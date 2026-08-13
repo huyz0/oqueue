@@ -1,0 +1,55 @@
+# Backlog
+
+One task equals one commit equals one change that leaves the tree green. If a
+task cannot be finished in one green commit, split it before writing code.
+
+Task IDs are stable. Completed tasks stay here with their commit reference so
+the history of why something was done survives.
+
+Decomposition rule: only the current milestone is decomposed in detail. Future
+milestones stay as roadmap entries until their turn.
+
+## M-1: AI development system
+
+Build the system that builds everything else. Ordered by dependency — the
+product docs come first because everything else references them, and `lib.sh`
+comes before any gate because every gate sources it.
+
+| ID | Task | Acceptance | State |
+| --- | --- | --- | --- |
+| M-1.0 | Repo foundation: `git init`, Apache-2.0 `LICENSE`, `.gitignore`, `rust-toolchain.toml`, and the research corpus placed under version control | Files exist; toolchain pins 1.97.1 and both Linux targets | done |
+| M-1.1 | `AGENTS.md` + `CLAUDE.md` adapter, non-negotiables with honest enforcement marking | Every rule names its gate task or is marked unenforceable; no rule claims a gate that does not exist, and no link points at a file that is not there | done |
+| M-1.2 | `mission.md` — what this is, what it costs, what it must never do | States the latency position and the scale target with citations into the corpus | done |
+| M-1.3 | `architecture.md` — crate map, dependency rule, the seams | Names all eleven crates, the star rule with its two exceptions, and the `unsafe` budget | done |
+| M-1.4 | `roadmap.md` + `backlog.md` — milestones with executable completion conditions | Every milestone's "done" is a command; only M-1 is decomposed | done |
+| M-1.5 | `standards/` — port `behavior`, `rust-style`, `error-handling`, `testing`; write `contracts` and `async-concurrency` fresh | ⚠️ Every ported threshold is re-derived against oqueue or explicitly marked underived | todo |
+| M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | todo |
+| M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | todo |
+| M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | todo |
+| M-1.9 | `review.sh` + `check-reviewed.sh` — the isolated reviewer and its gate | Review artifact keyed by staged-diff hash; amending one byte after review fails the commit | todo |
+| M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | todo |
+| M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | todo |
+| M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
+| M-1.13 | `.agents/skills/` — `next-task`, `spec`, `tdd`, `adr`, `contract-change`, `review` | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in | todo |
+| M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | todo |
+| M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | todo |
+| M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3 | todo |
+
+### Notes on specific tasks
+
+**M-1.5** carries the hazard the hybrid decision named: a ported rule justified
+by the other project's wire protocol, or a threshold derived from a test suite
+that does not exist here, is **stale but authoritative** — worse than absent.
+
+**M-1.9** is new to oqueue and has no precedent to port. The mechanism is in
+[docs/researches/21](../../researches/21-ai-development-loop.md) §5. The
+reviewer must not receive the author's reasoning; separation of invocation is
+not separation of information.
+
+**M-1.12** has no constant yet. The precedent states two minutes but never
+enforced it, and oqueue's dependency graph is heavier. Derive from measurement
+once M0's workspace exists, and until then the task is blocked rather than
+guessed.
+
+**M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
+gate triggered by one silently never runs.
