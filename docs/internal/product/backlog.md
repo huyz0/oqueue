@@ -47,10 +47,10 @@ that does not exist here, is **stale but authoritative** — worse than absent.
 reviewer must not receive the author's reasoning; separation of invocation is
 not separation of information.
 
-**M-1.12** has no constant yet. The precedent states two minutes but never
-enforced it, and oqueue's dependency graph is heavier. Derive from measurement
-once M0's workspace exists, and until then the task is blocked rather than
-guessed.
+**M-1.12** has no constant yet. Two minutes is a common figure for a pre-commit
+budget, but it is usually written as a comment and never measured, and oqueue's
+dependency graph is heavy. Derive it from measurement once M0's workspace
+exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
