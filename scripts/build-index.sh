@@ -42,12 +42,20 @@ require_tool python3 "apt-get install python3" || finish
 
 # The generator lives in Python because parsing YAML front matter in bash is a
 # source of bugs, not a demonstration of skill.
-python3 - "$MODE" <<'PYEOF'
+# `|| rc=$?` rather than a bare call followed by `rc=$?`: lib.sh sets `set -e`,
+# so a non-zero exit from python would kill this script before the lines below
+# could run — losing the message that says what to do, and returning python's
+# exit code instead of the 1 every gate here promises. The PROBLEM/STALE lines
+# still printed, which is why this survived its first negative test.
+rc=0
+python3 - "$MODE" <<'PYEOF' || rc=$?
 import re, sys, pathlib
 
 mode = sys.argv[1]
 root = pathlib.Path.cwd()
 problems, changed = [], []
+
+UNTERMINATED = object()   # distinct from None: "started but never closed"
 
 def frontmatter(p):
     """title/description/tags from YAML front matter. Deliberately minimal: a
@@ -55,7 +63,12 @@ def frontmatter(p):
     text = p.read_text()
     if not text.startswith("---\n"):
         return None
-    end = text.index("\n---", 4)
+    end = text.find("\n---", 4)
+    if end < 0:
+        # Reported rather than raised: a traceback here would be
+        # indistinguishable from the generator dying, and the operator would be
+        # told the index is stale.
+        return UNTERMINATED
     body, out, key = text[4:end], {}, None
     for line in body.split("\n"):
         m = re.match(r'^(\w+):\s*(.*)$', line)
@@ -68,6 +81,22 @@ def frontmatter(p):
         out[k] = out.get(k, "").strip('"')
     out["tags"] = [t.strip() for t in out.get("tags", "").strip("[]").split(",") if t.strip()]
     return out
+
+def read_fm(p, missing):
+    """Front matter, or None having recorded *why* it could not be read.
+
+    ⚠️ The two failures need different messages. Telling an author that a file
+    which visibly starts with `---` has "no front matter" rules out the one
+    thing actually wrong with it."""
+    fm = frontmatter(p)
+    if fm is UNTERMINATED:
+        problems.append(f"{p.relative_to(root)}: front matter is not terminated "
+                        f"by a closing --- line")
+        return None
+    if not fm:
+        problems.append(f"{p.relative_to(root)}: {missing}")
+        return None
+    return fm
 
 def replace_region(path, name, content):
     p = root / path
@@ -83,82 +112,105 @@ def replace_region(path, name, content):
         if mode == "write":
             p.write_text(new)
 
-# ---- standards table -------------------------------------------------------
-FAMILY = {"process": "Process", "quality": "Quality",
-          "delivery": "Delivery", "code": "Code"}
-by_family = {k: [] for k in FAMILY}
-for p in sorted((root / "docs/internal/standards").glob("*.md")):
-    fm = frontmatter(p)
-    if not fm:
-        problems.append(f"{p.relative_to(root)}: no front matter, so it cannot be indexed")
-        continue
-    fam = next((t for t in fm["tags"] if t in FAMILY), None)
-    if not fam:
-        problems.append(f"{p.relative_to(root)}: no family tag ({'/'.join(FAMILY)})")
-        continue
-    by_family[fam].append((p.name, fm["title"], fm["description"]))
+def build():
+    """Everything that reads or rewrites a file. Wrapped so that an
+    unexpected raise becomes exit 3 rather than exit 1.
 
-rows = []
-for fam, label in FAMILY.items():
-    for name, title, desc in sorted(by_family[fam]):
-        rows.append(f"| {label} | [{name}](docs/internal/standards/{name}) | {desc} |")
-replace_region("AGENTS.md", "standards",
-               "| Family | Standard | Read when |\n|---|---|---|\n" + "\n".join(rows))
+    ⚠️ Without this, any exception reaches bash as 1, which means *stale* --
+    so a FileNotFoundError from a renamed document printed 'index is stale;
+    run scripts/build-index.sh', and running that raised the same exception
+    and printed the same remedy. An operator loop with no progress."""
+    # ---- standards table -------------------------------------------------------
+    FAMILY = {"process": "Process", "quality": "Quality",
+              "delivery": "Delivery", "code": "Code"}
+    by_family = {k: [] for k in FAMILY}
+    for p in sorted((root / "docs/internal/standards").glob("*.md")):
+        fm = read_fm(p, "no front matter, so it cannot be indexed")
+        if not fm:
+            continue
+        fam = next((t for t in fm["tags"] if t in FAMILY), None)
+        if not fam:
+            problems.append(f"{p.relative_to(root)}: no family tag ({'/'.join(FAMILY)})")
+            continue
+        by_family[fam].append((p.name, fm["title"], fm["description"]))
 
-# ---- skills table ----------------------------------------------------------
-rows = []
-for p in sorted((root / ".agents/skills").glob("*/SKILL.md")):
-    fm = frontmatter(p)
-    if not fm:
-        problems.append(f"{p.relative_to(root)}: no front matter")
-        continue
-    first = fm["description"].split(".")[0].strip()
-    rows.append(f"| [`{p.parent.name}`](.agents/skills/{p.parent.name}/SKILL.md) | {first} |")
-replace_region("AGENTS.md", "skills",
-               "| Skill | Use when |\n|---|---|\n" + "\n".join(rows))
+    rows = []
+    for fam, label in FAMILY.items():
+        for name, title, desc in sorted(by_family[fam]):
+            rows.append(f"| {label} | [{name}](docs/internal/standards/{name}) | {desc} |")
+    replace_region("AGENTS.md", "standards",
+                   "| Family | Standard | Read when |\n|---|---|---|\n" + "\n".join(rows))
 
-# ---- research tag index ----------------------------------------------------
-docs, tags = [], {}
-for p in sorted((root / "docs/researches").glob("[0-9]*.md")):
-    fm = frontmatter(p)
-    if not fm:
-        problems.append(f"{p.relative_to(root)}: no front matter")
-        continue
-    num = p.name[:2]
-    docs.append((num, p.name, fm["title"]))
-    for t in fm["tags"]:
-        tags.setdefault(t, []).append(num)
+    # ---- skills table ----------------------------------------------------------
+    rows = []
+    for p in sorted((root / ".agents/skills").glob("*/SKILL.md")):
+        fm = read_fm(p, "no front matter")
+        if not fm:
+            continue
+        first = fm["description"].split(".")[0].strip()
+        rows.append(f"| [`{p.parent.name}`](.agents/skills/{p.parent.name}/SKILL.md) | {first} |")
+    replace_region("AGENTS.md", "skills",
+                   "| Skill | Use when |\n|---|---|\n" + "\n".join(rows))
 
-# Only tags that actually group documents. A tag on one document is a label,
-# not an index entry, and 200 alphabetical single-document tags are noise that
-# buries the ~30 that mean something. The curated by-question index above is
-# authored precisely because generated tags cannot replace it.
-byname = dict((d[0], d[1]) for d in docs)
-lines = [f"- **{t}:** " + ", ".join(f"[{n}]({byname[n]})" for n in sorted(set(v)))
-         for t, v in sorted(tags.items()) if len(set(v)) >= 3]
-replace_region("docs/researches/README.md", "tags", "\n".join(lines))
-replace_region("docs/researches/README.md", "count",
-               f"**{len(docs)} documents.**")
+    # ---- research tag index ----------------------------------------------------
+    docs, tags = [], {}
+    for p in sorted((root / "docs/researches").glob("[0-9]*.md")):
+        fm = read_fm(p, "no front matter")
+        if not fm:
+            continue
+        num = p.name[:2]
+        docs.append((num, p.name, fm["title"]))
+        for t in fm["tags"]:
+            tags.setdefault(t, []).append(num)
 
-# ---- verify the authored map covers every document -------------------------
-readme = (root / "docs/researches/README.md").read_text()
-for num, name, title in docs:
-    if f"({name})" not in readme:
-        problems.append(f"docs/researches/{name} is not in the document map")
+    # Only tags that actually group documents. A tag on one document is a label,
+    # not an index entry, and 200 alphabetical single-document tags are noise that
+    # buries the ~30 that mean something. The curated by-question index above is
+    # authored precisely because generated tags cannot replace it.
+    byname = dict((d[0], d[1]) for d in docs)
+    lines = [f"- **{t}:** " + ", ".join(f"[{n}]({byname[n]})" for n in sorted(set(v)))
+             for t, v in sorted(tags.items()) if len(set(v)) >= 3]
+    replace_region("docs/researches/README.md", "tags", "\n".join(lines))
+    replace_region("docs/researches/README.md", "count",
+                   f"**{len(docs)} documents.**")
 
-for line in problems:
-    print(f"PROBLEM {line}")
-for line in changed:
-    print(f"STALE {line}")
-sys.exit(2 if problems else (1 if (changed and mode == "check") else 0))
+    # ---- verify the authored map covers every document -------------------------
+    readme = (root / "docs/researches/README.md").read_text()
+    for num, name, title in docs:
+        if f"({name})" not in readme:
+            problems.append(f"docs/researches/{name} is not in the document map")
+
+    for line in problems:
+        print(f"PROBLEM {line}")
+    for line in changed:
+        print(f"STALE {line}")
+    sys.exit(2 if problems else (1 if (changed and mode == "check") else 0))
+
+try:
+    build()
+except SystemExit:
+    raise                      # the deliberate verdict below, not a crash
+except Exception as exc:
+    import traceback
+    traceback.print_exc()
+    print(f"PROBLEM the index generator raised {type(exc).__name__}: {exc}")
+    sys.exit(3)
 PYEOF
-rc=$?
 
 if (( rc == 2 )); then
   fail "index cannot be built — see the problems above"
   finish
 elif (( rc == 1 )); then
   fail "index is stale; run scripts/build-index.sh"
+  finish
+elif (( rc != 0 )); then
+  # ⚠️ Without this branch the gate fails **open**. Any exit code the generator
+  # does not choose itself — 137 from an OOM kill, 143 from SIGTERM, 120 from a
+  # broken pipe when the output is piped into `head` — would fall past the two
+  # cases above and reach the `ok` line, reporting a current index for a run
+  # that never finished. That is the failure lib.sh's header names: a gate that
+  # silently stopped running.
+  fail "index generator died (exit $rc); the index was not checked"
   finish
 fi
 
