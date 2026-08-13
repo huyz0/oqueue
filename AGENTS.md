@@ -36,23 +36,31 @@ assuming anything is settled.
 
 Rules that are always true. Read the one that covers what you are touching.
 
-**Process standards** govern how work is specified and traced; **code
-standards** govern what the code looks like. Both bind.
+Four families, all binding. Each rule names its gate, or is marked as having
+none — the second kind matters more, because it is where judgement is still
+required.
 
-- [docs/internal/standards/sdd.md](docs/internal/standards/sdd.md) spec-driven development: the requirement→spec→task→commit chain, acceptance criteria, definition of done
+**Process** — how work is specified and traced:
+- [sdd.md](docs/internal/standards/sdd.md) the requirement→spec→task→commit chain, acceptance criteria, definition of done
+- `review.md` *(M-1.23)* reviewer isolation, the deterministic/semantic split
 
-⚠️ **The rest do not exist yet — they are M-1.5.** Listed without links, because
-a link to a file that is not there is a claim this repo does not get to make.
+**Quality** — what must be true of the result:
+- [security.md](docs/internal/standards/security.md) untrusted input, secrets, tenant isolation, cryptography, `unsafe`
+- [performance.md](docs/internal/standards/performance.md) the three benchmark suites, where speed actually comes from, budgets
+- `testing.md` *(M-1.5)* test tiers, determinism, mutation testing, coverage
 
-- `docs/internal/standards/behavior.md` how to work in this repo, read this first
-- `docs/internal/standards/rust-style.md`
-- `docs/internal/standards/error-handling.md`
-- `docs/internal/standards/async-concurrency.md`
-- `docs/internal/standards/testing.md`
-- `docs/internal/standards/contracts.md`
+**Delivery** — how it is produced and shipped:
+- [build.md](docs/internal/standards/build.md) profiles, toolchain, workspace layout, disk hygiene
+- [portability.md](docs/internal/standards/portability.md) targets, glibc floor, cross-arch correctness
 
-Skills and scripts are in the same state: the directories exist, their contents
-are M-1.13 and M-1.6 through M-1.12.
+**Code** — what it looks like *(all M-1.5)*:
+- `behavior.md` how to work in this repo, read this first
+- `rust-style.md`, `error-handling.md`, `async-concurrency.md`, `contracts.md`
+
+⚠️ Entries without links do not exist yet. A link to a file that is not there is
+a claim this repo does not get to make. Skills and scripts are in the same
+state: the directories exist, their contents are M-1.13 and M-1.6 through
+M-1.12.
 
 ## Skills
 

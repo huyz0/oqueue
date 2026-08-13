@@ -42,6 +42,7 @@ comes before any gate because every gate sources it.
 | M-1.22 | `standards/sdd.md` — the process standard | Defines the requirement→spec→task→commit chain, what a spec must contain, acceptance-criteria rules, definition of done, and what to do when a spec proves wrong | done |
 | M-1.23 | `standards/review.md` — the operational review standard | Turns [docs/researches/21](../../researches/21-ai-development-loop.md) §3–5 into a standard: reviewer context isolation, the deterministic/semantic split, fixed-or-argued resolution | todo |
 | M-1.24 | Trace every milestone to the requirements it serves | Every roadmap entry names FR/NFR IDs; a gate fails on a milestone that names none | todo |
+| M-1.25 | `standards/security.md`, `performance.md`, `build.md`, `portability.md` | Each rule names its gate or is explicitly marked as having none; rationale delegated to the corpus rather than restated | done |
 
 ### Notes on specific tasks
 
@@ -61,6 +62,12 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.25** closed a gap in the standards plan. M-1.5's list was adapted from a
+service of a different shape — one that ships a single architecture, carries no
+benchmarking methodology, and holds no customer key material. Four of the
+categories oqueue actually needs had no standard planned at all. The remaining
+M-1.5 set is now code standards only.
 
 **M-1.21** deliberately leaves several NFRs **UNDERIVED** rather than choosing
 plausible numbers. NFR-13 (aggregate throughput) blocks NFR-31 and gates

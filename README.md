@@ -91,7 +91,7 @@ Derivation is in
 |---|---|
 | [`docs/researches/`](docs/researches/README.md) | 22 documents of cited research compiled before any code: reference architectures, object-storage physics, Kafka protocol, cost models, latency budgets, and this project's engineering standards. **Start with its README** — it maps the rest. |
 | [`docs/internal/product/`](docs/internal/product/) | Mission, **requirements** (functional and non-functional, with stable IDs), architecture, roadmap, backlog, and architecture decision records. |
-| [`docs/internal/standards/`](docs/internal/standards/) | How work is specified and what the code must look like. |
+| [`docs/internal/standards/`](docs/internal/standards/) | Four binding families: process (SDD), quality (security, performance, testing), delivery (build, portability), and code style. Each rule names its gate. |
 | [`AGENTS.md`](AGENTS.md) | The working agreement. Read this before changing anything. |
 
 Some entry points worth the time even if you never use oqueue:
