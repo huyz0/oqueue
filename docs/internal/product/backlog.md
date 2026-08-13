@@ -23,7 +23,7 @@ comes before any gate because every gate sources it.
 | M-1.3 | `architecture.md` — crate map, dependency rule, the seams | Names all eleven crates, the star rule with its two exceptions, and the `unsafe` budget | done |
 | M-1.4 | `roadmap.md` + `backlog.md` — milestones with executable completion conditions | Every milestone's "done" is a command; only M-1 is decomposed | done |
 | M-1.5 | `standards/` — remaining code standards: `behavior`, `rust-style`, `error-handling`, `async-concurrency`, `contracts` | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | todo |
-| M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | todo |
+| M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | done |
 | M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | todo |
 | M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | todo |
 | M-1.9 | `review.sh` + `check-reviewed.sh` — the isolated reviewer and its gate | Review artifact keyed by staged-diff hash; amending one byte after review fails the commit | todo |
@@ -68,6 +68,18 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.6** is the first gate, and writing its negative cases immediately found
+two defects in it. The subject-quality rule originally required ten characters,
+and the first thing it rejected was `M-1.2: mission` — an accurate one-word
+subject already in history. ⚠️ **The rule was wrong, not the commit**: length is
+a proxy for meaning and a poor one, since it accepts `fix the thing` and rejects
+`mission`. It is now a denylist of words that carry no information. The second
+defect was a `warn` line whose backticks inside double quotes made it *execute*
+`git log --oneline` rather than print it.
+
+Both are the argument for M-1.15 in miniature: **a gate nobody has watched fail
+is a gate nobody has tested.**
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every
