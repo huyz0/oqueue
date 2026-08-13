@@ -310,7 +310,7 @@ pub fn scratch() -> tempfile::TempDir {
 
 Three properties follow: `cargo clean` reclaims it, nothing lands in the system temp dir, and `TempDir`'s `Drop` covers the normal path — including panics, since `Drop` runs during unwind.
 
-⚠️ **`Drop` does not survive SIGKILL**, and `cargo-nextest` kills on timeout — which is precisely how orphans accumulate. **Reap by age at suite start** rather than attempting coordination: delete anything under `target/tmp` with an mtime older than a few hours, safely older than any live run. The same discipline catches `cargo-mutants`, which copies the entire workspace per mutant into `target/mutants-tmp` and leaves it behind on interruption (observed: **1.7 GB, 68% of a sibling project's entire `target/`**).
+⚠️ **`Drop` does not survive SIGKILL**, and `cargo-nextest` kills on timeout — which is precisely how orphans accumulate. **Reap by age at suite start** rather than attempting coordination: delete anything under `target/tmp` with an mtime older than a few hours, safely older than any live run. The same discipline catches `cargo-mutants`, which copies the entire workspace per mutant into `target/mutants-tmp` and leaves it behind on interruption (observed on one workspace: **1.7 GB, over two-thirds of the entire `target/` tree**).
 
 ⚠️ **Check whether the system temp dir is a tmpfs** (it is by default on WSL2 — 16 GB observed). tmpfs is RAM. For a broker whose tests write segment files, routing scratch there is an OOM vector, not merely a cleanup annoyance. Prefer `object_store`'s in-memory backend for unit tests: no scratch at all beats well-managed scratch.
 

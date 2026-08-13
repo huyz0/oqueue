@@ -31,9 +31,9 @@ file is the execution view.
 Build the system that builds everything else: the standards, the gates, the
 skills, and the loop. Nothing in this milestone is broker code.
 
-It exists first for the same reason it did in the project this is ported from:
-every later milestone is executed by an agent against these rules, and a rule
-that arrives after the code it governs has already been violated.
+It exists first because every later milestone is executed by an agent against
+these rules, and a rule that arrives after the code it governs has already been
+violated.
 
 **Completion condition:**
 

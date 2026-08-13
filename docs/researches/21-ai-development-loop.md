@@ -7,7 +7,7 @@ tags: [sdd, ai-development, review, subagents, quality-gates, mutation-testing, 
 related: [19-workspace-engineering, 18-rust-performance-methodology, 10-open-questions]
 summary: >
   Design for an unattended, fully AI-authored development loop where no human
-  reads the code. Two gaps in the inherited pgprox system: the reviewer is the
+  reads the code. Conventional practice leaves two gaps: the reviewer is the
   same agent that wrote the code, and the review step is enforced by nothing.
   Fixes both — context-isolated reviewer subagent, and a review artifact keyed
   to the staged diff hash so a pre-commit gate can require it. Plus the rule
@@ -17,29 +17,27 @@ summary: >
 
 # The AI Development Loop
 
-**⚠️ Not research — a design position**, in the sense of [15](15-scale-architecture-position.md). It extends the development system inherited from pgprox (see [19](19-workspace-engineering.md) and the 2026-08-13 methodology decision in [10](10-open-questions.md)) to the constraint that **no human reads the code**.
+**⚠️ Not research — a design position**, in the sense of [15](15-scale-architecture-position.md). It extends the engineering standard in [19](19-workspace-engineering.md) to the constraint recorded in [10](10-open-questions.md): **no human reads the code.**
 
-Marked **[pgprox]** (exists today), **[Gap]**, or **[Design]**.
+Marked **[Practice]** (established practice), **[Gap]**, or **[Design]**.
 
 ---
 
-## 1. What already exists
+## 1. The starting point
 
-**[pgprox]** `docs/internal/standards/behavior.md` defines the cycle: read roadmap and backlog → take the top unblocked task → implement test-first → **review before committing** → commit with the task ID in the subject → tick the backlog. One task = one commit = one green tree, direct to `main`, no feature branches, *"because every commit is green and every commit is small… A bad commit is reverted, not merged around."*
+**[Practice]** A spec-driven workflow defines the cycle: read roadmap and backlog → take the top unblocked task → implement test-first → **review before committing** → commit with the task ID in the subject → tick the backlog. One task = one commit = one green tree, direct to `main`, no feature branches, *"because every commit is green and every commit is small… A bad commit is reverted, not merged around."*
 
-**[pgprox]** The `crate-review` skill already states the governing principle for gate allocation:
+The governing principle for gate allocation is already well established, and the `crate-review` procedure states it: **run the deterministic checks first; anything red means keep working; the review is for what the scripts cannot see.**
 
-> *"Run the checks first… Anything red means keep working. **The rest of this is for what the scripts cannot see.**"*
-
-**[Assessment]** That is the right principle and it is already the design. Nothing below replaces it. Two things around it are missing.
+**[Assessment]** That principle is right and nothing below replaces it. Two things around it are missing.
 
 ---
 
 ## 2. The two gaps
 
-**[Gap 1] The reviewer is the agent that wrote the code.** `crate-review` is a skill the authoring agent runs on its own work. A self-review inherits every blind spot that produced the defect: the same misreading of the task, the same assumption about what a function guarantees, plus a commitment bias toward work already done. It reliably catches typos and reliably misses the thing it was wrong about.
+**[Gap 1] The reviewer is the agent that wrote the code.** Review is conventionally a procedure the authoring agent runs on its own work. A self-review inherits every blind spot that produced the defect: the same misreading of the task, the same assumption about what a function guarantees, plus a commitment bias toward work already done. It reliably catches typos and reliably misses the thing it was wrong about.
 
-**[Gap 2] Nothing enforces that the review happened.** Step 4 of the cycle is a behavioural rule. In an unattended `/goal` loop, an agent can skip it, or — worse and more likely — *report* having done it. This is the same class as non-negotiable #3 (*"never claim a test passes without having run it. **No script enforces this.**"*), and pgprox is explicit that #3 is the rule the other six rest on.
+**[Gap 2] Nothing enforces that the review happened.** Step 4 of the cycle is a behavioural rule. In an unattended loop, an agent can skip it, or — worse and more likely — *report* having done it. This is the same class as the non-negotiable *never claim a test passes without having run it*, which no script can enforce and on which every other rule rests.
 
 **[Assessment]** With a human in the loop these are tolerable, because a person eventually reads the diff. **With no human reading code, gap 2 is the load-bearing failure**: an unrun review reported as clean is strictly worse than no review, because it consumes the budget that would have bought a real one and produces a false record.
 
@@ -54,7 +52,7 @@ Marked **[pgprox]** (exists today), **[Gap]**, or **[Design]**.
 
 The first is obvious and widely violated. The second is not: a reviewer that re-checks formatting, lint-level issues, or test pass/fail spends its limited attention on noise and misses the semantic defect. **The review prompt must therefore be told which deterministic gates already ran and passed**, explicitly, so it does not re-derive them.
 
-The deeper reason for direction 1: **a check performed by an agent cannot be regression-tested.** A script has a fixed behaviour you can prove fails when it should ([pgprox] `tests/gates/negative.sh` invokes each gate against a broken artefact to prove it fails). An agent's judgement drifts between runs, between models, and between context loads.
+The deeper reason for direction 1: **a check performed by an agent cannot be regression-tested.** A script has a fixed behaviour you can prove fails when it should — which is what a negative suite that invokes each gate against a deliberately broken artefact establishes. An agent's judgement drifts between runs, between models, and between context loads.
 
 ### 3.1 The allocation
 
@@ -71,7 +69,7 @@ The deeper reason for direction 1: **a check performed by an agent cannot be reg
 | Commit subject names a real backlog task | Is the *spec itself* right — does it serve the mission? |
 | Tests-kept; drift; wiring (nothing dead) | Was scope silently widened? |
 
-**[Assessment]** The right-hand column is short by design. Every row that migrates leftward is a permanent gain, because it becomes cheap, repeatable, and provable. **A recurring semantic finding is a bug report against the gate set** — the correct response to catching the same class twice by review is to write a script, exactly as pgprox's M10/M12/M13 milestones did.
+**[Assessment]** The right-hand column is short by design. Every row that migrates leftward is a permanent gain, because it becomes cheap, repeatable, and provable. **A recurring semantic finding is a bug report against the gate set** — the correct response to catching the same class twice by review is to write a script.
 
 ---
 
@@ -126,7 +124,7 @@ It also makes review history queryable: `target/review/` accumulates a record of
 
 ## 6. Escalation: fix, or argue
 
-**[Design]** With no human adjudicator, a disputed finding needs a resolution that is not "the author decided." Reuse the vocabulary pgprox already applies to mutation survivors — *"155 survivors, 137 killed and 18 argued."*
+**[Design]** With no human adjudicator, a disputed finding needs a resolution that is not "the author decided." Reuse the vocabulary that already applies to mutation survivors: a survivor is either **killed** or **argued**.
 
 A blocking finding is resolved in exactly one of two ways:
 
@@ -189,7 +187,7 @@ completion condition runs as a command, not a judgement
 
 **[Assessment]** The outer loop catches what per-commit review structurally cannot: drift accumulated across commits, two concepts that each passed review but contradict each other, an abstraction that should now be extracted or collapsed, a standard that quietly stopped being followed — and **the spec being wrong**, which no amount of code review reaches.
 
-pgprox demonstrates this loop working, but **initiated by inspiration rather than by schedule**: M10 ("the claims nothing enforces"), M12 ("the gates that count files"), M13 ("the non-negotiables that nothing enforces") are outer-loop reviews that became milestones. The improvement available is to make it **structural — a required phase of every milestone's completion**, not a milestone someone thought to write.
+**[Practice]** In practice this loop tends to be **initiated by inspiration rather than by schedule** — someone notices that a set of claims has no enforcement, or that several gates check a file's name rather than its contents, and writes a milestone about it. Those are outer-loop reviews in retrospect. The improvement available is to make the phase **structural — a required part of every milestone's completion** rather than a milestone someone thought to write.
 
 ---
 
@@ -199,7 +197,7 @@ pgprox demonstrates this loop working, but **initiated by inspiration rather tha
 
 ### 9.1 The tiers
 
-**[pgprox]** Three local tiers already exist — agent hooks call the same scripts for in-session feedback, `pre-commit` binds every commit, and `pre-push` carries heavier work — with the rule that *"a check implemented in two places drifts, and the version that matters is whichever one the developer did not run."*
+**[Practice]** Three local tiers: agent hooks call the same scripts for in-session feedback, `pre-commit` binds every commit, and `pre-push` carries heavier work. The rule that keeps them coherent is that **a check implemented in two places drifts, and the version that matters is whichever one was not run** — so hooks and CI must call the same scripts, never reimplement them.
 
 | Tier | When | Target |
 |---|---|---|
@@ -214,16 +212,16 @@ pgprox demonstrates this loop working, but **initiated by inspiration rather tha
 
 ### 9.2 ⚠️ The budget is a comment, not a gate
 
-**[pgprox]** `.cargo/config.toml` states *"the pre-commit budget is two minutes."* Nothing measures it. No script times the suite and fails when it exceeds the number.
+**[Practice]** A pre-commit budget is typically written down as a comment — *two minutes* is a common figure — and then never measured. No script times the suite and fails when it exceeds the number.
 
-**[Assessment]** By this system's own thesis, **the pre-commit budget is currently a preference** — and it is the single constraint that determines whether an autonomous loop remains viable as the codebase grows. It should become a constant enforced exactly like the coverage threshold: `scripts/check-budget.sh` times the suite and fails over N seconds, and the measured timings are written as an artifact (§5's pattern) so erosion shows up as a trend rather than arriving as a crisis.
+**[Assessment]** By this project's own thesis, **a budget stated only in prose is a preference** — and it is the single constraint that determines whether an autonomous loop remains viable as the codebase grows. It should become a constant enforced exactly like the coverage threshold: `scripts/check-budget.sh` times the suite and fails over N seconds, and the measured timings are written as an artifact (§5's pattern) so erosion shows up as a trend rather than arriving as a crisis.
 
 ### 9.3 The four cost centres
 
 | Cost | Dominated by | Bounded by |
 |---|---|---|
 | **Compilation** | dependency count, DAG depth, debuginfo | [18](18-rust-performance-methodology.md) §3.7.5, [19](19-workspace-engineering.md) §1.1 |
-| **Coverage** | `-C instrument-coverage` changing the fingerprint | **[pgprox]** already runs llvm-cov under a separate `CARGO_TARGET_DIR`, so the instrumented and normal builds do not evict each other. Costs another artifact tree — see [18](18-rust-performance-methodology.md) §3.7.2. |
+| **Coverage** | `-C instrument-coverage` changing the fingerprint | Run llvm-cov under a separate `CARGO_TARGET_DIR` so the instrumented and normal builds do not evict each other. Costs another artifact tree — see [18](18-rust-performance-methodology.md) §3.7.2. |
 | **Mutation testing** | one **rebuild** per mutant | Crate granularity: incremental rebuild scope *is* the mutation budget. Keeps it in CI, never pre-commit — even 30 diff-narrowed mutants is 30 × (build + test). |
 | **Review subagent** | token latency, **not CPU** | Run it **concurrently** with the deterministic gates. Otherwise the cores idle while waiting on tokens. |
 
@@ -231,7 +229,7 @@ pgprox demonstrates this loop working, but **initiated by inspiration rather tha
 
 ### 9.4 A slow test is a sans-I/O violation
 
-**[Assessment]** If business logic touches no socket and no clock ([19](19-workspace-engineering.md) §4.1), its tests are sub-millisecond — **[pgprox]** measures fourteen of sixteen crates finishing under 0.4 s. It follows that **a test which suddenly takes 500 ms has acquired I/O somewhere it should not have.**
+**[Assessment]** If business logic touches no socket and no clock ([19](19-workspace-engineering.md) §4.1), its tests are sub-millisecond — a workspace built this way typically has almost every crate's suite finishing well under half a second. It follows that **a test which suddenly takes 500 ms has acquired I/O somewhere it should not have.**
 
 So a per-test time threshold is not only a speed gate; it is a second detector for the architectural rule that matters most. One constant, two properties, and the failure it reports is the more useful of the two.
 
@@ -239,14 +237,14 @@ So a per-test time threshold is not only a speed gate; it is a second detector f
 
 ### 9.5 Monotonic growth
 
-**[pgprox]** `check-tests-kept.sh` names any test that disappears and requires a `Removes-test:` line in the commit message — deletion is possible but recorded, which is the correct shape. **[Assessment]** No change needed, but the milestone-boundary review (§8) should treat suite runtime as a reviewable quantity: a suite that has doubled without the crate count doubling is a finding, not a fact of life.
+**[Practice]** `check-tests-kept.sh` names any test that disappears and requires a `Removes-test:` line in the commit message — deletion is possible but recorded, which is the correct shape. **[Assessment]** No change needed, but the milestone-boundary review (§8) should treat suite runtime as a reviewable quantity: a suite that has doubled without the crate count doubling is a finding, not a fact of life.
 
 ---
 
 ## 10. Open questions
 
 - **Cost of per-commit review.** (see also §9.3 — it is network-bound, so it parallelizes with the gates)
-- **What is the actual pre-commit budget for oqueue?** pgprox states two minutes; the number for a broker with a heavier dependency graph has to be derived from measurement, and §9.2's gate needs a constant to hold.
+- **What is the actual pre-commit budget?** Two minutes is a common figure elsewhere, but the number for a broker with a heavy dependency graph has to be derived from measurement, and §9.2's gate needs a constant to hold.
 - **Cost of per-commit review.** A reviewer subagent on every commit is real token spend. Is it every commit, or gated by diff size / touched-crate risk? A cheap heuristic (any diff touching `oqueue-core`, any `unsafe`, any public API change → always review) may capture most of the value.
 - **Reviewer prompt drift.** The reviewer is defined by a prompt, and a prompt is not version-pinned the way a script is. How is a change to the review prompt itself reviewed? Candidate: treat the prompt as source, subject to the same gates, with `tests/gates/negative.sh`-style cases proving the reviewer *fails* on known-bad diffs.
 - **Who reviews the spec?** §8 puts it in the outer loop, but a wrong spec is the most expensive failure and the outer loop is slow. Possibly a spec-review subagent before implementation, against mission and architecture.
@@ -257,6 +255,6 @@ So a per-test time threshold is not only a speed gate; it is a second detector f
 
 ## Sources
 
-**Primary — the pgprox development system** (read 2026-08-13): `AGENTS.md` (non-negotiables and their honest enforcement marking), `docs/internal/standards/behavior.md` (the cycle, one-task-one-commit, direct-to-main), `.agents/skills/crate-review/SKILL.md` (the deterministic-first principle), `docs/internal/product/roadmap.md` (M10/M12/M13 as outer-loop reviews), `scripts/mutants.sh` and `docs/internal/product/mutants-baseline.txt` (the fixed-or-argued pattern), `tests/gates/negative.sh` (proving a gate can fail).
+Practices marked **[Practice]** are established in production spec-driven Rust workspaces and are stated here as this project's standard.
 
 **External** — [Agent OS v2](https://buildermethods.com/agent-os/v2) (Standards + Product + Specs structure, assessed as a subset — see [10](10-open-questions.md)).

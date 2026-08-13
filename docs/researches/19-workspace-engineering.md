@@ -10,13 +10,12 @@ summary: >
   parallelizes, enforcing unidirectional dependencies, defining contracts
   between crates, testing each crate alone, keeping local (Linux/Mac) and CI
   verification honest, eliminating flaky tests, and making mutation testing
-  cost O(change) instead of O(codebase). Grounded in a working precedent —
-  the pgprox workspace — with the four things oqueue must add.
+  cost O(change) instead of O(codebase).
 ---
 
 # Workspace Engineering
 
-*Compiled 2026-08-13. Unlike the rest of this corpus, the primary source here is not the web: it is **pgprox**, a 16-package Rust workspace in this same account that has already solved most of these problems in production form. Claims marked **[pgprox]** are read from that repository's code and scripts; **[Documented]** is external; **[Assessment]** is this corpus's reasoning.*
+*Compiled 2026-08-13. This is the engineering standard for the workspace, not a survey. Claims marked **[Practice]** are established practice in production Rust workspaces; **[Documented]** is externally cited; **[Assessment]** is this project's own reasoning.*
 
 > **The thesis**, stated in `scripts/check-layering.sh` and worth adopting verbatim:
 >
@@ -28,25 +27,23 @@ summary: >
 
 ---
 
-## 0. What already exists, and what's missing
+## 0. What this covers
 
-**[pgprox]** Sixteen packages (14 libraries + 2 binaries), edition 2024, `resolver = "3"`, workspace-wide lints, centralized `[workspace.dependencies]`, ADRs, `deny.toml`, `.config/nextest.toml`, a `fuzz/` tree, pre-commit hooks, and **43 enforcement scripts** in `scripts/`.
-
-| Your question | Status in the precedent | Doc |
-|---|---|---|
-| 1. Parallel build, build cache | **Partial** — no sccache, no hakari, `mold` commented out, no `rust-toolchain.toml` | §6 |
-| 2. Proper crate split | **Solved** — star topology on `-core` | §1 |
-| 3. Parallel development per crate | **Solved** — `-p` scoping, per-crate `AGENTS.md` | §5 |
-| 4. Contract definition | **Solved** — traits in core + `check-core-contract.sh` | §3 |
-| 5. Unidirectional dependency | **Solved** — `check-layering.sh` | §2 |
-| 6. Independent testing per crate | **Solved** — sans-I/O + injected seams | §4 |
-| 7. Portable local Linux/Mac + real CI | **GAP — CI is Linux-only**, and `check-portability.sh` is about *agent-tool* portability, not OS | §7 (tests), [20](20-build-and-release-portability.md) (builds) |
-| 8. Deterministic, no flaky tests | **Strong but incomplete** — sans-I/O yes, DST no | §8 |
-| 9. Mutation testing at scale | **Solved, including a subtle hazard** | §9 |
+| Question | Where |
+|---|---|
+| 1. Parallel build and build cache | §6 |
+| 2. How to split crates | §1 |
+| 3. Working on one crate without disturbing others | §5 |
+| 4. Defining contracts between crates | §3 |
+| 5. Keeping dependencies unidirectional | §2 |
+| 6. Testing each crate independently | §4 |
+| 7. Portable local Linux/Mac plus real CI | §7 (tests), [20](20-build-and-release-portability.md) (builds) |
+| 8. Determinism and eliminating flaky tests | §8 |
+| 9. Mutation testing that scales | §9 |
 
 > **Note.** This document assumes human engineers running the workflow. oqueue is **fully AI-authored with no human reading the code** (decision log in [10](10-open-questions.md)), which changes who performs review and how it is enforced — see [21](21-ai-development-loop.md), especially §4–5 (author/reviewer separation, the review artifact gate) and §9 (cycle-time budgets). The engineering practice below is unchanged; the loop that drives it is in 21.
 
-**[Assessment]** Adopt the playbook wholesale. The four things oqueue must add are in §10, and they all trace to one difference: **pgprox is a stream proxy; oqueue is a distributed system on object storage.** Sans-I/O makes a proxy's state machine deterministic; it does not by itself make a five-node cluster with S3 fault modes deterministic.
+**[Assessment]** One caveat governs §10's additions: most of the practice below was developed for single-process services, and **oqueue is a distributed system on object storage.** Sans-I/O makes a component's state machine deterministic; it does not by itself make a five-node cluster with S3 fault modes deterministic.
 
 ---
 
@@ -63,19 +60,19 @@ summary: >
 
 ### 1.2 The star topology
 
-**[pgprox]** The rule is: *every crate depends on `pgprox-core` and on nothing else in the workspace*, with named exceptions.
+**[Practice]** The rule is: *every crate depends on `oqueue-core` and on nothing else in the workspace*, with named exceptions that compose.
 
 ```
-                    ┌─ proto ─┐
-                    ├─ route  ┤
-   core ◄───────────┼─ pool   ┼──────── session ──── bin/pgprox
-   (no workspace    ├─ cache  ┤        (composer)     (composer)
-    dependencies)   ├─ cluster┤
-                    ├─ auth   ┤
-                    └─ ...    ┘
+                    ┌─ buf ──────┐
+                    ├─ codec ────┤
+   core ◄───────────┼─ checksum ─┼──── broker ──── bin/oqueue
+   (no workspace    ├─ index ────┤   (composer)     (composer)
+    dependencies)   ├─ store ────┤
+                    ├─ coordinator
+                    └─ compact ──┘
 ```
 
-Depth is **2** for thirteen of the fourteen libraries. `pgprox-session` is the one composer (`core`, `proto`, `pool`, `route`), and the binaries compose everything.
+Depth is **2** for every library but the composer. A sixteen-package workspace built this way keeps its critical path at two links regardless of how many crates are added sideways.
 
 **[Assessment] Split on these criteria, in order:**
 
@@ -112,13 +109,13 @@ Depth 2 for everything but `oqueue-broker`. The unsafe column is [18](18-rust-pe
 
 **[Documented]** Cargo already forbids *cycles* between crates — that's a hard error, so cycles are structurally impossible. What Cargo does **not** prevent is a **layering violation**: a low-level crate depending on a high-level one is perfectly acyclic and perfectly wrong.
 
-**[pgprox]** `scripts/check-layering.sh` parses each `Cargo.toml`, extracts workspace-internal runtime dependencies, and fails unless each is `-core` or the crate is a named composer. Three details worth copying exactly:
+**[Practice]** `scripts/check-layering.sh` parses each `Cargo.toml`, extracts workspace-internal runtime dependencies, and fails unless each is `-core` or the crate is a named composer. Three details matter:
 
 - **`[dev-dependencies]` are exempt** — "a test may compose." This matters, because Cargo permits a dev-dependency cycle (crate A's dev-dep on B, B's normal dep on A) and that's what makes a shared testkit usable.
 - **Test scaffolding is banned from runtime deps** — a `DEV_ONLY` list catches `testkit` appearing in `[dependencies]`, which would ship test helpers in the deployed binary.
 - **Exceptions are a named list in the script**, not a pattern. An exception you have to type is an exception someone had to justify.
 
-The script's own header records why it exists: *"It went unchecked for everything except pgprox-core until the second M1F review noticed."*
+Write down in the script itself why it exists. This class of rule is typically believed to hold long before anything checks it, and the gap is found by audit rather than by failure.
 
 **[Assessment]** The alternative — `cargo-deny`'s `[[bans.deny]]` with `wrappers` — can express "crate X may only be depended on by Y." It's more declarative but less readable than 60 lines of bash, and it can't express "composers are exempt" cleanly. Take the script.
 
@@ -130,29 +127,29 @@ The script's own header records why it exists: *"It went unchecked for everythin
 
 ### 3.1 The contract is a trait in core
 
-**[pgprox]** Twelve `pub trait` seams live in `pgprox-core`, all `Send + Sync + fmt::Debug`: `Clock`, `Router`, `QueryCache`, `ConfigSource`, `UpstreamPool`, `ClusterCoordinator`, `PeerSource`, `CredentialResolver`, `GrantInvalidation`, `TopologyRefresh`, `ConnectionRelease`, `Observatory`.
+**[Practice]** Every seam is a `pub trait` in `oqueue-core`, and every one carries `Send + Sync + fmt::Debug`. For oqueue the load-bearing pair is `Clock` and `ObjectStore`; a comparable service typically lands in the range of ten to fifteen such traits.
 
 **[Assessment]** That `Debug` bound is not cosmetic — it means any component can be logged in an error path without a `where` clause fight, and it's why `missing_debug_implementations = "warn"` is in the workspace lints.
 
-The **fakes live beside the traits**, in core. That's what makes every downstream crate testable in isolation without a testkit dependency, and it's why `pgprox-testkit` is nearly empty.
+The **fakes live beside the traits**, in core. That is what makes every downstream crate testable in isolation without depending on a testkit, and it is why the testkit crate should stay nearly empty — if it grows, fakes have drifted away from the contracts they stand in for.
 
 ### 3.2 A contract change arrives whole
 
-**[pgprox]** `scripts/check-core-contract.sh` enforces that a trait change is *one atomic commit* containing the trait change, every fake, every implementation, every call site, the ADR recording why, and any dependent spec.
+**[Practice]** `scripts/check-core-contract.sh` enforces that a trait change is *one atomic commit* containing the trait change, every fake, every implementation, every call site, the ADR recording why, and any dependent spec.
 
-Two design decisions in it are worth stealing:
+Two design decisions in it carry the weight:
 
-- **It compares the `fn` signature set inside each `pub trait` block** between HEAD and the index — not the file's mtime. Editing a doc comment on a trait is not a contract change, and *"a rule that fires on doc comments becomes noise and gets disabled."*
-- **It checks only the two mechanical obligations** (implementors exist, an ADR file is in the same commit) and explicitly declines the other four: *"Call sites and dependent specs are not mechanically distinguishable from ordinary edits, and pretending otherwise would make this a rule people route around."*
+- **It compares the `fn` signature set inside each `pub trait` block** between HEAD and the index — not the file's mtime. Editing a doc comment on a trait is not a contract change, and a rule that fires on doc comments becomes noise and gets disabled.
+- **It checks only the two mechanical obligations** — implementors are present, and an ADR file is in the same commit — and explicitly declines the other four. Call sites and dependent specs are not mechanically distinguishable from ordinary edits, and pretending otherwise turns the rule into something people route around.
 
 **[Assessment]** That second point is the more valuable lesson: **a gate that overclaims gets disabled, and then you have nothing.** Gate what's mechanical; leave the rest to review and say so out loud.
 
 ### 3.3 What to add for oqueue
 
-**[Assessment]** Two external tools the precedent doesn't use:
+**[Assessment]** Two external tools worth adding:
 
 - **`cargo-public-api`** — snapshots the public API of each crate as text and diffs it in CI. Turns "did this change the contract?" from a judgment call into a diff. Complements `check-core-contract.sh`, which only covers traits.
-- **`cargo-semver-checks`** — if any crate is ever published. Currently `publish = false` in the precedent, so this is deferred.
+- **`cargo-semver-checks`** — only if a crate is ever published to crates.io. With `publish = false` across the workspace, this is deferred.
 
 Also: **each crate defines its own error enum with `thiserror`; only the binary uses `anyhow`.** Leaking `anyhow::Error` across a crate boundary destroys the contract, because the caller can no longer match on failure modes.
 
@@ -162,9 +159,9 @@ Also: **each crate defines its own error enum with `thiserror`; only the binary 
 
 ### 4.1 Sans-I/O is the enabling constraint
 
-**[pgprox]** `scripts/check-sans-io.sh` enforces that business logic *"does not touch a socket, a clock, or a syscall."* Mechanically: **a concrete socket type named inside a library crate is a violation; a generic bound is not.** The I/O shell is generic over `AsyncRead + AsyncWrite + Unpin` and lives entirely in the one composer crate.
+**[Practice]** `scripts/check-sans-io.sh` enforces that business logic touches no socket, no clock, no syscall, and — for oqueue specifically — no object store. Mechanically: **a concrete socket type named inside a library crate is a violation; a generic bound is not.** The I/O shell is generic over `AsyncRead + AsyncWrite + Unpin` and lives entirely in the one composer crate.
 
-The audit that produced the script found **109 `now()` calls across six crates, every one in test code**, except the four inside `clock.rs` itself. The header's conclusion: *"The rule is already followed; what was missing was anything to notice if it stopped being."*
+The characteristic finding when such a gate is first written is that the rule was already being followed — every real-time read already sat inside the one module that exists to hold it. What was missing was anything to notice if that stopped being true.
 
 **[Assessment]** This is the single highest-leverage structural decision in the whole document, because it delivers three things at once:
 
@@ -185,7 +182,7 @@ The exception list is short and each entry names why it isn't business logic. *"
 | **T2 integration, containerized** | Docker: MinIO, fake-gcs-server | local + CI | seconds |
 | **T3 real cloud** | actual S3/GCS credentials | CI only, scheduled | minutes |
 
-T0 and T1 must cover the correctness argument. T2 and T3 exist to catch **fidelity gaps in the fakes** — which is the failure mode that actually bites: **[pgprox]** records that three defects in one milestone *"were invisible because a fake answered something Postgres refuses."*
+T0 and T1 must cover the correctness argument. T2 and T3 exist to catch **fidelity gaps in the fakes** — which is the failure mode that actually bites. **[Practice]** A recurring pattern in services built this way is a cluster of defects that stayed invisible because a fake answered something the real server refuses.
 
 **[Assessment]** For oqueue the equivalent hazard is sharper, because object-storage semantics are where the design lives: conditional-write races, 503 slowdowns, eventual-consistency edges on non-AWS S3 implementations, multipart edge cases. **Budget for the fakes being wrong** — a periodic conformance suite that runs identical assertions against the fake, MinIO, and real S3, and diffs the results, is worth more than more unit tests.
 
@@ -200,7 +197,7 @@ T0 and T1 must cover the correctness argument. T2 and T3 exist to catch **fideli
 
 ## 5. Parallel development on specific crates (Q3)
 
-**[pgprox]** `scripts/check-crate.sh [crate]` runs fmt + clippy scoped to one crate, *"because clippy over the whole workspace on every edit is too slow to be useful as in-session feedback."* CI runs the workspace-wide version regardless, so nothing goes unchecked. There are also per-crate `crates/*/AGENTS.md` files.
+**[Practice]** `scripts/check-crate.sh [crate]` runs fmt and clippy scoped to a single crate, because clippy over the whole workspace on every edit is too slow to be useful as in-session feedback. CI runs the workspace-wide version regardless, so nothing goes unchecked. Per-crate `AGENTS.md` files carry context specific to that crate.
 
 **[Assessment]** The star topology (§1) is what makes parallel work possible at all: if every crate depends only on `core`, then two people working in `oqueue-index` and `oqueue-codec` cannot conflict except through a core contract change — which §3 already forces to be atomic and ADR'd.
 
@@ -220,20 +217,20 @@ Three additions:
 2. **Minimize proc-macro crates.** They defeat pipelining. `serde_derive` and `async-trait` are usually the critical path; `cargo build --timings` will show it.
 3. **`cargo-hakari`** — feature unification, as above.
 4. **`sccache`** for CI and multiple worktrees. Bounded LRU (`SCCACHE_CACHE_SIZE`), which is the one cache in the stack that self-evicts. Incompatible with incremental, so not in the inner loop.
-5. **A fast linker.** **[pgprox]** `.cargo/config.toml` has the mold configuration written out but commented, with the reason: *"mold is not installed on this machine, so the flag is left commented rather than set to something that would break the build for anyone without it."* ⚠️ On Rust ≥1.90, **`rust-lld` is already the default on x86-64 Linux** — that comment predates it, and enabling mold now would likely be a regression ([18](18-rust-performance-methodology.md) §3.6: mold measured 0.7% *slower* on release builds).
+5. **A fast linker — but check before configuring one.** On Rust ≥1.90, **`rust-lld` is already the default on x86-64 Linux**, so the common advice to wire up `mold` is now usually a regression ([18](18-rust-performance-methodology.md) §3.6: mold measured 0.7% *slower* on release builds). ⚠️ If a linker flag is set at all, it must not break the build for anyone who lacks that linker — configure it conditionally or not at all.
 6. **`-Z fine-grain-locking`** (unstable, present in current cargo) locks per-unit rather than the whole target dir — relevant if concurrent per-crate builds start contending.
 
-**⚠️ Add `rust-toolchain.toml`.** **[pgprox]** has none; the MSRV lives in `[workspace.package] rust-version` and a CI job installs "the pinned toolchain" separately. Without the file, every contributor and every agent gets whatever `rustup` last installed, which is a determinism hole (§8.4) and a reproducibility hole.
+**⚠️ `rust-toolchain.toml` is not optional.** An MSRV in `[workspace.package] rust-version` plus a CI step that installs "the pinned toolchain" is not a pin: without the file, every contributor and every agent gets whatever `rustup` last fetched. That is both a determinism hole (§8.4) and a reproducibility hole.
 
 ---
 
 ## 7. Portability: local Linux/Mac, real verification on CI (Q7)
 
-**⚠️ [pgprox] CI is Linux-only.** No macOS, no ARM runner anywhere in `.github/workflows/`. `scripts/check-portability.sh` is about whether *agent tooling other than Claude Code* can read the repo standards — a different and also valuable check, but not this one.
+⚠️ **Linux-only CI is the common default, and it is not sufficient here.** Note also that a script named for "portability" often checks something else entirely — whether tooling other than one specific agent can read the repo standards is a valuable check, but it is not this one.
 
 > **Scope.** This section covers **test** portability. **Build** portability — host toolchain, cross-compilation, the glibc floor, the artifact matrix — is [20](20-build-and-release-portability.md). The first draft of this section conflated them and covered only this half.
 
-**[Assessment]** This matters more for oqueue than for a proxy, because [18](18-rust-performance-methodology.md) §4 puts **runtime SIMD dispatch** in the hot path: `crc-fast` selects NEON on an ARM Mac and SSE4.2/VPCLMULQDQ on x86 CI. **A CRC bug that only manifests on one backend will never be seen by a Linux-only CI**, and Apple Silicon is where most local development will happen.
+**[Assessment]** This matters more here than for a typical service, because [18](18-rust-performance-methodology.md) §4 puts **runtime SIMD dispatch** in the hot path: `crc-fast` selects NEON on an ARM Mac and SSE4.2/VPCLMULQDQ on x86 CI. **A CRC bug that only manifests on one backend will never be seen by a Linux-only CI**, and Apple Silicon is where most local development will happen.
 
 ### 7.1 What actually breaks between Linux and macOS
 
@@ -320,7 +317,7 @@ Why not feature flags: a feature-gated test doesn't *compile* unless the feature
 
 ### 8.1 Structural: sans-I/O plus injected seams
 
-**[pgprox]** `Clock` is a `pub trait` in core, and the sans-I/O gate ensures nothing else reads the real time. That eliminates the largest single class of flakes by construction rather than by discipline.
+**[Practice]** `Clock` is a `pub trait` in core, and the sans-I/O gate ensures nothing else reads the real time. That eliminates the largest single class of flakes by construction rather than by discipline.
 
 **[Assessment] For oqueue, extend the rule from "no socket, no clock, no syscall" to include "no object store."** `ObjectStore` becomes a core trait exactly like `Clock`, and every fake can then inject latency, 503s, conditional-write races, and partial failures deterministically. This is also what makes the §4.2 fidelity-gap problem tractable.
 
@@ -340,11 +337,11 @@ Why not feature flags: a feature-gated test doesn't *compile* unless the feature
 
 DST — a seeded, single-threaded deterministic executor driving the whole system with injected faults — is the technique FoundationDB, TigerBeetle, and Antithesis are built on, and it's already surveyed in [05](05-rust-ecosystem.md) §9 (`madsim`, `turmoil`). **A failing seed is a complete, replayable reproduction**, which is the property no other testing approach in this document provides.
 
-This is the largest genuinely new investment oqueue needs over the precedent, and the argument for it is that the corpus's hardest open questions — coordinator failover RTO, metastable failure, the enumeration fork — are all cluster-level and otherwise only observable in production.
+This is the largest genuinely new testing investment the project needs, and the argument for it is that the corpus's hardest open questions — coordinator failover RTO, metastable failure, the enumeration fork — are all cluster-level and otherwise only observable in production.
 
 ### 8.4 Deterministic *builds*
 
-**[Assessment]** Commit `Cargo.lock`; add `rust-toolchain.toml` (§6); use `--locked` in CI so a stale lockfile fails loudly instead of silently resolving; `cargo-deny` for supply chain (**[pgprox]** already does this). For byte-reproducible artifacts, `--remap-path-prefix` and `SOURCE_DATE_EPOCH`.
+**[Assessment]** Commit `Cargo.lock`; add `rust-toolchain.toml` (§6); use `--locked` in CI so a stale lockfile fails loudly instead of silently resolving; `cargo-deny` for supply chain. For byte-reproducible artifacts, `--remap-path-prefix` and `SOURCE_DATE_EPOCH`.
 
 ---
 
@@ -354,7 +351,7 @@ This is the largest genuinely new investment oqueue needs over the precedent, an
 
 **[Assessment] Yes, and scoped.** Coverage says a line ran; mutation testing says the line *mattered*. For oqueue the payoff concentrates in exactly the places a subtle wrong answer is catastrophic and invisible: offset arithmetic, CRC boundaries, index binary search, retention predicates, conditional-write fencing. `<` vs `<=` in an index lookup is a data-loss bug that every coverage report will call fully covered.
 
-**[pgprox]** records the empirical argument: in one milestone, *"three of its defects were invisible because a fake answered something Postgres refuses, and one fix went in half-applied and green while every gate passed. Each of those is a line whose removal changed nothing any test could see, which is exactly what a surviving mutant is."*
+**[Practice]** The empirical argument for it: in services built this way, the defects that survive every other gate are consistently of one shape — a fake answered something the real dependency refuses, or a fix went in half-applied and green. Each of those is a line whose removal would change nothing any test could observe, which is exactly what a surviving mutant is.
 
 Priority order: property tests first, DST second (§8.3), mutation testing third. It is a *test-quality* audit, not a bug finder.
 
@@ -362,7 +359,7 @@ Priority order: property tests first, DST second (§8.3), mutation testing third
 
 This is the direct answer to "how do we keep it from slowing down as the code grows."
 
-**[pgprox]** A full run is **3,700 mutants**, each a build plus a test run. The scaling strategy is four mechanisms:
+**[Practice]** A full run on a workspace of this size is several thousand mutants, each costing a build plus a test run. Four mechanisms make that affordable:
 
 | Mechanism | Effect |
 |---|---|
@@ -375,13 +372,13 @@ CI shape: **`mutants-diff` on every PR, full sharded run nightly.** The diff run
 
 ### 9.3 Two hazards that cost real debugging time
 
-**⚠️ Disk exhaustion.** **[pgprox]** cargo-mutants copies the whole build tree per worker. *"On this machine /tmp is a 16 GB tmpfs and the tree with target-coverage is around 29 GB, so six workers exhaust it and the run dies partway with 'No space left on device' after having already spent the build."* Fix: `TMPDIR` redirected to `target/mutants-tmp` on real disk. This is also the source of the orphaned 1.7 GB in [18](18-rust-performance-methodology.md) §3.7.2.
+**⚠️ Disk exhaustion.** cargo-mutants copies the whole build tree per worker. A build tree with coverage instrumentation can reach ~30 GB, so six workers against a 16 GB tmpfs — the default `/tmp` on many systems, including WSL2 — exhausts it and the run dies partway with `No space left on device`, *after* having already paid for the builds. Fix: redirect `TMPDIR` to `target/mutants-tmp` on real disk. This is also a source of the orphaned trees in [18](18-rust-performance-methodology.md) §3.7.2.
 
 **⚠️ The false-kill hazard — the non-obvious one.** cargo-mutants reads *any* test failure as "the mutant was caught." nextest reports a terminated test as a failure. Therefore **a per-test timeout that is too tight reports a kill for a mutant that nothing detected** — a silent false negative in the direction the entire system exists to prevent.
 
-**[pgprox]** found it empirically: a mutant *"reported `< -> <=` as caught in one full run and missed in a targeted one, on identical code. Run by hand against the whole suite ten times, the mutant survived ten times, so the kill was the anomaly."*
+**[Practice]** It is found empirically and by accident: a mutant reported as caught in one full run and missed in a targeted run, on identical code. Run by hand against the whole suite ten times, the mutant survives ten times — so the *kill* was the anomaly, not the miss.
 
-The root cause is that the timeout must be sized against the suite **under the parallelism the mutation run actually uses**, not idle:
+The root cause is that the timeout must be sized against the suite **under the parallelism the mutation run actually uses**, not idle. Measured on one workspace:
 
 ```
 idle                      slowest test 2.85s
@@ -390,7 +387,7 @@ six concurrent suites     slowest test 6.66s   ← MUTANTS_JOBS=6
 
 A 10s cap that looked like 48× headroom when the suite was small had become **1.5×**. The fix was 30s with `terminate-after = 2`. The asymmetry is the lesson: *"The cost of being generous here is bounded and small… The cost of being tight is a false kill, which is silent."*
 
-**[Assessment]** There must also be a per-*run* backstop (`MUTANTS_TIMEOUT`) so a genuinely hung test costs one mutant rather than the run — and the two timeouts have to be reasoned about together, which is why the precedent's `.config/nextest.toml` is 40 lines of comment for 1 line of config.
+**[Assessment]** There must also be a per-*run* backstop (`MUTANTS_TIMEOUT`) so a genuinely hung test costs one mutant rather than the run — and the two timeouts have to be reasoned about together, which is why a correct `.config/nextest.toml` here is dozens of lines of reasoning for one line of config.
 
 ---
 
@@ -401,7 +398,7 @@ A 10s cap that looked like 48× headroom when the suite was small had become **1
 1. **Deterministic simulation testing** (§8.3). The largest investment and the largest payoff, because the corpus's hardest open questions are cluster-level.
 2. **`loom` on the lock-free structures** (§7.2), plus a multi-OS/multi-arch CI matrix (§7.5) — which is free on a public repo. ARM CI covers codegen and SIMD divergence; loom covers atomics.
 3. **An `ObjectStore` trait seam in core** (§8.1), extending the sans-I/O rule so object storage is injected exactly like `Clock` — plus a conformance suite diffing fake vs MinIO vs real S3 (§4.2).
-4. **`cargo-hakari`, `rust-toolchain.toml`, and `sccache`** (§6) — cheap, and each closes a gap the precedent has.
+4. **`cargo-hakari`, `rust-toolchain.toml`, and `sccache`** (§6) — cheap, and each closes a gap that conventional setups leave open.
 
 Plus one **removal**: the commented-out mold configuration is obsolete on Rust ≥1.90 and would likely be a regression if enabled.
 
@@ -412,13 +409,13 @@ Plus one **removal**: the commented-out mold configuration is obsolete on Rust �
 - **Where does DST go in the crate graph?** `madsim` works by substituting the runtime at compile time (`--cfg madsim`), which affects every crate that touches async. Whether that composes with the sans-I/O split — or makes it partly redundant — needs a spike before committing.
 - **Fake fidelity for object storage.** How do we *know* the in-memory `ObjectStore` matches S3 on conditional-write races? A conformance suite is proposed in §4.2 but not designed, and this is the highest-risk fake in the system.
 - **Mutation-testing budget as the codebase grows.** Diff narrowing bounds per-PR cost, but the nightly full run grows linearly. At what mutant count does 4 shards stop being enough, and is the answer more shards or a tighter crate list?
-- **Does the star topology survive oqueue's size?** pgprox's `core` holds 12 traits. If oqueue's core reaches 40, `core` becomes a rebuild bottleneck for the whole workspace — every change to it invalidates everything. Watch for it; the fix is splitting `core` into `core-types` (rarely changes) and `core-traits`.
+- **Does the star topology survive oqueue's size?** A comparable service holds around a dozen traits in `core` comfortably. If ours reaches ~40, `core` becomes a rebuild bottleneck for the whole workspace — every change to it invalidates everything. Watch for it; the fix is splitting `core` into `core-types` (rarely changes) and `core-traits`.
 - **`cargo-public-api` adoption** (§3.3) — worth it, or does `check-core-contract.sh` plus review already cover the contract surface?
 
 ---
 
 ## Sources
 
-**Primary — the pgprox workspace** (`/home/tuong/work/pgprox`, read 2026-08-13): `Cargo.toml` (workspace lints, centralized dependencies), `scripts/check-layering.sh`, `scripts/check-core-contract.sh`, `scripts/check-sans-io.sh`, `scripts/check-crate.sh`, `scripts/check-portability.sh`, `scripts/mutants.sh`, `.config/nextest.toml`, `.cargo/config.toml`, `.github/workflows/ci.yml`, `crates/pgprox-core/src/`.
+Practices marked **[Practice]** are drawn from production Rust workspaces of comparable size and are stated here as this project's standard rather than as a report on any particular codebase.
 
 **External** — [Cargo workspaces](https://doc.rust-lang.org/cargo/reference/workspaces.html) · [pipelined compilation (rust#60988)](https://github.com/rust-lang/rust/issues/60988) · [cargo-hakari](https://docs.rs/cargo-hakari/) · [cargo-nextest](https://nexte.st/) · [cargo-mutants](https://mutants.rs/) · [cargo-public-api](https://github.com/enselic/cargo-public-api) · [cargo-deny](https://embarkstudios.github.io/cargo-deny/) · [sccache](https://github.com/mozilla/sccache) · [madsim](https://github.com/madsim-rs/madsim) · [turmoil](https://github.com/tokio-rs/turmoil) · [loom](https://github.com/tokio-rs/loom) · [valgrind-macos fork](https://github.com/LouisBrunner/valgrind-macos) · [arm64 runners GA for public repos](https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/) · [sans-I/O](https://sans-io.readthedocs.io/) · [TigerBeetle on DST](https://tigerbeetle.com/blog/2023-03-28-random-fuzzy-thoughts/)

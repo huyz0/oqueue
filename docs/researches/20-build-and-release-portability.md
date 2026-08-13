@@ -20,7 +20,7 @@ summary: >
 
 *Compiled 2026-08-13. Written because [19](19-workspace-engineering.md) §7 covered test portability and skipped build portability entirely — see §0.*
 
-Marked **[Documented]**, **[Measured]**, **[pgprox]** (read from the sibling workspace), or **[Assessment]**.
+Marked **[Documented]**, **[Measured]**, **[Practice]** (established practice), or **[Assessment]**.
 
 ---
 
@@ -39,11 +39,11 @@ They have disjoint solutions, and mixing them produces the classic mistake of st
 
 ## 1. The host toolchain tax
 
-**[pgprox]** The sibling workspace's gates require, beyond cargo: `cmake`, `docker`, `go`, `protoc`, `python`, `valgrind`, plus `cargo-fuzz`, `cargo-mutants`, and `cargo-nextest`. On this machine `nasm` and `protoc`'s system package are absent; `protoc` is a user-local binary.
+**[Practice]** A mature Rust service's gates routinely require, beyond cargo: `cmake`, `docker`, `go`, `protoc`, `python`, and `valgrind`, plus `cargo-fuzz`, `cargo-mutants`, and `cargo-nextest`. Each is a way for a fresh checkout to fail on someone else's machine.
 
 **[Assessment] The rule that keeps this manageable: `cargo build` must need only cargo and a C compiler. Everything else belongs to gates, and gates must degrade rather than fail.**
 
-pgprox already implements the right pattern — `require_tool protoc "apt-get install protobuf-compiler" || finish`, which *skips* the gate with a named remedy rather than failing the build. Copy it exactly. The distinction that matters: **a missing tool must never be indistinguishable from a failing check**, and the header on `check-crate.sh` shows why they learned this — a missing `protoc` surfaced as "clippy failed" four lines into a build-script error.
+The pattern that makes this survivable is `require_tool protoc "apt-get install protobuf-compiler" || finish`, which **skips** the gate with a named remedy rather than failing the build. The distinction that matters: **a missing tool must never be indistinguishable from a failing check.** Without it, an absent `protoc` surfaces as "clippy failed" four lines into a build-script error, and the time is spent debugging the wrong thing.
 
 **Dependency choices are build-portability choices.** The heaviest offenders in this space:
 
@@ -55,13 +55,13 @@ pgprox already implements the right pattern — `require_tool protoc "apt-get in
 | anything `bindgen` | libclang |
 | `protoc`-based codegen | a `protoc` binary |
 
-**[Assessment]** oqueue has an advantage worth protecting: **the Kafka wire protocol is not protobuf**, so unlike pgprox we have no structural need for `protoc` at all. Keep it that way. For TLS, prefer `rustls` with a backend chosen for build simplicity, and treat "adds a C toolchain requirement" as a real cost in the [05](05-rust-ecosystem.md) crate selection, not a footnote.
+**[Assessment]** oqueue has an advantage worth protecting: **the Kafka wire protocol is not protobuf**, so we have no structural need for `protoc` at all. Keep it that way. For TLS, prefer `rustls` with a backend chosen for build simplicity, and treat "adds a C toolchain requirement" as a real cost in the [05](05-rust-ecosystem.md) crate selection, not a footnote.
 
 ---
 
 ## 2. The glibc floor — the actual Linux distribution problem
 
-**[Documented]** glibc symbol versioning is **forward-compatible only**. A binary linked against glibc 2.43 will not start on a system with 2.34; the reverse is fine. This machine is on **glibc 2.43**, which means a binary built here natively fails on essentially every current LTS server:
+**[Documented]** glibc symbol versioning is **forward-compatible only**. A binary linked against glibc 2.43 will not start on a system with 2.34; the reverse is fine. A current rolling-release development host sits well ahead of every deployment target, so a binary built there natively fails on essentially every current LTS server:
 
 | Target | glibc |
 |---|---|
@@ -69,7 +69,7 @@ pgprox already implements the right pattern — `require_tool protoc "apt-get in
 | Ubuntu 22.04 LTS | 2.35 |
 | Debian 12 | 2.36 |
 | Ubuntu 24.04 LTS | 2.39 |
-| **This machine** | **2.43** |
+| **Typical current dev host** | **2.43** |
 
 **[Assessment]** This is *the* Linux binary-distribution problem and it is invisible until someone deploys. Three answers exist:
 
@@ -141,7 +141,7 @@ An object-storage-backed broker is deployed on Linux. Nobody runs it in producti
 
 - **macOS must** build the workspace and run the T0/T1 test tiers (per [19](19-workspace-engineering.md) §7), because that's where much local development happens.
 - **macOS need not** produce release artifacts — which means **no codesigning, no notarization, no universal binaries, no Gatekeeper handling**. All of that is real, tedious work avoided by writing the decision down.
-- Windows is not a target at all; WSL2 is the supported path, which is what this machine uses.
+- Windows is not a target at all; WSL2 is the supported path for development on Windows.
 
 The cost of this decision is that macOS-only build breakage is caught by CI rather than by a release gate — which is exactly what the free `macos-latest` runner in [19](19-workspace-engineering.md) §7.2 is for.
 
@@ -168,9 +168,9 @@ Both Linux architectures are first-class. Graviton is a plausible deployment tar
 
 **[Assessment]** Complements [19](19-workspace-engineering.md) §8.4:
 
-- **`rust-toolchain.toml`** — still the largest gap. Without it, the compiler version is whatever `rustup` last fetched, which makes every other reproducibility measure moot. **[pgprox]** has none.
+- **`rust-toolchain.toml`** — the prerequisite for everything else here. Without it the compiler version is whatever `rustup` last fetched, which makes every other reproducibility measure moot. An MSRV field plus a CI install step is not a substitute.
 - **`--locked` in CI** so a stale `Cargo.lock` fails loudly.
-- **`--remap-path-prefix`** to strip absolute build paths from binaries and panic messages — also a small privacy win, since otherwise `/home/tuong/...` ships in the binary.
+- **`--remap-path-prefix`** to strip absolute build paths from binaries and panic messages — also a small privacy win, since otherwise the builder's home-directory path ships inside the binary.
 - **`SOURCE_DATE_EPOCH`** for timestamp determinism.
 - **Pin the glibc floor and `target-cpu` in CI config**, not in a developer's shell. Both are properties of the artifact and both drift silently.
 
@@ -187,4 +187,4 @@ Both Linux architectures are first-class. Graviton is a plausible deployment tar
 
 ## Sources
 
-[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and its [glibc version targeting](https://github.com/rust-cross/cargo-zigbuild/blob/main/README.md) · [cargo-zigbuild #231 (static glibc + explicit target)](https://github.com/rust-cross/cargo-zigbuild/issues/231) · [cross](https://github.com/cross-rs/cross) · [Rust Project Primer: cross-compiling](https://rustprojectprimer.com/building/cross.html) · [Performance of static Rust with MUSL](https://raniz.blog/2025-02-06_rust-musl-malloc/) · [Tweag: Supercharging Rust static executables with mimalloc](https://www.tweag.io/blog/2023-08-10-rust-static-link-with-mimalloc/) · [arm64 hosted runners GA for public repos](https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/) · [arm64 standard runners in private repos](https://github.blog/changelog/2026-01-29-arm64-standard-runners-are-now-available-in-private-repositories/) · [AWS Graviton getting-started: Rust](https://github.com/aws/aws-graviton-getting-started/blob/main/rust.md) · [x86-64 microarchitecture levels](https://en.opensuse.org/X86-64_microarchitecture_levels) · **[pgprox]** `scripts/lib.sh`, `scripts/check-crate.sh`, `Cargo.lock` (read 2026-08-13)
+[cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) and its [glibc version targeting](https://github.com/rust-cross/cargo-zigbuild/blob/main/README.md) · [cargo-zigbuild #231 (static glibc + explicit target)](https://github.com/rust-cross/cargo-zigbuild/issues/231) · [cross](https://github.com/cross-rs/cross) · [Rust Project Primer: cross-compiling](https://rustprojectprimer.com/building/cross.html) · [Performance of static Rust with MUSL](https://raniz.blog/2025-02-06_rust-musl-malloc/) · [Tweag: Supercharging Rust static executables with mimalloc](https://www.tweag.io/blog/2023-08-10-rust-static-link-with-mimalloc/) · [arm64 hosted runners GA for public repos](https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/) · [arm64 standard runners in private repos](https://github.blog/changelog/2026-01-29-arm64-standard-runners-are-now-available-in-private-repositories/) · [AWS Graviton getting-started: Rust](https://github.com/aws/aws-graviton-getting-started/blob/main/rust.md) · [x86-64 microarchitecture levels](https://en.opensuse.org/X86-64_microarchitecture_levels)

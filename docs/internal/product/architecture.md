@@ -1,7 +1,6 @@
 # Architecture
 
-The crate map and the dependency rule. Written fresh for oqueue rather than
-ported, because the seams here are `ObjectStore` and `Clock`, not a proxy's.
+The crate map and the dependency rule.
 
 ## The dependency rule
 
@@ -54,7 +53,7 @@ a recorded decision. See
 [docs/researches/18](../../researches/18-rust-performance-methodology.md) §5.7.
 
 ⚠️ **Watch `oqueue-core`'s size.** Every crate depends on it, so every change to
-it rebuilds the workspace. The precedent this is modelled on holds 12 traits
+it rebuilds the workspace. A comparable service holds around a dozen traits
 comfortably. If ours approaches ~40, split `core-types` (rarely changes) from
 `core-traits`. Tracked as open question #34.
 

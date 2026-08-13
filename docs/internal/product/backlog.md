@@ -34,6 +34,7 @@ comes before any gate because every gate sources it.
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | todo |
 | M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | todo |
 | M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3 | todo |
+| M-1.17 | Make the corpus and product docs self-contained before the repo goes public | No reference to any other repository, no absolute local path, no verbatim quotation of an external private source; every practice stated as this project's own standard | done |
 
 ### Notes on specific tasks
 
@@ -53,3 +54,10 @@ guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.17** was executed out of ID order, immediately before the first push. Task
+IDs are stable, so the table is ordered by ID rather than by execution. The
+substance of every borrowed practice survives — it is now stated as this
+project's standard under a `[Practice]` marker, which keeps the honest
+distinction from `[Assessment]` (our own reasoning) and `[Documented]`
+(externally cited).
