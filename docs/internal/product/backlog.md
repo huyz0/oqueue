@@ -49,6 +49,7 @@ comes before any gate because every gate sources it.
 | M-1.29 | `check-hot-path-bench.sh` | Every hot path named in `performance.md` rule 18 has a benchmark, so the list cannot silently rot | todo |
 | M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | todo |
 | M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
+| M-1.32 | `standards/git.md` — commit atomicity and structure | States why atomicity matters (bisect is the substitute for a reviewer), the subject and body rules, amend-before-push / follow-up-after, and the no-branching workflow | done |
 
 ### Notes on specific tasks
 
@@ -68,6 +69,17 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.32** names the rule most likely to be broken without noticing: ⚠️ **never
+mix a refactor with a behaviour change**. It is the most common way an atomic
+commit stops being one, it makes the diff unreviewable, and a bisect landing on
+that commit cannot say which half broke. No script catches it, so it is review's
+job.
+
+It also records what happened earlier in this milestone: a pushed commit
+carrying wrong counts in its message was left standing and corrected by a
+follow-up rather than amended, because `main` is public and rewriting it breaks
+every clone.
 
 **M-1.6** is the first gate, and writing its negative cases immediately found
 two defects in it. The subject-quality rule originally required ten characters,

@@ -42,6 +42,7 @@ required.
 
 **Process** — how work is specified and traced:
 - [sdd.md](docs/internal/standards/sdd.md) the requirement→spec→task→commit chain, acceptance criteria, definition of done
+- [git.md](docs/internal/standards/git.md) commit atomicity, subject and body structure, amend/revert rules, direct-to-main
 - `review.md` *(M-1.23)* reviewer isolation, the deterministic/semantic split
 
 **Quality** — what must be true of the result:
