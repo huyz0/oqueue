@@ -19,7 +19,7 @@ crate you are working in adds context specific to that crate.
 
 ## The research corpus
 
-[docs/researches/](docs/researches/) is 21 documents of cited background
+[docs/researches/](docs/researches/) is 22 documents of cited background
 compiled before any code existed: the reference architectures, object-storage
 physics, the Kafka protocol, cost models, and this project's own engineering
 standards. **It is upstream of the product docs, not parallel to them.** Read

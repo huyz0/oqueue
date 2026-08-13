@@ -90,7 +90,7 @@ must mean per-topic *configuration* rather than per-topic KMS key, is in
 
 | Path | Contents |
 |---|---|
-| [`docs/researches/`](docs/researches/README.md) | 21 documents of cited research compiled before any code: reference architectures, object-storage physics, Kafka protocol, cost models, latency budgets, and this project's engineering standards. **Start with its README** — it maps the rest. |
+| [`docs/researches/`](docs/researches/README.md) | 22 documents of cited research compiled before any code: reference architectures, object-storage physics, Kafka protocol, cost models, latency budgets, and this project's engineering standards. **Start with its README** — it maps the rest. |
 | [`docs/internal/product/`](docs/internal/product/) | Mission, architecture, roadmap, backlog, and architecture decision records. |
 | [`AGENTS.md`](AGENTS.md) | The working agreement. Read this before changing anything. |
 
