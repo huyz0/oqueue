@@ -65,8 +65,27 @@ M-1.12.
 ## Skills
 
 Procedures, in [.agents/skills/](.agents/skills/), written to the Agent Skills
-spec so they work in any tool that reads `SKILL.md`. Where a skill needs to run
-something it calls a script in `scripts/`, never a tool-specific built-in.
+spec so they work in any tool that reads `SKILL.md`. A skill calls a script in
+`scripts/`, never a tool-specific built-in.
+
+| Skill | Use when |
+|---|---|
+| [`goal`](.agents/skills/goal/SKILL.md) | Driving a milestone to completion without a human in the loop |
+| [`next-task`](.agents/skills/next-task/SKILL.md) | Starting work and needing to know what to do next |
+| [`spec`](.agents/skills/spec/SKILL.md) | Something needs specifying before code |
+| [`tdd`](.agents/skills/tdd/SKILL.md) | Implementing a task |
+| [`review`](.agents/skills/review/SKILL.md) | A change is staged and needs an independent reviewer |
+| [`adr`](.agents/skills/adr/SKILL.md) | Making a choice that is expensive to reverse |
+| [`research`](.agents/skills/research/SKILL.md) | A question might already be answered in the corpus |
+
+**Progressive disclosure.** This file is layer 0 and is deliberately an index.
+Skill *descriptions* are layer 1 and cost a few hundred words. A skill's *body*
+is layer 2, loaded when invoked. Standards, product docs, and the 22-document
+research corpus are layer 3, loaded only when a skill says to read one — never
+wholesale. See [.agents/skills/README.md](.agents/skills/README.md).
+
+⚠️ **`.claude/` is an adapter layer and holds no procedures.** A command file
+that contains a procedure rather than a pointer is a fork waiting to drift.
 
 ## Non-negotiables
 

@@ -30,7 +30,7 @@ comes before any gate because every gate sources it.
 | M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | todo |
 | M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | todo |
 | M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
-| M-1.13 | `.agents/skills/` — `next-task`, `spec`, `tdd`, `adr`, `contract-change`, `review` | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in | todo |
+| M-1.13 | `.agents/skills/` — `goal`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | todo |
 | M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | todo |
 | M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3 | todo |
@@ -47,6 +47,8 @@ comes before any gate because every gate sources it.
 | M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | todo |
 | M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | todo |
 | M-1.29 | `check-hot-path-bench.sh` | Every hot path named in `performance.md` rule 18 has a benchmark, so the list cannot silently rot | todo |
+| M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | todo |
+| M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
 
 ### Notes on specific tasks
 
@@ -66,6 +68,17 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.13** implements progressive disclosure in four layers, because the
+alternative — loading seven standards and 110,000 words of research into every
+session — is impossible and would be useless if it were not. ⚠️ The load-bearing
+piece is a skill's `description`: it is the only thing an agent sees before
+deciding to load the body, so it must say *when to use this* rather than *what
+this is*.
+
+`.claude/agents/reviewer.md` is where doc 21 §4 stops being a design and starts
+being a mechanism: a subagent whose prompt explicitly denies it the author's
+reasoning, with a restricted tool set so it reads rather than writes.
 
 **M-1.26** makes the structural limits real rather than aspirational.
 `clippy::too_many_lines`, `cognitive_complexity`, and `too_many_arguments` are
