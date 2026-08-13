@@ -90,7 +90,8 @@ Derivation is in
 | Path | Contents |
 |---|---|
 | [`docs/researches/`](docs/researches/README.md) | 22 documents of cited research compiled before any code: reference architectures, object-storage physics, Kafka protocol, cost models, latency budgets, and this project's engineering standards. **Start with its README** — it maps the rest. |
-| [`docs/internal/product/`](docs/internal/product/) | Mission, architecture, roadmap, backlog, and architecture decision records. |
+| [`docs/internal/product/`](docs/internal/product/) | Mission, **requirements** (functional and non-functional, with stable IDs), architecture, roadmap, backlog, and architecture decision records. |
+| [`docs/internal/standards/`](docs/internal/standards/) | How work is specified and what the code must look like. |
 | [`AGENTS.md`](AGENTS.md) | The working agreement. Read this before changing anything. |
 
 Some entry points worth the time even if you never use oqueue:

@@ -12,6 +12,7 @@ crate you are working in adds context specific to that crate.
 ## Start here
 
 - [docs/internal/product/mission.md](docs/internal/product/mission.md) what this is and what it must never do
+- [docs/internal/product/requirements.md](docs/internal/product/requirements.md) functional and non-functional requirements, with the IDs specs cite
 - [docs/internal/product/architecture.md](docs/internal/product/architecture.md) crate map and dependency rules
 - [docs/internal/product/roadmap.md](docs/internal/product/roadmap.md) milestones and their completion conditions
 - [docs/internal/product/backlog.md](docs/internal/product/backlog.md) the current task list
@@ -35,10 +36,13 @@ assuming anything is settled.
 
 Rules that are always true. Read the one that covers what you are touching.
 
-⚠️ **None of these exist yet — they are M-1.5.** Listed here as the plan, without
-links, because a link to a file that is not there is a claim this repo does not
-get to make. Until M-1.5 lands, the governing rules are the non-negotiables
-below and the position documents in `docs/researches/`.
+**Process standards** govern how work is specified and traced; **code
+standards** govern what the code looks like. Both bind.
+
+- [docs/internal/standards/sdd.md](docs/internal/standards/sdd.md) spec-driven development: the requirement→spec→task→commit chain, acceptance criteria, definition of done
+
+⚠️ **The rest do not exist yet — they are M-1.5.** Listed without links, because
+a link to a file that is not there is a claim this repo does not get to make.
 
 - `docs/internal/standards/behavior.md` how to work in this repo, read this first
 - `docs/internal/standards/rust-style.md`

@@ -22,7 +22,7 @@ comes before any gate because every gate sources it.
 | M-1.2 | `mission.md` — what this is, what it costs, what it must never do | States the latency position and the scale target with citations into the corpus | done |
 | M-1.3 | `architecture.md` — crate map, dependency rule, the seams | Names all eleven crates, the star rule with its two exceptions, and the `unsafe` budget | done |
 | M-1.4 | `roadmap.md` + `backlog.md` — milestones with executable completion conditions | Every milestone's "done" is a command; only M-1 is decomposed | done |
-| M-1.5 | `standards/` — port `behavior`, `rust-style`, `error-handling`, `testing`; write `contracts` and `async-concurrency` fresh | ⚠️ Every ported threshold is re-derived against oqueue or explicitly marked underived | todo |
+| M-1.5 | `standards/` — **code standards**: `behavior`, `rust-style`, `error-handling`, `testing`, plus `contracts` and `async-concurrency` written fresh | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | todo |
 | M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | todo |
 | M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | todo |
 | M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | todo |
@@ -38,6 +38,10 @@ comes before any gate because every gate sources it.
 | M-1.18 | Public-facing files: `README.md`, `CONTRIBUTING.md`, `SECURITY.md` | README states plainly that no implementation exists; contributing says code is not yet accepted and why; security gives a private reporting route | done |
 | M-1.19 | Record the BYOK and FIPS requirements across mission, architecture, roadmap, and the corpus | New milestone M8; `KeyProvider` seam and `oqueue-crypto` crate in the architecture; the AEAD-algorithm-in-region-header constraint recorded against M1 | done |
 | M-1.20 | Revise the encryption design for the clarified BYOK volume (~10K topics, not catalog-wide) | Segregation replaces universal per-region sealing; the KMS key-count conclusion corrected and marked as corrected | done |
+| M-1.21 | `requirements.md` — functional and non-functional, with stable IDs | Every entry names a verification; every NFR carries a number or is marked UNDERIVED with what blocks it; nothing invented | done |
+| M-1.22 | `standards/sdd.md` — the process standard | Defines the requirement→spec→task→commit chain, what a spec must contain, acceptance-criteria rules, definition of done, and what to do when a spec proves wrong | done |
+| M-1.23 | `standards/review.md` — the operational review standard | Turns [docs/researches/21](../../researches/21-ai-development-loop.md) §3–5 into a standard: reviewer context isolation, the deterministic/semantic split, fixed-or-argued resolution | todo |
+| M-1.24 | Trace every milestone to the requirements it serves | Every roadmap entry names FR/NFR IDs; a gate fails on a milestone that names none | todo |
 
 ### Notes on specific tasks
 
@@ -57,6 +61,13 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.21** deliberately leaves several NFRs **UNDERIVED** rather than choosing
+plausible numbers. NFR-13 (aggregate throughput) blocks NFR-31 and gates
+architectural decisions; NFR-55 and NFR-56 are constants that cannot be picked
+before there is a workspace to measure. ⚠️ An invented number is
+indistinguishable from a measured one a month later, which is why the standard
+forbids it outright.
 
 **M-1.20** corrected a conclusion rather than extending one. The first
 encryption draft assumed BYOK might apply catalog-wide and derived a design from

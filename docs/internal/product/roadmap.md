@@ -47,6 +47,12 @@ exists and passes, that `tests/gates/negative.sh` proves each gate can fail,
 and that no rule remains marked "not yet enforced" except rule 3, which cannot
 be.
 
+> **Requirements** live in [requirements.md](requirements.md) with stable IDs.
+> Every milestone below serves specific FR/NFR entries, and a milestone serving
+> none is unjustified. ⚠️ Several requirements are **UNDERIVED** — most
+> importantly NFR-13 (aggregate throughput), which gates architectural decisions
+> in M1 and M3.
+
 ## M0 — Workspace, contracts, and quality gates
 
 The Cargo workspace, the eleven crates, `oqueue-core`'s trait seams with a fake
