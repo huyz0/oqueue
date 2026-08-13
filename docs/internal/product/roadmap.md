@@ -25,6 +25,7 @@ file is the execution view.
 | M5 | Compaction and retention | not started |
 | M6 | Recovery and failover | not started |
 | M7 | Metadata sharding and scale | not started |
+| M8 | Encryption: BYOK and the FIPS build | not started |
 
 ## M-1 — AI development system
 
@@ -66,6 +67,23 @@ to land properly, and its answer shapes `standards/testing.md`.
 passes against the in-memory fake and against MinIO, and records which backends
 it has been run against. ⚠️ Real S3 is deferred; conditional-write behaviour
 stays marked unverified until it runs. Open question #33.
+
+## M8 — Encryption: BYOK and the FIPS build
+
+The `KeyProvider` seam, envelope encryption with a DEK per topic, per-region
+sealing inside shared objects, the DEK cache that keeps KMS off the per-batch
+path, and the separate FIPS artifact.
+
+Sequenced after the object format is stable, because per-region sealing changes
+the footer and the index entry. ⚠️ But the **region header must name its AEAD
+algorithm from M1 onward**, or a FIPS build and a non-FIPS build become mutually
+unable to read each other's data — a cheap field now, an expensive migration
+later.
+
+**Completion condition:** `scripts/gates/m8-complete.sh` — round-trip against
+AWS KMS and GCP Cloud KMS through the same seam, a FIPS build that asserts
+`fips_mode_enabled()` at runtime, and a differential test proving FIPS and
+non-FIPS builds read each other's data.
 
 ## M2–M7
 

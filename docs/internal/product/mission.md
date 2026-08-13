@@ -43,6 +43,21 @@ partitions on this node.** See
 [docs/researches/15](../../researches/15-scale-architecture-position.md) and
 [16](../../researches/16-automq-deep-dive.md).
 
+## Encryption
+
+Two optional capabilities, neither of which may burden deployments that do not
+use them:
+
+- **BYOK** — customers supply key material, configured **per topic**, portable
+  across AWS KMS and GCP Cloud KMS. Because one object carries many tenants'
+  data, server-side encryption cannot express this, so encryption is
+  broker-side envelope encryption with a DEK per topic.
+- **FIPS 140-3** — a **separate build**, using the validated `aws-lc-rs` module.
+  Separate because it requires a Go toolchain at build time, which no
+  non-FIPS user should pay for.
+
+See [docs/researches/22](../../researches/22-encryption-byok-and-fips.md).
+
 ## What it must never do
 
 - **Never acknowledge a write that is not durable.** The cache is populated
@@ -58,6 +73,10 @@ partitions on this node.** See
 - **Never require LIST on the read path.** It is semantically useless for
   finding a partition's data and priced at 12–38× a GET.
 - **Never lose a record that was acknowledged.** Everything else is negotiable.
+- **Never let a data encryption key reach a log, span, metric label, error
+  variant, or admin response**, and never let one outlive its use unzeroized.
+- **Never reuse an AEAD nonce.** Nonces are constructed from writer epoch,
+  object sequence, and region index — never drawn at random.
 
 ## Non-goals
 

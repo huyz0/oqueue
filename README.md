@@ -69,6 +69,23 @@ the partitions that node actually serves. The rule this produces —
 derived in [docs/researches/15](docs/researches/15-scale-architecture-position.md)
 and [16](docs/researches/16-automq-deep-dive.md).
 
+## Encryption
+
+Two optional capabilities, neither of which burdens deployments that skip them:
+
+- **BYOK, configured per topic**, portable across AWS KMS and GCP Cloud KMS.
+  Server-side encryption cannot express this — one object carries many tenants'
+  data, and an object can carry only one SSE-KMS key — so encryption is
+  broker-side envelope encryption, with each region inside an object sealed
+  under its own topic's key.
+- **FIPS 140-3 as a separate build**, using the validated `aws-lc-rs` module.
+  Separate because it needs a Go toolchain at build time, which no other user
+  should have to install.
+
+Derivation, including why AWS KMS's 100,000-key-per-region cap means "per topic"
+must mean per-topic *configuration* rather than per-topic KMS key, is in
+[docs/researches/22](docs/researches/22-encryption-byok-and-fips.md).
+
 ## What's in this repository
 
 | Path | Contents |
@@ -123,6 +140,7 @@ workspace standard in
 | M5 | Compaction and retention | not started |
 | M6 | Recovery and failover | not started |
 | M7 | Metadata sharding and scale | not started |
+| M8 | Encryption: BYOK and the FIPS build | not started |
 
 Every milestone's completion condition is a command rather than a judgement.
 See [roadmap.md](docs/internal/product/roadmap.md).

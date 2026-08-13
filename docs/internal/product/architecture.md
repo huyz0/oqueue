@@ -42,6 +42,7 @@ which is what makes a shared testkit usable at all.
 | `oqueue-index` | Offset→object index and its search | forbid |
 | `oqueue-store` | `ObjectStore` implementations: S3, GCS, in-memory | forbid |
 | `oqueue-coordinator` | Metadata, offset sequencing, recovery | forbid |
+| `oqueue-crypto` | AEAD, envelope encryption, DEK cache, nonce construction | forbid |
 | `oqueue-compact` | Compaction planning and execution | forbid |
 | `oqueue-broker` | **Composer.** The I/O shell, generic over its seams | forbid |
 | `oqueue-testkit` | Fakes, generators, harness. **Dev-only.** | forbid |
@@ -70,6 +71,10 @@ The two that carry the most weight:
 - **`ObjectStore`** — nothing else talks to S3 or GCS. This extends the
   sans-I/O rule beyond its usual form and is what allows latency, 503s,
   conditional-write races, and partial failures to be injected deterministically.
+- **`KeyProvider`** — wrap and unwrap only. Deliberately *not* "generate a data
+  key": GCP Cloud KMS has no `GenerateDataKey` equivalent, so the seam is the
+  intersection of what AWS and GCP both offer, and DEKs are generated locally.
+  See [docs/researches/22](../../researches/22-encryption-byok-and-fips.md) §4.
 
 ⚠️ **The `ObjectStore` fake is the highest-risk component in the project.**
 Conditional writes (`If-Match`/`If-None-Match`) are load-bearing for the whole
@@ -79,6 +84,23 @@ to the documented semantics in
 [docs/researches/04](../../researches/04-object-storage-s3-gcs.md) §6, and
 **conditional-write behaviour stays marked unverified until it has run against
 real S3.** Open question #33.
+
+## Encryption
+
+⚠️ **Per-topic keys and multi-topic object batching collide, and the resolution
+shapes the object format.** One object carries many tenants' data, so it cannot
+carry one key. Instead each region within an object is sealed independently
+under its own topic's DEK — which works because the read path already issues
+ranged GETs into the object rather than reading it whole.
+
+`oqueue-crypto` sits between the codec and the store; `oqueue-store` stays
+unaware that bytes are encrypted, which keeps the object-storage conformance
+suite independent of encryption. KMS is on the DEK-rotation path and **never on
+the per-batch path** — AWS KMS shares a 5,500–10,000 ops/sec quota across an
+account, so a synchronous KMS call per flush would throttle at modest load.
+
+Full derivation in
+[docs/researches/22](../../researches/22-encryption-byok-and-fips.md).
 
 ## Sans-I/O
 
