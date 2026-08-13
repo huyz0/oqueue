@@ -46,16 +46,16 @@ required.
 
 **Quality** — what must be true of the result:
 - [security.md](docs/internal/standards/security.md) untrusted input, secrets, tenant isolation, cryptography, `unsafe`
-- [performance.md](docs/internal/standards/performance.md) the three benchmark suites, where speed actually comes from, budgets
-- `testing.md` *(M-1.5)* test tiers, determinism, mutation testing, coverage
+- [performance.md](docs/internal/standards/performance.md) benchmark suites, hot-path obligations, on-demand profiling, budgets
+- [testing.md](docs/internal/standards/testing.md) the four tiers, fakes over mocks, the no-flake rules, mutation testing
 
 **Delivery** — how it is produced and shipped:
 - [build.md](docs/internal/standards/build.md) profiles, toolchain, workspace layout, disk hygiene
 - [portability.md](docs/internal/standards/portability.md) targets, glibc floor, cross-arch correctness
 
-**Code** — what it looks like *(all M-1.5)*:
-- `behavior.md` how to work in this repo, read this first
-- `rust-style.md`, `error-handling.md`, `async-concurrency.md`, `contracts.md`
+**Code** — what it looks like:
+- [code-structure.md](docs/internal/standards/code-structure.md) crates, folders, per-crate README and AGENTS.md, file and function limits
+- `behavior.md`, `rust-style.md`, `error-handling.md`, `async-concurrency.md`, `contracts.md` *(M-1.5)*
 
 ⚠️ Entries without links do not exist yet. A link to a file that is not there is
 a claim this repo does not get to make. Skills and scripts are in the same

@@ -1,0 +1,21 @@
+# Thresholds that make the code-structure standard enforceable rather than
+# aspirational. See docs/internal/standards/code-structure.md.
+#
+# These are constants. Raising one is a decision with an ADR, not a fix for a
+# function that grew -- the standard's whole point is that the limit is the
+# signal.
+
+# A function is at most 50 lines. clippy's default is 100.
+too-many-lines-threshold = 50
+
+# Branching and nesting, weighted. Default is 25.
+cognitive-complexity-threshold = 20
+
+# More than five arguments means a struct is trying to exist. Default is 7.
+too-many-arguments-threshold = 5
+
+# A type nested this deep in a signature is unreadable. Default is 4.
+type-complexity-threshold = 250
+
+# Enum variants whose sizes differ wildly cost memory on every value.
+enum-variant-size-threshold = 200

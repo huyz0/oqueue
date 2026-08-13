@@ -22,7 +22,7 @@ comes before any gate because every gate sources it.
 | M-1.2 | `mission.md` — what this is, what it costs, what it must never do | States the latency position and the scale target with citations into the corpus | done |
 | M-1.3 | `architecture.md` — crate map, dependency rule, the seams | Names all eleven crates, the star rule with its two exceptions, and the `unsafe` budget | done |
 | M-1.4 | `roadmap.md` + `backlog.md` — milestones with executable completion conditions | Every milestone's "done" is a command; only M-1 is decomposed | done |
-| M-1.5 | `standards/` — **code standards**: `behavior`, `rust-style`, `error-handling`, `testing`, plus `contracts` and `async-concurrency` written fresh | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | todo |
+| M-1.5 | `standards/` — remaining code standards: `behavior`, `rust-style`, `error-handling`, `async-concurrency`, `contracts` | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | todo |
 | M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | todo |
 | M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | todo |
 | M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | todo |
@@ -43,6 +43,10 @@ comes before any gate because every gate sources it.
 | M-1.23 | `standards/review.md` — the operational review standard | Turns [docs/researches/21](../../researches/21-ai-development-loop.md) §3–5 into a standard: reviewer context isolation, the deterministic/semantic split, fixed-or-argued resolution | todo |
 | M-1.24 | Trace every milestone to the requirements it serves | Every roadmap entry names FR/NFR IDs; a gate fails on a milestone that names none | todo |
 | M-1.25 | `standards/security.md`, `performance.md`, `build.md`, `portability.md` | Each rule names its gate or is explicitly marked as having none; rationale delegated to the corpus rather than restated | done |
+| M-1.26 | `standards/code-structure.md` + `standards/testing.md` + `clippy.toml` | File ≤500 lines with a reasoned allowlist; function ≤50 lines, cognitive complexity ≤20, ≤5 arguments, all via `clippy.toml`; per-crate `README.md` and `AGENTS.md` required; fakes over mocks; the no-flake rules | done |
+| M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | todo |
+| M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | todo |
+| M-1.29 | `check-hot-path-bench.sh` | Every hot path named in `performance.md` rule 18 has a benchmark, so the list cannot silently rot | todo |
 
 ### Notes on specific tasks
 
@@ -62,6 +66,19 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.26** makes the structural limits real rather than aspirational.
+`clippy::too_many_lines`, `cognitive_complexity`, and `too_many_arguments` are
+all in the `pedantic` group, which is already denied workspace-wide, so the
+thresholds in `clippy.toml` are enforced the moment a crate exists. ⚠️ The
+500-line file limit needs its own script and an allowlist, because generated
+protocol tables and exhaustive `match` arms over wire types are legitimately
+large — M-1.27.
+
+**M-1.28** is deliberately **not** a gate. Profiling is slow, needs a quiet
+machine, and produces output requiring judgement; gating on it would either
+stall the loop or produce alerts nobody trusts. The requirement is that it be
+runnable at any moment without ceremony.
 
 **M-1.25** closed a gap in the standards plan. M-1.5's list was adapted from a
 service of a different shape — one that ships a single architecture, carries no

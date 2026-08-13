@@ -82,6 +82,60 @@ Ordered by observed leverage. **Exhaust the earlier rows before the later ones.*
     change that adds an API call to a hot path is a performance regression even
     if it is fast. → NFR-30's zero-LIST gate
 
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.** → a gate
+    asserting each named path has one, so the list above cannot silently rot.
+
+## Profiling: on demand, never gated
+
+⚠️ **These are tools, not gates.** They are slow, they need a quiet machine, and
+several produce output that requires judgement to read. Gating on them would
+either slow the loop to a crawl or produce alerts nobody trusts. They must be
+**runnable at any moment** without ceremony, which is the whole point.
+
+20. **Every profiling mode is a one-line command**, documented in
+    `scripts/profile.sh`. A profiler that takes twenty minutes to set up is a
+    profiler nobody runs.
+
+| Want to know | Tool | Command |
+|---|---|---|
+| Instructions retired, per function | Callgrind via **gungraun** | `scripts/profile.sh instructions <bench>` |
+| Where wall time goes | `perf` + flamegraph | `scripts/profile.sh flame <bench>` |
+| Heap: what allocated, where, how long | **DHAT** | `scripts/profile.sh heap <bench>` |
+| Peak memory over time | **Massif** | `scripts/profile.sh massif <bench>` |
+| Cache misses and branch misprediction | **Cachegrind** | `scripts/profile.sh cache <bench>` |
+| Allocation count and size distribution | allocator stats | `scripts/profile.sh alloc <bench>` |
+| Which mutants survive here | cargo-mutants, scoped | `scripts/mutants.sh <crate>` |
+| Full mutation run, sharded | cargo-mutants | `scripts/mutants.sh` |
+
+21. **Memory is a first-class concern, not an afterthought.** A broker holding
+    buffers for many partitions fails on allocation behaviour long before it
+    fails on CPU. Heap profiling belongs in the routine, and **allocation count
+    is often a better regression signal than bytes** — it catches a new copy
+    that a peak-memory number hides.
+22. **Profile before optimizing, and keep the profile.** Attach it to the task.
+    A performance claim with no profile behind it is a guess that has been
+    written down.
+23. ⚠️ **Valgrind-based tools cannot execute AVX-512 or SVE**, and under
+    Valgrind runtime feature detection reports false. For any SIMD-dispatching
+    path, use `perf` on real hardware — the Valgrind number describes code that
+    does not ship. → rule 4
+
 ## What has no gate
 
 **Whether a benchmark represents a real workload.** A fast benchmark on an
