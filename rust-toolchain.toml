@@ -1,0 +1,19 @@
+# The toolchain is pinned, and this file is the prerequisite for every other
+# reproducibility measure in the project. pgprox has no equivalent: its MSRV
+# lives in `[workspace.package] rust-version` and a CI job installs "the pinned
+# toolchain" separately, which means every contributor and every agent gets
+# whatever `rustup` last fetched. docs/researches/20 §8.
+#
+# Bumping this is a task with a commit, not a side effect of someone running
+# `rustup update`.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+
+# Both Linux targets are first-class release artifacts, so both are installed
+# rather than fetched on demand in CI. aarch64 is a real deployment target
+# (Graviton), not an afterthought — see docs/researches/20 §5, §7.
+targets = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]

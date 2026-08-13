@@ -1,0 +1,38 @@
+# Build artifacts. `target/` is never garbage-collected by Cargo, so it is also
+# the thing that grows without bound — see docs/researches/18 §3.7.
+/target/
+**/*.rs.bk
+
+# Per-crate and per-tool artifact trees. Coverage runs under a separate
+# CARGO_TARGET_DIR so instrumented and normal builds do not evict each other,
+# and cargo-mutants copies the workspace per worker; both land here.
+/target-cov/
+/target-mutants/
+
+# Test scratch. Everything lands under target/ so `cargo clean` reclaims it and
+# nothing touches the system temp dir, which is a 16 GB tmpfs on WSL2.
+# docs/researches/18 §3.7.4.
+/target/tmp/
+
+# Review artifacts, keyed by staged-diff hash. Regenerable by re-running the
+# reviewer; the gate recomputes the hash rather than trusting the file.
+# docs/researches/21 §5.
+/target/review/
+
+# Fuzzing
+/fuzz/target/
+/fuzz/corpus/
+/fuzz/artifacts/
+
+# Editor / OS
+.idea/
+*.swp
+.DS_Store
+
+# Secrets. Nothing here should ever exist, but a gate that never fires costs
+# nothing and the one time it fires it saves a rotation.
+*.pem
+*.key
+.env
+.env.*
+!.env.example
