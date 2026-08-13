@@ -3,6 +3,7 @@ title: "Portability"
 description: >
   Read when a change is OS- or architecture-specific, when touching release artifacts, or when a test behaves differently on macOS.
 tags: [delivery, targets, glibc, cross-arch, artifacts]
+applies_to: ["scripts/*", ".github/workflows/*", "*/build.rs", ".agents/*", ".claude/*", "AGENTS.md", "CLAUDE.md", "*/SKILL.md"]
 ---
 
 # Portability

@@ -3,6 +3,7 @@ title: "Spec-driven development"
 description: >
   Read when specifying work, decomposing a milestone, writing acceptance criteria, or when a spec turns out to be wrong.
 tags: [process, specs, requirements, decomposition, traceability]
+applies_to: ["docs/internal/product/*", "docs/internal/specs/*", "docs/internal/standards/*"]
 ---
 
 # Spec-driven development

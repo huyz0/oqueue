@@ -58,6 +58,7 @@ comes before any gate because every gate sources it.
 | M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
 | M-1.32 | `standards/git.md` — commit atomicity and structure | States why atomicity matters (bisect is the substitute for a reviewer), the subject and body rules, amend-before-push / follow-up-after, and the no-branching workflow | done |
 | M-1.33 | Frontmatter on standards and product docs + `scripts/build-index.sh` | Every standard and product doc carries a `description` saying *when to read it*, so layer-1 disclosure works for them as it does for skills; generated index regions rebuild from frontmatter and `--check` fails a stale one | done |
+| M-1.34 | `applies_to:` frontmatter + `scripts/which-standards.sh` — route a change to the standards it is judged against | Every standard declares the paths it claims, and one without `applies_to` fails; a staged diff resolves to standards without anyone choosing | done |
 
 ### Notes on specific tasks
 
@@ -88,6 +89,41 @@ correct and strictly worse, because the curated one is organised by *question*,
 which is how people look things up. The split now is: **mechanical things are
 generated (counts, tables, coverage), authored things stay authored**, and the
 generated tag list is filtered to tags that group three or more documents.
+
+**M-1.34** exists because doc 21 §4 says the reviewer receives "the relevant
+standards", and until now that phrase had no referent. Handing a reviewer all
+eight dilutes its attention across seven that do not apply — the same failure
+§4 is trying to avoid by withholding the author's reasoning.
+
+The mapping lives in each standard's own front matter rather than in a table
+inside the script, for the reason M-1.33 established: two places holding one
+fact is a promise to keep them in sync forever. ⚠️ Most patterns name Rust that
+does not exist yet, so they are **unexercised until M0** — deliberate, but it
+means the mapping is asserted rather than demonstrated for every crate-scoped
+entry.
+
+⚠️ The first independent review of this task found a defect the author's own
+testing had not: `git diff --cached --name-only --diff-filter=ACMR` silently
+drops deletions, so a **deletion-only change reported "nothing staged" and
+routed to no standards at all** — including `git.md`, whose `*` is meant to be
+unconditional. Deleting a test or a standard is exactly the commit class
+non-negotiable 2 exists for, and it was the one class the router could not see.
+The review also found `applies_to` claimed too few crates in two standards:
+`security.md` did not claim `oqueue-buf` or `oqueue-checksum`, which are two of
+the three crates where `unsafe` is allowed, and `performance.md` did not claim
+`oqueue-broker`, `oqueue-store`, or `oqueue-compact`, which hold three rows of
+its own hot-path table.
+
+The second round found two more, both introduced by the fixes: the front-matter
+parser **failed open** on a quoting style it did not handle — yielding a shorter
+standards list with no diagnostic, which is worse than the loud failure it
+already had for a missing key — and a comment justifying the rewrite made a
+claim about `build-index.sh` that is **not true**. ⚠️ That leaves a real wart:
+`which-standards.sh` accepts a block sequence and `build-index.sh` does not, so
+a `tags:` written that way fails the index gate with a message about a missing
+family tag. Reconciling the two parsers belongs to whichever task next touches
+`build-index.sh`; it is recorded here rather than fixed, because doing it in
+this commit would have widened it.
 
 **M-1.32** names the rule most likely to be broken without noticing: ⚠️ **never
 mix a refactor with a behaviour change**. It is the most common way an atomic

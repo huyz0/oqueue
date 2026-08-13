@@ -3,6 +3,7 @@ title: "Code structure"
 description: >
   Read when adding a crate, module, or file; when a file nears 500 lines or a function nears 50; or when writing a crate's README and AGENTS.md.
 tags: [code, crates, layering, modules, limits]
+applies_to: ["*.rs", "Cargo.toml", "*/Cargo.toml", "README.md", "*/README.md", "AGENTS.md", "*/AGENTS.md"]
 ---
 
 # Code structure

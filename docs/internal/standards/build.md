@@ -3,6 +3,7 @@ title: "Build"
 description: >
   Read when changing Cargo profiles, adding a dependency, bumping the toolchain, or when builds are slow or the disk is filling.
 tags: [delivery, cargo, profiles, lto, toolchain, hygiene]
+applies_to: ["Cargo.toml", "*/Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "clippy.toml", ".cargo/*", "*/build.rs"]
 ---
 
 # Build

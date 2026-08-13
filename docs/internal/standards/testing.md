@@ -3,6 +3,7 @@ title: "Testing"
 description: >
   Read when writing any test, choosing a tier, or when a test is slow, flaky, or passes without constraining anything.
 tags: [quality, tests, determinism, mutation, fakes]
+applies_to: ["*.rs", "tests/*", "*/tests/*", "*/benches/*", "*oqueue-testkit/*"]
 ---
 
 # Testing

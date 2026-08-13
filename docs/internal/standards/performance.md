@@ -3,6 +3,7 @@ title: "Performance"
 description: >
   Read before optimizing, when adding or changing a benchmark, when a change touches a hot path, or when profiling.
 tags: [quality, benchmarks, profiling, budgets, simd]
+applies_to: ["benches/*", "*/benches/*", "*oqueue-buf/*", "*oqueue-codec/*", "*oqueue-checksum/*", "*oqueue-index/*", "*oqueue-broker/*", "*oqueue-store/*", "*oqueue-compact/*"]
 ---
 
 # Performance
