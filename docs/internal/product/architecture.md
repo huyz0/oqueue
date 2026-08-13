@@ -87,17 +87,29 @@ real S3.** Open question #33.
 
 ## Encryption
 
-⚠️ **Per-topic keys and multi-topic object batching collide, and the resolution
-shapes the object format.** One object carries many tenants' data, so it cannot
-carry one key. Instead each region within an object is sealed independently
-under its own topic's DEK — which works because the read path already issues
-ranged GETs into the object rather than reading it whole.
+Per-topic keys and multi-topic object batching collide: an object bundles many
+tenants precisely because that is what makes the cost model work, and records
+under different keys cannot share an encryption context.
+
+**BYOK is expected on ~10,000 topics out of 1M–100M, and that rarity decides the
+resolution: segregate rather than complicate.** An object is *either* a
+default-key object — the >99% path, unchanged — *or* a BYOK object holding only
+regions whose topics share one KEK. Regions inside a BYOK object are still
+sealed per topic, so a customer's topics stay isolated from each other.
+
+⚠️ The rejected alternative was sealing every region of every object
+independently. It works, but pays object-format complexity on 100% of traffic to
+serve under 1% of it.
+
+⚠️ **BYOK topics accept worse batching efficiency** as the price, since they can
+only batch within a key domain. That is the customer's trade to make, and it
+should be stated rather than absorbed.
 
 `oqueue-crypto` sits between the codec and the store; `oqueue-store` stays
 unaware that bytes are encrypted, which keeps the object-storage conformance
 suite independent of encryption. KMS is on the DEK-rotation path and **never on
-the per-batch path** — AWS KMS shares a 5,500–10,000 ops/sec quota across an
-account, so a synchronous KMS call per flush would throttle at modest load.
+the per-batch path** — cached DEKs put KMS at roughly 3 ops/sec against a
+5,500/sec quota, where an uncached design would throttle at modest load.
 
 Full derivation in
 [docs/researches/22](../../researches/22-encryption-byok-and-fips.md).

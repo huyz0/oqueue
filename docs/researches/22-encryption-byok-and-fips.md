@@ -6,14 +6,13 @@ last_updated: 2026-08-13
 tags: [encryption, byok, kms, aws-kms, gcp-kms, envelope-encryption, fips, aws-lc-rs, rustls, compliance, multi-tenancy, dek, kek]
 related: [15-scale-architecture-position, 12-object-discovery-and-api-cost, 20-build-and-release-portability, 04-object-storage-s3-gcs]
 summary: >
-  Two requirements added 2026-08-13: per-topic BYOK portable across AWS KMS and
-  GCP Cloud KMS, and FIPS 140-3 as a separate build. Both are optional. Core
-  findings: per-topic keys and multi-topic object batching collide, and the
-  resolution is per-region encryption inside one object; SSE-KMS cannot satisfy
-  the requirement at all, so broker-side envelope encryption is forced; AWS KMS
-  caps customer-managed keys at 100,000 per region, so "per topic" must mean
-  per-topic configuration rather than per-topic KMS key; and the portable KMS
-  abstraction is wrap/unwrap, not generate-data-key, because GCP has no
+  Two optional requirements: per-topic BYOK portable across AWS KMS and GCP
+  Cloud KMS, and FIPS 140-3 as a separate build. BYOK applies to roughly 10,000
+  topics out of 1M-100M, which is the number that decides the design: it is a
+  rare, opt-in path, so BYOK data is segregated into its own objects by key
+  domain rather than complicating the object format for everyone. SSE-KMS still
+  cannot satisfy it, so broker-side envelope encryption is forced. The portable
+  KMS abstraction is wrap/unwrap, not generate-data-key, because GCP has no
   GenerateDataKey equivalent.
 ---
 
@@ -27,10 +26,18 @@ Marked **[Documented]**, **[Assessment]**, or **[Design]**.
 
 ## 0. The requirements
 
-1. **BYOK** — customers supply their own key material, configured **per topic**, portable across **AWS KMS** and **GCP Cloud KMS**. Optional; the default is a provider-managed key.
+1. **BYOK** — customers supply their own key material, configured **per topic**, portable across **AWS KMS** and **GCP Cloud KMS**. Optional; the default is a provider-managed key. **Expected volume: ~10,000 topics**, against a total target of 1M–100M.
 2. **FIPS 140-3** — available as a **separate build**. Optional; not the default artifact.
 
-Both are opt-in. Neither may impose cost on deployments that do not use them — which turns out to be the constraint that shapes most of the design.
+Both are opt-in. Neither may impose cost on deployments that do not use them.
+
+**[Assessment] The 10,000 figure is the single most important number in this document.** BYOK covers on the order of **0.01%–1% of topics**. That makes it a *rare, opt-in, premium* path rather than a property of the system, and nearly every design decision below follows from it:
+
+- **The object format does not change for everyone.** BYOK data is segregated rather than co-mingled (§2).
+- **KMS quotas stop being a scaling problem** and become a rounding error (§3, §5).
+- **BYOK topics may pay worse batching efficiency**, because they are few and it is the customer's choice (§2).
+
+⚠️ Designing BYOK as though every topic used it would impose per-region sealing, wider index entries, and a DEK cache sized for millions on **100% of traffic to serve under 1%.** That is the mistake this section exists to prevent.
 
 ---
 
@@ -51,50 +58,59 @@ SSE-KMS remains worth enabling underneath as defence in depth. It just cannot be
 
 ---
 
-## 2. The collision, and the resolution
+## 2. The collision, and the resolution: segregate, don't complicate
 
-**[Assessment]** Per-topic keys and multi-topic batching appear to be in direct conflict: records encrypted under different keys cannot share an encryption context.
+**[Assessment]** Per-topic keys and multi-topic batching are in direct conflict: records encrypted under different keys cannot share an encryption context, and an object bundles many topics precisely because that is what makes the cost model work.
 
-**The resolution is that they do not need to share one.** An object is already a *container of independently addressable regions* — the read path never reads a whole object, it issues a **ranged GET** resolved through the offset→object index ([12](12-object-discovery-and-api-cost.md) §3). Each partition's data is already a contiguous region within the object.
+There are two ways out, and **the 10,000-topic figure picks the second.**
 
-So: **encrypt each region independently, under the key belonging to its topic.** One object, one PUT, many encryption contexts.
+**Option A — per-region sealing.** Keep co-mingling every topic and seal each region inside the object under its own topic's DEK. Workable, because the read path already issues ranged GETs into the object rather than reading it whole. But it changes the object format, the footer, and the index entry **for all traffic**, and it forbids a single streaming encrypt of an object forever after.
+
+**Option B — segregate by key domain.** An object is **either** a default-key object (the overwhelmingly common case, unchanged from today) **or** a BYOK object containing only regions whose topics share one KEK. Two object kinds, one simple and one not.
+
+**[Design] Option B, because BYOK is under 1% of topics.** Option A pays format complexity on 100% of objects to serve under 1% of them. Segregation confines the cost to the traffic that asked for it and leaves the hot path exactly as it is.
 
 ```
-  object (one PUT, many tenants)
-  ┌──────────────────────────────────────────────────────┐
-  │ region A: topic-1 p0   AEAD(DEK_1, nonce_a)          │
-  │ region B: topic-2 p3   AEAD(DEK_2, nonce_b)          │
-  │ region C: topic-1 p7   AEAD(DEK_1, nonce_c)          │
-  │ …                                                     │
-  │ footer: per-region { key_id, wrapped_dek, nonce }    │
-  └──────────────────────────────────────────────────────┘
+  default object  (the >99% path — unchanged)
+  ┌──────────────────────────────────────────┐
+  │ topic-1 p0 │ topic-2 p3 │ topic-7 p1 │ … │   one key or none
+  └──────────────────────────────────────────┘
+
+  BYOK object     (one customer's key domain)
+  ┌──────────────────────────────────────────┐
+  │ region: topic-A p0   AEAD(DEK_A, nonce)  │
+  │ region: topic-B p2   AEAD(DEK_B, nonce)  │   topics A,B share KEK_cust
+  │ footer: per-region { key_id, wrapped_dek, nonce, alg }
+  └──────────────────────────────────────────┘
 ```
+
+Regions inside a BYOK object are still sealed **per topic**, not per object — a customer's topics stay cryptographically isolated from each other. What segregation buys is that the *default* object never learns about any of it.
 
 **[Design] What this costs, stated honestly:**
 
-- **No single streaming encrypt of the object.** Each region is sealed separately, so the writer holds per-region AEAD state. Bounded by the number of distinct topics in a flush, not by object size.
-- **Nonce discipline per region.** A nonce reused under one DEK is catastrophic for GCM. Nonces must be constructed, never randomly drawn — see §5.
-- **The footer and the coordinator index must carry key metadata** per region: key identifier, wrapped DEK, nonce. Small, but it widens the index entry.
-- **Compaction must re-seal.** Merging regions across objects means decrypt-and-re-encrypt under the same topic key, so compaction workers need unwrap capability. This is the largest operational consequence and it is discussed in §6.
-- **No cross-topic compression.** Already true — compression is per-batch — so nothing is lost here.
+- ⚠️ **BYOK topics get worse batching efficiency.** They can only batch with other topics in the same key domain, so a customer with one low-volume BYOK topic produces smaller objects and pays more PUTs per byte. **This is the real price of BYOK and it should be stated to customers rather than absorbed.** The mitigation is a longer flush interval for BYOK topics — trading latency for cost, which is the customer's trade to make.
+- **Compaction must re-seal** within a key domain: decrypt and re-encrypt under the same topic key, so compaction workers need unwrap capability for the topics they touch (§6).
+- **Nonce discipline per region.** A nonce reused under one DEK is catastrophic for GCM. Nonces are constructed, never drawn at random — see §6.
+- **Two object kinds to test**, and the conformance suite must cover both. Cheaper than one universally complicated kind.
 
 ---
 
-## 3. ⚠️ "Per topic" cannot mean "one KMS key per topic"
+## 3. KMS key count: not a constraint at this volume
 
 **[Documented]** AWS KMS allows **100,000 customer-managed keys per region** ([resource quotas](https://docs.aws.amazon.com/kms/latest/developerguide/resource-limits.html)). AWS-managed and AWS-owned keys do not count against it.
 
-**[Assessment]** The scale target in [15](15-scale-architecture-position.md) is **1M–100M topics**. One KMS key per topic exceeds the quota by **one to three orders of magnitude**, and no quota increase closes that gap.
+**[Assessment]** At ~10,000 BYOK topics this ceiling is **not binding** — one KMS key per BYOK topic would fit inside it with an order of magnitude to spare. Two further facts widen the margin:
 
-**So "per topic" must mean per-topic *configuration*, not per-topic *KMS key*:**
+- **BYOK keys live in the customer's account, not ours.** That is what makes it *their* key. So the quota applies per customer account, and a customer with a handful of BYOK topics is nowhere near any limit.
+- **KMS charges roughly $1/month per customer-managed key.** With keys in the customer's account, that cost is theirs and visible to them, which is the correct place for it.
 
-- A topic **names** the KEK it is encrypted under.
-- **Many topics share one KEK** — in practice one KEK per customer, or per customer per environment.
-- The number of distinct KEKs is bounded by *customers who opt into BYOK*, not by topic count.
-- Topics that do not opt in use a provider-managed default key.
-- Each topic still gets its **own DEK**, so cryptographic isolation between topics is preserved even when they share a KEK.
+⚠️ **This is worth recording because it would bind at a different volume.** Had BYOK applied to every topic at the 1M–100M target, one key per topic would exceed the quota by one to three orders of magnitude and no increase would close it. The design would then be forced into a strict hierarchy — one KEK per customer, many topics sharing it. **At 10,000 topics we get to choose instead of being forced**, and the recommendation is the hierarchy anyway:
 
-This is the standard envelope hierarchy and it is what makes per-topic isolation affordable: **DEKs are cheap and local, KEKs are scarce and remote.**
+- A topic **names** the KEK it is encrypted under; several topics may name the same one.
+- Each topic still gets its **own DEK**, so topics stay cryptographically isolated even when sharing a KEK.
+- Customers who want strict one-key-per-topic can have it, because the headroom exists.
+
+**DEKs are cheap and local; KEKs are remote and metered.** That asymmetry, not the quota, is what shapes §5.
 
 ---
 
@@ -135,17 +151,25 @@ Implementations: AWS KMS, GCP Cloud KMS, a static key for tests, and an in-memor
 
 ---
 
-## 5. KMS call amplification — the thing that actually breaks
+## 5. KMS call amplification — bounded, but only with caching
 
 **[Documented]** AWS KMS cryptographic operations share a request quota of **5,500–10,000 requests/second per account per region**, depending on region ([request quotas](https://docs.aws.amazon.com/kms/latest/developerguide/throttling.html)). All crypto operations draw on the same budget.
 
-**[Assessment]** A broker flushing objects several times per second across many topics would exhaust that instantly if each flush wrapped a fresh DEK. **Uncached, this design does not work at all** — and unlike most scale problems it fails at modest load, not at the target.
+**[Assessment] At 10,000 BYOK topics the budget is comfortable, but only because DEKs are cached.** The arithmetic is worth doing rather than assuming:
+
+| | Uncached (KMS per flush) | Cached, hourly DEK rotation |
+|---|---|---|
+| KMS ops/sec | flush rate × BYOK topics — **thousands** | 10,000 ÷ 3,600 ≈ **3/sec** |
+| Against a 5,500/sec quota | throttles | **~0.05%** |
+
+So caching converts this from a hard blocker into a rounding error. ⚠️ **Without it the design fails at modest load**, not at the target — a flush-rate-driven KMS call per BYOK topic reaches the quota long before the topic count does.
 
 **[Documented]** The proven mitigation is exactly S3's: **Bucket Keys** generate a short-lived intermediate key reused across objects within a time window, cutting KMS calls **by up to 99%**.
 
 **[Design] The same shape, broker-side:**
 
 - **One DEK per topic**, held in memory, **rotated on whichever comes first** — a time bound or a bytes-encrypted bound. Both are constants, not settings.
+- **The cache is small.** 10,000 DEKs at 32 bytes is ~320 KB of key material. There is no eviction pressure and no need for a sophisticated policy; it is sized by the BYOK topic count, not by the catalog.
 - The **wrapped DEK travels with the data** in the object footer, so a reader needs the KEK but never the writer.
 - **Unwrapped DEKs are cached on read** with a TTL, keyed by wrapped-blob identity.
 - **KMS is on the rotation path, never the per-batch path.** If a produce request can trigger a synchronous KMS call, the design is wrong.
@@ -163,6 +187,7 @@ Implementations: AWS KMS, GCP Cloud KMS, a static key for tests, and an in-memor
 - **`oqueue-core`** gains the `KeyProvider` trait seam, alongside `Clock` and `ObjectStore`. `#![forbid(unsafe_code)]` as before.
 - **`oqueue-crypto`** (new crate) holds the AEAD, envelope logic, DEK cache, nonce construction, and zeroization. `#![forbid(unsafe_code)]` — the AEAD comes from a vetted implementation, not from us.
 - **`oqueue-store`** stays unaware. It moves bytes; it does not know they are encrypted. This keeps the object-storage conformance suite ([19](19-workspace-engineering.md) §4.2) independent of encryption.
+- **The writer routes by key domain** (§2): a topic with a KEK goes to a BYOK object, everything else to the default path. That routing decision belongs with the flush planner, and it is the only place the >99% path needs to know BYOK exists.
 - Encryption sits **between the codec and the store**, and the sans-I/O rule holds: `oqueue-crypto` performs no I/O, since `KeyProvider` is injected.
 
 **Nonce construction, not generation.** With per-region sealing there are many nonces under one DEK, and random 96-bit nonces have a birthday bound that is uncomfortable at this volume. Construct them deterministically — writer epoch ‖ object sequence ‖ region index — so reuse is structurally impossible rather than statistically unlikely. **This is the single highest-severity thing in the document to get wrong**, and it is exactly the kind of invariant that belongs in a type rather than a comment.
@@ -202,7 +227,7 @@ Implementations: AWS KMS, GCP Cloud KMS, a static key for tests, and an in-memor
 
 **[Assessment]** The requirement that neither feature burdens the default:
 
-- **No encryption configured** → no KMS dependency, no DEK cache, no per-region sealing. The region header still names an algorithm, and it says "none". Cost: a few bytes per region.
+- **No BYOK on a topic** → its data goes into ordinary objects on the ordinary path, with no per-region sealing, no KMS dependency, and no DEK cache entry. Because BYOK objects are segregated (§2), **the >99% path is not merely cheap, it is unchanged**. The region header still names an algorithm and says "none" — a few bytes.
 - **Non-FIPS build** → no Go, no CMake, no aws-lc-fips-sys, ordinary build times.
 - **The `KeyProvider` seam exists regardless**, with a no-op implementation. A trait with a null implementation costs nothing at runtime and keeps the encrypted and unencrypted paths from diverging — which is how the unencrypted path stays tested.
 
@@ -212,8 +237,9 @@ Implementations: AWS KMS, GCP Cloud KMS, a static key for tests, and an in-memor
 
 - **Key rotation semantics.** When a customer rotates a KEK, existing wrapped DEKs remain valid under the old KEK version. Both clouds keep old versions available for unwrap, but the policy — re-wrap eagerly, re-wrap during compaction, or never — is undecided and affects how long old key versions must be retained.
 - **Revocation behaviour.** If a customer revokes a KEK, that topic's data becomes unreadable *by design*. What does the broker do — fail fetches with a specific error, stall compaction, or tombstone? Undefined, and it needs to be defined before anyone relies on revocation.
-- **DEK rotation constants.** §5 requires a time bound and a bytes bound; neither has a value. Derive from the KMS request budget and the flush rate once those are known.
-- **Does BYOK compose with compaction across tenants?** Compaction currently plans across objects; with per-topic keys it may need to plan within a key domain. Not worked through.
+- **DEK rotation constants.** §5 requires a time bound and a bytes bound; neither has a value. The KMS budget is not the binding constraint at this volume, so they should be derived from the security argument — how much data may share a key — rather than from the quota.
+- **How much does segregation cost a small BYOK customer?** §2 accepts worse batching for BYOK topics. Unquantified: at what topic volume does a BYOK object become small enough that PUT costs dominate, and is a longer flush interval sufficient compensation?
+- **Should one-key-per-topic be offered?** §3 shows the headroom exists at 10,000 topics. Whether to expose it, or to require the KEK-per-customer hierarchy, is a product decision with a support cost.
 - **Is a FIPS-mode conformance suite needed?** The two builds must agree byte-for-byte on anything they both produce. A differential test across builds would catch divergence, but running two toolchains in CI is a real cost.
 - **Per-topic key configuration and the metadata plane.** A topic's KEK reference is metadata, and [15](15-scale-architecture-position.md) requires metadata cost proportional to *active* partitions. A KEK reference per topic is small, but it is another per-topic field at 100M topics.
 

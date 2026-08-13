@@ -37,6 +37,7 @@ comes before any gate because every gate sources it.
 | M-1.17 | Make the corpus and product docs self-contained before the repo goes public | No reference to any other repository, no absolute local path, no verbatim quotation of an external private source; every practice stated as this project's own standard | done |
 | M-1.18 | Public-facing files: `README.md`, `CONTRIBUTING.md`, `SECURITY.md` | README states plainly that no implementation exists; contributing says code is not yet accepted and why; security gives a private reporting route | done |
 | M-1.19 | Record the BYOK and FIPS requirements across mission, architecture, roadmap, and the corpus | New milestone M8; `KeyProvider` seam and `oqueue-crypto` crate in the architecture; the AEAD-algorithm-in-region-header constraint recorded against M1 | done |
+| M-1.20 | Revise the encryption design for the clarified BYOK volume (~10K topics, not catalog-wide) | Segregation replaces universal per-region sealing; the KMS key-count conclusion corrected and marked as corrected | done |
 
 ### Notes on specific tasks
 
@@ -56,6 +57,14 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.20** corrected a conclusion rather than extending one. The first
+encryption draft assumed BYOK might apply catalog-wide and derived a design from
+AWS KMS's 100,000-key ceiling. At ~10,000 BYOK topics that ceiling is not
+binding, and the resolution changes from *seal every region of every object* to
+*segregate BYOK data into its own objects*. Both the corpus and the decision log
+mark this as a correction, because a reader arriving at the earlier reasoning
+would otherwise inherit a constraint that does not apply.
 
 **M-1.17** was executed out of ID order, immediately before the first push. Task
 IDs are stable, so the table is ordered by ID rather than by execution. The

@@ -76,14 +76,13 @@ Two optional capabilities, neither of which burdens deployments that skip them:
 - **BYOK, configured per topic**, portable across AWS KMS and GCP Cloud KMS.
   Server-side encryption cannot express this — one object carries many tenants'
   data, and an object can carry only one SSE-KMS key — so encryption is
-  broker-side envelope encryption, with each region inside an object sealed
-  under its own topic's key.
+  broker-side envelope encryption. BYOK is a rare opt-in path, so its data is
+  segregated into its own objects and the default path stays unchanged.
 - **FIPS 140-3 as a separate build**, using the validated `aws-lc-rs` module.
   Separate because it needs a Go toolchain at build time, which no other user
   should have to install.
 
-Derivation, including why AWS KMS's 100,000-key-per-region cap means "per topic"
-must mean per-topic *configuration* rather than per-topic KMS key, is in
+Derivation is in
 [docs/researches/22](docs/researches/22-encryption-byok-and-fips.md).
 
 ## What's in this repository
