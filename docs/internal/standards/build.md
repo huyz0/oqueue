@@ -1,3 +1,10 @@
+---
+title: "Build"
+description: >
+  Read when changing Cargo profiles, adding a dependency, bumping the toolchain, or when builds are slow or the disk is filling.
+tags: [delivery, cargo, profiles, lto, toolchain, hygiene]
+---
+
 # Build
 
 Profiles, toolchain, workspace layout, and hygiene. Evidence in

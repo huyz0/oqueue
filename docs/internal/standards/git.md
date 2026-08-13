@@ -1,3 +1,10 @@
+---
+title: "Git operations"
+description: >
+  Read before committing, when unsure whether a change is one commit or several, or before amending anything already pushed.
+tags: [process, commits, atomicity, bisect, main]
+---
+
 # Git operations
 
 Commits go directly to `main`. There are no feature branches, no pull requests,

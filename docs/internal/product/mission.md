@@ -1,3 +1,10 @@
+---
+title: "Mission"
+description: >
+  Read first. What this is, what it costs, the scale target, and what it must never do.
+tags: [product, purpose, constraints]
+---
+
 # Mission
 
 oqueue is a Kafka-protocol-compatible message broker whose primary log storage

@@ -1,3 +1,10 @@
+---
+title: "Roadmap"
+description: >
+  Read when starting a milestone or checking whether one is done. Each completion condition is a command.
+tags: [product, milestones, planning]
+---
+
 # Roadmap
 
 Every milestone carries a completion condition that is **a command, not a

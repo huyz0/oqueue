@@ -1,3 +1,10 @@
+---
+title: "Backlog"
+description: >
+  Read when picking up work. Only the current milestone is decomposed.
+tags: [product, tasks, planning]
+---
+
 # Backlog
 
 One task equals one commit equals one change that leaves the tree green. If a
@@ -50,6 +57,7 @@ comes before any gate because every gate sources it.
 | M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | todo |
 | M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
 | M-1.32 | `standards/git.md` — commit atomicity and structure | States why atomicity matters (bisect is the substitute for a reviewer), the subject and body rules, amend-before-push / follow-up-after, and the no-branching workflow | done |
+| M-1.33 | Frontmatter on standards and product docs + `scripts/build-index.sh` | Every standard and product doc carries a `description` saying *when to read it*, so layer-1 disclosure works for them as it does for skills; generated index regions rebuild from frontmatter and `--check` fails a stale one | done |
 
 ### Notes on specific tasks
 
@@ -69,6 +77,17 @@ exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
 gate triggered by one silently never runs.
+
+**M-1.33** closed a hole in progressive disclosure: skills had layer-1
+descriptions and standards did not, so an agent could see *when* to load a skill
+but had to open a whole standard or guess from its filename.
+
+⚠️ It also produced a lesson about generated indexes. The first version replaced
+the curated 39-entry tag index with 205 alphabetical raw tags — mechanically
+correct and strictly worse, because the curated one is organised by *question*,
+which is how people look things up. The split now is: **mechanical things are
+generated (counts, tables, coverage), authored things stay authored**, and the
+generated tag list is filtered to tags that group three or more documents.
 
 **M-1.32** names the rule most likely to be broken without noticing: ⚠️ **never
 mix a refactor with a behaviour change**. It is the most common way an atomic

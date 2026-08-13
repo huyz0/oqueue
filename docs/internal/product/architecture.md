@@ -1,3 +1,10 @@
+---
+title: "Architecture"
+description: >
+  Read before adding a crate or a trait seam, or when unsure which crate something belongs in.
+tags: [product, crates, seams, layering]
+---
+
 # Architecture
 
 The crate map and the dependency rule.

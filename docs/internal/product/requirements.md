@@ -1,3 +1,10 @@
+---
+title: "Requirements"
+description: >
+  Read when writing a spec or a task — every spec cites FR/NFR IDs from here. Also lists what is deliberately not required.
+tags: [product, requirements, fr, nfr, traceability]
+---
+
 # Requirements
 
 Functional and non-functional requirements, with stable IDs.

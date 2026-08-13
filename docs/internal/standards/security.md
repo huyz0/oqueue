@@ -1,3 +1,10 @@
+---
+title: "Security"
+description: >
+  Read when touching the wire protocol, anything parsing untrusted input, secrets, key material, tenant isolation, or unsafe.
+tags: [quality, untrusted-input, secrets, crypto, isolation, unsafe]
+---
+
 # Security
 
 Rules for a multi-tenant broker that terminates untrusted connections and holds

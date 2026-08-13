@@ -1,3 +1,10 @@
+---
+title: "Performance"
+description: >
+  Read before optimizing, when adding or changing a benchmark, when a change touches a hot path, or when profiling.
+tags: [quality, benchmarks, profiling, budgets, simd]
+---
+
 # Performance
 
 Rules for measuring and optimizing. The methodology and its evidence are in

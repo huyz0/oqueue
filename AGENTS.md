@@ -40,28 +40,22 @@ Four families, all binding. Each rule names its gate, or is marked as having
 none — the second kind matters more, because it is where judgement is still
 required.
 
-**Process** — how work is specified and traced:
-- [sdd.md](docs/internal/standards/sdd.md) the requirement→spec→task→commit chain, acceptance criteria, definition of done
-- [git.md](docs/internal/standards/git.md) commit atomicity, subject and body structure, amend/revert rules, direct-to-main
-- `review.md` *(M-1.23)* reviewer isolation, the deterministic/semantic split
+<!-- index:standards:start -->
+| Family | Standard | Read when |
+|---|---|---|
+| Process | [git.md](docs/internal/standards/git.md) | Read before committing, when unsure whether a change is one commit or several, or before amending anything already pushed. |
+| Process | [sdd.md](docs/internal/standards/sdd.md) | Read when specifying work, decomposing a milestone, writing acceptance criteria, or when a spec turns out to be wrong. |
+| Quality | [performance.md](docs/internal/standards/performance.md) | Read before optimizing, when adding or changing a benchmark, when a change touches a hot path, or when profiling. |
+| Quality | [security.md](docs/internal/standards/security.md) | Read when touching the wire protocol, anything parsing untrusted input, secrets, key material, tenant isolation, or unsafe. |
+| Quality | [testing.md](docs/internal/standards/testing.md) | Read when writing any test, choosing a tier, or when a test is slow, flaky, or passes without constraining anything. |
+| Delivery | [build.md](docs/internal/standards/build.md) | Read when changing Cargo profiles, adding a dependency, bumping the toolchain, or when builds are slow or the disk is filling. |
+| Delivery | [portability.md](docs/internal/standards/portability.md) | Read when a change is OS- or architecture-specific, when touching release artifacts, or when a test behaves differently on macOS. |
+| Code | [code-structure.md](docs/internal/standards/code-structure.md) | Read when adding a crate, module, or file; when a file nears 500 lines or a function nears 50; or when writing a crate's README and AGENTS.md. |
+<!-- index:standards:end -->
 
-**Quality** — what must be true of the result:
-- [security.md](docs/internal/standards/security.md) untrusted input, secrets, tenant isolation, cryptography, `unsafe`
-- [performance.md](docs/internal/standards/performance.md) benchmark suites, hot-path obligations, on-demand profiling, budgets
-- [testing.md](docs/internal/standards/testing.md) the four tiers, fakes over mocks, the no-flake rules, mutation testing
-
-**Delivery** — how it is produced and shipped:
-- [build.md](docs/internal/standards/build.md) profiles, toolchain, workspace layout, disk hygiene
-- [portability.md](docs/internal/standards/portability.md) targets, glibc floor, cross-arch correctness
-
-**Code** — what it looks like:
-- [code-structure.md](docs/internal/standards/code-structure.md) crates, folders, per-crate README and AGENTS.md, file and function limits
-- `behavior.md`, `rust-style.md`, `error-handling.md`, `async-concurrency.md`, `contracts.md` *(M-1.5)*
-
-⚠️ Entries without links do not exist yet. A link to a file that is not there is
-a claim this repo does not get to make. Skills and scripts are in the same
-state: the directories exist, their contents are M-1.13 and M-1.6 through
-M-1.12.
+⚠️ `behavior.md`, `rust-style.md`, `error-handling.md`, `async-concurrency.md`,
+and `contracts.md` do not exist yet — they are M-1.5. Most gate scripts are
+M-1.7 through M-1.12.
 
 ## Skills
 
@@ -69,15 +63,17 @@ Procedures, in [.agents/skills/](.agents/skills/), written to the Agent Skills
 spec so they work in any tool that reads `SKILL.md`. A skill calls a script in
 `scripts/`, never a tool-specific built-in.
 
+<!-- index:skills:start -->
 | Skill | Use when |
 |---|---|
-| [`goal`](.agents/skills/goal/SKILL.md) | Driving a milestone to completion without a human in the loop |
-| [`next-task`](.agents/skills/next-task/SKILL.md) | Starting work and needing to know what to do next |
-| [`spec`](.agents/skills/spec/SKILL.md) | Something needs specifying before code |
-| [`tdd`](.agents/skills/tdd/SKILL.md) | Implementing a task |
-| [`review`](.agents/skills/review/SKILL.md) | A change is staged and needs an independent reviewer |
-| [`adr`](.agents/skills/adr/SKILL.md) | Making a choice that is expensive to reverse |
-| [`research`](.agents/skills/research/SKILL.md) | A question might already be answered in the corpus |
+| [`adr`](.agents/skills/adr/SKILL.md) | Write an architecture decision record |
+| [`goal`](.agents/skills/goal/SKILL.md) | Drive a milestone to completion autonomously, one task per commit, without asking between tasks |
+| [`next-task`](.agents/skills/next-task/SKILL.md) | Choose what to work on next and confirm it is genuinely ready |
+| [`research`](.agents/skills/research/SKILL.md) | Find whether a question is already answered in the research corpus before investigating it fresh |
+| [`review`](.agents/skills/review/SKILL.md) | Review a staged change as an independent agent that did not write it |
+| [`spec`](.agents/skills/spec/SKILL.md) | Write a spec before implementing, and decompose it into commit-sized tasks |
+| [`tdd`](.agents/skills/tdd/SKILL.md) | Implement a task test-first |
+<!-- index:skills:end -->
 
 **Progressive disclosure.** This file is layer 0 and is deliberately an index.
 Skill *descriptions* are layer 1 and cost a few hundred words. A skill's *body*

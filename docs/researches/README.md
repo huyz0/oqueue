@@ -57,6 +57,10 @@ Every object-storage-primary streaming system solves the same core problem — o
 
 ## Tag index
 
+Curated by *question*, which is how people actually look things up. This section
+is **authored** — a generated list of raw frontmatter tags is alphabetical,
+granular, and answers nothing.
+
 - **Architecture/reference design:** [01](01-warpstream-architecture.md), [03](03-competitive-landscape.md), [06](06-distributed-systems-design-challenges.md)
 - **Kafka protocol specifics:** [02](02-kafka-protocol-compatibility.md)
 - **Object storage physics (S3/GCS):** [04](04-object-storage-s3-gcs.md)
@@ -96,6 +100,28 @@ Every object-storage-primary streaming system solves the same core problem — o
 - **BUILD portability: cross-compilation, glibc floor, musl, packaging:** [20](20-build-and-release-portability.md)
 - **Concurrency correctness (loom vs TSan vs ARM CI):** [19](19-workspace-engineering.md) §7.2
 - **KIP-1150 / Kafka's own diskless-topics work:** [02](02-kafka-protocol-compatibility.md) §5, [03](03-competitive-landscape.md) §2.11, [06](06-distributed-systems-design-challenges.md) (throughout)
+
+## Document inventory
+
+Mechanically derived from frontmatter, so it cannot drift. Regenerate with
+`scripts/build-index.sh`; `--check` fails a stale one.
+
+⚠️ Only tags appearing in three or more documents are listed. Most frontmatter
+tags label exactly one document, and an alphabetical list of 200 of those buries
+the handful that group anything. **The curated index above is the one to use** —
+this section exists so that the count and the coverage check cannot drift, not
+because a generated tag list is a good index.
+
+<!-- index:count:start -->
+**22 documents.**
+<!-- index:count:end -->
+
+<!-- index:tags:start -->
+- **compaction:** [06](06-distributed-systems-design-challenges.md), [12](12-object-discovery-and-api-cost.md), [16](16-automq-deep-dive.md)
+- **multi-tenancy:** [06](06-distributed-systems-design-challenges.md), [08](08-turbopuffer-lessons.md), [22](22-encryption-byok-and-fips.md)
+- **object-storage:** [01](01-warpstream-architecture.md), [04](04-object-storage-s3-gcs.md), [08](08-turbopuffer-lessons.md)
+- **rust:** [05](05-rust-ecosystem.md), [08](08-turbopuffer-lessons.md), [18](18-rust-performance-methodology.md)
+<!-- index:tags:end -->
 
 ## Status
 

@@ -1,3 +1,10 @@
+---
+title: "Testing"
+description: >
+  Read when writing any test, choosing a tier, or when a test is slow, flaky, or passes without constraining anything.
+tags: [quality, tests, determinism, mutation, fakes]
+---
+
 # Testing
 
 What to test, at which tier, and the rules that keep the suite fast and
