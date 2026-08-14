@@ -58,7 +58,7 @@ original ten did not reach a shippable v1. Sequence:
 
 | # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
 |---|---|---|---|---|---|---|---|
-| 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | 48 ⚠️ | `scripts/gates/m-1-complete.sh` | in progress |
+| 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | see `backlog.md` ⚠️ | `scripts/gates/m-1-complete.sh` | in progress |
 | 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | 18 | `scripts/gates/m0-complete.sh` | not started |
 | 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | 18 | `scripts/gates/m1-complete.sh` | not started |
 | 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | 18 | `scripts/gates/m2-complete.sh` | not started |
@@ -87,16 +87,21 @@ be pulled ahead of M4; it sits at slot 9 because idempotence is worth less than
 consumer groups, not because it is blocked. The column says what is *possible*,
 the number says what is *chosen*.
 
-⚠️ **M-1 is over the 20-task limit** `sdd.md` now states, at 48 and still
+⚠️ **M-1 is well over the 20-task limit** `sdd.md` now states, and still
 moving. It accumulated the planning work, the defects its own gates found,
-and — twice now — findings from its own `milestone-review` checkpoints
-turned into new tasks (M-1.44/M-1.45 from the first, M-1.46/M-1.47 from the
-second). It is the evidence for the rule, not an exception to it; every
-milestone after it is planned under the cap and should be split rather than
-allowed to grow. This cell is a snapshot as of the last checkpoint, not a
-live count — `docs/internal/product/backlog.md`'s own row count is
-authoritative, and `scripts/milestone-review.sh coverage` (not this table)
-is what a checkpoint should ask for the current commit list.
+and every `milestone-review` checkpoint so far has turned some of what it
+found into new tasks — see `milestones/M-1.md`'s own "Notes for the boundary
+review" section for the specifics, rather than a count duplicated here that
+would need updating at the same rate that section already does. It is the
+evidence for the rule, not an exception to it; every milestone after it is
+planned under the cap and should be split rather than allowed to grow. This
+row's Tasks cell deliberately carries no number — `docs/internal/product/backlog.md`'s
+own row count is authoritative, and `scripts/milestone-review.sh coverage`
+(not this table) is what a checkpoint should ask for the current commit
+list. ⚠️ A fixed number here (first 44, then 48) went stale twice before this
+paragraph stopped writing one down at all — the fourth recurrence of the
+identical failure mode `milestones/M-1.md`'s own boundary-review section
+tracks as **M-1.52**.
 
 ### Why this order
 
