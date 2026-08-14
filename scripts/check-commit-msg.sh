@@ -130,7 +130,19 @@ if [[ -z "$known" ]]; then
 fi
 
 for id in $ids; do
-  if printf '%s\n' "$known" | grep -qx "$id"; then
+  # ⚠️ `-F`, and a here-string rather than `printf | grep`. `-F` is
+  # defense in depth rather than a live bug here — `$id` can only be
+  # something the subject regex above already matched
+  # (`M-?[0-9]+\.[0-9]+`), so it never carries a regex metacharacter the
+  # way a hand-written review artifact's `task_id` could — but the
+  # here-string is a real fix: `grep -qx` exits at the first match,
+  # `printf`'s remaining write can then SIGPIPE, and `pipefail` reports
+  # that early exit as failure, misreporting a real, listed task id as
+  # unlisted. `M-1.48`: the same site `M-1.38` fixed in `check-reviewed.sh`
+  # and `M-1.37` fixed in `check-milestone-review.sh`, missed here until
+  # M-1.38's own review found it. See `portability.md`'s "Shell scripting"
+  # section (rules 21-22) for the general idiom.
+  if grep -qxF "$id" <<< "$known"; then
     ok "commit subject names $id, which the backlog lists"
   else
     fail "commit subject names $id, which the backlog does not list"

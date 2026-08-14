@@ -77,7 +77,7 @@ comes before any gate because every gate sources it.
 | M-1.45 | Backport the crash-safety wrapper (`try`/`except Exception` around the Python body, distinct exit code 3 for an uncaught crash) from `build-index.sh`/`check-unsafe.sh` to `check-layering.sh` and `check-core-contract.sh` | Both scripts were written after `fadd095` (M-1.33's follow-up) established the wrapper and after `check-unsafe.sh` reused it, but neither adopted it; both currently avoid a false *pass* on crash only because no `print` executes before their risky `git`/file-read calls — an undocumented, unenforced invariant one added diagnostic print away from silently reintroducing the exact false-pass class the wrapper exists to prevent. Acceptance: both scripts exit a distinct non-1/0 code on an uncaught exception, verified against a contrived non-UTF-8 input the way `check-unsafe.sh`'s own suite already does | todo |
 | M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | todo |
 | M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
-| M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | todo |
+| M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | done |
 | M-1.49 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" after the third milestone-review checkpoint | The section's Checkpoint 2 bullet 3 no longer states, in the present tense, that `M-1.38` and its sibling `M-1.39` "are both live defects ... confirmed still present" — both are fixed (`scripts/check-reviewed.sh` now uses `grep -qxF ... <<<`, `scripts/lib.sh`'s `known_task_ids`/`open_task_ids` now read the index via `_backlog_from_index`) and both backlog rows are `done`; the section gains a Checkpoint 3 entry recording what this checkpoint found instead, the same shape checkpoints 1 and 2 used | done |
 | M-1.50 | `check-hot-path-bench.sh` reports only the first failing category per run, not every violation in one pass | The script's three checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row) each end in an early `finish` on failure, so a commit with more than one kind of defect at once only sees the first — reproduced directly: a fixture with both an unknown marker and a `NOT_YET_BUILT` entry that has become stale reports only the unknown-marker failure, and the stale-entry failure only surfaces once that is fixed and the gate re-run. Contradicts `scripts/lib.sh`'s own `fail()` contract ("the caller keeps going so one run reports every violation rather than only the first"), which every sibling gate in this milestone (`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`, `check-portability.sh`) follows by accumulating all problems before a single terminal report. Acceptance: all three checks run unconditionally and every violation across all three is reported in one invocation | done |
 
@@ -1361,6 +1361,30 @@ own `M-1.38` comment — the freshest, most directly relevant instance of the
 idiom in the tree — now points to rules 21–22 by name, so a future reader
 hitting that comment finds the general rule rather than re-deriving it from
 one site's specific reasoning.
+
+**M-1.48** closes the seventh site: `check-commit-msg.sh:133` had the
+identical `printf '%s\n' "$known" | grep -qx "$id"`, missed when `M-1.38`
+fixed the sibling in `check-reviewed.sh` and `M-1.37` fixed it in
+`check-milestone-review.sh`, and outside `M-1.44`'s own list of six because
+it was found later, by `M-1.38`'s own review. The regex-injection half of
+the sibling fixes does not apply here — `$id` can only be something the
+subject-format regex earlier in the same script already matched
+(`M-?[0-9]+\.[0-9]+`), never a hand-written string with a metacharacter —
+so `-F` is defense in depth rather than a live bug at this site; the
+SIGPIPE-misreport half is the real one, and `M-1.44`'s "Shell scripting"
+section rules 21-22 are now cited directly from the fixed line's own
+comment. Reproduced both directions before and after the fix, in isolation
+rather than through the full gate invocation: run through
+`check-commit-msg.sh` itself against a real ~20,000-row backlog, the race
+did not trigger on the first attempt (SIGPIPE reproduction is inherently
+timing-dependent, not deterministic) — so the exact vulnerable line was
+extracted and run standalone several times instead, where the pre-fix
+`printf | grep -qx` form misreported a real, listed task id as unlisted on
+every attempt, and the fixed `grep -qxF ... <<<` form was correct on every
+attempt. A construction that reproduces unreliably through one invocation
+path but reliably in isolation is still a real defect; the fix removes the
+open pipe the SIGPIPE needs entirely, which is what makes it not merely
+"less likely to fail" but structurally unable to fail this way.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on
