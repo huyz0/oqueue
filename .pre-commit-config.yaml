@@ -70,6 +70,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-requirements-trace
+        name: "M-1.24: every milestone plan names a requirement it serves, and every id it names exists"
+        entry: scripts/check-requirements-trace.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
 
       # --- commit-msg stage: the two gates that read the message file itself,
       # which pre-commit passes as this stage's one positional argument.

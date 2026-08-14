@@ -53,7 +53,7 @@ comes before any gate because every gate sources it.
 | M-1.21 | `requirements.md` — functional and non-functional, with stable IDs | Every entry names a verification; every NFR carries a number or is marked UNDERIVED with what blocks it; nothing invented | done |
 | M-1.22 | `standards/sdd.md` — the process standard | Defines the requirement→spec→task→commit chain, what a spec must contain, acceptance-criteria rules, definition of done, and what to do when a spec proves wrong | done |
 | M-1.23 | `standards/review.md` — the operational review standard | Turns [docs/researches/21](../../researches/21-ai-development-loop.md) §3–5 into a standard: reviewer context isolation, the deterministic/semantic split, fixed-or-argued resolution | done |
-| M-1.24 | Trace every milestone to the requirements it serves | Every roadmap entry names FR/NFR IDs; a gate fails on a milestone that names none | todo |
+| M-1.24 | Trace every milestone to the requirements it serves | Every roadmap entry names FR/NFR IDs; a gate fails on a milestone that names none | done |
 | M-1.25 | `standards/security.md`, `performance.md`, `build.md`, `portability.md` | Each rule names its gate or is explicitly marked as having none; rationale delegated to the corpus rather than restated | done |
 | M-1.26 | `standards/code-structure.md` + `standards/testing.md` + `clippy.toml` | File ≤500 lines with a reasoned allowlist; function ≤50 lines, cognitive complexity ≤20, ≤5 arguments, all via `clippy.toml`; per-crate `README.md` and `AGENTS.md` required; fakes over mocks; the no-flake rules | done |
 | M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | todo |
@@ -1631,6 +1631,79 @@ standards, already used that same generation mechanism and lands after both
 also false; that confirmation already happened at `M-1.5`. What remains true:
 review.md is a standard added the ordinary way, one file plus a
 regeneration, not a file plus a hand-edited table.
+
+**M-1.24** is `scripts/check-requirements-trace.sh`. The data it checks
+already existed — every milestone plan M-1.41 through M-1.43 wrote already
+carries a `**Serves:** FR-N, NFR-N` line, confirmed by grepping all
+seventeen before writing a line of the gate — so this task is the gate, not
+the citations. `roadmap.md`'s own summary table gains no new column for
+this: each row already links to `milestones/M-N.md`, and duplicating the
+`Serves:` line into the table would be the same two-places-one-fact hazard
+`build-index.sh`'s header names, now for requirement citations instead of
+generated indexes. The gate reads the plans directly.
+
+Two failure classes, both real and both tested against contrived cases in
+scratch repos before review, plus the empty-requirements-table edge case
+(`requirements.md` with a header row but no id rows, which would otherwise
+make every plan pass vacuously for the wrong reason): a plan with no
+`**Serves:**` line at all, a `**Serves:**` line naming no FR/NFR id, and a
+`**Serves:**` line citing an id `requirements.md` does not list — the last
+one exists because a citation is not traceable if the thing it cites is not
+real, the same reasoning `check-milestone-review.sh` already applies to a
+finding's `task_id`.
+
+Given `M-1.46` exists specifically because `m-1-complete.sh` (M-1.16) shipped
+without a `tests/gates/negative.sh` case, this task adds its own case in the
+same commit rather than repeating that finding a third time — the one
+lesson checkpoint 2 most directly named. Wired into `.pre-commit-config.yaml`
+and the local hook alongside `build-index-check`, since it is cheap (a grep
+over eighteen small files) and enforces exactly the kind of product-doc
+staleness `M-1.47` just spent a commit fixing by hand.
+
+Review found a real gap in the first version: `roadmap.md` already carries
+a **second**, hand-maintained "Requirement coverage" table restating every
+milestone's `Serves:` line as a summary row — pre-existing, and its own
+prose already forward-references M-1.24 by name as the gate that should
+cover it. The first version reasoned only about `roadmap.md`'s *Sequence*
+table (correctly not duplicating there) and missed that this second table
+already existed and already duplicated the fact with zero gate coverage —
+exactly the hazard the gate's own header claimed to avoid. Extended the
+same gate rather than writing a second one: it now also fails a plan whose
+ids disagree with the table's row for the same milestone, a plan with no
+row in the table, and a table row naming a milestone with no plan file.
+
+⚠️ Writing that extension found its own bug before it ever reached review:
+the row parser used `cut -d'|' -fN` on every line of the section, and `cut`
+without `-s` prints a line **unchanged** when it contains no delimiter at
+all — so the prose paragraph right below the table (which names `FR-15`,
+the deferred-requirements case) was picked up as a bogus row and then
+failed as a table entry for a milestone that does not exist. Reproduced in
+a scratch repo built specifically to contain that trap before trusting the
+parser, fixed by requiring a line to match the exact `| X | Y |` two-column
+shape before treating it as a row. A second scratch repo confirmed the
+fixed parser still ignores that same prose correctly, and three more
+confirmed each new failure mode (a drifted id set, a plan missing its row,
+an orphaned row) independently.
+
+Round 2 review found one more real gap, in `tests/gates/negative.sh`'s own
+new case rather than in the gate: adding the round-1 extension's
+`[[ ! -f "$ROADMAP_FILE" ]]` check meant `setup_requirements_trace`'s
+fixture — which had no `roadmap.md` at all, since it predated that check —
+now failed for an unrelated reason ("roadmap.md not found") before ever
+reaching the unknown-id check the case is named and commented for. The
+reviewer proved this concretely with a mutant: a copy of the gate with the
+unknown-id loop deleted still failed identically against the old fixture,
+so `run_case`'s exit-code-only check could not tell the two apart — a case
+that passes regardless of whether the thing it claims to test exists, the
+same "coverage theatre" `testing.md` names for tests that execute a line
+without constraining it. Fixed by giving the fixture a `roadmap.md` whose
+Requirement coverage row *agrees* with the plan (both say `FR-999`, which
+does not exist in `requirements.md`), so only the unknown-id path is
+exercised. Reconfirmed by repeating the reviewer's own mutant: the same
+gate with the unknown-id check deleted, run against the corrected fixture,
+now passes — the opposite of what a real gate should do — which is what
+proves the fixture is actually constraining that check now, not merely
+inert.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every

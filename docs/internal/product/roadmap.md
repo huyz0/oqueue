@@ -121,10 +121,14 @@ Three placements are not obvious and are the ones worth arguing about:
 
 ⚠️ **A requirement with no milestone is not scheduled; a milestone with no
 requirement is not justified.** Both are findings for a milestone-boundary
-review. ⚠️ **Only one direction is gated.** M-1.24 fails a milestone that names
-no requirement; nothing fails a *requirement* that names no milestone, so a new
-FR added to `requirements.md` is unscheduled silently. Closing that needs the
-gate to read both files, and it is not what M-1.24 currently asks for.
+review. ⚠️ **Only one direction is gated.** `scripts/check-requirements-trace.sh`
+fails a milestone plan that names no requirement, an id it names that
+`requirements.md` does not list, and — since the table below is checked
+against the plans, not authored independently — this table disagreeing with
+what a plan actually says. It does not fail a *requirement* that names no
+milestone, so a new FR added to `requirements.md` is unscheduled silently.
+Closing that needs the gate to read both files in the other direction too,
+and it is not what M-1.24 asked for.
 
 | Milestone | Serves |
 |---|---|

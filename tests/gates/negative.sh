@@ -356,16 +356,54 @@ invoke_build_index() {
   bash "$1/scripts/build-index.sh" --check
 }
 
-run_case "check-commit-msg.sh"        setup_commit_msg       invoke_commit_msg
-run_case "check-tests-kept.sh"        setup_tests_kept       invoke_tests_kept
-run_case "check-drift.sh"             setup_drift            invoke_drift
-run_case "check-layering.sh"          setup_layering          invoke_layering
-run_case "check-sans-io.sh"           setup_sans_io           invoke_sans_io
-run_case "check-core-contract.sh"     setup_core_contract     invoke_core_contract
-run_case "check-unsafe.sh"            setup_unsafe            invoke_unsafe
-run_case "check-reviewed.sh"          setup_reviewed          invoke_reviewed
-run_case "check-milestone-review.sh"  setup_milestone_review  invoke_milestone_review
-run_case "build-index.sh --check"     setup_build_index       invoke_build_index
+# --- check-requirements-trace.sh: a milestone plan citing a requirement that
+# does not exist -------------------------------------------------------------
+setup_requirements_trace() {
+  local dir; dir="$(new_scratch requirements-trace)"
+  copy_gate "$dir" check-requirements-trace.sh
+  mkdir -p "$dir/docs/internal/product/milestones"
+  cat > "$dir/docs/internal/product/requirements.md" <<'EOF'
+| ID | Requirement | Verification | Status |
+| --- | --- | --- | --- |
+| FR-1 | does a thing | a test | agreed |
+EOF
+  cat > "$dir/docs/internal/product/milestones/M1.md" <<'EOF'
+**Serves:** FR-999
+EOF
+  # A roadmap.md whose Requirement coverage row *agrees* with the plan above
+  # (both say FR-999) -- so the roadmap-agreement check the gate also runs
+  # passes cleanly, and this case exercises only the failure it is named
+  # for: an id the plan cites that requirements.md does not list. Without
+  # this file at all, the gate's own "roadmap.md not found" check fires
+  # first and this case would pass for an unrelated reason -- found by
+  # review, which built a mutant of the gate with the unknown-id check
+  # deleted and confirmed it still failed identically against the fixture
+  # as it stood before this file was added.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'EOF'
+## Requirement coverage
+
+| Milestone | Serves |
+|---|---|
+| M1 | FR-999 |
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.1: a plan cites a requirement that does not exist")
+  printf '%s\n' "$dir"
+}
+invoke_requirements_trace() {
+  bash "$1/scripts/check-requirements-trace.sh"
+}
+
+run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
+run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
+run_case "check-drift.sh"               setup_drift               invoke_drift
+run_case "check-layering.sh"            setup_layering            invoke_layering
+run_case "check-sans-io.sh"             setup_sans_io             invoke_sans_io
+run_case "check-core-contract.sh"       setup_core_contract       invoke_core_contract
+run_case "check-unsafe.sh"              setup_unsafe              invoke_unsafe
+run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewed
+run_case "check-milestone-review.sh"    setup_milestone_review    invoke_milestone_review
+run_case "build-index.sh --check"       setup_build_index         invoke_build_index
+run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 
