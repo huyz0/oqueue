@@ -51,12 +51,17 @@ required.
 | Quality | [testing.md](docs/internal/standards/testing.md) | Read when writing any test, choosing a tier, or when a test is slow, flaky, or passes without constraining anything. |
 | Delivery | [build.md](docs/internal/standards/build.md) | Read when changing Cargo profiles, adding a dependency, bumping the toolchain, or when builds are slow or the disk is filling. |
 | Delivery | [portability.md](docs/internal/standards/portability.md) | Read when a change is OS- or architecture-specific, when touching release artifacts, or when a test behaves differently on macOS. |
+| Code | [async-concurrency.md](docs/internal/standards/async-concurrency.md) | Read when writing anything that spawns a task, holds a lock, awaits, or shares state across connections — the coordinator, the broker's I/O shell, and anywhere producers or consumers run concurrently. |
+| Code | [behavior.md](docs/internal/standards/behavior.md) | Read when a change is visible to a Kafka client, an operator, or another tenant — protocol responses, defaults, degradation under a dependency failure, logs, or the shape of anything persisted to object storage. |
 | Code | [code-structure.md](docs/internal/standards/code-structure.md) | Read when adding a crate, module, or file; when a file nears 500 lines or a function nears 50; or when writing a crate's README and AGENTS.md. |
+| Code | [contracts.md](docs/internal/standards/contracts.md) | Read when defining or changing a `pub trait` in `oqueue-core`, adding a fake, or deciding whether a new type belongs on a seam or beside one. |
+| Code | [error-handling.md](docs/internal/standards/error-handling.md) | Read when defining an error type, deciding whether something is a `Result` or a panic, propagating a failure across a crate boundary, or writing an error message a client or operator will see. |
+| Code | [rust-style.md](docs/internal/standards/rust-style.md) | Read when naming a type or function, choosing between a generic and `impl Trait`, deciding what a lint attribute or `clippy.toml` entry should say, or when a diff is hard to read for reasons `code-structure.md` doesn't cover. |
 <!-- index:standards:end -->
 
-⚠️ `behavior.md`, `rust-style.md`, `error-handling.md`, `async-concurrency.md`,
-and `contracts.md` do not exist yet — they are M-1.5. Most gate scripts are
-M-1.7 through M-1.12.
+⚠️ Most gate scripts these standards name do not exist yet — that is
+M-1.7 through M-1.12. Until then, a rule that names a script it can't yet
+run is a preference, same as the non-negotiables below.
 
 ## Skills
 

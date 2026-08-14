@@ -34,7 +34,7 @@ comes before any gate because every gate sources it.
 | M-1.2 | `mission.md` — what this is, what it costs, what it must never do | States the latency position and the scale target with citations into the corpus | done |
 | M-1.3 | `architecture.md` — crate map, dependency rule, the seams | Names all eleven crates, the star rule with its two exceptions, and the `unsafe` budget | done |
 | M-1.4 | `roadmap.md` + `backlog.md` — milestones with executable completion conditions | Every milestone's "done" is a command; only M-1 is decomposed | done |
-| M-1.5 | `standards/` — remaining code standards: `behavior`, `rust-style`, `error-handling`, `async-concurrency`, `contracts` | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | todo |
+| M-1.5 | `standards/` — remaining code standards: `behavior`, `rust-style`, `error-handling`, `async-concurrency`, `contracts` | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | done |
 | M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | done |
 | M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | todo |
 | M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | todo |
@@ -79,6 +79,20 @@ comes before any gate because every gate sources it.
 **M-1.5** carries the hazard the hybrid decision named: a ported rule justified
 by the other project's wire protocol, or a threshold derived from a test suite
 that does not exist here, is **stale but authoritative** — worse than absent.
+
+`behavior.md`'s scope was not specified anywhere before this task and had to
+be decided rather than found: it is the *external* contract — what a Kafka
+client, an operator, or another tenant may rely on staying true — as opposed
+to the other four, which govern how the Rust reads and is structured
+internally. That split is stated at the top of the file itself so a future
+reader does not have to reverse-engineer it from the table of contents.
+`code-structure.md` already covered the `unwrap`/`expect` ban and the
+`unchecked_*` ban, and `testing.md` already covered where fakes live; the
+four new files reference those rules rather than restating them, to avoid
+the two places-one-fact hazard M-1.33 already named for generated indexes. Every gate a rule names is one of
+M-1.7 through M-1.12, none of which exist yet — consistent with every other
+standard in this repository, which routinely names a gate before the script
+behind it is written.
 
 **M-1.9** is new to oqueue and has no precedent to port. The mechanism is in
 [docs/researches/21](../../researches/21-ai-development-loop.md) §5. The
