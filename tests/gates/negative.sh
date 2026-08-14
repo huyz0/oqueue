@@ -371,6 +371,55 @@ invoke_unsafe() {
   bash "$1/scripts/check-unsafe.sh"
 }
 
+# --- check-unsafe.sh: a non-UTF-8 file does not suppress a real violation --
+#
+# `M-1.53`. ⚠️ **Not a crash-path case, unlike its siblings for
+# `check-layering.sh`/`check-core-contract.sh` (`M-1.51`) — the acceptance
+# criterion that asked for "the same shape" turned out not to be
+# satisfiable, and this is the deviation, made explicitly rather than
+# forced.** Probed directly before writing this fixture: a non-UTF-8 byte in
+# a tracked `.rs` file's *content*, in its *filename*, and in
+# `baselines/unsafe.txt` itself, none of them crash `check-unsafe.sh` — each
+# is already caught by the per-file `except (OSError, UnicodeDecodeError)`
+# guard (content, and a mis-decoded filename lands on `FileNotFoundError`,
+# also `OSError`) or by `os.environ`'s own `surrogateescape` decoding
+# (baseline text), and reported as a `warn`, not a crash. That guard did not
+# exist in `check-layering.sh`/`check-core-contract.sh` before `M-1.45`,
+# which is exactly why a bare non-UTF-8 byte crashed *them* and does not
+# crash this script — `check-unsafe.sh` was already more defensive, not
+# less. No small, realistic fixture was found that reaches this script's
+# outer `try`/`except Exception` wrapper at all; every path a non-UTF-8 byte
+# can take is already handled before reaching it.
+#
+# What *is* real and untested: whether an unreadable file silently stops the
+# scan before it reaches a real violation elsewhere in the tree, or is
+# skipped without disturbing it. This fixture combines both in one tree, and
+# — checked against `git ls-files`' own return order, not assumed — the
+# unreadable file's path (`crates/aaa-bad/...`) sorts *before* the real
+# violation's (`crates/oqueue-broker/...`), so the per-file loop reaches the
+# `warn`-and-`continue` before it ever reaches the real violation. A path
+# ordering where the violation came first would let this case pass by
+# accident regardless of whether the scan actually continues past a skip.
+setup_unsafe_non_utf8() {
+  local dir; dir="$(new_scratch unsafe-non-utf8)"
+  copy_gate "$dir" check-unsafe.sh
+  mkdir -p "$dir/baselines" "$dir/crates/aaa-bad/src" "$dir/crates/oqueue-broker/src"
+  cat > "$dir/baselines/unsafe.txt" <<'EOF'
+# empty
+EOF
+  printf 'pub fn f() {}\n// \xff\xfe bad byte\n' > "$dir/crates/aaa-bad/src/bad.rs"
+  cat > "$dir/crates/oqueue-broker/src/lib.rs" <<'EOF'
+fn evil() {
+    unsafe { std::hint::unreachable_unchecked(); }
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.53: a non-UTF-8 file scanned before a real violation")
+  printf '%s\n' "$dir"
+}
+invoke_unsafe_non_utf8() {
+  bash "$1/scripts/check-unsafe.sh"
+}
+
 # --- check-reviewed.sh: a staged change with no recorded verdict -----------
 setup_reviewed() {
   local dir; dir="$(new_scratch reviewed)"
@@ -878,6 +927,7 @@ run_case "check-sans-io.sh"             setup_sans_io             invoke_sans_io
 run_case "check-core-contract.sh"       setup_core_contract       invoke_core_contract
 run_case "check-core-contract.sh (non-UTF-8 crash)" setup_core_contract_non_utf8 invoke_core_contract_non_utf8
 run_case "check-unsafe.sh"              setup_unsafe              invoke_unsafe
+run_case "check-unsafe.sh (non-UTF-8 file doesn't suppress a real violation)" setup_unsafe_non_utf8 invoke_unsafe_non_utf8
 run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewed
 run_case "check-reviewed.sh (regex task_id)" setup_reviewed_regex_task_id invoke_reviewed_regex_task_id
 run_case "check-milestone-review.sh"    setup_milestone_review    invoke_milestone_review

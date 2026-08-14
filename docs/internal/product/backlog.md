@@ -82,7 +82,7 @@ comes before any gate because every gate sources it.
 | M-1.50 | `check-hot-path-bench.sh` reports only the first failing category per run, not every violation in one pass | The script's three checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row) each end in an early `finish` on failure, so a commit with more than one kind of defect at once only sees the first — reproduced directly: a fixture with both an unknown marker and a `NOT_YET_BUILT` entry that has become stale reports only the unknown-marker failure, and the stale-entry failure only surfaces once that is fixed and the gate re-run. Contradicts `scripts/lib.sh`'s own `fail()` contract ("the caller keeps going so one run reports every violation rather than only the first"), which every sibling gate in this milestone (`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`, `check-portability.sh`) follows by accumulating all problems before a single terminal report. Acceptance: all three checks run unconditionally and every violation across all three is reported in one invocation | done |
 | M-1.51 | `tests/gates/negative.sh` — a permanent crash-path case for `check-layering.sh` and `check-core-contract.sh` | `M-1.45`'s crash-safety wrapper was verified only in scratch fixtures, not checked in — no gate in this repository currently exercises the crash path for any script, including `check-unsafe.sh`, whose own suite the `M-1.45` acceptance criterion pointed at as precedent and which turns out not to have one either. `tests/gates/negative.sh` already carries `run_case`/`setup_*`/`invoke_*` scaffolding for both scripts a companion `(non-UTF-8 crash)` case can reuse directly, the same shape `check-reviewed.sh (regex task_id)` and `check-hot-path-bench.sh (required row)`/`(leftover entry)` already use for a second case against one gate. Found by `M-1.45`'s own review | done |
 | M-1.52 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after the milestone-review checkpoint covering M-1.31, M-1.44 through M-1.46, and M-1.48 through M-1.51 | `M-1.md`'s closing paragraph still names `M-1.31`, `M-1.44` through `M-1.46`, and `M-1.48` as open although `backlog.md` marks all of them `done` (and doesn't mention `M-1.49`–`M-1.51` at all); its "Tasks" table still lists `contract-change (M-1.31)` under "Remaining" though it landed; `roadmap.md`'s M-1 task-count cell says 48 against `backlog.md`'s actual 52 rows. `M-1.49` claimed to replace a hardcoded ID list with something that wouldn't need remembering to update and, read against its own diff, replaced a 2-ID list with a 5-ID list — the identical fragile shape, which is why it went stale again one batch later. Acceptance: add a Checkpoint 4 entry, correct the stale prose and table, fix the task-count cell, and replace both hardcoded task-ID lists with something derived from `backlog.md`'s actual open rows rather than a list an editor has to remember to update by hand. Found by the boundary milestone review | done |
-| M-1.53 | `tests/gates/negative.sh` — a `(non-UTF-8 crash)` case for `check-unsafe.sh` | `check-unsafe.sh`'s crash-safety wrapper has existed since `M-1.11`, the earliest rounds of this milestone, and has never been exercised by any test — a gate whose failure path nobody has run. Acknowledged twice without a tracking row: `M-1.45`'s own review found it, and `M-1.51`'s commit message explicitly deferred it ("a distinct, undertaken gap, left for a follow-up") without opening one. Acceptance: a `setup_unsafe_non_utf8`/`invoke_unsafe_non_utf8` case, the same shape `M-1.51` already gave `check-layering.sh` and `check-core-contract.sh`, verified to exercise the crash wrapper specifically (a `CRASH ...` line in the captured output), not an incidental failure. Found by the boundary milestone review | todo |
+| M-1.53 | `tests/gates/negative.sh` — a case for `check-unsafe.sh`'s handling of unreadable input | `check-unsafe.sh`'s crash-safety wrapper has existed since `M-1.11` and had never been exercised by any test. The literal acceptance this row originally asked for — a `(non-UTF-8 crash)` case in the same shape `M-1.51` gave `check-layering.sh`/`check-core-contract.sh`, verified via a `CRASH ...` line — turned out not to be satisfiable: probed directly, a non-UTF-8 byte in a tracked file's content, its filename, or `baselines/unsafe.txt` are all already caught before reaching that wrapper, unlike the sibling scripts before `M-1.45`. See the retrospective for the investigation and the adjacent property implemented instead: `setup_unsafe_non_utf8`/`invoke_unsafe_non_utf8`, proving an unreadable file's `warn`-and-skip does not stop the scan before a real violation elsewhere, mutant-tested against the loop's own `continue`. Found by the boundary milestone review | done |
 
 ### Notes on specific tasks
 
@@ -1543,6 +1543,42 @@ Tasks table's `contract-change (M-1.31)` moved from "Remaining" to
 since well before this checkpoint, found only because fixing the adjacent
 paragraph meant rereading this one — now points at `backlog.md`'s row count
 instead of carrying its own number.
+
+⚠️ **M-1.53's own acceptance criterion turned out not to be satisfiable as
+written, and the deviation is recorded here rather than forced.** It asked
+for "the same shape" as `M-1.51` — a non-UTF-8 byte in a tracked file,
+verified to produce a `CRASH ...` line. Probed directly before writing any
+fixture, in three separate scratch repos, none of them crashed
+`check-unsafe.sh`: a non-UTF-8 byte in a tracked `.rs` file's *content*
+(caught by the per-file `except (OSError, UnicodeDecodeError)` guard,
+reported as a `warn` and skipped), in the file's *name* (git quotes an
+unrepresentable filename, the quoted string then resolves to no real path,
+so `open()` raises `FileNotFoundError` — still `OSError`, still caught), and
+in `baselines/unsafe.txt` itself (read via bash `git show` into an env var,
+decoded by Python's `os.environ` with `surrogateescape`, which does not
+raise). This is not a defect: `check-unsafe.sh` was already more defensive
+than `check-layering.sh`/`check-core-contract.sh` were before `M-1.45` —
+which is exactly why a bare non-UTF-8 byte crashed *them* and does not crash
+this one — and no small, realistic fixture was found that reaches its outer
+`try`/`except Exception` wrapper at all.
+
+Rather than force a synthetic fixture built to exploit an unknown, unproven
+bug — the opposite of this project's own testing philosophy, which tests
+understood failure modes, not invented ones — the honest, narrower thing was
+implemented instead: `(non-UTF-8 file doesn't suppress a real violation)`, a
+fixture combining an unreadable file with a genuine violation elsewhere,
+proving the `warn`-and-skip on the first does not stop the scan before it
+reaches the second. Checked against `git ls-files`'s actual return order,
+not assumed, since an ordering where the real violation sorts first would
+let the case pass by accident regardless of whether a skip really continues
+the scan — the unreadable file's path was chosen to sort first. Mutant-tested
+by replacing the per-file loop's `continue` statements with `break` in a
+scratch copy: the mutant reports the tree `ok` (0 files scanned) against the
+identical fixture that makes the real script report `fail` — confirming the
+fixture is load-bearing for the property it actually tests, even though
+that property is not the literal crash wrapper the acceptance criterion
+named. Flagged here for review to weigh in on, per the precedent `M-1.29`
+set for exactly this shape of literal-criterion-versus-reality tension.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on
