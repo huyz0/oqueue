@@ -40,7 +40,7 @@ comes before any gate because every gate sources it.
 | M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | done |
 | M-1.9 | `review.sh` + `check-reviewed.sh` — the isolated reviewer and its gate | Review artifact keyed by staged-diff hash; amending one byte after review fails the commit | done |
 | M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | done |
-| M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | todo |
+| M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | done |
 | M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
 | M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | todo |
@@ -373,6 +373,353 @@ comment-shadow case, the round-2 `'"'` false-positive case, escaped
 single-quote and escaped-backslash char literals each hiding a real
 change behind a trailing comment, a nested block comment mentioning an
 unrelated trait, and a doc-comment-only edit.
+
+**M-1.11** closes the non-negotiables list except rule 3. `check-unsafe.sh`
+enforces two things: `unsafe` outside `oqueue-buf`/`oqueue-codec`/
+`oqueue-checksum` fails outright, and every `unsafe fn`/`unsafe { ... }`
+site inside those three needs an immediately-preceding `// SAFETY:` comment
+whose text has a baseline entry in the new `baselines/unsafe.txt`, id =
+`sha256(file + "\0" + the comment's own text)` truncated to 12 hex
+characters — the same shape `baselines/review.txt` already established for
+argued findings and `testing.md` rule 17's mutants baseline, chosen for
+the identical reason: keyed on content, not a line number, so an unrelated
+edit above a baselined block never invalidates its entry. `unsafe impl
+Send`/`unsafe trait` marker forms are confined to the three crates like
+everything else but are not required to carry a SAFETY comment — doc 18
+§5.7's six conditions are framed around a block or function with a
+precondition to state, and a marker trait has none.
+
+Built and verified against a scratch git repository: unsafe confined with
+a baselined SAFETY comment passes; the identical block with no baseline
+entry yet fails and prints the exact id to add; unsafe in a non-allowed
+crate fails; an `unsafe fn` with no SAFETY comment at all fails; an
+`unsafe impl Send` marker needs no comment but is still confined; and an
+unstaged baseline entry does not satisfy the gate, read from the index for
+the same reason `baselines/review.txt` is.
+
+Round 1 found two real defects and one piece of unnecessary weight:
+
+- **blocking**: the per-file read only caught `OSError`. A non-UTF-8 byte in
+  a scanned file raises `UnicodeDecodeError`, which is not an `OSError` —
+  the scanner died with Python's own exit code 1, indistinguishable on the
+  bash side from "no violations found", and every file after the crashing
+  one in scan order was silently never checked. Reproduced with a file
+  containing one raw `\xff` byte. Fixed two ways: the read is now wrapped in
+  `except (OSError, UnicodeDecodeError)`, so one unreadable file is skipped
+  rather than killing the run, and the whole scan body is wrapped in
+  `def build(): ...` called from a top-level `try/except Exception` that
+  maps any *other* unexpected exception to a distinct exit code (3),
+  matching `build-index.sh`'s own established crash-safety pattern for the
+  identical reason. A skipped file is not silent either: it now prints as a
+  `warn` naming the path, because a file the scanner could not read is a
+  file not scanned for unsafe, and `lib.sh`'s own contract is that a gate
+  states what it checked even when it passes.
+- **major**: `UNSAFE_SITE` was matched with `re.search` per line, so
+  `unsafe` and `{` on separate lines — valid, ordinary Rust that `rustfmt`
+  does not forbid — evaded the SAFETY-comment requirement entirely.
+  Reproduced with `unsafe` alone on one line and `{` on the next. Fixed by
+  matching against the whole file's text once with `re.finditer` and
+  mapping each match's start offset back to a line number via
+  `bisect.bisect_right` over a precomputed table of line-start offsets,
+  rather than searching line by line.
+- **minor**: `require_sha256 || finish` was dead weight — the id is computed
+  in the embedded Python via `hashlib`, never shelled out to `sha256sum`, so
+  the tool-presence check gated nothing. Removed.
+
+Reverified the full original suite after the fix (well-formed pass, missing
+baseline, missing SAFETY comment, unsafe in the wrong crate, marker-impl
+exemption, unstaged baseline) with no regression, plus the two new cases
+above and a forced-exception run confirming the crash path fails loudly
+with a distinct message rather than reporting a false "ok".
+
+Round 2 found two more real defects, both in the round-1 fix itself:
+
+- **blocking**: the SAFETY-comment lookback anchored to the line of the
+  `fn`/`{` token (`m.start(2)` in the round-1 regex), not the line of the
+  `unsafe` keyword. For a split-line site — the exact shape round 1's major
+  fix was written to detect — the line immediately above the detected site
+  was the `unsafe` line itself, not the comment above it, so a correctly
+  placed `// SAFETY:` comment above `unsafe` was invisible to the lookback.
+  Reproduced: `// SAFETY: ...` above `unsafe`, `{` on the next line, a
+  correct staged baseline entry for that exact comment text — failed with
+  "no SAFETY: comment" anyway. The single-line form (`unsafe {` together)
+  passed with the same baseline entry, confirming the anchor was the only
+  variable. Fixed by capturing the `unsafe` keyword itself as its own group
+  and anchoring the lookback (and the reported line number) to its
+  position, not the trailing token's.
+- **major**: rule 1's confinement match was still the original whole-word
+  `unsafe`, unchanged since before round 1 — it matches the English word in
+  prose, not only the Rust keyword. Reproduced: a file outside the three
+  crates containing only a doc comment reading "this crate ... never uses
+  unsafe code, unlike oqueue-buf which does" failed the gate with no
+  `unsafe` keyword anywhere in it. Not a security bypass (errs toward
+  over-blocking), but likely to produce spurious failures once library
+  crates carry real prose about their own safety posture. Fixed by
+  requiring one of the tokens that actually follows the keyword in Rust
+  syntax (`fn`, `impl`, `trait`, `extern`, or `{`), matched over the whole
+  file's text so a confinement violation split across a line break (the
+  same shape round 1 fixed for the SAFETY-required subset) can't evade rule
+  1 either — the bash-side `grep -n` rule 1 previously used could not have
+  spanned lines even if its pattern had required a trailing token, which is
+  why detection for both rules now lives in the one whole-text Python scan
+  rather than half in `grep` and half in Python.
+
+Reverified the full original suite again after both fixes, plus a
+correctly-annotated split-line site (now passes), a disallowed-crate file
+containing only prose mentioning "unsafe" (now passes), and a
+disallowed-crate site split across a line break (still correctly caught,
+confirming the rule-1 move into Python didn't lose the round-1 span
+coverage) — no regression anywhere.
+
+Round 3 found two more real defects, both about legitimate Rust the earlier
+rounds' fixes had not accounted for:
+
+- **blocking**: the SAFETY lookback stopped at the first line that was
+  neither a `//` comment nor blank — an attribute (`#[inline]`, `#[cold]`,
+  `#[target_feature(...)]`) between a correct `// SAFETY:` comment and the
+  `unsafe fn`/`unsafe {` it documents made the comment invisible, exactly
+  the pattern doc 18 §5.7 and the performance standard recommend for
+  hot-path unsafe functions. Reproduced with a `// SAFETY:` comment,
+  `#[inline]`, then `unsafe fn` — failed despite the comment being present
+  two lines above. Fixed by marking every line that belongs to an attribute
+  (tracking `[`/`]` depth so a multi-line attribute, e.g. a wrapped
+  `#[cfg_attr(...)]`, is covered too — the same forward `in_attr`-style scan
+  `check-tests-kept.sh` already uses for its own attribute lines) and having
+  the lookback skip over those lines rather than stopping at them.
+- **major**: rule 1's confinement regex required one of `fn`/`impl`/`trait`/
+  `extern`/`{` after `unsafe`, which does not include edition-2024's
+  `#[unsafe(no_mangle)]` attribute-wrapper syntax — rustc itself requires
+  the wrapper for `no_mangle`/`export_name`/`link_section`, so this is
+  genuine unsafe-introducing syntax, not an oversight to exempt. Reproduced:
+  a disallowed-crate file containing only `#[unsafe(no_mangle)]` over an
+  `extern "C" fn` passed with zero violations reported. Fixed by adding
+  `\(` to the site regex's trailing-token alternation — `unsafe` is a
+  reserved word, so `unsafe(` cannot be anything but this wrapper form, no
+  further disambiguation needed. Treated as confinement-only like `impl`/
+  `trait`/`extern`, not SAFETY-required: it is an attribute annotation, not
+  a block asserting one inline runtime invariant.
+
+Reverified the full suite a third time after both fixes (12 cases: the six
+from round 1 unchanged, plus the round-2 split-line and prose cases, plus a
+multi-line-attribute-annotated site now passing, an attribute-only site
+with no SAFETY comment still correctly failing, and the `#[unsafe(...)]`
+wrapper correctly confined) — no regression.
+
+Round 4 found one more real defect in round 3's own fix, plus a doc/code
+mismatch:
+
+- **blocking**: `attribute_lines()`'s depth tracker counted every `[`/`]`
+  character on a line, including ones inside a string literal that is
+  itself an attribute argument's value. An attribute whose string value
+  contains an unbalanced `[` (`#[doc = "array[ unmatched bracket..."]`, a
+  plausible `#[serde(rename = "items[0]")]`) pushed `depth` permanently
+  above zero, so `in_attr` never cleared — every line for the rest of the
+  file, including later genuine `// SAFETY:` comments, was silently
+  swallowed into the attribute-skip set instead of being read as a comment
+  or used as a boundary. Reproduced with exactly the `#[doc = "array[...`
+  case; a correctly placed SAFETY comment two lines later failed the gate.
+  Fixed by stripping ordinary double-quoted string content
+  (`"(?:\\.|[^"\\])*"`) from each line before counting brackets — the same
+  string-awareness discipline `check-core-contract.sh`'s own brace-depth
+  scan had to learn the hard way. Disclosed, not chased further: a raw
+  string or an unterminated (non-compiling) string literal inside an
+  attribute can still miscount, the same category of accepted gap
+  `check-core-contract.sh` already discloses for itself.
+- **minor**: the header claimed the SAFETY/site association tolerated
+  "blank lines ... in between", but the lookback actually stops at the
+  first blank line — it never skipped them, only comments and attributes.
+  The stricter code was correct (an accidental blank-line gap should not
+  associate a comment with a much later, unrelated site); the header was
+  wrong. Fixed by correcting the header's wording, not the behavior.
+
+Reverified the full suite a fourth time (14 cases: the twelve above, plus
+the bracket-in-attribute-string case now passing, plus a blank line
+between comment and site still correctly failing) — no regression.
+
+Round 5 found the same defect *class* as round 4 recurring through a
+second, unstripped path, plus one more prose false positive:
+
+- **blocking**: `attribute_lines()`'s bracket counter had no concept of
+  `/* ... */` block comments. A block comment containing commented-out,
+  attribute-shaped text with an unbalanced bracket count (kept-for-context
+  reference code, a rejected draft) set `in_attr` and never cleared it, the
+  identical whole-file cascading failure round 4 fixed for string literals,
+  reached by an unstripped comment instead. A companion case, a single
+  attribute containing a bracket inside a char literal
+  (`#[my_tool_attr('[')]`), showed the round-4 fix (string-only stripping)
+  was one instance of the general problem, not the problem itself.
+- **major**: the `\(` alternative added in round 3 for `#[unsafe(...)]`
+  reopened round 2's prose defect for that one token -- `unsafe(` matched
+  inside an ordinary `//` comment that merely named the syntax by way of
+  explaining a crate didn't need it, the same class round 2 eliminated for
+  the other trailing tokens but never re-checked when `\(` was added.
+
+Both are the same root cause surfacing a third and fourth time: matching
+and counting brackets against raw source text cannot distinguish real code
+from a comment or a string that merely contains code-shaped text, and
+every incremental, single-shape fix (strings in round 4, now attributes
+found via comments) left the next shape uncovered. Fixed by stopping the
+one-shape-at-a-time patching and porting `check-core-contract.sh`'s
+tested `strip_comments()` state machine wholesale, extended to also blank
+string and single-quote-char-literal *interiors* (that file only ever
+needed comments blanked; this gate's regex matches on syntax shape, which
+strings and char literals can just as easily contain). `SITE` and the
+attribute-bracket counter now both run against this one stripped text
+instead of the raw one; the SAFETY-comment lookback still reads the raw
+lines, since it needs the real comment text to hash, not a blanked one.
+Char-literal recognition uses a bounded lookahead for the two shapes that
+occur in practice (`'x'`, `'\x'`) rather than a full lifetime/char-literal
+disambiguator -- the same "narrow special case, not a full lexer" posture
+`check-core-contract.sh` already established for the identical ambiguity
+in its own scanner, and it turned out to subsume that file's separate
+`'"'`-char-literal special case for free, since char-literal detection
+here happens at the opening quote, before the interior `"` is ever visited
+on its own.
+
+Reverified the full suite a fifth time (17 cases: the fourteen above,
+plus the block-comment-with-unbalanced-bracket case now passing, a
+bracket-in-char-literal attribute now passing, and `unsafe(no_mangle)`
+named inside a `//` comment outside the allowed crates no longer failing)
+— no regression.
+
+Round 6 found the most severe defect of the six rounds: a real false
+*pass* (every prior round's dangerous-direction findings were near
+misses, caught before shipping; this one was live in the diff sent to
+review), plus a second false-rejection defect in the same family as
+rounds 4-5, plus a cosmetic one:
+
+- **blocking**: `strip_for_scan`'s `'string'` state applies
+  backslash-escaping to every double-quoted string uniformly, but raw
+  strings (`r"..."`, `r#"..."#`) have no escape sequences in real Rust.
+  Reproduced: `r"\"` (a common shape -- any Windows-style path literal, or
+  a regex fragment ending in a literal backslash) ends its content with a
+  backslash directly before the closing quote; the escape-tracking state
+  interpreted that quote as escaped and kept consuming -- silently
+  blanking every real character after it, including a genuine
+  `unsafe { ... }` block outside the three allowed crates, until an
+  unrelated later `"` or end of file. `check-unsafe.sh` reported `ok` on a
+  file that plainly violates rule 1. This is the dangerous direction
+  non-negotiable 7 exists to prevent, and the disclosed "what this does
+  not catch" note previously understated it by lumping raw strings in
+  with "does not compile" cases -- this one compiles and is ordinary.
+  Fixed by recognizing the `r`/`br` prefix and pound-count via a backward
+  lookahead from the opening quote (mirroring how rustc's own lexer
+  resolves it) and closing on the real rule: `"` followed by exactly that
+  many `#`, no escaping in between. Verified against `r"\"`,
+  `r#"[a-z]+\"#`, and `br"C:\some\path\"` (pound-delimited and byte-string
+  forms) each followed by a real unsafe site, and confirmed an ordinary
+  escaped string (`b"a\\\"b"`) is unaffected.
+- **major**: `attribute_lines()` tracked bracket depth as a whole-line net
+  count (`ln.count('[') - ln.count(']')`), so a line where an attribute
+  closes and unrelated real code follows on the *same* line
+  (`#[derive(Debug)] struct Padding([u8; 4]);`) still balanced to zero for
+  the line as a whole (the struct's own `[u8; 4]` also nets to zero) and
+  the entire line -- including the struct declaration -- was marked
+  transparent. The SAFETY lookback then skipped straight over it,
+  letting an unrelated, far-above `// SAFETY:` comment attach to an
+  unsafe site it never described: a false pass on the baseline-coverage
+  check specifically, the same dangerous direction as the blocking
+  finding, just one level down. Reproduced exactly as described. Fixed by
+  scanning each attribute line character by character to find the exact
+  column its own bracket closes at, and only marking a line transparent
+  when nothing but whitespace follows that column -- a line mixing an
+  attribute with real code is now left unmarked and acts as an ordinary
+  boundary.
+- **minor**: the `char_lit` state's fallback branch blanked every
+  non-escape, non-closing character to a plain space, including `\n`,
+  contradicting the function's own documented "every newline is preserved"
+  invariant. Unreachable in practice (a bare newline inside `'...'` is not
+  valid, compiling Rust), but fixed for free while already in this code:
+  now preserves `\n` like every other blanking branch does.
+
+Reverified the full suite a sixth time (20 cases: the seventeen above,
+plus the raw-string-masking case now correctly failing on its real
+`unsafe` site, the attribute-with-trailing-code case now correctly
+requiring its own SAFETY comment, and two extra probes -- a
+pound-delimited raw string and an escaped byte string, both followed by a
+real unsafe site that is still correctly caught) — no regression.
+
+Round 7 asked the reviewer to scrutinize the string-handling machinery
+hardest, since round 6 had found a real false pass there; that machinery
+held. It found a second false pass instead, in code unchanged since round
+1:
+
+- **blocking**: the main scan loop deduplicated by line number --
+  `if i in seen_lines: continue` -- on the mistaken assumption that a line
+  holds at most one relevant `unsafe` site. `unsafe fn f() { unsafe { ... }
+  }`, or an edition-2024 `#[unsafe(no_mangle)] pub unsafe extern "C" fn
+  foo() { unsafe { ... } }`, puts two or more genuinely distinct `unsafe`
+  occurrences on one line, and every one after the first was silently
+  never examined for a SAFETY comment or baseline entry -- a real,
+  uncommented, unbaselined unsafe block reported as compliant.
+  Reproduced both ways: a nested `unsafe fn`/`unsafe {}` pair sharing a
+  line with only the outer site's comment baselined passed cleanly, and
+  the FFI-export shape above with an entirely empty baseline file also
+  passed. `SITE.finditer` never produces two matches for the same keyword
+  occurrence -- each match consumes its own boundary character and
+  scanning resumes strictly after it -- so every match was already a
+  genuinely distinct occurrence; there was nothing to legitimately dedup,
+  and the dedup itself was the bug. Fixed by removing it. A shared
+  physical line means sites sharing that line also share whichever
+  comment sits directly above the line, at this gate's line-level
+  granularity (unchanged, documented) -- two sites needing two different
+  justifications is exactly what pulling the inner block onto its own
+  line already achieves, same as any other case where this gate's
+  granularity asks for a line split.
+
+Reverified the full suite a seventh time (both repros above now correctly
+failing, plus the full twenty-case suite unchanged) — no regression.
+
+Round 8, asked to scrutinize the whole file for any remaining way a real
+site could be silently missed given the last two rounds' pattern, found
+one more real false pass, plus confirmed round 7's fix introduced no new
+false positive:
+
+- **blocking**: `unsafe extern` is ambiguous by itself -- `unsafe extern
+  "C" fn foo() { ... }` is a real function definition with a body and
+  exactly one inline invariant to state (indistinguishable in shape from
+  `unsafe fn`); `unsafe extern "C" { fn foo(); }` is a foreign block, a
+  list of declarations with nothing to assert. `SITE` only ever captured
+  the token immediately after `unsafe`, which is `extern` either way, so
+  every `unsafe extern "ABI" fn` site was silently classified with the
+  marker-exempt block form and never checked for a SAFETY comment or
+  baseline entry at all -- the header's own "what this does not catch"
+  section already correctly scoped the disclosed exemption to *blocks*
+  only, but the code did not actually enforce that distinction. Reproduced
+  with a bare, uncommented `pub unsafe extern "C" fn my_callback(...)` in
+  an allowed crate against an empty baseline: reported `ok`. Fixed by
+  peeking past the optional ABI string literal for the real continuation
+  (`fn` vs `{`) and reclassifying accordingly; an unrecognized or
+  ambiguous continuation resolves to requiring a SAFETY comment rather
+  than to the exempt form, since a false rejection here costs a second
+  look and a false exemption costs nothing and is invisible -- the same
+  fail-safe default this file has settled on for every dangerous-direction
+  fix from round 6 onward.
+- Confirmed, not a defect: round 7's dedup removal does not introduce
+  spurious double-reporting for a genuinely single site --
+  `SITE.finditer` cannot produce two matches for one keyword occurrence,
+  verified again directly.
+
+Reverified the full suite an eighth time (21 cases: the twenty above,
+plus five extra probes around `unsafe extern` -- a bare uncommented
+extern fn now correctly failing, the same fn with a comment now passing,
+an extern *block* still correctly exempt, a bare `extern fn` with no ABI
+string still correctly requiring SAFETY, and an extern fn outside the
+three allowed crates still correctly confined) — no regression.
+
+Round 9, asked to hunt specifically for a fifth dangerous-direction false
+pass given the pattern of the previous four (each in a different
+mechanism: string handling, attribute-line tracking, line dedup, extern
+disambiguation), reasoned through Rust's actual function-qualifier grammar
+(`const|async → unsafe → extern → fn`, meaning `unsafe` is always
+immediately followed by `extern` or `fn` for a function item, so no legal
+function-definition shape exists that `SITE`'s trailing-token set doesn't
+already recognize) and tested adversarial `unsafe extern` shapes directly
+against the real script: a function-pointer type field, a malformed
+double-ABI-string, a no-ABI-string form, an ABI string containing an
+escaped quote, and an `unsafe impl` sharing a line with a genuine
+`unsafe { ... }` block. **Pass, no findings** -- the first round of nine
+to return clean.
 
 **M-1.9** is new to oqueue and has no precedent to port. The mechanism is in
 [docs/researches/21](../../researches/21-ai-development-loop.md) §5. The

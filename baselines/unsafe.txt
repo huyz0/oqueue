@@ -1,0 +1,27 @@
+# Baselined SAFETY blocks.
+#
+# `security.md` rule 19 and `docs/researches/18` §5.7: every `unsafe` block
+# satisfies six conditions -- a benchmark, the safe alternatives tried first,
+# a `SAFETY:` comment naming the precondition, a `debug_assert!` of it, the
+# obligation encoded in a type where possible, and a differential property
+# test kept forever. `scripts/check-unsafe.sh` checks only the mechanical
+# half: that a SAFETY comment exists, and that this file has an entry for it.
+# Whether the other five conditions actually hold is stated here, in the
+# reason, and is review's job to check -- the same split every other gate in
+# this repository draws between "presence" and "truth".
+#
+# Format: <id>  <reason>
+#
+# id = sha256(file + "\0" + the SAFETY comment's own text), truncated to 12
+# hex characters -- keyed on the comment's content, not a line number, so
+# editing unrelated lines elsewhere in the file never invalidates an entry.
+# `scripts/check-unsafe.sh` prints the id it computed when an entry is
+# missing.
+#
+# ⚠️ The entry must be **staged**, read from the index like
+# `baselines/review.txt` -- an unstaged line satisfies the gate locally and
+# fails it on CI, the same pass-here/red-there asymmetry M-1.39 tracks for
+# the review baseline.
+#
+# This file is empty until M1's `oqueue-buf`/`oqueue-codec`/`oqueue-checksum`
+# code exists to hold a real entry.
