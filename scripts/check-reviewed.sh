@@ -152,7 +152,9 @@ if [[ -z "$known" ]]; then
 # `check-milestone-review.sh` already fixed for both reasons; this one was
 # missed the first time. Reproduced before fixing: a ~20,000-row `known`
 # list with the real match on line 1 makes the old `printf | grep -qx` form
-# report "not found" for a task id that is, in fact, present.
+# report "not found" for a task id that is, in fact, present. See
+# `portability.md`'s "Shell scripting" section (rules 21-22) for the general
+# idiom this is one instance of.
 elif ! grep -qxF "$task_id" <<< "$known"; then
   fail "review names $task_id, which the backlog does not list"
   finish

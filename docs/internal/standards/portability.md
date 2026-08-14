@@ -103,6 +103,40 @@ runtime fix) to solve a build problem, at large and unnecessary cost.
     them. This is an argument for confining them to `oqueue-buf` and
     `oqueue-core`.
 
+## Shell scripting
+
+⚠️ **This section exists because the same defect was found nine times, across
+six of this milestone's own gate scripts, before it was written down.** A
+defect that recurs after the fix for one instance was read is not carelessness
+— it is a gap in what "portable" covers here, since every instance passed on
+the machine that wrote it and failed only under load the author's own test run
+never produced.
+
+21. ⚠️ **`producer | grep -q` and `producer | head -N` are not safe under
+    `set -o pipefail`, even though every one of this project's scripts sets
+    it.** `grep -q` and `head` both exit the instant they have what they need
+    — the first match, the first `N` lines — closing their end of the pipe
+    while `producer` may still be writing. The write that follows delivers
+    `SIGPIPE`, `producer` exits with status 128+13, and `pipefail` reports
+    *that* as the pipeline's status, not `grep`'s or `head`'s successful
+    match. The consumer's *success* is what triggers it: a `producer` too
+    small to overflow the pipe buffer (roughly 64 KiB on Linux) never
+    reproduces it, which is why this passed nine times in nine separate test
+    runs before failing once at real scale. `yes | head -n 3` fails the same
+    way for the identical reason and is not a safe way to build a repeated-line
+    fixture in a script that inherits `pipefail`.
+    → no script checks for this pattern; the remedy below is applied by hand,
+    same as any other review-caught defect until one exists.
+22. **Two remedies, chosen by what is on the pipeline's left side.** If the
+    producer's output is already captured in a variable, use a here-string
+    (`grep -qF "$needle" <<< "$haystack"`) instead of piping it back through
+    a subshell — there is no live pipe to SIGPIPE on. If the producer must run
+    as a real command whose exit code also matters, capture the pipeline's
+    result explicitly rather than trusting a bare command's implicit
+    propagation: `producer | consumer || rc=$?`, then branch on `rc`. Both
+    are used throughout this milestone's gates; grep for `<<<` and `|| rc=`
+    in `scripts/*.sh` for worked examples.
+
 ## What has no gate
 
 **Whether the target list is still right.** It is a product decision that should

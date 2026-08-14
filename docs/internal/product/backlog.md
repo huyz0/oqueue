@@ -73,7 +73,7 @@ comes before any gate because every gate sources it.
 | M-1.41 | Milestone plans: M0, M1, M2, M3, M10 | The build-out sequence — workspace, object store, protocol, coordinator, deterministic simulation. Each names its goal, kind, requirements, the ADRs that must be written before its code, ≤20 provisional tasks, and a completion condition that is a command | done |
 | M-1.42 | Milestone plans: M9, M4, M11, M5, M6 | Security, consumer groups, idempotence, compaction, recovery. Same shape as M-1.41 | done |
 | M-1.43 | Milestone plans: M7, M8, M12, M13, M14, M15 | Scale, encryption, admin, release engineering, performance validation, hardening. Same shape as M-1.41 | done |
-| M-1.44 | `portability.md` — a shell-scripting section documenting the `set -o pipefail` SIGPIPE-under-`grep -q`/`head`/early-exit idiom | Names the idiom that recurred nine times across six scripts in this milestone (`build-index.sh`, `check-reviewed.sh`, `check-layering.sh`, `check-core-contract.sh`, `milestone-review.sh`, `check-milestone-review.sh`), gives the `\|\| rc=$?` / here-string remedies as rules, and is cited by name from at least one gate script comment rather than left as tribal knowledge in commit messages and backlog prose | todo |
+| M-1.44 | `portability.md` — a shell-scripting section documenting the `set -o pipefail` SIGPIPE-under-`grep -q`/`head`/early-exit idiom | Names the idiom that recurred nine times across six scripts in this milestone (`build-index.sh`, `check-reviewed.sh`, `check-layering.sh`, `check-core-contract.sh`, `milestone-review.sh`, `check-milestone-review.sh`), gives the `\|\| rc=$?` / here-string remedies as rules, and is cited by name from at least one gate script comment rather than left as tribal knowledge in commit messages and backlog prose | done |
 | M-1.45 | Backport the crash-safety wrapper (`try`/`except Exception` around the Python body, distinct exit code 3 for an uncaught crash) from `build-index.sh`/`check-unsafe.sh` to `check-layering.sh` and `check-core-contract.sh` | Both scripts were written after `fadd095` (M-1.33's follow-up) established the wrapper and after `check-unsafe.sh` reused it, but neither adopted it; both currently avoid a false *pass* on crash only because no `print` executes before their risky `git`/file-read calls — an undocumented, unenforced invariant one added diagnostic print away from silently reintroducing the exact false-pass class the wrapper exists to prevent. Acceptance: both scripts exit a distinct non-1/0 code on an uncaught exception, verified against a contrived non-UTF-8 input the way `check-unsafe.sh`'s own suite already does | todo |
 | M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | todo |
 | M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
@@ -1333,6 +1333,34 @@ same call made for `check-portability.sh`'s round 3 (a fix verified
 correct but outside what the existing suite's shape can cheaply cover) —
 a candidate for a future task if `milestone-review.sh record` itself ever
 gets brought under `tests/gates/negative.sh`'s framework.
+
+**M-1.44** writes down the class M-1.9's sixth round named ("it belongs in
+the shell rules `portability.md` will grow," above) rather than leaving it
+tribal knowledge scattered across commit messages and this file's own
+prose. A new "Shell scripting" section, appended after rule 20 rather than
+inserted earlier in the file: rule 2 is already cited by number from
+`lib.sh`, and rule 10 from `check-milestone-review.sh`, so renumbering
+anything before them would break those live citations — the exact kind of
+drift this whole file exists to prevent, avoided by construction instead of
+caught later. ⚠️ Corrected by review: an earlier draft of this paragraph
+said both scripts cited both rules; `check-milestone-review.sh`'s only other
+"rule 2" is its own local numbered checklist ("# 2. no artifact claims a
+commit the milestone does not contain"), not a `portability.md` citation,
+and not itself evidence either way. Two rules: 21 names the mechanism
+precisely (`grep -q`/`head` exit
+early, the pipe's other end SIGPIPEs on its next write, `pipefail` reports
+the *consumer's success* as the pipeline's failure — and why it passed
+every one of the nine times it shipped: the producer has to be large
+enough to still be writing when the pipe closes, which a small test
+fixture rarely is until it happens to be), and 22 gives the two remedies
+already in use throughout this milestone's gates (a here-string when the
+data is already in a variable, `\|\| rc=$?` when the producer must run as
+a real command). Acceptance also asked for a citation from an actual gate
+script, not just the standard existing in isolation: `check-reviewed.sh`'s
+own `M-1.38` comment — the freshest, most directly relevant instance of the
+idiom in the tree — now points to rules 21–22 by name, so a future reader
+hitting that comment finds the general rule rather than re-deriving it from
+one site's specific reasoning.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on
