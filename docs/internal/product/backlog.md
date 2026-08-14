@@ -59,7 +59,7 @@ comes before any gate because every gate sources it.
 | M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | done |
 | M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | done |
 | M-1.29 | `check-hot-path-bench.sh` | A benchmark's `hot-path:` marker names a real row in `performance.md` rule 18's table; a row with no marker fails unless it is named, with a reason, in the script's `NOT_YET_BUILT` allowlist — see rule 19 and the retrospective below for why | done |
-| M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | todo |
+| M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | done |
 | M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
 | M-1.32 | `standards/git.md` — commit atomicity and structure | States why atomicity matters (bisect is the substitute for a reviewer), the subject and body rules, amend-before-push / follow-up-after, and the no-branching workflow | done |
 | M-1.33 | Frontmatter on standards and product docs + `scripts/build-index.sh` | Every standard and product doc carries a `description` saying *when to read it*, so layer-1 disclosure works for them as it does for skills; generated index regions rebuild from frontmatter and `--check` fails a stale one | done |
@@ -1318,6 +1318,92 @@ part of its interface with the tool, not only with the reader.** `spec`, `tdd`,
 `adr`, `research`, and `review` are all short enough to be claimed the same way.
 M-1.30's `check-portability.sh` is the natural home for a check, if one is worth
 having.
+
+**M-1.30** is `check-portability.sh`, `.agents/skills/README.md`'s "The rules"
+1–3. Three checks, each a direct translation of one of those rules rather than
+anything invented: no line in `AGENTS.md` or any `SKILL.md` starts with `@` (the
+one vendor syntax this repository actually names by example — `CLAUDE.md`'s own
+`@AGENTS.md`/`@.agents/skills/README.md`), every `SKILL.md`'s frontmatter has a
+non-empty `name` and `description` with `name` matching its own directory, and
+every `.claude/commands/*.md` both points at a skill that exists and contains
+neither a markdown heading nor a numbered step — the shapes a real procedure
+would have and the eight actual adapter files, checked by hand first, do not.
+
+Deliberately left out: the name-collision risk `M-1.36`'s retrospective raised
+above ("a skill's name is part of its interface with the tool"). Checking it
+would need an authoritative list of names some other tool might claim, which
+does not exist here to check against — the same reason `requirements.md` marks
+NFR-55/56 UNDERIVED rather than guessing a number. `M-1.36`'s own note already
+says this explicitly ("if one is worth having"); inventing the list now would be
+exactly the kind of unsourced number this project's standards forbid.
+
+Fenced code blocks are stripped before the vendor-syntax scan, confirmed
+necessary by testing rather than assumed: a skill illustrating `@import` as a
+*counter*-example inside a ` ``` ` block should not itself be flagged, even
+though nothing in this repository currently does that. Verified end to end in
+scratch fixtures for every branch — a vendor-syntax line (and its fenced-block
+exemption), a `SKILL.md` name/directory mismatch, a missing `description` on
+both `SKILL.md` and a command file, a command file shaped like a procedure
+(heading, numbered step), and a command file pointing at a skill that does not
+exist — plus the crash-safety wrapper this session's other Python-backed gates
+already use, exercised directly with a non-UTF-8 `AGENTS.md`. One
+`tests/gates/negative.sh` case (the vendor-syntax line, the rule this gate's
+own standard names most concretely) was added and mutant-tested: with the
+check's `if` condition disabled, the fixture wrongly passes.
+
+Review found two real defects the "verified every branch" list above did not
+actually cover, both in how fence-stripping was applied rather than in
+whether it was justified. First, `enumerate()` numbered the vendor-syntax scan
+*after* fenced lines were already dropped, so a violation reported on a file
+with a fence earlier in it got the wrong line number — reproduced by
+appending a violation to the true end of `review/SKILL.md` (already 114 lines
+with two fenced blocks): the gate reported line 110, not 115. Fixed by
+carrying each surviving line's original position through the strip rather
+than renumbering what remained. Second, the command-file heading/numbered-step
+scan never stripped fences at all, despite the header's own stated reason for
+stripping them elsewhere — a pointer file legitimately quoting a bad example
+inside a fence would be flagged as "looks like a procedure" for its own
+counter-example. None of the eight real command files trigger this today, but
+review reproduced it directly in a scratch fixture. Fixed by routing that
+scan through the same fence-stripping helper the vendor-syntax check uses,
+now shared rather than duplicated. Both fixes reproduced exactly as review
+described, then reproduced as fixed, before re-review: the corrected line
+number (115, not 110) against the real `review/SKILL.md`, and a scratch
+fixture with a fenced bad-example block passing cleanly where it previously
+failed — with a genuine, unfenced procedure-shaped command file confirmed to
+still fail, so the fix narrows the exemption rather than widening it into a
+loophole.
+
+Round 2 review, verifying the round-1 fixes rather than the original diff,
+passed both reproductions but found a third defect in the same shared
+helper: a ` ``` ` marker with no closing partner left `in_fence` `True` for
+the rest of the file, so `strip_fenced_lines` silently dropped -- exempted
+from every scan -- every line from the unclosed marker to end of file,
+including a real violation. Not currently triggered by any file in the
+repository (fence-marker parity checked across all 17), but an ordinary
+missing-closing-fence typo away from disabling this gate's remaining
+coverage of a file with no diagnostic at all. Fixed by counting `` ``` ``
+markers before stripping: an odd count grants no fence exemption for that
+file at all (fails closed on the whole file rather than open on the
+remainder) and is itself reported as its own problem, the same "cannot skip
+and still mean anything" discipline `lib.sh`'s `require_sha256` and
+`require_python` already use. Reproduced review's exact construction against
+both a `SKILL.md` and a command file, confirmed failing after the fix where
+it silently passed before, and a second `tests/gates/negative.sh` case
+covers it, mutant-tested the same way as the others: with the odd-count
+check disabled, the fixture wrongly passes.
+
+Round 3 passed, with one minor finding recorded but not required to be
+fixed before this commit, per `review.md` rule 14: round 1's two fixes (line
+numbers surviving fence-stripping; fence-stripping applied to the
+command-file scan) have no dedicated regression case of their own, unlike
+round 2's fix. Independently re-verified correct in round 3's own
+reproduction, so nothing is wrong today — but `tests/gates/negative.sh`
+only asserts on exit code, never message content (no case in the suite
+does), so a case genuinely checking "the line number is 115, not 110" does
+not fit the suite's current design without extending it — a bigger change
+than this task's own scope, and left as a noted gap rather than invented on
+the spot.
 
 **M-1.35** is a defect M-1.9's work found in an already-`done` gate, and its
 review is a warning about fixing diagnostics. The first fix made the gate speak

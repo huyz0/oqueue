@@ -617,6 +617,91 @@ invoke_hot_path_bench_leftover() {
   bash "$1/scripts/check-hot-path-bench.sh"
 }
 
+# --- check-portability.sh: a vendor-syntax line in AGENTS.md ---------------
+setup_portability() {
+  local dir; dir="$(new_scratch portability)"
+  copy_gate "$dir" check-portability.sh
+  mkdir -p "$dir/.agents/skills/foo" "$dir/.claude/commands"
+  # `@import` (Claude Code's own syntax) in AGENTS.md, the one concrete
+  # vendor-syntax pattern the skill this gate enforces names by example.
+  # Everything else in this fixture is deliberately clean, so this case
+  # exercises only the failure it is named for.
+  cat > "$dir/AGENTS.md" <<'EOF'
+# Test repo
+
+@some-other-file.md
+
+Some prose.
+EOF
+  cat > "$dir/.agents/skills/foo/SKILL.md" <<'EOF'
+---
+name: foo
+description: Do the foo thing.
+---
+
+# Foo
+
+Some procedure.
+EOF
+  cat > "$dir/.claude/commands/foo.md" <<'EOF'
+---
+description: Do the foo thing.
+---
+
+Follow the procedure in `.agents/skills/foo/SKILL.md`. Read that file now
+and do what it says.
+
+This file is an adapter.
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.30: AGENTS.md uses vendor-specific @import syntax")
+  printf '%s\n' "$dir"
+}
+invoke_portability() {
+  bash "$1/scripts/check-portability.sh"
+}
+
+# --- check-portability.sh: an unterminated ``` fence ------------------------
+setup_portability_unterminated_fence() {
+  local dir; dir="$(new_scratch portability-unterminated-fence)"
+  copy_gate "$dir" check-portability.sh
+  mkdir -p "$dir/.agents/skills/foo" "$dir/.claude/commands"
+  # A ``` marker with no closing partner. Without the fix this fixture
+  # exists to hold in place, `strip_fenced_lines` never re-closes `in_fence`
+  # and silently drops every line from the unclosed marker to end of file --
+  # including the real `@` violation below -- from every scan, with no
+  # diagnostic. Found by review reproducing it against a real file; this
+  # fixture is the same construction, minimized.
+  cat > "$dir/AGENTS.md" <<'EOF'
+# Test repo
+
+```
+an unterminated fence
+
+@some-other-file.md
+EOF
+  cat > "$dir/.agents/skills/foo/SKILL.md" <<'EOF'
+---
+name: foo
+description: Do the foo thing.
+---
+
+# Foo
+EOF
+  cat > "$dir/.claude/commands/foo.md" <<'EOF'
+---
+description: Do the foo thing.
+---
+
+Follow the procedure in `.agents/skills/foo/SKILL.md`. Read that file now
+and do what it says.
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.30: AGENTS.md has an unterminated fence hiding a real violation")
+  printf '%s\n' "$dir"
+}
+invoke_portability_unterminated_fence() {
+  bash "$1/scripts/check-portability.sh"
+}
+
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
@@ -633,6 +718,8 @@ run_case "check-readmes.sh"             setup_readmes             invoke_readmes
 run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench
 run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required
 run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover
+run_case "check-portability.sh"         setup_portability         invoke_portability
+run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 

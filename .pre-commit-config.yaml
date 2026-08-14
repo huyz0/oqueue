@@ -98,6 +98,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-portability
+        name: "skills/README.md rules 1-3: no vendor syntax in AGENTS.md/SKILL.md, every skill names itself, every command is a pointer"
+        entry: scripts/check-portability.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
 
       # --- commit-msg stage: the two gates that read the message file itself,
       # which pre-commit passes as this stage's one positional argument.
