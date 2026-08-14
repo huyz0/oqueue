@@ -57,7 +57,7 @@ comes before any gate because every gate sources it.
 | M-1.25 | `standards/security.md`, `performance.md`, `build.md`, `portability.md` | Each rule names its gate or is explicitly marked as having none; rationale delegated to the corpus rather than restated | done |
 | M-1.26 | `standards/code-structure.md` + `standards/testing.md` + `clippy.toml` | File ≤500 lines with a reasoned allowlist; function ≤50 lines, cognitive complexity ≤20, ≤5 arguments, all via `clippy.toml`; per-crate `README.md` and `AGENTS.md` required; fakes over mocks; the no-flake rules | done |
 | M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | done |
-| M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | todo |
+| M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | done |
 | M-1.29 | `check-hot-path-bench.sh` | Every hot path named in `performance.md` rule 18 has a benchmark, so the list cannot silently rot | todo |
 | M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | todo |
 | M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
@@ -1762,6 +1762,69 @@ already warns about. Reproduced with the raw (non-`grep`-filtered) output
 of the over-limit scratch case, which showed both lines side by side.
 Fixed with an explicit violation counter checked before the success
 message, the same shape `check-requirements-trace.sh` already uses.
+
+**M-1.28** is `scripts/profile.sh` and `scripts/bench.sh`, `performance.md`
+rules 2 and 20–22. Neither is a gate — no `.pre-commit-config.yaml` entry, no
+`tests/gates/negative.sh` case, matching `performance.md`'s own "Profiling:
+on demand, never gated" section, which the header quotes rather than
+restates.
+
+`profile.sh <mode> <bench>` implements the exact six-row table
+`performance.md` rule 20 gives. Before writing the `instructions`/`heap`/
+`massif`/`cache` branch, fetched gungraun's own documentation rather than
+guessing its CLI: its Callgrind/Cachegrind/DHAT/Massif backends are
+selected in the benchmark harness's own Rust configuration, not by a flag
+or environment variable this script could pass — so all four modes run the
+identical `cargo bench --bench <bench>`, and which Valgrind sub-tool
+actually executes is decided by which harness file `<bench>` names. `alloc`
+names no tool the other five don't already cover and no crate exists to
+wire a custom allocator into, so it reports what it needs and exits rather
+than inventing a plausible-sounding command — the same discipline
+non-negotiable 3 asks of test claims, extended to tooling claims.
+
+`bench.sh <suite>` implements rule 2's three suites as one command each:
+`cargo bench --bench bench-<suite> --workspace`. The workspace-wide
+invocation for a bench target only some crates will define was not assumed
+— built a real two-crate toy Cargo workspace (one crate with a
+`bench-micro` target, one without) and ran the actual command against it,
+confirming Cargo runs it for the crate that has it and silently skips the
+one that doesn't rather than erroring. `cargo` is present in this
+environment, so this is genuine end-to-end verification, not a scratch-repo
+skip-path check — the strongest kind either script gets.
+
+⚠️ **What neither script's testing can reach.** `valgrind`, `perf`, and
+`cargo-flamegraph` are all absent from this environment, and no crate or
+real benchmark exists yet, so every `require_tool` skip path in
+`profile.sh` was exercised and observed to fail cleanly (in a scratch repo
+with a bare `Cargo.toml`, since the real repo has none), but the actual
+`cargo bench`/`cargo flamegraph` invocations for `instructions`/`heap`/
+`massif`/`cache`/`flame` were not run against real code — the same limit
+`M-1.12` names for `check-budget.sh`'s constant, now for command
+correctness rather than a threshold. Both scripts `exec` into the
+underlying `cargo` invocation rather than wrapping it, so the replaced
+process's own exit code and signal handling reach the caller directly —
+appropriate for a tool nobody gates, where losing `Ctrl-C` semantics to an
+extra shell layer would be a real cost with no offsetting benefit.
+
+Review found one real gap in `instructions`/`heap`/`massif`/`cache`'s
+tool-presence check, despite the header's claim of having read gungraun's
+docs first: those modes checked `valgrind` and `cargo` but not
+`gungraun-runner`, the separate binary gungraun's own guide says its
+benchmark harness needs on `PATH` — installed independently
+(`cargo install gungraun-runner`), not bundled with the `gungraun` library
+dependency. A developer with `valgrind`+`cargo` but not that binary would
+have hit a raw gungraun error instead of the clean, remedy-bearing skip
+every other missing-tool path in this file gives — undercutting rule 20's
+"no ceremony" goal for exactly the developer it exists to help. Fixed with
+a third `require_tool` check. Not independently exercisable in this
+environment (`valgrind` is absent, so its own check fires first, same as
+before the fix), but the new line's shape matches every other
+`require_tool` call in this file, already proven correct elsewhere.
+
+A minor, cosmetic finding in the same round: the `flame` mode's
+`cargo-flamegraph`-missing message double-nested its parenthetical inside
+`skip`'s own message text, inconsistent with every other `require_tool`
+call's format in this file. Fixed to match.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every
