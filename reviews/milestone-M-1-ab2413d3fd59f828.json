@@ -1,0 +1,36 @@
+{
+  "commits": [
+    "80574fc1f774932fcb71630c66a0e27b38fc8ec1",
+    "3bb4b61327e330707e51e9a8d7e5247602ba189f",
+    "9970181b79f8aff3e7584f73bdcd8bb3a45be601",
+    "730237ea338c15ac431a38928ab133b72bd6ed54",
+    "2dde84fb4bc1bca104651717905505d84062c717",
+    "5f6f0649c2e43f892a882e3d71940609cfcdbf40",
+    "20bd20eb778c033a883dcda2a4233797399179d9",
+    "082551f0a46ea814672c1b12321e59e49c42b09f",
+    "22389b01f8a91e1040438d58b0ca77fd6f45c2c0",
+    "8b0c4b6092da80af8d5748e8854cc38e887b1d55"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/milestones/M-1.md, Checkpoint 2 bullet 3: 'M-1.38 ... and its sibling M-1.39 are both live defects in the literal scripts non-negotiable 4 names, confirmed still present by re-reading the files.' Compare current scripts/check-reviewed.sh:156 (`grep -qxF \"$task_id\" <<< \"$known\"`, fixed by 22389b0) and scripts/lib.sh's known_task_ids/open_task_ids (now read via _backlog_from_index/git show, fixed by 8b0c4b6); docs/internal/product/backlog.md marks both M-1.38 and M-1.39 done. The same 'then re-plan' step the M-1.47 finding closed for checkpoint 1 has not been repeated after this checkpoint.",
+      "id": "760a190d69af",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "milestones/M-1.md's Notes for the boundary review still asserts, in the present tense, that M-1.38 and M-1.39 are live defects confirmed still present, but this checkpoint's batch fixed both and both backlog rows are now done.",
+      "task_id": "M-1.49"
+    },
+    {
+      "evidence": "scripts/check-hot-path-bench.sh calls finish immediately after the unknown-marker loop (line ~136), again after the stale-NOT_YET_BUILT loop (line ~161), before ever reaching the uncovered-required-row loop. scripts/lib.sh's fail() docstring: 'Records the failure; the caller keeps going so one run reports every violation rather than only the first.' Reproduced: a fixture with both an unknown hot-path marker and a NOT_YET_BUILT entry that has become stale (a real marker now covers it) reports only the unknown-marker FAIL line; removing the unknown marker then reveals the stale-entry FAIL in a second run. Contrast with scripts/check-requirements-trace.sh, scripts/check-file-size.sh, scripts/check-readmes.sh and scripts/check-portability.sh, all added in this same checkpoint's commits, which accumulate every problem before a single terminal report.",
+      "id": "8959c2ca3638",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "check-hot-path-bench.sh reports only the first of its three failure categories per run (an early `finish` after each), unlike every sibling gate added this checkpoint and unlike lib.sh's own documented fail() contract that one run should report every violation.",
+      "task_id": "M-1.50"
+    }
+  ],
+  "milestone": "M-1",
+  "recorded_at": "2026-08-14T21:48:31Z",
+  "reviewer": "Claude Sonnet 5 (independent milestone review, dispatched by parent agent, no drive-authorship, checkpoint 3)",
+  "verdict": "changes-requested"
+}
