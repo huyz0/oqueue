@@ -54,7 +54,16 @@ BACKLOG="docs/internal/product/backlog.md"
 #                        no argument it would check HEAD, i.e. the *previous*
 #                        commit, and report a pass about the wrong thing
 #   check-reviewed.sh    checks for the artifact this run is about to produce
-GATES_EXCLUDED=(check-commit-msg.sh check-reviewed.sh)
+#   check-milestone-review.sh
+#                        ⚠️ two reasons, and the second is the sharper one.
+#                        It is a *milestone completion* gate, not a per-commit
+#                        one — a commit is not required to have had its whole
+#                        milestone re-read. And it reads git history, which the
+#                        materialised tree deliberately does not have, so under
+#                        the planted `.git` it fails; before that plant existed
+#                        it did something worse and reported `passed` for a
+#                        milestone whose every commit was unread.
+GATES_EXCLUDED=(check-commit-msg.sh check-reviewed.sh check-milestone-review.sh)
 
 staged_hash() {
   # --diff-filter is deliberately absent: a deletion is part of what is being

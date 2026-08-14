@@ -40,7 +40,7 @@ comes before any gate because every gate sources it.
 | M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | todo |
 | M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | todo |
-| M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3 | todo |
+| M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3; calls `check-milestone-review.sh`, so the milestone cannot be completed while any of its commits has gone unread as a whole | todo |
 | M-1.17 | Make the corpus and product docs self-contained before the repo goes public | No reference to any other repository, no absolute local path, no verbatim quotation of an external private source; every practice stated as this project's own standard | done |
 | M-1.18 | Public-facing files: `README.md`, `CONTRIBUTING.md`, `SECURITY.md` | README states plainly that no implementation exists; contributing says code is not yet accepted and why; security gives a private reporting route | done |
 | M-1.19 | Record the BYOK and FIPS requirements across mission, architecture, roadmap, and the corpus | New milestone M8; `KeyProvider` seam and `oqueue-crypto` crate in the architecture; the AEAD-algorithm-in-region-header constraint recorded against M1 | done |
@@ -61,6 +61,9 @@ comes before any gate because every gate sources it.
 | M-1.34 | `applies_to:` frontmatter + `scripts/which-standards.sh` — route a change to the standards it is judged against | Every standard declares the paths it claims, and one without `applies_to` fails; a staged diff resolves to standards without anyone choosing | done |
 | M-1.35 | `check-commit-msg.sh` dies silently on an all-comments message | `grep -v '^#' \| head -1` under `pipefail` exits 1 with no output; the gate must name itself and the reason | done |
 | M-1.36 | Rename the `goal` skill to `milestone` | No skill, adapter, or index entry is named `goal`; every reference resolves and `build-index.sh --check` passes | done |
+| M-1.37 | The outer loop: `milestone-review` skill + `milestone-review.sh` + `check-milestone-review.sh` | Every commit in a milestone is covered by a review artifact naming the commits it read; a blocking or major finding must name a backlog task that exists, or be argued; an uncovered commit fails the gate | done |
+| M-1.39 | `known_task_ids` reads the backlog from the working tree | Every other input to `check-reviewed.sh` and `check-milestone-review.sh` is read from the index; an unstaged backlog row satisfies a gate locally and fails the same gate on CI. Shared by three gates, so it is not M-1.37's to change | todo |
+| M-1.38 | `check-reviewed.sh` matches a task id as a regex | `grep -qx "$task_id"` against the backlog's ids: an artifact whose `task_id` is `.*` matches every row. `grep -qxF`. Found by M-1.37's review at the sibling site | todo |
 
 ### Notes on specific tasks
 
@@ -245,6 +248,267 @@ correct and strictly worse, because the curated one is organised by *question*,
 which is how people look things up. The split now is: **mechanical things are
 generated (counts, tables, coverage), authored things stay authored**, and the
 generated tag list is filtered to tags that group three or more documents.
+
+**M-1.37** builds the outer loop. Doc 21 §8 designed it and then recorded why
+it does not happen: it is "initiated by inspiration rather than by schedule" —
+someone notices something and writes a milestone about it. ⚠️ **A phase that
+runs when somebody thinks of it is not a phase**, which is the same argument
+this project makes about every rule with no gate.
+
+The inner loop reads one delta against one task, so it cannot see its own
+drift: a convention quietly abandoned, two commits that each passed review and
+contradict each other, or a spec that should not have been written that way all
+pass it, because every individual step was faithful.
+
+The artifact follows doc 21 §5's pattern but keys on **a set of commits** rather
+than a diff, which is what makes reviews incremental and therefore
+checkpointable: each names the commits it read, the gate unions them, and a new
+commit is simply uncovered until some review covers it.
+
+⚠️ **The step with teeth is `task_id`.** Every blocking or major finding must
+name a backlog row that exists, or be argued. A cross-cutting finding recorded
+only in `target/review/` is one nobody will act on — the directory is gitignored
+and `cargo clean` reclaims it. That is what "findings become backlog tasks"
+means operationally, and it is checkable.
+
+⚠️ **What has no gate: the cadence.** Nothing bounds how many commits may
+accumulate before a review, and no honest constant is available — it depends on
+how much a reviewer can hold at once. Reviewing thirty commits in one pass
+satisfies this gate and wastes it. ⚠️ **M-1 already has 24 commits and none has
+been read as a whole**, which is the backlog of outer-loop work this task
+creates rather than discharges.
+
+Writing it produced one defect of the family M-1.9 catalogued, in the argued
+escape: `grep -q … || argued=$?` only assigns when grep *fails*, so the variable
+never became 0 and a finding argued in the baseline was still reported
+unresolved. Exit-status plumbing written so the interesting branch cannot run.
+
+Review returned `changes-requested` on three majors, and the sharpest is one
+the *inner* loop produced.
+
+⚠️ **The packet reported `check-milestone-review.sh: passed` for a milestone
+whose every commit was unread.** `review.sh` discovers `scripts/check-*.sh`
+automatically, so the new gate was picked up on the commit that added it — and
+ran inside the materialised staged tree, whose `.git` M-1.9 deliberately plants
+as an invalid file. No history, no milestone commits, and the gate's own
+`skip … (no commits yet)` exit 0. Two independent defects composing into a
+false pass: a **fail-open** in the gate, and the wrong **scope**. Both fixed —
+the gate now hard-`fail`s when it cannot read history, and the gate is in
+`GATES_EXCLUDED` because it is a *milestone completion* gate and a commit is
+not required to have had its whole milestone re-read. ⚠️ Note which way the
+composition ran: M-1.9's `.git` plant is what makes a git-using gate fail
+closed, and it turned a gate that could not run into one reporting success,
+because the gate answered "cannot run" with `skip`. **A gate that cannot run
+must not report success**, and `skip` is a claim about applicability, not about
+availability.
+
+⚠️ **The documented escape was unreachable.** The skill and the packet both
+said a blocking or major finding may be argued in `baselines/review.txt`
+instead of becoming a task — but `record` refused to store a finding with no
+`task_id`, and the `id` a baseline entry needs is assigned *by* `record`. So
+the only path to the escape ran through the check that forbade it. It bit
+hardest on `kind: spec-wrong` at blocking severity, precisely where the skill
+says the outcome is a decision and not a task. Fixed by moving the demand from
+`record` to the gate: record validates shape and prints the id, the gate
+demands a resolution — the split `check-reviewed.sh` already used. ⚠️ The
+general shape is worth keeping: **a documented escape nobody has walked is a
+claim, not a feature**, the same argument this file makes about a gate whose
+failure path nobody has run.
+
+Two more, both about a check that answers with something other than what it
+checked. `git show … | grep -q` on the baseline is a pipe whose left side dies
+of SIGPIPE when grep exits at the first match — measured at rc=141 on a
+200,000-line baseline, reporting a genuinely argued finding as unargued.
+`check-reviewed.sh` escapes it only because its read carries `|| true`. And
+`grep -qx "$tid"` treats a task id as a regular expression, so a hand-written
+artifact claiming `task_id: ".*"` satisfies the one rule this gate calls the
+one with teeth. `-F` closes it here; **the identical site in
+`check-reviewed.sh` is M-1.38**, tracked rather than fixed in passing, because
+it belongs to M-1.9.
+
+A second round found two more blocking, and both are the same mistake in
+different clothes: **a check written against the example in front of it.**
+
+⚠️ **The milestone derivation matched exactly one milestone in the project's
+life.** `^## (M-[0-9]+):` requires the hyphen, and only *this* milestone has
+one — the roadmap's next headings are `## M0 —`, `## M1 —`, `## M8 —`. From M0
+onward the gate would print "no milestone is decomposed" and exit 0: a false
+statement, and a pass for a milestone whose every commit was unread. Once
+M-1.16 wires it into the completion condition, every remaining milestone in the
+roadmap could be declared complete with no cross-cutting review at all. ⚠️ It
+also fails **quietly and late** — nothing would have gone wrong until the first
+commit after M-1, months from the code that caused it. `known_task_ids` and
+`check-commit-msg.sh` both already use `M-?[0-9]+`; this was the only place
+that assumed otherwise, which is the tell: a project-wide id shape re-derived
+locally, from the one example the author could see.
+
+⚠️ **Rule 2 wedged the gate shut on `git commit --amend`.** git.md rule 21
+endorses amending freely before a push, and this project never pushes unasked,
+so every commit is amendable. A message typo fixed after a review left an
+artifact naming a SHA that history no longer reaches — and rule 2 called that
+"a review claims a commit the milestone does not contain", forever. The argued
+baseline resolves *findings*, not coverage, so the only escape was hand-deleting
+a file in gitignored `target/review/` that no message named, which also
+discarded the coverage of every other commit in the milestone: a typo fix
+costing a full re-review. The gate also printed its `FAIL` and then `ok … all
+commits covered`, two contradictory lines with the reassuring one last. Now a
+commit HEAD no longer reaches is a superseded artifact (`warn`), a commit that
+is reachable but belongs elsewhere is still a failure, and the failure path
+`finish`es before it can contradict itself. ⚠️ The first attempt at this used
+`git cat-file -e`, which succeeds for an amended-away commit because the object
+survives in the reflog — **reachability, not existence, is the question**.
+
+And the packet's `## What changed across them` used `${first}~1`, which the
+**root commit does not have**. M-1.0 is this repository's root *and* its first
+unreviewed commit, so the first intended use of this tool hit it: `2>/dev/null`
+swallowed the fatal and the fallback showed the root commit's stat alone — 73
+files of research corpus, none of the work under review — under a heading
+claiming it was the shape of all 24. The empty tree is the correct base.
+
+⚠️ Three of these five were **fail-open in a gate whose subject is fail-open**,
+which is worth stating plainly rather than filing away: writing the check does
+not confer the property, and the only thing that found them was running them.
+
+A third round found the *same* fail-open a third time, one layer further in.
+Fixing the hyphen made `grep -m1 -oE '^## M-?[0-9]+'` match M0 — but line 13 of
+this file says **"Completed tasks stay here with their commit reference"**, so a
+finished milestone keeps its section and `-m1` returns M-1 forever. From M0
+onward both scripts would have kept checking a fully covered M-1 and reported
+success while the milestone actually being built went unread. ⚠️ **Twice in a
+row the milestone derivation was written against the only example available**,
+which is the argument for deriving it from something that cannot be one example:
+the current milestone is now the one **HEAD is working in**, read from the most
+recent commit subject that names a task. This gate's subject is commits, so
+deriving from commits needs no convention, and it flips to M0 exactly when M0's
+first commit lands — not before, which is what leaves M-1's completion still
+checkable after M-1's last commit.
+
+Two honesty fixes came with it. The `ok` line said "all N commit(s) covered"
+when what it counted was commits whose subject *begins* with a task id of this
+milestone — so the shapes `check-commit-msg.sh` deliberately exempts, `Revert
+"…"` and merges, are never required to be covered. It now says what it counted.
+⚠️ **Closing that gap needs a decision about what a revert's coverage means**,
+and is not this task. And the unresolved-finding failure named neither the
+baseline nor the requirement that the argued line be *staged*, so an operator
+taking the documented escape got an unchanged failure and repeated the edit;
+`check-reviewed.sh` already had both aids.
+
+A fourth round found the artifact in the wrong place. ⚠️ **Milestone coverage
+was stored in gitignored `target/review/`**, so `cargo clean` erased the record
+that a milestone had been reviewed — and M-1.16's completion condition calls
+this gate while M-1.14 puts gates in CI, which means the condition would have
+passed on exactly one machine and been permanently red on every clone. The
+per-commit reviewer is right to write there: its verdict is keyed to a staged
+diff about to become a commit, and it is consumed where it was made. A
+milestone's coverage is the opposite kind of claim — durable, about history,
+and something a second agent has to be able to check. It now lives in tracked
+`reviews/`, read **from the index** for the reason `baselines/review.txt` is:
+a file that counts while unstaged rewards the path that leaves no trace.
+
+⚠️ That move exposed a regress the on-disk version had hidden: **committing a
+milestone's verdict creates a commit that names a task in that milestone**, so
+the milestone goes from fully covered to one-uncovered the instant it is
+recorded, and covering that commit needs another review in another commit.
+Measured, then fixed by excluding commits whose every changed path is under
+`reviews/` — narrowly, so a commit carrying real work alongside a review file is
+still subject matter.
+
+The rest of the round was duplication and honesty. `current_milestone` and the
+commit-enumeration grep were **byte-identical copies** in the driver and the
+gate, and the two rounds above had each had to land in both; they are one
+definition in `lib.sh` now, because if the gate ever enumerates a commit the
+driver did not show the reviewer, `record` refuses the SHA the gate demands and
+the gate cannot be passed at all. `record` called an abbreviated SHA "not a
+commit in M-1" — false, and pointing at the wrong problem, while this tool's own
+`coverage` output prints exactly that abbreviated form; an unambiguous prefix is
+resolved now. And an absent roadmap section rendered as an empty heading, which
+reads as "this milestone had no goals"; it says so instead, on both streams.
+
+⚠️ **A fifth round found the SIGPIPE bug again, in the code written to fix the
+regress above, in the same commit that documents fixing it elsewhere.**
+`printf '%s\n' "$paths" | grep -qv '^reviews/'`: `grep -qv` exits at the first
+non-matching line, `printf` dies of EPIPE, `pipefail` calls the pipeline failed,
+and the leading `!` inverts that to true — so a commit whose changed-path list
+overflows the pipe buffer was classified as review bookkeeping and **dropped
+from the milestone entirely**, with the gate then reporting full coverage
+without it. Measured: correct at 1000 changed files, wrong at 1500 (~57 KB);
+with a 204 KB path list the commit vanished and the fixed version keeps it.
+⚠️ It is exactly the **largest** commits that disappear — generated protocol
+code, an imported corpus, a mass rename — and the same shared helper makes
+`record` refuse to store a verdict naming one, so a reviewer who did read it
+could not record having read it. A here-string fixes it. That this class has now
+appeared **nine times across six scripts**, including inside its own fix and its
+own documentation, says it is not carelessness but a property of the idiom: `set
+-o pipefail` makes every `cmd | grep -q` a place where a *successful early exit*
+is reported as failure. It belongs in the shell rules `portability.md` will grow.
+
+Two smaller ones. A `task_id` the backlog lists but marks **done** discharged a
+blocking finding — plausible to write, since the row that introduced the code is
+often the one a finding is about, and fatal in effect: `next-task` reads `todo`,
+so the finding is parked where nothing will look again, which is the exact state
+rule 3 exists to prevent. The row must now still be open. And ⚠️ `known_task_ids`
+reads the backlog from the **working tree** while artifacts and the argued
+baseline are read from the index, so an unstaged row satisfies the gate locally
+and fails it on CI — the same pass-here/red-there asymmetry this task fixed for
+the artifact location. It is shared by three gates and is **M-1.39**, not
+M-1.37's to change.
+
+⚠️ **A sixth round found that round five's own fix punished the honest path.**
+Requiring a cited backlog row to still be `todo` was checked by the gate on
+every run — so the moment the finding's task was implemented and its row ticked
+to `done`, the gate went red and stayed red, because the artifact is cumulative
+and never re-read. The three ways out were re-opening a finished row (a lie),
+arguing a finding the author had actually acted on, and re-recording the verdict
+without the finding — **deleting a finding to make a check pass**, non-negotiable
+2 exactly. The rule itself is right; its place was wrong. Openness is an
+authoring-time question, enforced by `record` while the author is still there to
+pick another row, and the gate is back to what the acceptance criterion says:
+the task exists. ⚠️ Third time in this task that a check written to close a hole
+made the correct behaviour the expensive one — worth naming as a review question
+in its own right: *what does this gate cost someone who is doing the right
+thing?*
+
+The anti-regress carve-out was also too wide. Excluding every commit whose paths
+are all under `reviews/` dropped a commit that only rewrote `reviews/README.md`
+— real work, silently unreviewed, gate green. Only the verdict files cause the
+regress, so it matches the artifact name now.
+
+And ⚠️ **nothing said who runs a milestone review.** The inner loop is explicit
+that a change is reviewed by an agent that did not write it, and the outer loop
+had no equivalent — so as wired, an agent could drive a milestone to its last
+commit and then review its own 24 commits, which is the one reader guaranteed
+not to see their drift. Now stated in the packet, in both skills, and given an
+adapter in `.claude/agents/milestone-reviewer.md` so it is a thing to do rather
+than a thing to remember. ⚠️ It is still unenforceable — the artifact records a
+`reviewer` string nothing can verify — and that is said where the other
+unenforceable claims are said, rather than implied away.
+
+⚠️ **A seventh round found that round six's edit had deleted the baseline read.**
+Removing the gate-side openness check took `baseline_text="$(git show …)"` with
+it — adjacent lines, one edit — leaving the argue branch referencing a variable
+assigned nowhere. Under `set -u` that aborts the condition, `argued` stays 1, and
+**the entire argue escape was dead code**: an operator who did exactly what the
+gate's own remedy line told them to got the identical failure back, with a raw
+`baseline_text: unbound variable` on stderr naming no gate. It failed hardest for
+`kind: spec-wrong` at blocking severity — the one case the skill says must *not*
+become a backlog row — so a milestone carrying one could never be completed.
+
+⚠️ Two lessons, and the second is the one worth keeping. First: a removal is a
+change, and this one was never run. Second and larger — **six of the seven
+rounds found a defect on a path that had been described but never walked.** The
+escape was documented in the skill, in the packet, and in the gate's remedy
+note, and the documentation was written before anyone tried it. This is the
+concrete form of non-negotiable 3 for gates rather than tests: *a failure path
+nobody has walked is a claim, not a feature*, and it belongs in whatever
+`sdd.md` grows for acceptance criteria. The fix here was one line; finding it
+took walking the two documented steps once.
+
+⚠️ **An eighth round, run after actually walking that same escape end to end,
+returned `pass`** with one minor: `known_task_ids | grep -qxF` was the one site
+in this file the earlier sweep for this exact SIGPIPE class missed — reachable
+only past roughly 150x today's backlog size, so not urgent, but the same class
+this task spent seven rounds eliminating and one line to close. Fixed on sight
+rather than filed, since the file was already open.
 
 **M-1.36** renames the `goal` skill because the name is one a tool is likely to
 claim. ⚠️ The collision would be **silent**: a slash command resolves to one

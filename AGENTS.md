@@ -68,6 +68,7 @@ spec so they work in any tool that reads `SKILL.md`. A skill calls a script in
 |---|---|
 | [`adr`](.agents/skills/adr/SKILL.md) | Write an architecture decision record |
 | [`milestone`](.agents/skills/milestone/SKILL.md) | Drive a milestone to completion autonomously, one task per commit, without asking between tasks |
+| [`milestone-review`](.agents/skills/milestone-review/SKILL.md) | Review a milestone's commits as a whole, turn what is found into backlog tasks, and re-plan |
 | [`next-task`](.agents/skills/next-task/SKILL.md) | Choose what to work on next and confirm it is genuinely ready |
 | [`research`](.agents/skills/research/SKILL.md) | Find whether a question is already answered in the research corpus before investigating it fresh |
 | [`review`](.agents/skills/review/SKILL.md) | Review a staged change as an independent agent that did not write it |

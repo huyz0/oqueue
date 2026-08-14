@@ -14,9 +14,15 @@
 # docs/researches/18 §3.7.4.
 /target/tmp/
 
-# Review artifacts, keyed by staged-diff hash. Regenerable by re-running the
-# reviewer; the gate recomputes the hash rather than trusting the file.
-# docs/researches/21 §5.
+# Per-commit review artifacts, keyed by staged-diff hash. Regenerable by
+# re-running the reviewer, and consumed on the machine that made them; the gate
+# recomputes the hash rather than trusting the file. docs/researches/21 §5.
+#
+# ⚠️ **Milestone** review artifacts are not here — they are tracked, in
+# `reviews/`. Coverage of a milestone is a durable claim about history that a
+# fresh clone and CI have to be able to check, and it is not regenerable
+# without an agent re-reading the whole milestone. See the note at the top of
+# scripts/check-milestone-review.sh.
 /target/review/
 
 # Fuzzing

@@ -18,11 +18,24 @@
 # a blocking finding while recording nothing about why — which is exactly the
 # quiet growth this file exists to prevent.
 #
-# The id is printed by `scripts/review.sh record`, for every blocking and major
-# finding, and again by `check-reviewed.sh` when one is unresolved. It is
-# sha256(file + summary) truncated, so it is stable across unrelated edits —
-# arguing a finding does not have to be repeated every time the diff moves for
-# some other reason.
+# ⚠️ **This file serves two reviews, and their ids are derived differently.**
+# Nothing in a line says which, so a reader re-deriving an id needs to know:
+#
+#   per-commit    `scripts/review.sh record` prints it; `check-reviewed.sh`
+#                 prints it again when one is unresolved.
+#                 id = sha256(file + "\0" + summary), truncated to 12 hex.
+#   milestone     `scripts/milestone-review.sh record` prints it;
+#                 `check-milestone-review.sh` prints it again when unresolved.
+#                 id = sha256(kind + "\0" + summary), truncated to 12 hex.
+#                 ⚠️ A cross-cutting finding has no single file, which is why
+#                 its id cannot use one — that is the whole point of the outer
+#                 loop. Both gates match this file's lines undifferentiated.
+#
+# Either way the id is stable across unrelated edits, so arguing a finding does
+# not have to be repeated every time the diff moves for some other reason. ⚠️ A
+# milestone finding is argued when its right outcome is **not** a backlog row —
+# typically `kind: spec-wrong`, where the outcome is a decision. Say which
+# review a line came from in its reason; nothing enforces that.
 #
 # ⚠️ This is a file nobody may grow quietly. A growing argued-list is itself a
 # finding: it means a reviewer is being systematically overruled, and one of the

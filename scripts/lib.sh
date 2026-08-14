@@ -147,3 +147,84 @@ known_task_ids() {
   # handled gracefully, so the two empty states behaved oppositely.
   grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' "$backlog" | tr -d '|' | tr -d ' ' || true
 }
+
+# Task IDs whose backlog row is not yet `done`.
+#
+# ⚠️ A finding is discharged by a row something will still act on: `next-task`
+# reads `todo`, so citing a row already closed parks the finding where nothing
+# will look again. This is checked when a verdict is *recorded* — while the
+# author is there to pick a different row — and deliberately not by the gate,
+# which would then turn finishing the task into a permanent failure.
+open_task_ids() {
+  local backlog="$REPO_ROOT/docs/internal/product/backlog.md"
+  [[ -f "$backlog" ]] || return 0
+  grep -E '^\| M-?[0-9]+\.[0-9]+ \|' "$backlog" \
+    | grep -vE '\|[[:space:]]*done[[:space:]]*\|[[:space:]]*$' \
+    | grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' | tr -d '|' | tr -d ' ' || true
+}
+
+# The milestone HEAD is working in: the most recent commit whose subject names a
+# task, and the milestone that task belongs to.
+#
+# ⚠️ Not the backlog's first heading, which is what this was. backlog.md says
+# "Completed tasks stay here with their commit reference", so a finished
+# milestone keeps its section and `grep -m1` returns M-1 forever — from M0
+# onward the outer loop would keep checking a fully covered M-1 and report
+# success while the milestone actually being built went unread. Reading the
+# *last* heading instead would only trade that for a dependency on an unwritten
+# ordering convention. History needs no convention: the outer loop's subject is
+# commits, so deriving from commits is the coherent choice, and it flips to M0
+# exactly when M0's first commit lands — not before, which is what lets a
+# milestone's completion still be checked after its last commit.
+#
+# A subject naming no task (`Revert "…"`, a merge) is skipped rather than ending
+# the search, since check-commit-msg.sh exempts those shapes.
+current_milestone() {
+  local id
+  id="$(git log --pretty=%s | grep -m1 -oE '^M-?[0-9]+\.[0-9]+' || true)"
+  printf '%s' "${id%%.*}"
+}
+
+# Commits whose subject names a task in this milestone, oldest first, minus the
+# ones that only record a milestone review.
+#
+# ⚠️ The `\.` matters: without it `M-1` also matches `M-10.3`. And this lives
+# here rather than in each caller because the driver and the gate must agree
+# exactly — if the gate enumerates a commit the driver never showed the
+# reviewer, `record` refuses the SHA the gate demands and the gate cannot be
+# passed at all. Two copies of a definition that must not differ.
+#
+# ⚠️ **The `reviews/` exclusion is what stops an infinite regress.** Recording a
+# milestone review produces a commit, that commit names a task in the milestone,
+# and it is therefore uncovered — so covering it needs another review, which
+# needs another commit. Measured: a milestone reviewed in full went from 0
+# uncovered to 1 the moment its own verdict was committed, permanently. A commit
+# whose every changed path is a verdict file is bookkeeping about the review,
+# not subject matter for it. ⚠️ Matched by artifact name, not by directory: the
+# regress is caused only by the verdicts, and excluding all of `reviews/` also
+# dropped a commit that only rewrote `reviews/README.md` — real work, silently
+# unreviewed, with the gate reporting full coverage without it. A commit that
+# touches a verdict *and* anything else is still enumerated.
+milestone_commits() {
+  local ms="$1" c paths
+  while read -r c; do
+    [[ -n "$c" ]] || continue
+    paths="$(git show --pretty=format: --name-only "$c" | grep -v '^$' || true)"
+    # ⚠️ A here-string, not `printf | grep`. `grep -qv` exits at the first
+    # non-matching line, the left side then dies of SIGPIPE, `pipefail` calls
+    # that a failure, and `!` inverts it to true — so a commit whose path list
+    # overflows the pipe buffer was classified as review bookkeeping and dropped
+    # from the milestone entirely. Measured: correct at 1000 changed files,
+    # wrong at 1500 (~57 KB). It is exactly the largest commits — generated
+    # code, an imported corpus, a mass rename — that would have vanished, and
+    # the gate would have reported full coverage without them. Same class as the
+    # baseline read in check-milestone-review.sh, found in the code written to
+    # fix a different defect in this same change.
+    if [[ -n "$paths" ]] && ! grep -qvE '^reviews/milestone-.*\.json$' <<< "$paths"; then
+      continue
+    fi
+    printf '%s\n' "$c"
+  done < <(git log --reverse --format='%H %s' \
+    | grep -E "^[0-9a-f]+ ${ms//./\\.}\.[0-9]+[,:]" \
+    | cut -d' ' -f1 || true)
+}

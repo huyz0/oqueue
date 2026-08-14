@@ -33,8 +33,25 @@ until completion condition exits 0:
     tick the backlog   → with the commit reference
 ```
 
-Run the completion condition after each commit. When it exits 0, the milestone
-is done: update the roadmap **with what was learned**, not merely with "complete".
+Run the completion condition after each commit.
+
+## The outer loop
+
+⚠️ **The inner loop above cannot see its own drift.** It reads one delta against
+one task, so a convention quietly abandoned, two commits that contradict each
+other, or a spec that should not have been written that way all pass it — every
+individual step was faithful.
+
+So at checkpoints, and always before the milestone is declared complete, run
+[`milestone-review`](../milestone-review/SKILL.md) — ⚠️ **dispatching a fresh
+agent, exactly as the inner loop does.** You drove these commits; you are the
+one person who cannot see their drift. It reads the commits as a whole,
+turn what is found into backlog tasks, amend the roadmap with what was learned,
+and re-decompose what remains. `scripts/check-milestone-review.sh` is what stops
+this from being a phase somebody has to remember.
+
+⚠️ **Checkpoint rather than saving it for the end.** Nothing enforces the
+cadence — reviewing thirty commits in one pass satisfies the gate and wastes it.
 
 ## ⚠️ Stop conditions
 
