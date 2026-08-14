@@ -118,23 +118,31 @@ fi
 # an empty grep match must not kill the script under `set -e`.
 mapfile -t marker_lines < <(git grep -nE '// *hot-path: *' -- '*.rs' 2>/dev/null || true)
 
+# ⚠️ All three checks below run unconditionally, and `problems` accumulates
+# across every one of them, rather than each ending in its own `finish` --
+# the same "accumulate, then one terminal report" shape `check-file-size.sh`,
+# `check-requirements-trace.sh`, `check-readmes.sh`, and `check-portability.sh`
+# already use, and the one `lib.sh`'s own `fail()` docstring asks for ("the
+# caller keeps going so one run reports every violation rather than only the
+# first"). An earlier version of this script called `finish` after each
+# check, so a commit with two kinds of defect at once only ever saw the
+# first -- found by review, reproduced directly (a marker naming an unknown
+# path *and* a stale `NOT_YET_BUILT` entry in one tree reported only the
+# unknown-marker failure until that was fixed and the gate re-run).
+problems=0
+
 declare -A COVERED=()
-unknown=0
 for line in "${marker_lines[@]}"; do
   [[ -n "$line" ]] || continue
   name="$(sed -E 's/^[^:]+:[0-9]+:.*hot-path: *//' <<< "$line" | sed -E 's/[[:space:]]+$//')"
   if [[ -z "${TABLE_PATHS[$name]:-}" ]]; then
     fail "$line"
     note "hot-path marker names '$name', which $PERFORMANCE_STD's table does not list"
-    unknown=$((unknown + 1))
+    problems=$((problems + 1))
   else
     COVERED["$name"]=1
   fi
 done
-
-if (( unknown > 0 )); then
-  finish
-fi
 
 # Every row in `NOT_YET_BUILT` is also checked against the table itself --
 # an entry naming a path rule 18 no longer lists is exactly the same drift
@@ -146,20 +154,16 @@ fi
 # deleted again -- stayed silent instead of becoming the individual hard
 # failure the header claims. Found by review reproducing exactly that
 # sequence against a scratch fixture, not by inspection.
-stale_allowlist=0
 for name in "${!NOT_YET_BUILT[@]}"; do
   if [[ -z "${TABLE_PATHS[$name]:-}" ]]; then
     fail "NOT_YET_BUILT names '$name', which $PERFORMANCE_STD's table does not list"
-    stale_allowlist=$((stale_allowlist + 1))
+    problems=$((problems + 1))
   elif [[ -n "${COVERED[$name]:-}" ]]; then
     fail "NOT_YET_BUILT still lists '$name', which now has a hot-path: marker"
     note "remove this entry -- the row is covered, so it no longer needs the allowlist"
-    stale_allowlist=$((stale_allowlist + 1))
+    problems=$((problems + 1))
   fi
 done
-if (( stale_allowlist > 0 )); then
-  finish
-fi
 
 uncovered=0
 for name in "${!TABLE_PATHS[@]}"; do
@@ -169,11 +173,14 @@ for name in "${!TABLE_PATHS[@]}"; do
   else
     fail "hot path '$name' has no benchmark and is not in NOT_YET_BUILT"
     note "add a hot-path: marker for it, or, if it genuinely isn't built yet, add it to NOT_YET_BUILT with a reason"
+    problems=$((problems + 1))
   fi
 done
 
-ok "hot-path markers (${#marker_lines[@]} found, all name a real row)"
-if (( uncovered > 0 )); then
-  note "$uncovered of ${#TABLE_PATHS[@]} hot path(s) in rule 18's table have no benchmark yet, allowlisted in NOT_YET_BUILT"
+if (( problems == 0 )); then
+  ok "hot-path markers (${#marker_lines[@]} found, all name a real row)"
+  if (( uncovered > 0 )); then
+    note "$uncovered of ${#TABLE_PATHS[@]} hot path(s) in rule 18's table have no benchmark yet, allowlisted in NOT_YET_BUILT"
+  fi
 fi
 finish

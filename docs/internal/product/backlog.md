@@ -79,7 +79,7 @@ comes before any gate because every gate sources it.
 | M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
 | M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | todo |
 | M-1.49 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" after the third milestone-review checkpoint | The section's Checkpoint 2 bullet 3 no longer states, in the present tense, that `M-1.38` and its sibling `M-1.39` "are both live defects ... confirmed still present" — both are fixed (`scripts/check-reviewed.sh` now uses `grep -qxF ... <<<`, `scripts/lib.sh`'s `known_task_ids`/`open_task_ids` now read the index via `_backlog_from_index`) and both backlog rows are `done`; the section gains a Checkpoint 3 entry recording what this checkpoint found instead, the same shape checkpoints 1 and 2 used | todo |
-| M-1.50 | `check-hot-path-bench.sh` reports only the first failing category per run, not every violation in one pass | The script's three checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row) each end in an early `finish` on failure, so a commit with more than one kind of defect at once only sees the first — reproduced directly: a fixture with both an unknown marker and a `NOT_YET_BUILT` entry that has become stale reports only the unknown-marker failure, and the stale-entry failure only surfaces once that is fixed and the gate re-run. Contradicts `scripts/lib.sh`'s own `fail()` contract ("the caller keeps going so one run reports every violation rather than only the first"), which every sibling gate in this milestone (`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`, `check-portability.sh`) follows by accumulating all problems before a single terminal report. Acceptance: all three checks run unconditionally and every violation across all three is reported in one invocation | todo |
+| M-1.50 | `check-hot-path-bench.sh` reports only the first failing category per run, not every violation in one pass | The script's three checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row) each end in an early `finish` on failure, so a commit with more than one kind of defect at once only sees the first — reproduced directly: a fixture with both an unknown marker and a `NOT_YET_BUILT` entry that has become stale reports only the unknown-marker failure, and the stale-entry failure only surfaces once that is fixed and the gate re-run. Contradicts `scripts/lib.sh`'s own `fail()` contract ("the caller keeps going so one run reports every violation rather than only the first"), which every sibling gate in this milestone (`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`, `check-portability.sh`) follows by accumulating all problems before a single terminal report. Acceptance: all three checks run unconditionally and every violation across all three is reported in one invocation | done |
 
 ### Notes on specific tasks
 
@@ -2109,6 +2109,32 @@ not just the single new fixture in isolation. Mutant-tested the same way as
 the other two cases. `.pre-commit-config.yaml`'s hook `name:` field, which
 still described the gate as "drift only" after two rounds of the
 enforcement growing past that, was corrected in the same commit.
+
+**M-1.50** is checkpoint 3's second finding: all three of `check-hot-path-bench.sh`'s
+checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row)
+each ended in their own early `finish`, so a commit with two kinds of defect
+at once only ever saw the first — reproduced directly, both before and after
+the fix, in a scratch fixture combining an unknown marker with a stale
+allowlist entry in one tree: before, only the unknown-marker `FAIL` line
+appeared; after, both appear in the same run. This contradicted `lib.sh`'s
+own `fail()` contract ("the caller keeps going so one run reports every
+violation rather than only the first") and was inconsistent with every
+sibling gate added in the same checkpoint's commits
+(`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`,
+`check-portability.sh`), all of which already accumulate every problem
+before one terminal report — the pattern `check-hot-path-bench.sh` should
+have followed from the start and did not. Fixed by replacing the three
+per-check `finish` calls with one shared `problems` counter incremented in
+every failure branch across all three checks, and a single `finish` at the
+very end; the only conditional left is whether the closing `ok` line
+prints, gated on `problems == 0`, matching `check-readmes.sh`'s exact
+"accumulate, then branch once" shape. ⚠️ No new `tests/gates/negative.sh`
+case: the defect this fixed is about *how many* lines a broken run prints,
+not *whether* it exits non-zero, and the suite (like every other gate's
+case in it) only asserts exit code — the same "message content, not exit
+code" gap `M-1.30`'s round 3 already named for this file's testing
+conventions. The scratch reproduction above is the actual regression test,
+run and recorded rather than encoded into a framework not built to check it.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every
