@@ -78,7 +78,7 @@ comes before any gate because every gate sources it.
 | M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | todo |
 | M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
 | M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | todo |
-| M-1.49 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" after the third milestone-review checkpoint | The section's Checkpoint 2 bullet 3 no longer states, in the present tense, that `M-1.38` and its sibling `M-1.39` "are both live defects ... confirmed still present" — both are fixed (`scripts/check-reviewed.sh` now uses `grep -qxF ... <<<`, `scripts/lib.sh`'s `known_task_ids`/`open_task_ids` now read the index via `_backlog_from_index`) and both backlog rows are `done`; the section gains a Checkpoint 3 entry recording what this checkpoint found instead, the same shape checkpoints 1 and 2 used | todo |
+| M-1.49 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" after the third milestone-review checkpoint | The section's Checkpoint 2 bullet 3 no longer states, in the present tense, that `M-1.38` and its sibling `M-1.39` "are both live defects ... confirmed still present" — both are fixed (`scripts/check-reviewed.sh` now uses `grep -qxF ... <<<`, `scripts/lib.sh`'s `known_task_ids`/`open_task_ids` now read the index via `_backlog_from_index`) and both backlog rows are `done`; the section gains a Checkpoint 3 entry recording what this checkpoint found instead, the same shape checkpoints 1 and 2 used | done |
 | M-1.50 | `check-hot-path-bench.sh` reports only the first failing category per run, not every violation in one pass | The script's three checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row) each end in an early `finish` on failure, so a commit with more than one kind of defect at once only sees the first — reproduced directly: a fixture with both an unknown marker and a `NOT_YET_BUILT` entry that has become stale reports only the unknown-marker failure, and the stale-entry failure only surfaces once that is fixed and the gate re-run. Contradicts `scripts/lib.sh`'s own `fail()` contract ("the caller keeps going so one run reports every violation rather than only the first"), which every sibling gate in this milestone (`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`, `check-portability.sh`) follows by accumulating all problems before a single terminal report. Acceptance: all three checks run unconditionally and every violation across all three is reported in one invocation | done |
 
 ### Notes on specific tasks
@@ -1764,6 +1764,34 @@ M-1 complete: a green `m-1-complete.sh` is not license to skip confirming
 M-1.38 and M-1.39 are actually closed. The roadmap's task-count cell is
 now stated as a snapshot rather than implied as current, since keeping it
 live would just be the next thing to go stale.
+
+**M-1.49** is checkpoint 3's own finding, closed by this edit: the same
+"then re-plan" step went unrun a second time, on the same file. Checkpoint
+2's own bullet 3 — added by `M-1.47`'s edit to warn that M-1.38 and M-1.39
+were still live — was never revisited once both were actually fixed by this
+checkpoint's own commits, so it kept asserting, present tense, a state that
+had become false the moment `22389b0` and `8b0c4b6` landed. Fixed by marking
+that bullet closed rather than deleting it (the finding it recorded was
+real and worth keeping as history, the same way checkpoint 1's own findings
+stay visible after their tasks close) and adding a Checkpoint 3 entry in the
+established shape. The forward-guidance paragraph is rewritten to point at
+whatever the backlog's actual open tasks are rather than naming two specific
+IDs a future re-sync would have to remember to update — the exact staleness
+this task exists to close, now designed against rather than merely fixed
+once.
+
+Opening the file for this also surfaced that its "Tasks" table — a
+different section from the one M-1.49's own finding named — had drifted
+just as far: `M-1.24`, `M-1.5`, `M-1.23`, `M-1.15`, and `M-1.16` were all
+still listed under "Remaining" several commits after each landed. Same
+class of staleness the finding is about, same file, found while already
+there rather than left for a fourth checkpoint to catch — fixed in the same
+edit, noted here rather than silently, since fixing something a finding
+didn't name is still worth being explicit about. The "44 tasks" count in
+this section's own lead sentence was replaced with a pointer to
+`backlog.md`'s row count, matching the fix `M-1.47` already made for
+`roadmap.md`'s task-count cell — the same specific number, stated in two
+places, that had already gone stale once.
 
 **M-1.23** is `standards/review.md`, turning doc 21 §3–6 into rules rather
 than argument. It deliberately does not restate §3.1's deterministic/semantic
