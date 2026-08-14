@@ -1,0 +1,67 @@
+{
+  "commits": [
+    "a7574d484a6d6e948c6477f0c9d1844763fb61db",
+    "54563bf5d2f559b45830388a1fcad2610c575b34",
+    "7c9c8d12f3552df889d80fafe8a371461e0f5b0d",
+    "2aeb7c42e6569d80b5a2a277132ebdf710d7c89f",
+    "5fdfd7375ab5f3bf1e115217109cbf9195005f68",
+    "1b8fd7a578892e971e81289b7289a918aaa99c9b",
+    "b4c3b0da1dbc8160b4bab2acf605325b68d3f439",
+    "9dfe29044345c780dd3096412f09a5a45754171f",
+    "89532dd4151e905db9b5f231b302bf9b506c5b30",
+    "397cf3fd5edd590ee5bb2a88d2814abf8666fc16",
+    "512dcca01591dece7110d8635786b153ba09a481",
+    "a35a0421378abdff557fab064ae6ac58cd542b83",
+    "588a844ce171b9b5a92af597bd242d12a1462164",
+    "466a657fd5f322eaa2a9e745e984feafb96c91cb",
+    "f22931a7f75bbdebcc0ecec2b5d36fc5bcf6a43a",
+    "e3ba18394795679808a71af71caf2c2991cf37cd",
+    "d1e76a1aab90c284dfac3f0a417f6173a2e4f95c",
+    "57681804c45aa74c2403ec4a9936735946fc18f8",
+    "de169a61414804d6d5f105667f14b5cc2a38b708",
+    "216dad385e6ab8b4bf73ba2eb6d9258fa26a7255",
+    "fadd0953b65479c91d5231b135e3f3145aace71f",
+    "9c1d837ad00faac3e50ba605dfcf9c24db49c9c1",
+    "d158b618569a862942b16fa649a844e38218bf91",
+    "c45e68f254127dfc48bcb8263a8b300f60e94c42",
+    "084d03244863ce7670398d6ccad8213c4c1b14ba",
+    "7312139d90747f91c5b4ae03fade6b30e032a33b",
+    "8cfd8499ba840c22aedb6acc28b2a3c81f9a3b63",
+    "8cb2a02836aa3f928e9e1d1c288b27c970f5e349",
+    "75bf42d4386708c39dcefc689b946ec8ca8ece1e",
+    "7b244ade42dafbe60a3380b921f8e67676778ed5",
+    "1daa3061255c241fdf864c67ec94e3703ad7ecc9",
+    "c2704cd568edef9d5cb494e5ee88857e491cc820",
+    "904724cef5d934adc97ca7edf1caaeff264d04d8",
+    "b8bd28e58f94f4547ba7631f3abd016a2127e967"
+  ],
+  "findings": [
+    {
+      "evidence": "grep -rn 'pipefail|SIGPIPE' docs/internal/standards/*.md returns nothing. docs/internal/standards/portability.md (114 lines, current state) has no shell-scripting section at all -- its 20 rules cover targets/runtime/build/test/cross-arch portability but not this. The idiom is documented only in scattered code comments (scripts/lib.sh:14, scripts/check-layering.sh:79-82, scripts/check-core-contract.sh:70-72, scripts/check-unsafe.sh:102-104, scripts/build-index.sh:45, scripts/check-milestone-review.sh:229/255/277, scripts/milestone-review.sh:89, scripts/check-reviewed.sh:70/80/207, scripts/check-commit-msg.sh:49-52) and in backlog prose, which is tribal knowledge, not a standard any future gate-writer is pointed at before making the ninth-plus mistake.",
+      "id": "71cfaf87b69e",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "The set -o pipefail SIGPIPE-under-early-exit defect that recurred nine times across six scripts this milestone (per docs/internal/product/backlog.md's M-1.37 retrospective, ~line 1090, and docs/internal/product/milestones/M-1.md's own 'Notes for the boundary review') was never written into a standard, despite the retrospective explicitly saying 'it belongs in the shell rules portability.md will grow.'",
+      "task_id": "M-1.44"
+    },
+    {
+      "evidence": "Chronological order via `git log --oneline --reverse a7574d4..b8bd28e`: fadd095 (M-1.33 follow-up) introduces the try/except-Exception-then-sys.exit(3) wrapper in scripts/build-index.sh; c2704cd (M-1.8, check-layering.sh) and 904724c (M-1.10, check-core-contract.sh) both land after it; b8bd28e (M-1.11, check-unsafe.sh, lines 529-537) explicitly copies the wrapper and cites build-index.sh's precedent in its own comment ('the same fix build-index.sh already applies to itself for the identical reason'). scripts/check-layering.sh and scripts/check-core-contract.sh have no `try:`/`except Exception`/`exit(3)` anywhere (confirmed by grep) -- their crash-safety currently depends entirely on the undocumented fact that no `print()` executes before their risky `.read_text()` / `git show` calls, so a future diagnostic print added before those calls would silently reintroduce exactly the false-pass-on-crash class this milestone's review rounds spent many cycles closing elsewhere.",
+      "id": "c96b0b5a7035",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-layering.sh and check-core-contract.sh pass safely on an uncaught Python crash only by accident of statement ordering, not by the defended crash-safety wrapper (try/except with a distinct exit code) that build-index.sh established and check-unsafe.sh explicitly reused -- both were written after that idiom existed and neither adopted it.",
+      "task_id": "M-1.45"
+    },
+    {
+      "evidence": "scripts/check-reviewed.sh:191 and scripts/check-milestone-review.sh:238 both emit `warn \"$BASELINE has unstaged edits, which are ignored...\"`; scripts/check-unsafe.sh reads baselines/unsafe.txt via the identical `git show \":$BASELINE\"` pattern (line 97) but has no corresponding warn call anywhere in the file (grep for 'unstaged' in check-unsafe.sh returns nothing), even though its own header comment says baselines/unsafe.txt uses 'the same escape-with-a-reason shape baselines/review.txt already uses.'",
+      "id": "75a92be5ead6",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "check-unsafe.sh reads baselines/unsafe.txt from the index (matching baselines/review.txt's convention) but, unlike check-reviewed.sh and check-milestone-review.sh, never warns when the file has unstaged edits, so the 'honest path punished' UX fix M-1.9's retrospective called its sharpest finding was not carried to the baseline file modeled explicitly on the one that motivated it."
+    }
+  ],
+  "milestone": "M-1",
+  "recorded_at": "2026-08-14T16:56:23Z",
+  "reviewer": "Claude Sonnet 5 (independent milestone review, dispatched by parent agent, no drive-authorship)",
+  "verdict": "changes-requested"
+}
