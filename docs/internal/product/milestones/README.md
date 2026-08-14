@@ -11,10 +11,10 @@ One file per milestone, M-1 through M15, ordered by execution in
 [`../roadmap.md`](../roadmap.md) — that file is the index and carries every
 milestone's completion condition; this directory is the detail.
 
-⚠️ **Eleven exist so far**: [M-1](M-1.md), [M0](M0.md), [M1](M1.md),
+⚠️ **All seventeen exist**: [M-1](M-1.md), [M0](M0.md), [M1](M1.md),
 [M2](M2.md), [M3](M3.md), [M10](M10.md), [M9](M9.md), [M4](M4.md),
-[M11](M11.md), [M5](M5.md), [M6](M6.md). M7, M8 and M12–M15 land in M-1.43, and
-are deliberately not linked until they do.
+[M11](M11.md), [M5](M5.md), [M6](M6.md), [M7](M7.md), [M8](M8.md),
+[M12](M12.md), [M13](M13.md), [M14](M14.md), [M15](M15.md).
 
 ## ⚠️ A plan is not a decomposition
 

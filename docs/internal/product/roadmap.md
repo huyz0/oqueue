@@ -69,12 +69,12 @@ original ten did not reach a shippable v1. Sequence:
 | 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | not started |
 | 10 | [M5](milestones/M5.md) | Compaction and retention | functional | M3, M10 | 20 | `scripts/gates/m5-complete.sh` | not started |
 | 11 | [M6](milestones/M6.md) | Recovery and failover | non-functional | M3, M10 | 16 | `scripts/gates/m6-complete.sh` | not started |
-| 12 | M7 | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | not started |
-| 13 | M8 | Encryption: BYOK and the FIPS build | feature | M1, M5, M9 | 18 | `scripts/gates/m8-complete.sh` | not started |
-| 14 | M12 | Admin API and operability | functional | M4, M9 | 16 | `scripts/gates/m12-complete.sh` | not started |
-| 15 | M13 | Release engineering and the artifact matrix | build | M12 | 15 | `scripts/gates/m13-complete.sh` | not started |
-| 16 | M14 | Performance and cost validation | non-functional | M5, M13 | 16 | `scripts/gates/m14-complete.sh` | not started |
-| 17 | M15 | v1 hardening: chaos, soak, and the release gate | non-functional | M14 | 15 | `scripts/gates/m15-complete.sh` | not started |
+| 12 | [M7](milestones/M7.md) | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | not started |
+| 13 | [M8](milestones/M8.md) | Encryption: BYOK and the FIPS build | feature | M1, M5, M9 | 18 | `scripts/gates/m8-complete.sh` | not started |
+| 14 | [M12](milestones/M12.md) | Admin API and operability | functional | M4, M9 | 16 | `scripts/gates/m12-complete.sh` | not started |
+| 15 | [M13](milestones/M13.md) | Release engineering and the artifact matrix | build | M12 | 15 | `scripts/gates/m13-complete.sh` | not started |
+| 16 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | M5, M13 | 16 | `scripts/gates/m14-complete.sh` | not started |
+| 17 | [M15](milestones/M15.md) | v1 hardening: chaos, soak, and the release gate | non-functional | M14 | 15 | `scripts/gates/m15-complete.sh` | not started |
 
 ⚠️ **Only `m-1-complete.sh` is specified today**; the rest name the script each
 milestone must produce, and what it must assert is written in that milestone's
@@ -337,8 +337,6 @@ than asserted.
 ---
 
 Per-milestone provisional tasks and full completion conditions are in
-[`milestones/`](milestones/README.md). ⚠️ Eleven have plans; M7, M8 and
-M12–M15 land in M-1.43, and are unlinked until they do rather than pointing at
-files that are not there. The design background is
+[`milestones/`](milestones/README.md). ⚠️ All seventeen have plans. The design background is
 [`docs/researches/`](../../researches/README.md); this file is the execution
 view.
