@@ -71,7 +71,7 @@ comes before any gate because every gate sources it.
 | M-1.38 | `check-reviewed.sh` matches a task id as a regex | `grep -qx "$task_id"` against the backlog's ids: an artifact whose `task_id` is `.*` matches every row. `grep -qxF`. Found by M-1.37's review at the sibling site | todo |
 | M-1.40 | The plan layer: `milestones/` + the plan-vs-backlog distinction | `sdd.md` states the difference between a *plan* (forward-looking, expected to be re-derived) and the *backlog* (authoritative, current milestone only); `roadmap.md` carries every milestone to v1 with a kind, the requirements it serves, its dependencies, and an execution order that is not numeric order; `milestones/README.md` says how a plan is consumed | done |
 | M-1.41 | Milestone plans: M0, M1, M2, M3, M10 | The build-out sequence — workspace, object store, protocol, coordinator, deterministic simulation. Each names its goal, kind, requirements, the ADRs that must be written before its code, ≤20 provisional tasks, and a completion condition that is a command | done |
-| M-1.42 | Milestone plans: M9, M4, M11, M5, M6 | Security, consumer groups, idempotence, compaction, recovery. Same shape as M-1.41 | todo |
+| M-1.42 | Milestone plans: M9, M4, M11, M5, M6 | Security, consumer groups, idempotence, compaction, recovery. Same shape as M-1.41 | done |
 | M-1.43 | Milestone plans: M7, M8, M12, M13, M14, M15 | Scale, encryption, admin, release engineering, performance validation, hardening. Same shape as M-1.41 | todo |
 
 ### Notes on specific tasks

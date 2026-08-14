@@ -11,9 +11,10 @@ One file per milestone, M-1 through M15, ordered by execution in
 [`../roadmap.md`](../roadmap.md) — that file is the index and carries every
 milestone's completion condition; this directory is the detail.
 
-⚠️ **Six exist so far**: [M-1](M-1.md), [M0](M0.md), [M1](M1.md),
-[M2](M2.md), [M3](M3.md), [M10](M10.md). The rest land in M-1.42 and M-1.43,
-and are deliberately not linked until they do.
+⚠️ **Eleven exist so far**: [M-1](M-1.md), [M0](M0.md), [M1](M1.md),
+[M2](M2.md), [M3](M3.md), [M10](M10.md), [M9](M9.md), [M4](M4.md),
+[M11](M11.md), [M5](M5.md), [M6](M6.md). M7, M8 and M12–M15 land in M-1.43, and
+are deliberately not linked until they do.
 
 ## ⚠️ A plan is not a decomposition
 
@@ -95,8 +96,8 @@ happens once, at decomposition, before the loop starts.
 ## ⚠️ What a plan is not evidence of
 
 It is not evidence the work is possible, correctly sized, or correctly ordered.
-**Five architecture decisions are unmade**, blocking four of the seventeen
-milestones, and four more have completion conditions that cannot yet be written
+**Eleven decisions are unmade** — five of them architecture — blocking six of
+the seventeen milestones, and four more have completion conditions that cannot yet be written
 because the requirement they check has no number. Both are listed in
 [`../roadmap.md`](../roadmap.md) rather than smoothed over, because a plan that
 reads as more settled than it is will be trusted more than it should be.

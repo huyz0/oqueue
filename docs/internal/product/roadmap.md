@@ -64,11 +64,11 @@ original ten did not reach a shippable v1. Sequence:
 | 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | 18 | `scripts/gates/m2-complete.sh` | not started |
 | 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | 19 | `scripts/gates/m3-complete.sh` | not started |
 | 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | 14 | `scripts/gates/m10-complete.sh` | not started |
-| 7 | M9 | Authentication, authorization, tenant isolation | feature | M2 | 16 | `scripts/gates/m9-complete.sh` | not started |
-| 8 | M4 | Consumer groups | functional | M3, M9 | 17 | `scripts/gates/m4-complete.sh` | not started |
-| 9 | M11 | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | not started |
-| 10 | M5 | Compaction and retention | functional | M3, M10 | 18 | `scripts/gates/m5-complete.sh` | not started |
-| 11 | M6 | Recovery and failover | non-functional | M3, M10 | 16 | `scripts/gates/m6-complete.sh` | not started |
+| 7 | [M9](milestones/M9.md) | Authentication, authorization, tenant isolation | feature | M2, M3 | 16 | `scripts/gates/m9-complete.sh` | not started |
+| 8 | [M4](milestones/M4.md) | Consumer groups | functional | M3, M9 | 17 | `scripts/gates/m4-complete.sh` | not started |
+| 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | not started |
+| 10 | [M5](milestones/M5.md) | Compaction and retention | functional | M3, M10 | 20 | `scripts/gates/m5-complete.sh` | not started |
+| 11 | [M6](milestones/M6.md) | Recovery and failover | non-functional | M3, M10 | 16 | `scripts/gates/m6-complete.sh` | not started |
 | 12 | M7 | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | not started |
 | 13 | M8 | Encryption: BYOK and the FIPS build | feature | M1, M5, M9 | 18 | `scripts/gates/m8-complete.sh` | not started |
 | 14 | M12 | Admin API and operability | functional | M4, M9 | 16 | `scripts/gates/m12-complete.sh` | not started |
@@ -154,11 +154,14 @@ from a decision nobody made. Each must appear in the receiving milestone's plan.
 | The madsim / `object_store` feasibility spike | M1 | Deferred from M-1 because it needs a repo and gates to land properly. Its answer shapes **`standards/testing.md`** — and, per doc 10's resolved log, *not* `architecture.md` or the crate split: madsim swaps the runtime via `cfg` rather than changing crate structure. ⚠️ Doc 10 #32's open-list entry still says it touches "every crate that does async", which the resolved log supersedes — the same un-struck-entry inconsistency as #8. Take the resolved log |
 | Verification against **real S3** | M1 | The conformance suite runs against the fake and MinIO now. ⚠️ **Conditional-write behaviour stays marked unverified until it runs against real S3** — doc 10 #33. If the fake and MinIO are both more permissive than S3, the result is an architectural error, not a test gap |
 | The region header's `alg` field | M1 (from M8) | A few bytes now against a migration later; doc 10 #40 |
+| The cross-tenant admin surface | M12 (from M9) | M9 forbids cross-tenant views going through `Metadata`, but `--list` over the whole catalog still needs a deliberate answer — pagination, prefix scoping, or refusal — ⚠️ **before someone finds it**. The constraint is set in M9; the answer is M12's |
+| Key-domain-aware compaction planning | M8 (from M5) | Compaction must plan **within** a key domain, workers need unwrap capability for every topic they touch, and a revoked KEK blocks compaction of that topic's data. ⚠️ M5 must not close without either that path or a recorded deferral here; doc 10 #37, #39 |
 
 ## The decisions that gate this plan
 
-⚠️ **Five architecture decisions are unmade**, and each blocks the milestone
-that first depends on it. They are listed here because a plan that hides them reads
+⚠️ **Eleven decisions are unmade**, and each blocks the milestone that first
+depends on it. The first five are architecture; the rest are constants and
+strategies that are no less blocking for being smaller. They are listed here because a plan that hides them reads
 as more settled than it is. Each becomes an ADR task inside its milestone, where
 the alternatives are still live.
 
@@ -169,6 +172,12 @@ the alternatives are still live.
 | 1 | Offset sequencing: external store vs object-storage CAS vs local consensus | M3 | doc 06 §1 |
 | 12 | Materialized-state engine (SQLite / redb / RocksDB / fjall / SlateDB) | M6 | doc 13 §6 |
 | 14 | The enumeration fork: recovery scanner vs `PREPARED`→`COMMITTED` | M6 | doc 13 §7 |
+| 9 | Metadata distribution: push tail deltas vs pull per fetch | M3 | doc 12 §4.4–4.5 |
+| 11 | The bounded-staleness limit | M3 (set), M5 (consumed) | doc 12 §4.6 — it is the floor for M5's deletion delay |
+| 5 | Idempotency strategy | M11 | doc 06 §6 — ⚠️ also decides how much of FR-15 stays reachable post-v1 |
+| 15 | Target RTOs | M6 | doc 13 §2 — hot-standby and cold rebuild are separate numbers |
+| 18 | Compaction cadence at high partition counts | M5 | doc 14 §7 — ~$720/day at 60 s vs ~$24/day at 30 min, at 100k partitions |
+| 22 | Retention on idle partitions | M5 | doc 10 #22 — both candidates named, neither worked through |
 
 ⚠️ **#8 (index granularity) is *not* on this list, and the corpus is
 inconsistent about it.** Doc 15 §7 and doc 10's resolved-decisions log both
@@ -328,9 +337,8 @@ than asserted.
 ---
 
 Per-milestone provisional tasks and full completion conditions are in
-[`milestones/`](milestones/README.md). ⚠️ M-1 and the build-out
-sequence (M0, M1, M2, M3, M10) have plans; the rest land in M-1.42 and M-1.43,
-and are unlinked until they do rather than pointing at files that are not
-there. The design background is
+[`milestones/`](milestones/README.md). ⚠️ Eleven have plans; M7, M8 and
+M12–M15 land in M-1.43, and are unlinked until they do rather than pointing at
+files that are not there. The design background is
 [`docs/researches/`](../../researches/README.md); this file is the execution
 view.
