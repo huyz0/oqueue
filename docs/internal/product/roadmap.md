@@ -59,11 +59,11 @@ original ten did not reach a shippable v1. Sequence:
 | # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
 |---|---|---|---|---|---|---|---|
 | 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | 44 ⚠️ | `scripts/gates/m-1-complete.sh` | in progress |
-| 2 | M0 | Workspace, contracts, and quality gates | crate delivery | M-1 | 18 | `scripts/gates/m0-complete.sh` | not started |
-| 3 | M1 | Object store seam and conformance suite | crate delivery | M0 | 17 | `scripts/gates/m1-complete.sh` | not started |
-| 4 | M2 | Kafka wire protocol: produce and fetch | functional | M0 | 18 | `scripts/gates/m2-complete.sh` | not started |
-| 5 | M3 | Coordinator: offset sequencing and the index | functional | M1, M2 | 18 | `scripts/gates/m3-complete.sh` | not started |
-| 6 | M10 | Deterministic simulation and fault injection | AI-native development support | M3 | 14 | `scripts/gates/m10-complete.sh` | not started |
+| 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | 18 | `scripts/gates/m0-complete.sh` | not started |
+| 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | 18 | `scripts/gates/m1-complete.sh` | not started |
+| 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | 18 | `scripts/gates/m2-complete.sh` | not started |
+| 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | 19 | `scripts/gates/m3-complete.sh` | not started |
+| 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | 14 | `scripts/gates/m10-complete.sh` | not started |
 | 7 | M9 | Authentication, authorization, tenant isolation | feature | M2 | 16 | `scripts/gates/m9-complete.sh` | not started |
 | 8 | M4 | Consumer groups | functional | M3, M9 | 17 | `scripts/gates/m4-complete.sh` | not started |
 | 9 | M11 | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | not started |
@@ -125,8 +125,8 @@ gate to read both files, and it is not what M-1.24 currently asks for.
 | M-1 | NFR-50, NFR-54 |
 | M0 | NFR-51, NFR-52, NFR-53, NFR-55, NFR-56 |
 | M1 | FR-30, FR-31, NFR-30 |
-| M2 | FR-1, FR-2, FR-3, FR-32 |
-| M3 | FR-10, FR-11, FR-12, FR-13, NFR-2, NFR-3, NFR-21 |
+| M2 | FR-1, FR-2, FR-3 |
+| M3 | FR-10, FR-11, FR-12, FR-13, FR-32, NFR-2, NFR-3, NFR-21 |
 | M10 | NFR-20 (the method), FR-51 (the method) |
 | M9 | FR-4, FR-40, FR-44, NFR-12 |
 | M4 | FR-20, FR-21, FR-22 |
@@ -328,8 +328,9 @@ than asserted.
 ---
 
 Per-milestone provisional tasks and full completion conditions are in
-[`milestones/`](milestones/README.md). ⚠️ Only M-1's plan exists so far; the
-rest land in M-1.41 through M-1.43, and the IDs above are unlinked until they
-do rather than pointing at files that are not there. The design background is
+[`milestones/`](milestones/README.md). ⚠️ M-1 and the build-out
+sequence (M0, M1, M2, M3, M10) have plans; the rest land in M-1.42 and M-1.43,
+and are unlinked until they do rather than pointing at files that are not
+there. The design background is
 [`docs/researches/`](../../researches/README.md); this file is the execution
 view.
