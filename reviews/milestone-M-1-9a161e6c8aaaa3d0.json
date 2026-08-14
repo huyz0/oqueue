@@ -1,0 +1,45 @@
+{
+  "commits": [
+    "642fa42cc9c6a2d57acd380ea75535e5dbac5165",
+    "3eb563a3bbc23f084d0bd6091494e8eac681f995",
+    "b522c88747b4a3f826ad5a4ebdeaabfd4720e0fc",
+    "87521e28ca66d0a5a1ed1a85eefa94a37f8b45e4"
+  ],
+  "findings": [
+    {
+      "evidence": "tests/gates/negative.sh's ten run_case lines (359-368) cover every scripts/check-*.sh gate plus build-index.sh --check, but scripts/gates/m-1-complete.sh appears nowhere in the file. The M-1.16 commit message and docs/internal/product/backlog.md (~line 1509-1540, 'M-1.16 is scripts/gates/m-1-complete.sh...') describe five ad hoc scratch repos, each breaking one thing, run once by hand and never preserved -- the exact one-off testing M-1.15's own header calls out as the finding it exists to close ('a gate nobody has watched fail is a gate nobody has tested... each of those runs was manual, one-off, and lives only in a commit message'). No backlog row tracks adding this coverage.",
+      "id": "0979f6683e9b",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "scripts/gates/m-1-complete.sh (M-1.16) has no permanent negative-test case in tests/gates/negative.sh even though M-1.15, one commit earlier, established exactly that as the standard for every gate in this milestone.",
+      "task_id": "M-1.46"
+    },
+    {
+      "evidence": "docs/internal/product/milestones/M-1.md lines 93-98 ('Notes for the boundary review') still say 'No commit in M-1 has been read as a whole -- reviews/ holds nothing but its README' and 'the coverage is zero', but reviews/milestone-M-1-6cd310475d247af1.json (committed at 642fa42, before this checkpoint) already covers 34 commits with real findings. docs/internal/product/roadmap.md line 61 still lists M-1's task count as '44 \u26a0\ufe0f', but docs/internal/product/backlog.md now has 46 distinct M-1.* rows (M-1.44 and M-1.45 were added by the first checkpoint and never reflected back into the roadmap). Neither file was touched by 642fa42, 3eb563a, b522c88, or 87521e2 -- confirmed via git log -- so the staleness has persisted across this entire checkpoint window.",
+      "id": "970ab8c38a3e",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "The milestone-review skill's required 'Then re-plan: amend the roadmap with what was learned' step was not carried out after the first checkpoint (642fa42), so two product docs now make claims the repository's current state contradicts.",
+      "task_id": "M-1.47"
+    },
+    {
+      "evidence": "scripts/gates/m-1-complete.sh's header: 'A milestone can satisfy this condition while backlog rows remain open if those rows do not bear on any non-negotiable; whether that is actually true right now is a judgement call for whoever reads this script's output next to the backlog, not something a gate can decide.' scripts/check-reviewed.sh:145 is still literally `grep -qx \"$task_id\"` against the backlog's ids (confirmed by reading the current file) -- the un-anchored-regex bug M-1.38 describes, un-fixed. scripts/lib.sh's known_task_ids() (lines 139-148) still reads docs/internal/product/backlog.md from $REPO_ROOT, the working tree, not the git index -- the M-1.39 gap, also un-fixed. Running scripts/gates/m-1-complete.sh directly against the current tree (this session) shows every non-negotiable's script passing structurally.",
+      "id": "cc06b11b4996",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "scripts/gates/m-1-complete.sh's own design explicitly leaves 'does an open backlog row bear on a non-negotiable' as a judgement call for whoever reads its output next to the backlog -- made now: M-1.38 (and its sibling M-1.39) are exactly such rows, since both are live, confirmed-present defects in scripts/check-reviewed.sh and lib.sh's known_task_ids(), the literal enforcement mechanism non-negotiable 4 names, so m-1-complete.sh reporting green (which it will, the moment this checkpoint's review artifact is staged) should not be read as license to mark M-1 'done' in roadmap.md while M-1.38 stands open.",
+      "task_id": "M-1.38"
+    },
+    {
+      "evidence": ".pre-commit-config.yaml's hook entries read e.g. \"non-negotiable 4: every commit is reviewed...\", \"non-negotiable 2: no threshold is read from an environment variable\" as literal, hand-written text. scripts/gates/m-1-complete.sh's header: 'A hard-coded rule 1 -> check-commit-msg.sh table here would be a second place non-negotiable 1's own script name lives, and the two would drift the first time either changed without the other.' Nothing checks .pre-commit-config.yaml's labels against AGENTS.md's actual numbering; a future renumbering of the seven rules would leave these labels silently wrong, though the entry: scripts themselves (the actual enforcement) would be unaffected -- cosmetic only, hence minor.",
+      "id": "d063f5619fca",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": ".pre-commit-config.yaml (M-1.14) hand-lists which AGENTS.md non-negotiable number each hook enforces in its 'name:' field, the exact hand-maintained rule-to-script mapping m-1-complete.sh (M-1.16, written afterward) explicitly avoids by parsing AGENTS.md's Non-negotiables section instead -- citing that precise hazard in its own header."
+    }
+  ],
+  "milestone": "M-1",
+  "recorded_at": "2026-08-14T18:45:40Z",
+  "reviewer": "Claude Sonnet 5 (independent milestone review, dispatched by parent agent, no drive-authorship, checkpoint 2)",
+  "verdict": "changes-requested"
+}
