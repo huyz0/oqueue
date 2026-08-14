@@ -134,18 +134,41 @@ require_python() {
   return 1
 }
 
+# The backlog's content as it is **staged**, never the working tree. `M-1.39`.
+#
+# ⚠️ Every other input `check-reviewed.sh` and `check-milestone-review.sh`
+# read — the review artifact's hash, the argued baseline — already came from
+# the index (`check-reviewed.sh`'s own `baseline_staged()` reads
+# `git show ":$BASELINE"` for exactly this reason). Reading the backlog from
+# disk instead let an unstaged row satisfy `known_task_ids`/`open_task_ids`
+# locally while the same gate failed on CI, which checks out the index —
+# the identical pass-here/red-there asymmetry `check-reviewed.sh`'s baseline
+# read was already fixed for. Shared by both functions below because they
+# read the same file the same way; a second copy of this line is a second
+# place to fix if the read ever needs to change again.
+#
+# ⚠️ `2>/dev/null || true`: `git show` fails loudly — exit 128, a `fatal:`
+# line on stderr — when the path is not staged at all: a fresh checkout
+# before anything is `git add`ed, or a repository with no `backlog.md` yet.
+# That is the same "missing" state the old `[[ -f "$backlog" ]]` guard
+# handled gracefully, and it must stay silent here for the same reason: a
+# missing backlog is not this function's failure to report.
+_backlog_from_index() {
+  git -C "$REPO_ROOT" show ":docs/internal/product/backlog.md" 2>/dev/null || true
+}
+
 # Every task ID this repository knows about, one per line, from the backlog.
 # The backlog is the single source; a gate that keeps its own list drifts.
 known_task_ids() {
-  local backlog="$REPO_ROOT/docs/internal/product/backlog.md"
-  [[ -f "$backlog" ]] || return 0
+  local backlog; backlog="$(_backlog_from_index)"
+  [[ -n "$backlog" ]] || return 0
   # ⚠️ `|| true`, because this is a pipeline and every caller writes
   # `known="$(known_task_ids)"`. Under `set -e` + `pipefail` a backlog whose
   # table has no rows makes `grep` return 1, the assignment fails, the caller
   # dies with no output at all — and the `[[ -n "$known" ]]` guard written for
   # exactly that case is never reached. A *missing* backlog returned 0 and was
   # handled gracefully, so the two empty states behaved oppositely.
-  grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' "$backlog" | tr -d '|' | tr -d ' ' || true
+  grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' <<< "$backlog" | tr -d '|' | tr -d ' ' || true
 }
 
 # Task IDs whose backlog row is not yet `done`.
@@ -156,9 +179,9 @@ known_task_ids() {
 # author is there to pick a different row — and deliberately not by the gate,
 # which would then turn finishing the task into a permanent failure.
 open_task_ids() {
-  local backlog="$REPO_ROOT/docs/internal/product/backlog.md"
-  [[ -f "$backlog" ]] || return 0
-  grep -E '^\| M-?[0-9]+\.[0-9]+ \|' "$backlog" \
+  local backlog; backlog="$(_backlog_from_index)"
+  [[ -n "$backlog" ]] || return 0
+  grep -E '^\| M-?[0-9]+\.[0-9]+ \|' <<< "$backlog" \
     | grep -vE '\|[[:space:]]*done[[:space:]]*\|[[:space:]]*$' \
     | grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' | tr -d '|' | tr -d ' ' || true
 }

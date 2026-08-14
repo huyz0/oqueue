@@ -67,7 +67,7 @@ comes before any gate because every gate sources it.
 | M-1.35 | `check-commit-msg.sh` dies silently on an all-comments message | `grep -v '^#' \| head -1` under `pipefail` exits 1 with no output; the gate must name itself and the reason | done |
 | M-1.36 | Rename the `goal` skill to `milestone` | No skill, adapter, or index entry is named `goal`; every reference resolves and `build-index.sh --check` passes | done |
 | M-1.37 | The outer loop: `milestone-review` skill + `milestone-review.sh` + `check-milestone-review.sh` | Every commit in a milestone is covered by a review artifact naming the commits it read; a blocking or major finding must name a backlog task that exists, or be argued; an uncovered commit fails the gate | done |
-| M-1.39 | `known_task_ids` reads the backlog from the working tree | Every other input to `check-reviewed.sh` and `check-milestone-review.sh` is read from the index; an unstaged backlog row satisfies a gate locally and fails the same gate on CI. Shared by three gates, so it is not M-1.37's to change | todo |
+| M-1.39 | `known_task_ids` reads the backlog from the working tree | Every other input to `check-reviewed.sh` and `check-milestone-review.sh` is read from the index; an unstaged backlog row satisfies a gate locally and fails the same gate on CI. Shared by three gates, so it is not M-1.37's to change | done |
 | M-1.38 | `check-reviewed.sh` matches a task id as a regex | `grep -qx "$task_id"` against the backlog's ids: an artifact whose `task_id` is `.*` matches every row. `grep -qxF`. Found by M-1.37's review at the sibling site | done |
 | M-1.40 | The plan layer: `milestones/` + the plan-vs-backlog distinction | `sdd.md` states the difference between a *plan* (forward-looking, expected to be re-derived) and the *backlog* (authoritative, current milestone only); `roadmap.md` carries every milestone to v1 with a kind, the requirements it serves, its dependencies, and an execution order that is not numeric order; `milestones/README.md` says how a plan is consumed | done |
 | M-1.41 | Milestone plans: M0, M1, M2, M3, M10 | The build-out sequence — workspace, object store, protocol, coordinator, deterministic simulation. Each names its goal, kind, requirements, the ADRs that must be written before its code, ≤20 provisional tasks, and a completion condition that is a command | done |
@@ -1277,6 +1277,60 @@ baseline are read from the index, so an unstaged row satisfies the gate locally
 and fails it on CI — the same pass-here/red-there asymmetry this task fixed for
 the artifact location. It is shared by three gates and is **M-1.39**, not
 M-1.37's to change.
+
+**M-1.39** closes that shared defect. `known_task_ids` and `open_task_ids`
+both read `docs/internal/product/backlog.md` as a plain path on disk; fixed
+by a new shared helper, `_backlog_from_index`, that reads
+`git show ":docs/internal/product/backlog.md"` instead — the exact read
+`check-reviewed.sh`'s own `baseline_staged()` already uses for
+`baselines/review.txt`, for the identical reason. `git show ":path"` reads
+stage 0 of the index regardless of a later, unstaged working-tree edit,
+confirmed directly: staging a backlog with one row, then appending a second
+row to the file *without* staging it, `known_task_ids` still reports only
+the first — and staging the second row makes it appear, with no commit
+required either time (the index, not `HEAD`, is what `:path` reads). A
+repository with no `backlog.md` staged at all — `git show` exits 128 with a
+`fatal:` line — degrades the same way the old `[[ -f "$backlog" ]]` guard
+did, silently, via the same `2>/dev/null || true` this file's other
+Python-backed gates use for a different kind of expected failure.
+
+One shared helper rather than the read duplicated in both functions,
+since they already live in the same file — unlike `check-readmes.sh`'s
+TOML parser, which is a second copy of `check-layering.sh`'s across
+*different* files with no shared Python module to hold a common one, this
+is one file, one function, one place to fix if the read ever changes again.
+Switching from `grep ... "$file"` to `grep ... <<< "$var"` for both
+functions' first `grep` also converts them to the here-string form `M-1.38`
+just established as the safe idiom, rather than reintroducing a
+`printf | grep` SIGPIPE risk while touching the exact code this milestone
+has now fixed that bug in twice.
+
+A new `tests/gates/negative.sh` case (`check-commit-msg.sh`, an unstaged
+backlog row) proves the fix rather than only the header's prose: a backlog
+staged with one real task, then a second row appended to the working tree
+*without* staging it, and a commit subject naming that second, unstaged
+task. Mutant-tested: reverting `known_task_ids` to the old working-tree
+read makes the fixture wrongly pass — the local-pass/CI-fail asymmetry this
+task exists to close, reproduced and then closed in the same fixture.
+
+Review found that fixture exercises only `known_task_ids`'s half of the fix
+— reverting `open_task_ids` alone, leaving `known_task_ids` fixed, was
+checked by hand to leave the entire `tests/gates/negative.sh` suite still
+green. `open_task_ids` is verified correct by direct reproduction (both
+mine and, independently, the reviewer's own mutant test), just not
+regression-guarded the way `known_task_ids` now is. Not given its own
+fixture here: `open_task_ids`'s only caller is `milestone-review.sh
+record`, a driver `tests/gates/negative.sh` does not currently exercise at
+all — its counterpart gate, `check-milestone-review.sh`, already has a
+case, but `record` itself needs a verdict JSON naming real commits against
+a real milestone, the same setup weight `check-milestone-review.sh`'s own
+fixture already carries, and duplicating that machinery for one function's
+regression coverage is a larger addition than this task's own scope.
+Accepted as a documented, non-blocking gap per `review.md` rule 14, the
+same call made for `check-portability.sh`'s round 3 (a fix verified
+correct but outside what the existing suite's shape can cheaply cover) —
+a candidate for a future task if `milestone-review.sh record` itself ever
+gets brought under `tests/gates/negative.sh`'s framework.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on

@@ -133,6 +133,29 @@ invoke_commit_msg() {
   bash "$1/scripts/check-commit-msg.sh" "$1/msg.txt"
 }
 
+# --- known_task_ids: a task id only in the working tree, unstaged ----------
+setup_commit_msg_unstaged_row() {
+  local dir; dir="$(new_scratch commit-msg-unstaged-row)"
+  copy_gate "$dir" check-commit-msg.sh
+  mkdir -p "$dir/docs/internal/product"
+  cat > "$dir/docs/internal/product/backlog.md" <<'EOF'
+| M-1.1 | a real task | some criterion | todo |
+EOF
+  (cd "$dir" && git add -A)
+  # Added to the working tree *after* staging, so the index still holds only
+  # M-1.1 -- `known_task_ids` (`M-1.39`) must read the index, not this file
+  # on disk, or a commit subject naming this row would wrongly pass locally
+  # and fail the identical gate on CI, which only ever sees the index.
+  cat >> "$dir/docs/internal/product/backlog.md" <<'EOF'
+| M-9.9 | an unstaged task | some criterion | todo |
+EOF
+  echo "M-9.9: a change whose task only exists in the working tree" > "$dir/msg.txt"
+  printf '%s\n' "$dir"
+}
+invoke_commit_msg_unstaged_row() {
+  bash "$1/scripts/check-commit-msg.sh" "$1/msg.txt"
+}
+
 # --- check-tests-kept.sh: a test removed with no Removes-test: trailer -----
 setup_tests_kept() {
   local dir; dir="$(new_scratch tests-kept)"
@@ -735,6 +758,7 @@ invoke_portability_unterminated_fence() {
 }
 
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
+run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_row invoke_commit_msg_unstaged_row
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
 run_case "check-layering.sh"            setup_layering            invoke_layering
