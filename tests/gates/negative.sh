@@ -242,6 +242,31 @@ invoke_layering() {
   bash "$1/scripts/check-layering.sh"
 }
 
+# --- check-layering.sh: a non-UTF-8 Cargo.toml, the crash path -------------
+#
+# `M-1.51`. Distinct from the violation case above: `package_name()`'s
+# `read_text()` raises `UnicodeDecodeError` before any manifest is even
+# parsed for dependencies, exercising the crash-safety wrapper `M-1.45`
+# added rather than the ordinary "stray dependency" path.
+setup_layering_non_utf8() {
+  local dir; dir="$(new_scratch layering-non-utf8)"
+  copy_gate "$dir" check-layering.sh
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-buf"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-buf/src"
+  printf '[package]\nname = "oqueue-buf"\nversion = "0.1.0"\nedition = "2021"\n# \xff\xfe bad byte\n' \
+    > "$dir/crates/oqueue-buf/Cargo.toml"
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-buf/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M-1.51: a non-UTF-8 byte in a Cargo.toml")
+  printf '%s\n' "$dir"
+}
+invoke_layering_non_utf8() {
+  bash "$1/scripts/check-layering.sh"
+}
+
 # --- check-sans-io.sh: a concrete socket type in a library crate -----------
 setup_sans_io() {
   local dir; dir="$(new_scratch sans-io)"
@@ -288,6 +313,41 @@ EOF
   printf '%s\n' "$dir"
 }
 invoke_core_contract() {
+  bash "$1/scripts/check-core-contract.sh"
+}
+
+# --- check-core-contract.sh: a non-UTF-8 tracked .rs file, the crash path --
+#
+# `M-1.51`. `extract_impl_files_by_trait()` scans every `*.rs` file
+# `git ls-files` returns via `git show`, not only files that mention the
+# changed trait -- so the crash comes from a file with nothing to do with
+# `Store`, exercising the crash-safety wrapper `M-1.45` added rather than
+# the "no ADR" path the case above already covers.
+setup_core_contract_non_utf8() {
+  local dir; dir="$(new_scratch core-contract-non-utf8)"
+  copy_gate "$dir" check-core-contract.sh
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/src/lib.rs" <<'EOF'
+pub trait Store {
+    fn get(&self, key: &str) -> Option<Vec<u8>>;
+}
+EOF
+  printf 'pub struct Other;\n// \xff\xfe bad byte\n' > "$dir/crates/oqueue-core/src/other.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M-1.51: define Store, and a non-UTF-8 byte in a tracked .rs file")
+  cat > "$dir/crates/oqueue-core/src/lib.rs" <<'EOF'
+pub trait Store {
+    fn get(&self, key: &str, epoch: u64) -> Option<Vec<u8>>;
+}
+EOF
+  (cd "$dir" && git add -A)
+  printf '%s\n' "$dir"
+}
+invoke_core_contract_non_utf8() {
   bash "$1/scripts/check-core-contract.sh"
 }
 
@@ -813,8 +873,10 @@ run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
 run_case "check-layering.sh"            setup_layering            invoke_layering
+run_case "check-layering.sh (non-UTF-8 crash)" setup_layering_non_utf8 invoke_layering_non_utf8
 run_case "check-sans-io.sh"             setup_sans_io             invoke_sans_io
 run_case "check-core-contract.sh"       setup_core_contract       invoke_core_contract
+run_case "check-core-contract.sh (non-UTF-8 crash)" setup_core_contract_non_utf8 invoke_core_contract_non_utf8
 run_case "check-unsafe.sh"              setup_unsafe              invoke_unsafe
 run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewed
 run_case "check-reviewed.sh (regex task_id)" setup_reviewed_regex_task_id invoke_reviewed_regex_task_id

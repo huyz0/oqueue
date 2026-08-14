@@ -80,7 +80,7 @@ comes before any gate because every gate sources it.
 | M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | done |
 | M-1.49 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" after the third milestone-review checkpoint | The section's Checkpoint 2 bullet 3 no longer states, in the present tense, that `M-1.38` and its sibling `M-1.39` "are both live defects ... confirmed still present" — both are fixed (`scripts/check-reviewed.sh` now uses `grep -qxF ... <<<`, `scripts/lib.sh`'s `known_task_ids`/`open_task_ids` now read the index via `_backlog_from_index`) and both backlog rows are `done`; the section gains a Checkpoint 3 entry recording what this checkpoint found instead, the same shape checkpoints 1 and 2 used | done |
 | M-1.50 | `check-hot-path-bench.sh` reports only the first failing category per run, not every violation in one pass | The script's three checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row) each end in an early `finish` on failure, so a commit with more than one kind of defect at once only sees the first — reproduced directly: a fixture with both an unknown marker and a `NOT_YET_BUILT` entry that has become stale reports only the unknown-marker failure, and the stale-entry failure only surfaces once that is fixed and the gate re-run. Contradicts `scripts/lib.sh`'s own `fail()` contract ("the caller keeps going so one run reports every violation rather than only the first"), which every sibling gate in this milestone (`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`, `check-portability.sh`) follows by accumulating all problems before a single terminal report. Acceptance: all three checks run unconditionally and every violation across all three is reported in one invocation | done |
-| M-1.51 | `tests/gates/negative.sh` — a permanent crash-path case for `check-layering.sh` and `check-core-contract.sh` | `M-1.45`'s crash-safety wrapper was verified only in scratch fixtures, not checked in — no gate in this repository currently exercises the crash path for any script, including `check-unsafe.sh`, whose own suite the `M-1.45` acceptance criterion pointed at as precedent and which turns out not to have one either. `tests/gates/negative.sh` already carries `run_case`/`setup_*`/`invoke_*` scaffolding for both scripts a companion `(non-UTF-8 crash)` case can reuse directly, the same shape `check-reviewed.sh (regex task_id)` and `check-hot-path-bench.sh (required row)`/`(leftover entry)` already use for a second case against one gate. Found by `M-1.45`'s own review | todo |
+| M-1.51 | `tests/gates/negative.sh` — a permanent crash-path case for `check-layering.sh` and `check-core-contract.sh` | `M-1.45`'s crash-safety wrapper was verified only in scratch fixtures, not checked in — no gate in this repository currently exercises the crash path for any script, including `check-unsafe.sh`, whose own suite the `M-1.45` acceptance criterion pointed at as precedent and which turns out not to have one either. `tests/gates/negative.sh` already carries `run_case`/`setup_*`/`invoke_*` scaffolding for both scripts a companion `(non-UTF-8 crash)` case can reuse directly, the same shape `check-reviewed.sh (regex task_id)` and `check-hot-path-bench.sh (required row)`/`(leftover entry)` already use for a second case against one gate. Found by `M-1.45`'s own review | done |
 
 ### Notes on specific tasks
 
@@ -1482,6 +1482,28 @@ downstream scripts a real repo would have aren't in the scratch fixture —
 confirming both real fixtures' failures are attributable to the specific
 defect each is named for, not to the fixture being incomplete in some other
 way.
+
+**M-1.51** closes the gap `M-1.45`'s own review found: neither
+`check-layering.sh` nor `check-core-contract.sh` had a checked-in crash-path
+case, despite the acceptance criterion citing `check-unsafe.sh`'s suite as
+having one — which turned out not to be true either, so this closes the
+first two of what could be read as a wider gap without inventing new
+scaffolding to do it. Both new cases reuse the existing `setup_layering`/
+`setup_core_contract` fixtures' own shape almost unchanged, with the one
+risky call each script makes fed a non-UTF-8 byte instead of valid input:
+`check-layering.sh`'s case corrupts the dependent crate's own `Cargo.toml`
+(`package_name()`'s `read_text()`), `check-core-contract.sh`'s case adds a
+second, unrelated tracked `.rs` file with the bad byte alongside a genuine
+trait-method-set change (`extract_impl_files_by_trait()`'s `git show`,
+which scans every tracked `.rs` file, not only ones mentioning the changed
+trait). Named `(non-UTF-8 crash)`, the same second-case-against-one-gate
+convention `check-reviewed.sh (regex task_id)` and `check-hot-path-bench.sh
+(required row)`/`(leftover entry)` already established. Verified beyond the
+suite's own exit-code check: each fixture was run directly outside
+`tests/gates/negative.sh` and its captured output inspected, confirming
+`FAIL the layering scanner crashed`/`FAIL the core-contract scanner
+crashed` and a `CRASH ...` line in both cases — the crash-wrapper path
+specifically, not a coincidentally-nonzero exit from some other cause.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on
