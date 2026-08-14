@@ -53,6 +53,7 @@ rather than reading it.
 | [`tdd`](tdd/SKILL.md) | Implementing a task |
 | [`review`](review/SKILL.md) | A change is staged and needs an independent reviewer |
 | [`adr`](adr/SKILL.md) | Making a choice that is expensive to reverse |
+| [`contract-change`](contract-change/SKILL.md) | A `pub trait`'s method set in `oqueue-core` is gaining, losing, or changing a method |
 | [`research`](research/SKILL.md) | A question might already be answered in the corpus |
 
 ## ⚠️ Bootstrap state

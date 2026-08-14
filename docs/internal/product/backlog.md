@@ -60,7 +60,7 @@ comes before any gate because every gate sources it.
 | M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | done |
 | M-1.29 | `check-hot-path-bench.sh` | A benchmark's `hot-path:` marker names a real row in `performance.md` rule 18's table; a row with no marker fails unless it is named, with a reason, in the script's `NOT_YET_BUILT` allowlist — see rule 19 and the retrospective below for why | done |
 | M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | done |
-| M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
+| M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | done |
 | M-1.32 | `standards/git.md` — commit atomicity and structure | States why atomicity matters (bisect is the substitute for a reviewer), the subject and body rules, amend-before-push / follow-up-after, and the no-branching workflow | done |
 | M-1.33 | Frontmatter on standards and product docs + `scripts/build-index.sh` | Every standard and product doc carries a `description` saying *when to read it*, so layer-1 disclosure works for them as it does for skills; generated index regions rebuild from frontmatter and `--check` fails a stale one | done |
 | M-1.34 | `applies_to:` frontmatter + `scripts/which-standards.sh` — route a change to the standards it is judged against | Every standard declares the paths it claims, and one without `applies_to` fails; a staged diff resolves to standards without anyone choosing | done |
@@ -1385,6 +1385,28 @@ attempt. A construction that reproduces unreliably through one invocation
 path but reliably in isolation is still a real defect; the fix removes the
 open pipe the SIGPIPE needs entirely, which is what makes it not merely
 "less likely to fail" but structurally unable to fail this way.
+
+**M-1.31** writes the `contract-change` skill the "Skills" group's own
+Remaining column has named since the milestone was decomposed: the procedure
+for the one thing `AGENTS.md` non-negotiable 6 and `contracts.md` rules 12–15
+require atomically — a `pub trait`'s method set, every fake beside it, every
+real implementation, every forced call site, and the ADR, in one commit.
+Unlike most of this milestone's remaining tasks, every gate the skill points
+at already exists and passes (`check-core-contract.sh` landed at M-1.10,
+`check-layering.sh` and `check-sans-io.sh` at M-1.8), so the skill is not
+written against a promise the way `contract-change` itself would have had to
+be a few tasks earlier — it is written against scripts already exercised in
+this milestone's own commits, including `check-core-contract.sh`'s own
+description of what it deliberately does not check (an implementor merely
+listed in the diff without being genuinely updated, a call site's body
+matching the new signature), which becomes this skill's own "before
+committing → review" step rather than a gap left unnamed. Follows the same
+frontmatter and adapter shape as every other skill: `name`/`description`
+only, a `.claude/commands/contract-change.md` pointer, and both skill-index
+tables updated — `AGENTS.md`'s via `scripts/build-index.sh` (generated, not
+hand-edited — the marker comment says so and hand-editing it would just be
+overwritten the next run), `.agents/skills/README.md`'s by hand since that
+table is authored, not generated.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on
