@@ -135,57 +135,85 @@ def runtime_deps(toml_path):
         # header, e.g. `path = "..."` -- never a new dependency name.
     return deps
 
-manifests = sorted((root / "crates").glob("*/Cargo.toml"))
-bin_manifest = root / "bin/oqueue/Cargo.toml"
-if bin_manifest.exists():
-    manifests.append(bin_manifest)
+def build():
+    manifests = sorted((root / "crates").glob("*/Cargo.toml"))
+    bin_manifest = root / "bin/oqueue/Cargo.toml"
+    if bin_manifest.exists():
+        manifests.append(bin_manifest)
 
-if not manifests:
-    print("SKIP no crate manifests found under crates/ or bin/oqueue/")
-    sys.exit(0)
+    if not manifests:
+        print("SKIP no crate manifests found under crates/ or bin/oqueue/")
+        sys.exit(0)
 
-names_by_manifest = {}
-all_names = set()
-problems = []
-for m in manifests:
-    name = package_name(m)
-    if not name:
-        problems.append(f"{m.relative_to(root)}: no [package] name")
-        continue
-    names_by_manifest[m] = name
-    all_names.add(name)
+    names_by_manifest = {}
+    all_names = set()
+    problems = []
+    for m in manifests:
+        name = package_name(m)
+        if not name:
+            problems.append(f"{m.relative_to(root)}: no [package] name")
+            continue
+        names_by_manifest[m] = name
+        all_names.add(name)
 
-checked = 0
-for m, name in names_by_manifest.items():
-    checked += 1
-    deps = runtime_deps(m) & all_names
-    dev_only_hit = deps & DEV_ONLY
-    if dev_only_hit:
-        problems.append(
-            f"{m.relative_to(root)} ({name}): {', '.join(sorted(dev_only_hit))} "
-            f"in [dependencies] -- dev-only, belongs in [dev-dependencies]"
-        )
-    if name in COMPOSERS:
-        continue
-    stray = deps - {"oqueue-core"} - DEV_ONLY
-    if stray:
-        problems.append(
-            f"{m.relative_to(root)} ({name}): depends on "
-            f"{', '.join(sorted(stray))}, not oqueue-core -- not a named composer"
-        )
+    checked = 0
+    for m, name in names_by_manifest.items():
+        checked += 1
+        deps = runtime_deps(m) & all_names
+        dev_only_hit = deps & DEV_ONLY
+        if dev_only_hit:
+            problems.append(
+                f"{m.relative_to(root)} ({name}): {', '.join(sorted(dev_only_hit))} "
+                f"in [dependencies] -- dev-only, belongs in [dev-dependencies]"
+            )
+        if name in COMPOSERS:
+            continue
+        stray = deps - {"oqueue-core"} - DEV_ONLY
+        if stray:
+            problems.append(
+                f"{m.relative_to(root)} ({name}): depends on "
+                f"{', '.join(sorted(stray))}, not oqueue-core -- not a named composer"
+            )
 
-for p in problems:
-    print(f"PROBLEM {p}")
-print(f"CHECKED {checked}")
-sys.exit(1 if problems else 0)
+    for p in problems:
+        print(f"PROBLEM {p}")
+    print(f"CHECKED {checked}")
+    sys.exit(1 if problems else 0)
+
+# Wrapped so an unexpected exception becomes a distinct exit code (3) rather
+# than landing on 1 -- backported by `M-1.45` from `build-index.sh` and
+# `check-unsafe.sh`. Without this, a crash in `package_name`/`runtime_deps`
+# (a non-UTF-8 byte in a scanned Cargo.toml) happens today to be caught by
+# the `else: fail "...died..."` branch below only because every `PROBLEM`
+# line is printed after both loops finish -- an accident of statement order,
+# not a guarantee. Streaming a `PROBLEM` line as it is found, instead of
+# collecting and printing them all at the end, would put partial output on
+# stdout before a later crash and route it to the "problems found" branch
+# instead -- reporting only the violations found before the crash as though
+# they were the whole story. A distinct exit code makes the crash case
+# checkable regardless of where in this function it happens, instead of by
+# where a print statement happens to sit.
+try:
+    build()
+except SystemExit:
+    raise
+except Exception as exc:
+    import traceback
+    traceback.print_exc()
+    print(f"CRASH the scanner raised {type(exc).__name__}: {exc}")
+    sys.exit(3)
 PYEOF
 )" || rc=$?
 
 problems="$(printf '%s\n' "$out" | grep '^PROBLEM ' | sed 's/^PROBLEM //' || true)"
 skipped="$(printf '%s\n' "$out" | grep -c '^SKIP ' || true)"
 checked="$(printf '%s\n' "$out" | grep '^CHECKED ' | sed 's/^CHECKED //' || true)"
+crashed="$(printf '%s\n' "$out" | grep -c '^CRASH ' || true)"
 
-if (( skipped > 0 )); then
+if (( crashed > 0 )); then
+  fail "the layering scanner crashed; the tree was not fully checked"
+  note "$(printf '%s\n' "$out" | grep '^CRASH ')"
+elif (( skipped > 0 )); then
   skip "crate layering (no crate manifests found)"
 elif (( rc == 0 )) && [[ -z "$problems" ]]; then
   ok "crate layering (${checked:-0} manifest(s) hold)"

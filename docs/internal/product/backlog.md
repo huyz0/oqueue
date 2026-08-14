@@ -74,12 +74,13 @@ comes before any gate because every gate sources it.
 | M-1.42 | Milestone plans: M9, M4, M11, M5, M6 | Security, consumer groups, idempotence, compaction, recovery. Same shape as M-1.41 | done |
 | M-1.43 | Milestone plans: M7, M8, M12, M13, M14, M15 | Scale, encryption, admin, release engineering, performance validation, hardening. Same shape as M-1.41 | done |
 | M-1.44 | `portability.md` — a shell-scripting section documenting the `set -o pipefail` SIGPIPE-under-`grep -q`/`head`/early-exit idiom | Names the idiom that recurred nine times across six scripts in this milestone (`build-index.sh`, `check-reviewed.sh`, `check-layering.sh`, `check-core-contract.sh`, `milestone-review.sh`, `check-milestone-review.sh`), gives the `\|\| rc=$?` / here-string remedies as rules, and is cited by name from at least one gate script comment rather than left as tribal knowledge in commit messages and backlog prose | done |
-| M-1.45 | Backport the crash-safety wrapper (`try`/`except Exception` around the Python body, distinct exit code 3 for an uncaught crash) from `build-index.sh`/`check-unsafe.sh` to `check-layering.sh` and `check-core-contract.sh` | Both scripts were written after `fadd095` (M-1.33's follow-up) established the wrapper and after `check-unsafe.sh` reused it, but neither adopted it; both currently avoid a false *pass* on crash only because no `print` executes before their risky `git`/file-read calls — an undocumented, unenforced invariant one added diagnostic print away from silently reintroducing the exact false-pass class the wrapper exists to prevent. Acceptance: both scripts exit a distinct non-1/0 code on an uncaught exception, verified against a contrived non-UTF-8 input the way `check-unsafe.sh`'s own suite already does | todo |
+| M-1.45 | Backport the crash-safety wrapper (`try`/`except Exception` around the Python body, distinct exit code 3 for an uncaught crash) from `build-index.sh`/`check-unsafe.sh` to `check-layering.sh` and `check-core-contract.sh` | Both scripts were written after `fadd095` (M-1.33's follow-up) established the wrapper and after `check-unsafe.sh` reused it, but neither adopted it; both currently avoid a false *pass* on crash only because no `print` executes before their risky `git`/file-read calls — an undocumented, unenforced invariant one added diagnostic print away from silently reintroducing the exact false-pass class the wrapper exists to prevent. Acceptance: both scripts exit a distinct non-1/0 code on an uncaught exception, verified against a contrived non-UTF-8 input the way `check-unsafe.sh`'s own suite already does | done |
 | M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | todo |
 | M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
 | M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | done |
 | M-1.49 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" after the third milestone-review checkpoint | The section's Checkpoint 2 bullet 3 no longer states, in the present tense, that `M-1.38` and its sibling `M-1.39` "are both live defects ... confirmed still present" — both are fixed (`scripts/check-reviewed.sh` now uses `grep -qxF ... <<<`, `scripts/lib.sh`'s `known_task_ids`/`open_task_ids` now read the index via `_backlog_from_index`) and both backlog rows are `done`; the section gains a Checkpoint 3 entry recording what this checkpoint found instead, the same shape checkpoints 1 and 2 used | done |
 | M-1.50 | `check-hot-path-bench.sh` reports only the first failing category per run, not every violation in one pass | The script's three checks (unknown marker, stale `NOT_YET_BUILT` entry, uncovered required row) each end in an early `finish` on failure, so a commit with more than one kind of defect at once only sees the first — reproduced directly: a fixture with both an unknown marker and a `NOT_YET_BUILT` entry that has become stale reports only the unknown-marker failure, and the stale-entry failure only surfaces once that is fixed and the gate re-run. Contradicts `scripts/lib.sh`'s own `fail()` contract ("the caller keeps going so one run reports every violation rather than only the first"), which every sibling gate in this milestone (`check-requirements-trace.sh`, `check-file-size.sh`, `check-readmes.sh`, `check-portability.sh`) follows by accumulating all problems before a single terminal report. Acceptance: all three checks run unconditionally and every violation across all three is reported in one invocation | done |
+| M-1.51 | `tests/gates/negative.sh` — a permanent crash-path case for `check-layering.sh` and `check-core-contract.sh` | `M-1.45`'s crash-safety wrapper was verified only in scratch fixtures, not checked in — no gate in this repository currently exercises the crash path for any script, including `check-unsafe.sh`, whose own suite the `M-1.45` acceptance criterion pointed at as precedent and which turns out not to have one either. `tests/gates/negative.sh` already carries `run_case`/`setup_*`/`invoke_*` scaffolding for both scripts a companion `(non-UTF-8 crash)` case can reuse directly, the same shape `check-reviewed.sh (regex task_id)` and `check-hot-path-bench.sh (required row)`/`(leftover entry)` already use for a second case against one gate. Found by `M-1.45`'s own review | todo |
 
 ### Notes on specific tasks
 
@@ -1407,6 +1408,39 @@ tables updated — `AGENTS.md`'s via `scripts/build-index.sh` (generated, not
 hand-edited — the marker comment says so and hand-editing it would just be
 overwritten the next run), `.agents/skills/README.md`'s by hand since that
 table is authored, not generated.
+
+**M-1.45** backports the crash-safety wrapper `build-index.sh` established
+and `check-unsafe.sh` reused to the two scripts that never adopted it,
+`check-layering.sh` and `check-core-contract.sh`: the Python body's top-level
+code moved into a `build()` function, called from a `try`/`except Exception`
+that maps an uncaught crash to exit 3 and a `CRASH ...` line, distinguishing
+it on the bash side from both a clean pass and genuine violations found. Both
+scripts already avoided a false pass today, but only because their one risky
+call (`package_name`/`runtime_deps`'s `read_text()`, `extract_impl_files_by_trait`'s
+`git show`) happens to run before either script's first `print` — an
+accident of statement order, not a property either script guaranteed, and
+exactly what the backlog row's own acceptance criterion named. Verified in
+scratch fixtures, not a permanent `tests/gates/negative.sh` case (the same
+verification level `check-portability.sh`'s crash path got at M-1.30): a
+clean tree still reports `ok`, a genuine violation still reports `fail`, and
+a contrived non-UTF-8 byte in a tracked file now reports the crash
+explicitly instead of dying silently. The false-pass class itself was then
+reproduced directly, not merely reasoned about: a mutant of
+`check-core-contract.sh` with the wrapper stripped back out *and* the
+implementor scan reordered to run after the first `CHANGED` print — a
+plausible future refactor, not a contrived shape — reported `ok trait Clock
+changed with every implementor and an ADR in this commit` against the exact
+fixture that crashed, while the real fixed script correctly reported the
+crash on the same input. That confirms the wrapper is load-bearing against a
+danger that does not yet exist in either script's current statement order,
+not decorative insurance against a danger that was never real.
+
+Review found that this verification level — scratch fixtures, not a
+checked-in gate — is exactly what the task's own acceptance criterion cited
+as precedent ("the way `check-unsafe.sh`'s own suite already does") without
+actually being true: no crash-path case exists in `tests/gates/negative.sh`
+for any script, `check-unsafe.sh` included. Not fixed here — out of this
+task's scope — tracked as **M-1.51**.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on

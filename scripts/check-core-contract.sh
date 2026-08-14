@@ -265,52 +265,80 @@ def extract_impl_files_by_trait(paths):
             result.setdefault(m.group(1), set()).add(p)
     return result
 
-problems = []
-changed_traits = set()
+def build():
+    problems = []
+    changed_traits = set()
 
-for path in changed_rs:
-    old_text = strip_comments(git_show("HEAD", path) or "")
-    new_text = strip_comments(index_content(path) or "")
-    old_traits = extract_pub_traits(old_text)
-    new_traits = extract_pub_traits(new_text)
-    for name in set(old_traits) | set(new_traits):
-        if old_traits.get(name) != new_traits.get(name):
-            changed_traits.add(name)
+    for path in changed_rs:
+        old_text = strip_comments(git_show("HEAD", path) or "")
+        new_text = strip_comments(index_content(path) or "")
+        old_traits = extract_pub_traits(old_text)
+        new_traits = extract_pub_traits(new_text)
+        for name in set(old_traits) | set(new_traits):
+            if old_traits.get(name) != new_traits.get(name):
+                changed_traits.add(name)
 
-if not changed_traits:
-    print("OK no pub trait's method set changed")
-    sys.exit(0)
+    if not changed_traits:
+        print("OK no pub trait's method set changed")
+        sys.exit(0)
 
-all_rs = subprocess.run(["git", "ls-files", "--", "*.rs"],
-                         capture_output=True, text=True).stdout.splitlines()
-impls_by_trait = extract_impl_files_by_trait(all_rs)
+    all_rs = subprocess.run(["git", "ls-files", "--", "*.rs"],
+                             capture_output=True, text=True).stdout.splitlines()
+    impls_by_trait = extract_impl_files_by_trait(all_rs)
 
-for name in sorted(changed_traits):
-    print(f"CHANGED {name}")
-    implementors = impls_by_trait.get(name, set())
-    missing = sorted(p for p in implementors if p not in changed_all)
-    for p in missing:
+    for name in sorted(changed_traits):
+        print(f"CHANGED {name}")
+        implementors = impls_by_trait.get(name, set())
+        missing = sorted(p for p in implementors if p not in changed_all)
+        for p in missing:
+            problems.append(
+                f"trait {name} changed, but implementor {p} is not part of this commit"
+            )
+
+    decisions_touched = any(p.startswith("docs/internal/product/decisions/") for p in changed_all)
+    if not decisions_touched:
         problems.append(
-            f"trait {name} changed, but implementor {p} is not part of this commit"
+            "trait method set changed but no file under docs/internal/product/decisions/ is part of this commit"
         )
 
-decisions_touched = any(p.startswith("docs/internal/product/decisions/") for p in changed_all)
-if not decisions_touched:
-    problems.append(
-        "trait method set changed but no file under docs/internal/product/decisions/ is part of this commit"
-    )
+    for p in problems:
+        print(f"PROBLEM {p}")
+    sys.exit(1 if problems else 0)
 
-for p in problems:
-    print(f"PROBLEM {p}")
-sys.exit(1 if problems else 0)
+# Wrapped so an unexpected exception becomes a distinct exit code (3) rather
+# than landing on 1 -- backported by `M-1.45` from `build-index.sh` and
+# `check-unsafe.sh`. Without this, a crash inside `extract_impl_files_by_trait`
+# (a non-UTF-8 byte in a scanned file, decoded under `text=True`) happens
+# today to land on the `elif [[ -z "$out" && "$rc" != 0 ]]` branch below only
+# because that call runs before this function's first `print` -- an accident
+# of statement order, not a guarantee. Move it one line later, past the first
+# `print(f"CHANGED {name}")`, and the identical crash produces partial stdout
+# the bash side reads as `changed_names`, taking the `elif [[ -n
+# "$changed_names" ]]` branch and reporting the commit "ok" -- a false pass on
+# the exact non-negotiable this gate exists to enforce. A distinct exit code
+# makes the crash case checkable regardless of where in this function it
+# happens, instead of by where a print statement happens to sit.
+try:
+    build()
+except SystemExit:
+    raise
+except Exception as exc:
+    import traceback
+    traceback.print_exc()
+    print(f"CRASH the scanner raised {type(exc).__name__}: {exc}")
+    sys.exit(3)
 PYEOF
 )" || rc=$?
 
 changed_names="$(printf '%s\n' "$out" | grep '^CHANGED ' | sed 's/^CHANGED //' || true)"
 problems="$(printf '%s\n' "$out" | grep '^PROBLEM ' | sed 's/^PROBLEM //' || true)"
 ok_line="$(printf '%s\n' "$out" | grep '^OK ' | sed 's/^OK //' || true)"
+crashed="$(printf '%s\n' "$out" | grep -c '^CRASH ' || true)"
 
-if [[ -n "$ok_line" ]]; then
+if (( crashed > 0 )); then
+  fail "the core-contract scanner crashed; the tree was not fully checked"
+  note "$(printf '%s\n' "$out" | grep '^CRASH ')"
+elif [[ -n "$ok_line" ]]; then
   ok "$ok_line"
 elif [[ -z "$out" && "$rc" != 0 ]]; then
   fail "core contract check died (exit $rc); the tree was not checked"
