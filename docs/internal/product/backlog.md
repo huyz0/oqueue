@@ -44,7 +44,7 @@ comes before any gate because every gate sources it.
 | M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
 | M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | done |
-| M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | todo |
+| M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | done |
 | M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3; calls `check-milestone-review.sh`, so the milestone cannot be completed while any of its commits has gone unread as a whole | todo |
 | M-1.17 | Make the corpus and product docs self-contained before the repo goes public | No reference to any other repository, no absolute local path, no verbatim quotation of an external private source; every practice stated as this project's own standard | done |
 | M-1.18 | Public-facing files: `README.md`, `CONTRIBUTING.md`, `SECURITY.md` | README states plainly that no implementation exists; contributing says code is not yet accepted and why; security gives a private reporting route | done |
@@ -1397,6 +1397,114 @@ defect was a `warn` line whose backticks inside double quotes made it *execute*
 
 Both are the argument for M-1.15 in miniature: **a gate nobody has watched fail
 is a gate nobody has tested.**
+
+**M-1.15** makes that permanent. `tests/gates/negative.sh` builds one
+deliberately broken artifact per existing gate — a commit subject with no
+task ID, a test removed with no `Removes-test:` trailer, a threshold read
+from an environment variable, a leaf crate depending on a sibling leaf, a
+library crate naming `TcpStream` directly, an `oqueue-core` trait whose
+signature changed with no ADR, `unsafe` outside the three allowed crates, a
+staged change with no recorded review verdict, a commit no milestone-review
+artifact covers, and a generated index region gone stale — and asserts each
+gate's own exit code is non-zero against it. Ten cases, one per gate that
+exists as of this task; `check-budget.sh`, `check-file-size.sh`, and
+`check-readmes.sh` (M-1.12, M-1.27) do not exist yet and are not covered,
+consistent with M-1.16's own completion condition only being able to check
+what exists at the time it runs.
+
+Every case runs in its own disposable git repository under `mktemp -d`,
+never the real tree — `lib.sh` resolves `REPO_ROOT` from its own file's
+location on disk, not the caller's working directory, so a gate only
+resolves against the scratch repo if both `lib.sh` and the gate itself are
+physically copied into it. Each case copies the real, unmodified gate
+script rather than re-implementing its logic, so this suite tests the
+actual file in `scripts/`, not a description of it.
+
+⚠️ Writing this suite repeated, in miniature, the exact bug class it exists
+to catch: `run_case()`'s first draft called the case function bare under
+this file's own `set -e` (inherited from `lib.sh`). A case function's whole
+job is to end in a command that fails — the gate under test, on a broken
+artifact — so the first case run aborted the entire suite before it could
+report anything, with zero output and exit 1. Fixed with `|| rc=$?`, the
+same fix this session applied repeatedly elsewhere (`check-core-contract.sh`,
+`check-unsafe.sh`) for the same reason: a script that must observe a
+command's failure, not propagate it, cannot call that command bare under
+`set -e`. The second defect was `case_core_contract`'s scratch repo lacking
+a root `Cargo.toml` — `has_rust()` in `lib.sh` requires one to exist before
+`check-core-contract.sh` examines anything, so the case silently `skip`ped
+rather than exercising the gate at all; fixed by giving the scratch repo a
+one-crate workspace manifest.
+
+After both fixes, all ten cases passed. That alone does not distinguish a
+suite that correctly detects failure from one that would report `ok`
+regardless of what happened — so, following this file's own repeated
+argument that a check must be watched fail before it is trusted, one case
+(`case_commit_msg`) was deliberately broken to use a *valid* subject,
+confirming the suite's own `run_case` reported `FAIL ... reported ok on a
+broken artifact` and exited non-zero, before restoring it and reconfirming
+the clean pass.
+
+This suite is not wired into `.pre-commit-config.yaml` or CI: it is slower
+than any single gate (ten scratch git repositories per run) and its purpose
+is to be invoked by M-1.16's own completion condition, not to run on every
+commit — adding it to the fast per-commit loop was not what this task asked
+for.
+
+Review found one more real defect after that, in the same mechanism: each
+`case_*` was one function doing setup *and* the final gate invocation, its
+single exit code standing for the whole thing. `run_case`'s own `set -e`
+fix (above) covered the bare-call class of bug, but calling that whole
+function on the left of `||` disables `set -e` for its *entire body*, not
+just the call — a `copy_gate` typo mid-setup would not abort; execution
+would fall through silently to the case's real final line, which then fails
+for an unrelated reason (the gate binary was never copied) that reads as
+"the gate correctly rejected the broken artifact." Reproduced concretely:
+mistyping the script name passed to `copy_gate` in `case_commit_msg` left
+the suite reporting `ok ... (exit 127)`, certifying a case whose intended
+defect was never actually constructed. Fixed by splitting every case into a
+`setup_*` (builds the scratch repo, echoes its path) and an `invoke_*`
+(only the real gate call) — `run_case` calls `setup_*` plainly, so a setup
+bug now hits this script's own `set -e` in full force and aborts the whole
+suite loudly, and only `invoke_*`'s single command is ever the thing whose
+exit code is caught and interpreted.
+
+⚠️ That split alone was not enough: `dir="$(setup_fn)"` is a command
+substitution, and bash does not propagate `errexit` into a command
+substitution's subshell unless `shopt -s inherit_errexit` is set — found by
+re-running the same typo reproduction against the split version and seeing
+it *still* report a false `ok`, because `cp`'s failure inside `setup_fn`
+printed straight to the terminal (outside `run_case`'s output capture,
+which only wraps `invoke_fn`) but did not stop `setup_fn` from reaching its
+final `printf` and returning success regardless. `shopt -s inherit_errexit`
+closed it; re-running the typo case a third time now aborts the entire
+suite immediately, with no case lines printed at all, rather than reporting
+anything as `ok`. Both the setup-failure reproduction and the original
+`case_commit_msg`-made-valid self-test were re-run clean after this fix,
+and all ten shipped cases still pass.
+
+Running the whole repository's real gates against this file, staged, before
+committing (this session's standing practice, not something review asked
+for) found a third defect: `check-drift.sh` scans every tracked `*.sh` file
+for a threshold-shaped identifier and an environment read on the same line,
+and `setup_drift`'s fixture writes exactly that pattern as a heredoc literal
+— which means it exists, literally, inside `tests/gates/negative.sh` itself,
+a tracked `.sh` file, and check-drift.sh failed on the real repo the moment
+this file was staged. The same self-reference hazard check-drift.sh's own
+header names for itself (M-1.7's retrospective: "found it did not [pass on
+the repository it was being added to]"), now hit by a second file for the
+same underlying reason — a gate that scans the whole tree will find its own
+worked/test examples unless something stops it. `check-drift.sh` excludes
+only itself by name; extending that exclusion list to every file that ever
+needs to contain a fixture would erode the property that every other file,
+including every other gate, is genuinely scanned. Fixed the fixture instead:
+`setup_drift` now builds the `${OQUEUE_BUDGET_SECONDS:-120}` text across two
+source lines (a `dollar='$'` fragment and the rest), so no single line in
+`tests/gates/negative.sh` contains both signals check-drift.sh looks for,
+while the two fragments still concatenate to the identical string at
+runtime — which is what lands in the scratch repo's `budget.sh` and is what
+check-drift.sh, run against *that* file inside the case, is meant to catch.
+Reconfirmed after the fix: all ten cases still pass, and `check-drift.sh`
+run directly against the real repo's staged tree passes clean.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every
