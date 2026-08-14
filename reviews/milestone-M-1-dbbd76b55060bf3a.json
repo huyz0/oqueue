@@ -1,0 +1,35 @@
+{
+  "commits": [
+    "5a3db13e88dc72507443000ec8e6334d27683572",
+    "880c247e381bdcf32cba15fd549206fc85b4c41c",
+    "763557618ae4b7f706f7d2b39fc31baa6549e31b",
+    "d6409d96601e9250fcece04754accbd8ede21a06",
+    "e301c798b045ae5519f0e3b498a32df84b964a72",
+    "e99fb663590a5f215cdbbb8b9de3912c25d6f8cb",
+    "4f3cd027f0da12cff471fca52a85e9272bdd8914",
+    "fb7a690c231e8528bf0869a269a05c4feb2fd77e",
+    "137ae6b1e0fa6cc3cd58f898ffa56b407cb53759"
+  ],
+  "findings": [
+    {
+      "evidence": "M-1.md's closing paragraph names M-1.31/M-1.44-46/M-1.48 as open; backlog.md marks all of them done. Its Tasks table still lists contract-change (M-1.31) as Remaining. roadmap.md line 61 says '48 tasks' vs backlog.md's actual 52 rows. M-1.49's commit message (7635576) claims it replaced hardcoded IDs with a pointer but its diff shows a 2-ID list replaced by a 5-ID list, the same fragile shape.",
+      "id": "88101220612b",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "milestones/M-1.md's Notes for the boundary review and roadmap.md's M-1 task-count cell are stale again -- a fourth recurrence of the exact pattern checkpoints 1-3 already fixed twice -- at the moment of the boundary review itself.",
+      "task_id": "M-1.52"
+    },
+    {
+      "evidence": "tests/gates/negative.sh has (non-UTF-8 crash) cases for check-layering.sh and check-core-contract.sh (M-1.51) but none for check-unsafe.sh. backlog.md ~line 1459 (M-1.45 notes) and M-1.51's commit message (137ae6b) both name this as a known, deferred gap; no M-1.* row in backlog.md tracks it.",
+      "id": "07ae1696d2ee",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-unsafe.sh's crash-safety wrapper, present since M-1.11, has never been exercised by any negative test, and the gap was explicitly acknowledged twice (M-1.45's review, M-1.51's commit message) but never given a backlog row.",
+      "task_id": "M-1.53"
+    }
+  ],
+  "milestone": "M-1",
+  "recorded_at": "2026-08-14T23:22:23Z",
+  "reviewer": "Claude Sonnet 5 (milestone-review subagent)",
+  "verdict": "changes-requested"
+}
