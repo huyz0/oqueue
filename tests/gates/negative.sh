@@ -757,6 +757,57 @@ invoke_portability_unterminated_fence() {
   bash "$1/scripts/check-portability.sh"
 }
 
+# --- m-1-complete.sh: AGENTS.md missing its ## Non-negotiables section ------
+#
+# `M-1.46`. `copy_gate`'s `<script-name>` argument doubles as the path under
+# `scripts/`, so `gates/m-1-complete.sh` copies the real nested script --
+# the directory it needs, `$dir/scripts/gates`, is made first since
+# `new_scratch` only creates `$dir/scripts`.
+setup_m1_complete_missing_section() {
+  local dir; dir="$(new_scratch m1-complete-missing-section)"
+  mkdir -p "$dir/scripts/gates"
+  copy_gate "$dir" gates/m-1-complete.sh
+  cat > "$dir/AGENTS.md" <<'EOF'
+# Test repo
+
+## Start here
+
+Nothing here.
+
+## Never
+
+Never do bad things.
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.46: AGENTS.md has no Non-negotiables section")
+  printf '%s\n' "$dir"
+}
+invoke_m1_complete_missing_section() {
+  bash "$1/scripts/gates/m-1-complete.sh"
+}
+
+# --- m-1-complete.sh: non-UTF-8 AGENTS.md bytes, the crash path -------------
+#
+# Distinct from the case above: that one exercises the ordinary "problems
+# found" path (`sys.exit(2)`, a `PROBLEM` line naming what's wrong with the
+# section). This one exercises the crash-safety wrapper `M-1.16` gave this
+# script from the start -- a non-UTF-8 byte makes Python's own
+# `open(path, encoding="utf-8").read()` raise `UnicodeDecodeError`, uncaught
+# inside `build()`, caught by the `try`/`except Exception` around it, and
+# mapped to exit 3 and a `PROBLEM the AGENTS.md parser raised ...` line
+# rather than a bare traceback the caller can't distinguish from any other
+# non-zero exit.
+setup_m1_complete_non_utf8() {
+  local dir; dir="$(new_scratch m1-complete-non-utf8)"
+  mkdir -p "$dir/scripts/gates"
+  copy_gate "$dir" gates/m-1-complete.sh
+  printf '# Test repo\n\n## Non-negotiables\n\n1. A rule with a bad byte: \xff\xfe.\n' > "$dir/AGENTS.md"
+  (cd "$dir" && git add -A && git commit -q -m "M-1.46: AGENTS.md has a non-UTF-8 byte")
+  printf '%s\n' "$dir"
+}
+invoke_m1_complete_non_utf8() {
+  bash "$1/scripts/gates/m-1-complete.sh"
+}
+
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
 run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_row invoke_commit_msg_unstaged_row
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
@@ -777,6 +828,8 @@ run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required 
 run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover
 run_case "check-portability.sh"         setup_portability         invoke_portability
 run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence
+run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
+run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 

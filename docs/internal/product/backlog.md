@@ -75,7 +75,7 @@ comes before any gate because every gate sources it.
 | M-1.43 | Milestone plans: M7, M8, M12, M13, M14, M15 | Scale, encryption, admin, release engineering, performance validation, hardening. Same shape as M-1.41 | done |
 | M-1.44 | `portability.md` — a shell-scripting section documenting the `set -o pipefail` SIGPIPE-under-`grep -q`/`head`/early-exit idiom | Names the idiom that recurred nine times across six scripts in this milestone (`build-index.sh`, `check-reviewed.sh`, `check-layering.sh`, `check-core-contract.sh`, `milestone-review.sh`, `check-milestone-review.sh`), gives the `\|\| rc=$?` / here-string remedies as rules, and is cited by name from at least one gate script comment rather than left as tribal knowledge in commit messages and backlog prose | done |
 | M-1.45 | Backport the crash-safety wrapper (`try`/`except Exception` around the Python body, distinct exit code 3 for an uncaught crash) from `build-index.sh`/`check-unsafe.sh` to `check-layering.sh` and `check-core-contract.sh` | Both scripts were written after `fadd095` (M-1.33's follow-up) established the wrapper and after `check-unsafe.sh` reused it, but neither adopted it; both currently avoid a false *pass* on crash only because no `print` executes before their risky `git`/file-read calls — an undocumented, unenforced invariant one added diagnostic print away from silently reintroducing the exact false-pass class the wrapper exists to prevent. Acceptance: both scripts exit a distinct non-1/0 code on an uncaught exception, verified against a contrived non-UTF-8 input the way `check-unsafe.sh`'s own suite already does | done |
-| M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | todo |
+| M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | done |
 | M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
 | M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | done |
 | M-1.49 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" after the third milestone-review checkpoint | The section's Checkpoint 2 bullet 3 no longer states, in the present tense, that `M-1.38` and its sibling `M-1.39` "are both live defects ... confirmed still present" — both are fixed (`scripts/check-reviewed.sh` now uses `grep -qxF ... <<<`, `scripts/lib.sh`'s `known_task_ids`/`open_task_ids` now read the index via `_backlog_from_index`) and both backlog rows are `done`; the section gains a Checkpoint 3 entry recording what this checkpoint found instead, the same shape checkpoints 1 and 2 used | done |
@@ -1441,6 +1441,47 @@ as precedent ("the way `check-unsafe.sh`'s own suite already does") without
 actually being true: no crash-path case exists in `tests/gates/negative.sh`
 for any script, `check-unsafe.sh` included. Not fixed here — out of this
 task's scope — tracked as **M-1.51**.
+
+**M-1.46** gives `m-1-complete.sh` (M-1.16) the permanent `tests/gates/negative.sh`
+coverage M-1.15 established as the standard one commit before M-1.16 landed,
+and which M-1.16's own commit message and retrospective admit it never got —
+five ad hoc scratch repos, run once by hand, not preserved. Two cases, not
+one, because the acceptance criterion names two distinct failure classes:
+`AGENTS.md` missing its `## Non-negotiables` section exercises the ordinary
+"problems found" path (the parser's `if not m: ... sys.exit(2)` guard), and a
+non-UTF-8 byte in `AGENTS.md` exercises the crash-safety wrapper this script
+has had since M-1.16 itself — distinct from the first case, since the read
+that raises `UnicodeDecodeError` happens before the regex search ever runs,
+and confirmed distinct by inspecting the captured output directly rather
+than trusting the exit code alone: the first case prints `PROBLEM AGENTS.md
+has no ## Non-negotiables section` (exit 2), the second `PROBLEM the
+AGENTS.md parser raised UnicodeDecodeError: ...` (exit 3) — the same
+distinction `check-unsafe.sh`'s and `check-core-contract.sh`'s own crash
+paths draw between "a real violation" and "the scanner died."
+
+`copy_gate`'s `<script-name>` argument turned out to already handle
+`m-1-complete.sh`'s nested location (`scripts/gates/`, not `scripts/`)
+without changes — passing `gates/m-1-complete.sh` copies the right file to
+the right place, since the helper only ever joins its two arguments as a
+path — with one addition: `new_scratch` only creates `$dir/scripts`, so each
+setup function makes `$dir/scripts/gates` itself before calling `copy_gate`.
+
+Both fixtures are deliberately minimal — `AGENTS.md` plus the one gate
+script, nothing else `m-1-complete.sh` would need to reach a genuine `ok`
+(every non-negotiable's own gate script, `tests/gates/negative.sh`,
+`check-milestone-review.sh`). That is structural, not a shortcut: unlike
+every other gate this suite tests, `m-1-complete.sh`'s success path needs
+the *entire* repository correctly in place, which is a fixture size no other
+case here approaches and which the task's own acceptance criterion does not
+ask for — only that a broken artifact makes it fail. Verified this
+minimalism does not accidentally widen what each fixture actually tests: a
+control run with a well-formed `## Non-negotiables` section (a valid rule, a
+following `## ` header) gets past the parsing step cleanly and fails only
+several steps later, for the unrelated and expected reason that the
+downstream scripts a real repo would have aren't in the scratch fixture —
+confirming both real fixtures' failures are attributable to the specific
+defect each is named for, not to the fixture being incomplete in some other
+way.
 
 ⚠️ **A sixth round found that round five's own fix punished the honest path.**
 Requiring a cited backlog row to still be `todo` was checked by the gate on
