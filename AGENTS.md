@@ -87,12 +87,16 @@ that contains a procedure rather than a pointer is a fork waiting to drift.
 ## Non-negotiables
 
 ⚠️ **Bootstrap state, M-1.** Each rule below should name the script that
-enforces it. **None of them do yet** — the scripts are M-1's own deliverable,
-and each rule names the task that will add its gate.
+enforces it. **Rules 1 and 4 now do; the rest do not** — the remaining scripts
+are M-1's own deliverable, and each rule names the task that will add its gate.
 
 Until that task lands, the rule is a preference. That is precisely the state
 this project exists not to be in, so treat the list below as M-1's checklist and
 not as a description of a working system. A rule with no gate is a preference.
+
+⚠️ **And a gate nothing invokes is a preference too.** `.git/hooks` is not
+tracked, so a fresh clone runs none of these until the hooks are installed by
+hand. M-1.14 is what makes a checkout inherit them.
 
 1. **One task equals one commit equals one change that leaves the tree green.**
    Split anything that cannot meet that. The commit subject starts with the
@@ -108,7 +112,11 @@ not as a description of a working system. A rule with no gate is a preference.
 4. **Every commit is reviewed by an agent that did not write it**, given the
    task and the diff but never the author's reasoning, and the verdict is bound
    to the staged diff by hash so the gate cannot be satisfied by claiming it.
-   → `scripts/check-reviewed.sh` (M-1.9). See
+   → `scripts/review.sh` builds the packet and records the verdict;
+   `scripts/check-reviewed.sh` refuses a commit whose staged bytes are not the
+   ones reviewed. ⚠️ The hash binds a verdict to a diff; it does **not** prove
+   the reviewer was not the author — that is bought by the harness, and saying
+   so is the same discipline as rule 3. See
    [docs/researches/21](docs/researches/21-ai-development-loop.md) §4–5.
 5. **Business logic is sans-I/O.** No library crate names a concrete socket
    type, reads the real clock, or touches object storage outside the seams that

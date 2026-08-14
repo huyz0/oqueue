@@ -56,9 +56,13 @@ rather than reading it.
 
 ## ⚠️ Bootstrap state
 
-Several skills invoke scripts that **do not exist yet** — they are M-1.6 through
-M-1.12. Until those land, a skill that says "run the gate" describes an intended
-step rather than an available one, and the honest response is to say the gate
-did not run, not to proceed as though it passed.
+Several skills invoke scripts that **do not exist yet** — the remaining gates
+are M-1.7 through M-1.12. Until those land, a skill that says "run the gate"
+describes an intended step rather than an available one, and the honest response
+is to say the gate did not run, not to proceed as though it passed.
+
+`review` is no longer in that state: `scripts/review.sh` and
+`scripts/check-reviewed.sh` exist and its verdict is bound to the staged diff by
+hash.
 
 See [backlog.md](../../docs/internal/product/backlog.md).

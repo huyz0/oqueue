@@ -10,11 +10,24 @@ self-review inherits every blind spot that produced the defect — the same
 misreading of the task, the same assumption about what a function guarantees,
 plus a commitment bias toward work already done.
 
+## Running it
+
+```
+scripts/review.sh context --task <ID>    the packet: task, standards, gates, diff
+scripts/review.sh record --file v.json --task <ID>   validate and store it
+scripts/check-reviewed.sh                the gate
+```
+
+⚠️ **`review.sh` does not spawn the reviewer**, because no script can do that in
+a way that works across tools. It owns the hash, the packet, the schema, and the
+artifact; the agent owns the judgement.
+
 ## What the reviewer receives
 
 - The task, verbatim from the backlog, with its acceptance criteria
 - The staged diff
-- The relevant standards
+- The relevant standards — selected from the staged paths by
+  `scripts/which-standards.sh`, not chosen by the author
 - **The list of deterministic gates that already passed**
 
 ## What the reviewer must NOT receive
@@ -71,13 +84,31 @@ Structured findings, each with `file:line`, a severity, and **a concrete failure
 scenario**. ⚠️ A finding that cannot say how it fails is a style opinion, and
 style is the linter's job.
 
-Write the verdict to `target/review/<staged-diff-sha256>.json`. The pre-commit
-gate recomputes that hash, so amending one byte after review invalidates it —
-which is what makes the review a fact rather than a claim.
+Return the verdict as JSON to
+`scripts/review.sh record --file <path> --task <ID>`, which validates it and
+writes `target/review/<staged-diff-sha256>.json`. The gate recomputes that hash,
+so amending one byte after review invalidates it — which is what makes the
+review a fact rather than a claim.
+
+`record` refuses a verdict whose `diff_sha256` is stale, a finding with no
+failure scenario, and a `pass` that coexists with a blocking finding. ⚠️ An
+empty findings list is a valid and expected outcome; invented findings are worse
+than none.
 
 ## Resolution
 
 Each blocking finding is **fixed** (the diff changes, the hash changes, review
-re-runs) or **argued** (an entry in the review baseline naming the finding and
-why it is not a defect). ⚠️ A growing argued-list is itself a signal: somebody is
-being systematically overruled, and one side is systematically wrong.
+re-runs) or **argued** (an entry in `baselines/review.txt` naming the finding's
+id and why it is not a defect).
+
+⚠️ **A `changes-requested` verdict extends that to every `major` finding too.**
+The gate refuses the commit until each one is fixed or argued — otherwise a
+reviewer asks for changes, the commit lands anyway, and the findings exist only
+in a gitignored directory. A reviewer who judges major findings non-blocking
+says so by returning `pass`, which records them and warns.
+
+⚠️ The entry must be **staged**. An unstaged one is ignored, because a line that
+never reaches the commit suppresses a finding while leaving no trace of it.
+
+⚠️ A growing argued-list is itself a signal: somebody is being systematically
+overruled, and one side is systematically wrong.

@@ -1,0 +1,31 @@
+# Argued review findings.
+#
+# A blocking review finding is resolved in exactly one of two ways (doc 21 §6):
+#
+#   1. Fixed   — the diff changes, the hash changes, the review re-runs
+#   2. Argued  — an entry here naming the finding and why it is not a defect
+#
+# ⚠️ When the verdict is `changes-requested`, every **major** finding needs the
+# same treatment. Otherwise a reviewer asks for changes, the commit lands, and
+# the findings survive only in a gitignored directory.
+#
+# ⚠️ The entry must be **staged**. An unstaged line is ignored: it would suppress
+# a finding while leaving nothing in the commit to show for it.
+#
+# Format: <id>  <reason>
+#
+# ⚠️ The reason is required. An id on its own is refused, because it suppresses
+# a blocking finding while recording nothing about why — which is exactly the
+# quiet growth this file exists to prevent.
+#
+# The id is printed by `scripts/review.sh record`, for every blocking and major
+# finding, and again by `check-reviewed.sh` when one is unresolved. It is
+# sha256(file + summary) truncated, so it is stable across unrelated edits —
+# arguing a finding does not have to be repeated every time the diff moves for
+# some other reason.
+#
+# ⚠️ This is a file nobody may grow quietly. A growing argued-list is itself a
+# finding: it means a reviewer is being systematically overruled, and one of the
+# two sides is systematically wrong. Read it at every milestone boundary.
+#
+# Empty is the correct state.

@@ -92,10 +92,58 @@ require_tool() {
   return 1
 }
 
+# sha256 of stdin, as a bare hex digest.
+#
+# macOS ships `shasum` and not `sha256sum`, and portability.md rule 2 makes
+# macOS a first-class development platform — so a script that hard-codes
+# `sha256sum` works for half the people who are supposed to be able to run it.
+sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | cut -d' ' -f1
+  else
+    return 3
+  fi
+}
+
+# ⚠️ Deliberately a `fail`, not the `skip` that `require_tool` gives every other
+# tool. The convention exists so a missing tool is distinguishable from a
+# failing check — but a gate built *on* a hash cannot skip the hash and still
+# mean anything, and skipping would silently disable the rule it enforces. With
+# two fallbacks this is close to unreachable; if it fires, it is a real problem.
+require_sha256() {
+  if command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; then
+    return 0
+  fi
+  fail "no sha256 tool found"
+  note "install coreutils (sha256sum), or use a system with shasum"
+  return 1
+}
+
+# ⚠️ The same departure as require_sha256, for the same reason. A gate whose
+# entire parsing and validation logic is Python cannot skip Python and still
+# mean anything — it would report success while enforcing nothing. `skip` stays
+# the default for genuinely optional tools; this is not one of them.
+require_python() {
+  if command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+  fail "python3 not found"
+  note "install: apt-get install python3, or the equivalent for this system"
+  return 1
+}
+
 # Every task ID this repository knows about, one per line, from the backlog.
 # The backlog is the single source; a gate that keeps its own list drifts.
 known_task_ids() {
   local backlog="$REPO_ROOT/docs/internal/product/backlog.md"
   [[ -f "$backlog" ]] || return 0
-  grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' "$backlog" | tr -d '|' | tr -d ' '
+  # ⚠️ `|| true`, because this is a pipeline and every caller writes
+  # `known="$(known_task_ids)"`. Under `set -e` + `pipefail` a backlog whose
+  # table has no rows makes `grep` return 1, the assignment fails, the caller
+  # dies with no output at all — and the `[[ -n "$known" ]]` guard written for
+  # exactly that case is never reached. A *missing* backlog returned 0 and was
+  # handled gracefully, so the two empty states behaved oppositely.
+  grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' "$backlog" | tr -d '|' | tr -d ' ' || true
 }
