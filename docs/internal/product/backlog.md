@@ -39,7 +39,7 @@ comes before any gate because every gate sources it.
 | M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | done |
 | M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | done |
 | M-1.9 | `review.sh` + `check-reviewed.sh` — the isolated reviewer and its gate | Review artifact keyed by staged-diff hash; amending one byte after review fails the commit | done |
-| M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | todo |
+| M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | done |
 | M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | todo |
 | M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
 | M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
@@ -259,6 +259,120 @@ problem in opposite ways. Corrected above.
 Both gates currently skip cleanly on this repository (`has_rust()` for the
 layering gate, an empty `git ls-files` glob for sans-I/O) and stay
 unexercised here until M0.
+
+**M-1.10** wires non-negotiable 6. `check-core-contract.sh` extracts each
+`pub trait Name { ... }` block by brace depth and reduces it to a **set**
+of normalized `fn` signatures — a required method captured up to its `;`,
+a provided method's default body skipped by depth so it is never
+misread as further signatures — then compares that set between HEAD and
+the staged index for every changed `.rs` file. A trait whose set differs
+requires every file that currently implements it (`impl Name for` found
+anywhere in the tracked tree) to also be part of this commit's changed
+files, and an ADR under `docs/internal/product/decisions/` in the same
+commit. Doc 19 §3.2's own limits are kept deliberately: the gate does not
+try to verify an implementor's body actually matches the new signature,
+only that its file is present in the commit — the same "checks only what's
+mechanical" posture `check-drift.sh` and `check-tests-kept.sh` already
+state for their own gates.
+
+⚠️ Built and tested against a scratch git repository with real commits
+(unlike M-1.8's gates, this one needs history — it compares HEAD against
+the index, not two states of a working tree), and the manual testing found
+a real defect before any review did: `index_content()` built the staged
+-index git reference as `git show "::path"` — a doubled colon, from
+passing `":"` as the ref into a helper that already appends `:` itself —
+which fails with exit 128 on every call. The failure was swallowed to
+`None` by the same helper, and every caller already treats `None` as "this
+file doesn't exist," so the result was silent and wrong in the most
+dangerous direction: every trait in a changed file looked like it had
+vanished entirely rather than changed, `changed_traits` still populated
+correctly from the `HEAD`-side comparison, but the *new* side read as
+empty — coincidentally still detecting "a change occurred" while reporting
+the wrong implementors (none, since `impls_by_trait` was built entirely
+from the same broken helper and came back empty too). Two of the four
+manual test cases run before this was found happened not to exercise the
+one code path where it mattered, which is the same lesson M-1.7's own
+retrospective already recorded once this task: a test that looks like it
+covers a case can silently cover a different one. Fixed by not
+concatenating two colons; reverified against the full case set — sideways
+implementor missing, ADR missing, both present, a doc-comment-only edit, a
+default-body-only edit, an unrelated function added to the same file, and
+a brand-new trait in a brand-new file — all before this was ever sent to
+review.
+
+⚠️ Review found a second defect in the same shape as the first, one layer
+further in. `pub trait Name` and `impl Name for` are found by plain
+substring search over the raw file text, with no comment stripping — so a
+trait name mentioned in a *later* comment (a stale doc example,
+commented-out old code, a migration note) overwrote the real trait's entry
+in the dict this builds, because matches are visited in source order and
+the last one wins. Reproduced: a real, breaking signature change to a
+`pub trait`, with the trait's old shape quoted verbatim in a trailing
+comment, made the gate report `ok no pub trait's method set changed` —
+exactly the failure mode `contracts.md` rule 13 promises cannot happen
+("editing a doc comment on a trait is not a contract change"), except here
+a comment made a *real* change invisible rather than a non-change visible,
+the opposite direction and the more dangerous one. Fixed with a
+best-effort comment stripper — `/* */` blanked out nesting-aware, `//` to
+end of line, skipping a `//` that falls inside a simple `"..."` string —
+applied before both the trait-signature extraction and the implementor
+scan, since both are vulnerable to the identical shadowing. Not
+string-literal-aware across a multi-line raw string; documented in the
+script rather than solved, since a raw string inside a trait's own
+signature is rare enough to accept. Reverified against the exact
+comment-shadowed reproduction plus the full original case set once more.
+
+⚠️ A second review round found the string-tracking half of that fix had the
+opposite bug, reached through a different case than the one just closed: a
+char literal holding a double quote, `'"'` — plausible in any wire-protocol
+codec comparing a byte against a quote character, not contrived — has no
+matching close on the line, so the scanner stayed "inside a string" for
+the rest of the line with nothing to end it, and a genuine trailing `//`
+comment was never cut. That comment's text then leaked into the real
+trait's signature set exactly like round 1's defect, just through the
+string-tracker instead of the missing comment-strip. Measured in the
+*opposite* direction from round 1 though: every case tried turned a
+non-change into a false `CHANGED`, never a real change into a false
+`unchanged` — still wrong, but not the more dangerous of the two
+directions this task exists to prevent. Fixed narrowly for the one
+ambiguous case (`'"'` specifically), not with a general char-literal
+lexer, and reverified against the exact reproduction plus the full case
+set including the round-1 comment-shadow scenario and nested block
+comments.
+
+⚠️ **A third review round found the two fixes above had never actually been
+combined correctly, and it was the dangerous direction again.** Both
+rounds patched their own pass in isolation — the block-comment pass ran
+first, over the raw file, with no string awareness at all; the string
+tracker ran second, per line, over whatever the first pass had already
+produced. An unmatched `/*` inside an ordinary string literal (a MIME
+type, a glob pattern, a log message — plausible in ordinary code, not
+adversarial) had nothing to stop it, because the pass that would have
+recognized "this is a string" ran *after* the pass that blanks comments.
+The result: everything from that `/*` to end of file was blanked, silently
+deleting every trait declaration after it — including ones with a real,
+breaking signature change — from extraction. Reproduced two ways: the
+unmatched `/*` immediately before the changed trait, and buried in an
+unrelated helper function earlier in the file; both made a genuine
+breaking change to `pub trait Framer` disappear entirely, gate reporting
+`ok` and exiting 0. The doc comment's own claim that this exposure was
+"confined to a trait's own signature or an `impl ... for` line" was itself
+wrong — the two-pass structure meant the blast radius was the rest of the
+file, and the review that found this said so explicitly rather than taking
+the disclosed-limitation framing at face value.
+
+Fixed by replacing both passes with one: a single left-to-right scan
+tracking string, block-comment, and line-comment state together, checked
+in that order — a block comment can only *begin* when the scanner is not
+already inside a string, which is what makes an unmatched `/*` inside a
+string literal inert instead of catastrophic. The char-literal special
+case from round 2 carries over unchanged. Reverified against every case
+from all three rounds in one pass: both unmatched-`/*`-in-a-string
+reproductions (now correctly detected as changed), the round-1
+comment-shadow case, the round-2 `'"'` false-positive case, escaped
+single-quote and escaped-backslash char literals each hiding a real
+change behind a trailing comment, a nested block comment mentioning an
+unrelated trait, and a doc-comment-only edit.
 
 **M-1.9** is new to oqueue and has no precedent to port. The mechanism is in
 [docs/researches/21](../../researches/21-ai-development-loop.md) §5. The

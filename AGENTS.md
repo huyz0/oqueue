@@ -94,7 +94,7 @@ that contains a procedure rather than a pointer is a fork waiting to drift.
 ## Non-negotiables
 
 ⚠️ **Bootstrap state, M-1.** Each rule below should name the script that
-enforces it. **Rules 1, 2, 4, and 5 now do; the rest do not** — the remaining
+enforces it. **Rules 1, 2, 4, 5, and 6 now do; the rest do not** — the remaining
 scripts are M-1's own deliverable, and each rule names the task that will add
 its gate.
 
