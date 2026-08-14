@@ -28,21 +28,58 @@ MSG_FILE="${1:-}"
 
 if [[ -n "$MSG_FILE" ]]; then
   [[ -f "$MSG_FILE" ]] || { fail "commit message file not found: $MSG_FILE"; finish; }
-  subject="$(head -1 "$MSG_FILE")"
+
+  # The subject is the **first non-blank line**, and if that line is a comment
+  # the message is refused rather than searched past.
+  #
+  # ⚠️ This script cannot know which cleanup mode git will apply, and the modes
+  # disagree about comments. `git commit` with an editor uses cleanup=strip,
+  # which removes them; `-m` and `-F` use cleanup=whitespace, which keeps them.
+  # So for `git commit -m '#42 note' -m 'M-1.35: …'` the subject that lands is
+  # `#42 note` — and a version of this script that skipped comment lines read
+  # the *body* instead, reported `ok … names M-1.35`, and let through a commit
+  # naming no task at all. That is the one thing this gate exists to refuse.
+  #
+  # Guessing cannot be made safe, so the ambiguity is the failure. Refusing also
+  # keeps the `commit.verbose` case honest: the appended diff is not
+  # comment-prefixed, and searching onward reported `got: diff --git a/f b/f`,
+  # a subject the author never wrote.
+  #
+  # ⚠️ Two earlier forms died silently instead. `head -1` after `grep -v '^#'`
+  # returned 1 on an all-comment message, so under `set -e` the assignment
+  # killed the script and the hook refused the commit with no output at all;
+  # and `grep | head -1` dies of SIGPIPE when grep outruns head, which
+  # `pipefail` reports as the failure of a command that did its job. `-m1`
+  # removes the pipe, `|| true` the no-match case.
+  subject="$(grep -m1 -vE '^[[:space:]]*$' "$MSG_FILE" || true)"
   source_desc="staged commit message"
+
+  if [[ "$subject" == \#* ]]; then
+    fail "the first line of the commit message is a comment"
+    note "source: $source_desc ($MSG_FILE)"
+    note "git keeps it as the subject under -m/-F and strips it when editing,"
+    note "so what would land is ambiguous. Put the subject on the first line."
+    finish
+  fi
 else
   if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
     skip "commit message (no HEAD and no file given)"
     finish
   fi
+  # ⚠️ No comment-stripping here. `git log -1 --pretty=%s` is already the
+  # cleaned subject, and `git commit -m '#123: …'` stores that verbatim —
+  # `-m` uses cleanup=whitespace, which does not strip comments. Treating a
+  # leading `#` as a comment in this mode reported "no subject" for a commit
+  # whose subject was plainly there.
   subject="$(git log -1 --pretty=%s)"
   source_desc="HEAD"
 fi
 
-# Comment lines are stripped by git before the message is used; if the first
-# line is one, the real subject is the first line that is not.
-if [[ "$subject" == \#* ]]; then
-  subject="$(grep -v '^#' "$MSG_FILE" | head -1)"
+if [[ -z "${subject//[[:space:]]/}" ]]; then
+  fail "the commit message has no subject"
+  note "source: $source_desc (${MSG_FILE:-HEAD})"
+  note "every line is blank or a comment, so there is nothing to check"
+  finish
 fi
 
 # --- exemptions, each with a reason -----------------------------------------

@@ -59,7 +59,7 @@ comes before any gate because every gate sources it.
 | M-1.32 | `standards/git.md` — commit atomicity and structure | States why atomicity matters (bisect is the substitute for a reviewer), the subject and body rules, amend-before-push / follow-up-after, and the no-branching workflow | done |
 | M-1.33 | Frontmatter on standards and product docs + `scripts/build-index.sh` | Every standard and product doc carries a `description` saying *when to read it*, so layer-1 disclosure works for them as it does for skills; generated index regions rebuild from frontmatter and `--check` fails a stale one | done |
 | M-1.34 | `applies_to:` frontmatter + `scripts/which-standards.sh` — route a change to the standards it is judged against | Every standard declares the paths it claims, and one without `applies_to` fails; a staged diff resolves to standards without anyone choosing | done |
-| M-1.35 | `check-commit-msg.sh` dies silently on an all-comments message | `grep -v '^#' \| head -1` under `pipefail` exits 1 with no output; the gate must name itself and the reason | todo |
+| M-1.35 | `check-commit-msg.sh` dies silently on an all-comments message | `grep -v '^#' \| head -1` under `pipefail` exits 1 with no output; the gate must name itself and the reason | done |
 
 ### Notes on specific tasks
 
@@ -244,6 +244,29 @@ correct and strictly worse, because the curated one is organised by *question*,
 which is how people look things up. The split now is: **mechanical things are
 generated (counts, tables, coverage), authored things stay authored**, and the
 generated tag list is filtered to tags that group three or more documents.
+
+**M-1.35** is a defect M-1.9's work found in an already-`done` gate, and its
+review is a warning about fixing diagnostics. The first fix made the gate speak
+where it had been silent — and said something **false** in two cases: it ran the
+comment-stripping branch in `HEAD` mode, where there is no message file, and it
+stripped comments but **not** leading blank lines, which git also removes — so
+on a `COMMIT_EDITMSG` whose first line is empty it returned that blank line as
+the subject. Both produced "the commit message has no subject" for a commit
+whose subject was plainly there. ⚠️ A wrong
+diagnosis is worse than the silence it replaced, because it sends the author to
+fix something that is not broken.
+
+⚠️ The second fix then introduced a **regression the original did not have**.
+`git commit` with an editor uses `cleanup=strip`, which removes comment lines;
+`-m` and `-F` use `cleanup=whitespace`, which keeps them. So for
+`git commit -m '#42 note' -m 'M-1.35: …'` the subject that lands is `#42 note`,
+and a script that skips comment lines reads the *body*, reports
+`ok … names M-1.35`, and admits a commit naming no task — the one thing this
+gate exists to refuse. No script can know which cleanup mode git will apply, so
+the ambiguity is now the failure: the subject is the first non-blank line, and a
+comment there is refused rather than searched past. That also stops the
+`commit.verbose` case reporting `got: diff --git a/f b/f`, a subject nobody
+wrote.
 
 **M-1.34** exists because doc 21 §4 says the reviewer receives "the relevant
 standards", and until now that phrase had no referent. Handing a reviewer all
