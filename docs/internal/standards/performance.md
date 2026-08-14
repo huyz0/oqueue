@@ -106,8 +106,20 @@ Ordered by observed leverage. **Exhaust the earlier rows before the later ones.*
     | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
     | Compaction throughput | `bench-macro`, report only |
 
-19. **A hot path without a benchmark is an unmeasured claim.** → a gate
-    asserting each named path has one, so the list above cannot silently rot.
+19. **A hot path without a benchmark is an unmeasured claim.** → gated
+    per row: `check-hot-path-bench.sh` fails hard when a benchmark's
+    `hot-path:` marker names something not in the table above (the table
+    and its markers cannot drift apart), and fails hard on any row with no
+    marker *unless* that row is named in the script's own
+    `NOT_YET_BUILT` allowlist — the same "an array entry with a reason, in
+    the script, so adding to it is a diff someone reviews" shape
+    `check-file-size.sh` already uses. Every row starts allowlisted,
+    because no crate exists yet; a hard "all eight, always" gate from day
+    one would stay red for the entire span these rows land across (M0
+    through at least M5). ⚠️ The task that adds a path's benchmark removes
+    that path's `NOT_YET_BUILT` entry in the same commit — after which
+    losing the marker again is a real failure for that row alone, not a
+    standing exception nothing revisits.
 
 ## Profiling: on demand, never gated
 

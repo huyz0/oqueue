@@ -91,6 +91,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-hot-path-bench
+        name: "performance.md rules 18-19: a hot-path marker names a real row in the table, and every row is covered unless allowlisted"
+        entry: scripts/check-hot-path-bench.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
 
       # --- commit-msg stage: the two gates that read the message file itself,
       # which pre-commit passes as this stage's one positional argument.

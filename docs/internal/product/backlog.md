@@ -58,7 +58,7 @@ comes before any gate because every gate sources it.
 | M-1.26 | `standards/code-structure.md` + `standards/testing.md` + `clippy.toml` | File ≤500 lines with a reasoned allowlist; function ≤50 lines, cognitive complexity ≤20, ≤5 arguments, all via `clippy.toml`; per-crate `README.md` and `AGENTS.md` required; fakes over mocks; the no-flake rules | done |
 | M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | done |
 | M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | done |
-| M-1.29 | `check-hot-path-bench.sh` | Every hot path named in `performance.md` rule 18 has a benchmark, so the list cannot silently rot | todo |
+| M-1.29 | `check-hot-path-bench.sh` | A benchmark's `hot-path:` marker names a real row in `performance.md` rule 18's table; a row with no marker fails unless it is named, with a reason, in the script's `NOT_YET_BUILT` allowlist — see rule 19 and the retrospective below for why | done |
 | M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | todo |
 | M-1.31 | `contract-change` skill | The atomic `oqueue-core` trait change: trait, every fake, every implementation, call sites, and the ADR in one commit | todo |
 | M-1.32 | `standards/git.md` — commit atomicity and structure | States why atomicity matters (bisect is the substitute for a reviewer), the subject and body rules, amend-before-push / follow-up-after, and the no-branching workflow | done |
@@ -1825,6 +1825,120 @@ A minor, cosmetic finding in the same round: the `flame` mode's
 `cargo-flamegraph`-missing message double-nested its parenthetical inside
 `skip`'s own message text, inconsistent with every other `require_tool`
 call's format in this file. Fixed to match.
+
+**M-1.29** is `check-hot-path-bench.sh`, `performance.md` rules 18–19. ⚠️ Its
+acceptance row reads literally as a hard requirement — "every hot path named
+in rule 18 has a benchmark" — and implementing that literally would have made
+the gate wrong rather than strict. The eight rows in rule 18's table belong to
+code that does not land at once: `RecordBatch encode / decode`, CRC-32C, and
+Varint decode are M2's; Compaction throughput is M5's. A gate hard-failing on
+any uncovered row from the moment any crate exists would stay red from M0's
+first commit until M5 ships, failing every unrelated commit in between —
+unlike every other bootstrap-skip gate in this repository, whose rule is
+satisfiable the instant any crate exists at all. Confirmed by grepping every
+milestone plan for the table's own wording before deciding, rather than
+assuming: hot-path code is genuinely scattered across M0, M2, M7, M11, and
+M13's plans, not concentrated in one place.
+
+The gate built instead checks what can be checked honestly at every point in
+history: a hard failure when a `// hot-path: <name>` marker in a tracked
+`.rs` file names something rule 18's table does not list (a typo, or a
+benchmark comment never updated after the table changed — this direction has
+no "too early" state), and a `note`, not a failure, for how many of the eight
+rows have no marker anywhere yet — visible in every run's output, which is
+what rule 19's "cannot silently rot" asks for read against what rot means:
+the table going *inaccurate*, not the table being *incomplete* while the code
+it describes has not been written. This is a narrower reading than the
+acceptance criterion's literal wording, made explicitly rather than silently,
+per `milestone-review`'s "if the review found the spec wrong, that is a
+decision, not a task" — flagged in the script's own header and here for the
+next milestone-review checkpoint or reviewer to weigh in on; the fix, if the
+literal reading was actually intended, is a one-line change (`note` to
+`fail`) once every hot path's owning milestone has landed.
+
+Parsing rule 18's table surfaced a real fixture bug before review ever saw
+it: the table's rows are indented four spaces (they sit inside numbered-list
+item 18's continuation, not at column 0), so an initial `^\|...` regex
+matched zero rows against the real file despite passing against a
+hand-written test string that happened not to be indented. Caught by running
+the parsing logic directly against the real `performance.md` and counting the
+result (8, not 0) before wiring it into the gate, the same "verify against
+the real artifact, not an assumption of its shape" discipline `M-1.24` and
+`M-1.27` already established for this repository's other table-parsing
+gates. Mutant-tested per that same established discipline: with the
+drift-detection `fail` branch disabled, the `tests/gates/negative.sh` fixture
+wrongly passes, confirming the fixture exercises the real check rather than
+an incidental side effect.
+
+⚠️ **Round 1 review found the row was closing against a spec its own
+implementation admitted it did not satisfy.** The Acceptance column and
+`performance.md` rule 19 both still read the literal, unnarrowed claim
+("every hot path... has a benchmark," "a gate asserting each named path has
+one") while the gate that shipped only half-enforced it (drift-only hard
+fail; missing coverage always just a note, for all eight rows, forever) —
+exactly the failure mode `sdd.md`'s "When the spec turns out to be wrong"
+section exists to catch, and exactly the shape the retrospective under
+`M-1.37` already flagged as fatal in effect: a row marked `done` discharges
+the finding to a place `next-task` will never look again, disclosure in a
+header comment notwithstanding. Fixed by rewriting the Acceptance column and
+rule 19 in the same commit, per `sdd.md`'s "amend the spec and say so."
+
+That first rewrite said the `note`→`fail` flip for a row was "that row's
+owning milestone's own task" — round 2 review found this was now a *second*
+copy of the same defect, one level down: prose promising per-row control the
+code did not actually have, since the shipped script only computed one
+aggregate uncovered-count and had no notion of an individual row's state at
+all. Confirmed by reading the loop, not just the prose. Fixed for real this
+time by building the mechanism the words described rather than rewriting the
+words again: a `NOT_YET_BUILT` allowlist in the script itself, the same
+"array entry with a reason, in the script" shape `check-file-size.sh`
+already established, checked against `performance.md`'s table for the same
+kind of drift a stray marker gets checked for. Every row starts allowlisted;
+a row missing both a marker and an allowlist entry is now a real, individual
+hard failure, verified in a scratch repo by removing one row's entry without
+adding its marker and observing exactly that row fail while the other seven
+stayed clean notes — the capability the docs now claim, actually exercised,
+not merely asserted a second time.
+
+A second `tests/gates/negative.sh` case was added for this new failure mode
+(a required row, uncovered), and building it caught a fixture bug before
+review ever saw it: the first draft's fixture table listed only one row not
+in the real `NOT_YET_BUILT`, which made all eight of the script's *real*
+entries "stale" against that tiny table and failed the run for the
+stale-allowlist reason instead of the required-row reason the case is named
+for — the exact "a fixture that fails, but for the wrong reason" bug
+`M-1.24`'s round 2 review already found once in this session, now caught by
+this task's own author rather than needing a second review round to surface
+it. Fixed by giving the fixture's table all eight real rows verbatim plus
+one extra the allowlist does not name, then confirmed correct by reading the
+actual failure output before trusting it, and mutant-tested the same way as
+the first case: with the required-row `fail` call disabled, the corrected
+fixture wrongly passes.
+
+Round 3 review found a third occurrence of the same defect shape, one level
+further down, and this one a real gap in the mechanism rather than only in
+the prose describing it: a row that is `COVERED` (has a real marker) but
+still carries a `NOT_YET_BUILT` entry was never flagged, because the final
+loop `continue`s past any covered row before checking whether its allowlist
+entry was actually removed. Reproduced exactly as review described: add the
+benchmark, forget to delete the entry — passes silently; delete the
+benchmark again (a real regression) with the stale entry still present —
+still passes silently, because the leftover entry keeps protecting the row
+forever. This directly falsified the guarantee both rule 19 and the
+script's own header state in as many words: that losing a marker again "is
+a real failure for that row alone." Fixed by checking every `NOT_YET_BUILT`
+entry against `COVERED` the same way it is already checked against the
+table for staleness — a row that is covered but still allowlisted is now
+itself a hard failure, naming the entry to remove. A third
+`tests/gates/negative.sh` case covers exactly this fixture (a marker for a
+row `NOT_YET_BUILT` still lists), and the full three-step sequence review
+found — add marker without removing the entry (fails), remove the entry
+(passes), delete the marker again (fails again, correctly, for the required-
+row reason) — was run end to end in a scratch repo before trusting the fix,
+not just the single new fixture in isolation. Mutant-tested the same way as
+the other two cases. `.pre-commit-config.yaml`'s hook `name:` field, which
+still described the gate as "drift only" after two rounds of the
+enforcement growing past that, was corrected in the same commit.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every

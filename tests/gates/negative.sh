@@ -465,6 +465,158 @@ invoke_readmes() {
   bash "$1/scripts/check-readmes.sh"
 }
 
+# --- check-hot-path-bench.sh: a marker names a path not in the table -------
+setup_hot_path_bench() {
+  local dir; dir="$(new_scratch hot-path-bench)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/crates/oqueue-x/benches"
+  # A minimal table, not the real one -- this gate reads whatever
+  # performance.md the tree it runs against has, so the fixture only needs
+  # the shape (indented GFM rows inside a numbered list item, per the real
+  # file) and one real row for the marker below to *not* match.
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  # Close, but not the table's exact wording -- the drift this gate exists
+  # to catch: a marker whose name fell out of sync with the table it cites.
+  cat > "$dir/crates/oqueue-x/benches/bench_micro.rs" <<'EOF'
+// hot-path: RecordBatch encode/decode
+fn bench_recordbatch() {}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.29: a hot-path marker names no real row")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
+# --- check-hot-path-bench.sh: a row is required (not in NOT_YET_BUILT) and
+# has no marker anywhere ------------------------------------------------
+setup_hot_path_bench_required() {
+  local dir; dir="$(new_scratch hot-path-bench-required)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/crates/oqueue-x/src"
+  # All eight of `NOT_YET_BUILT`'s real names, verbatim, plus one row it
+  # does not name. Without all eight present, every real entry becomes
+  # "stale" against this fixture's table and the gate fails on *that*
+  # instead -- found by running this fixture against the real script before
+  # trusting it: the first draft, with only the ninth row, failed for the
+  # stale-allowlist reason, not the required-row reason this case is named
+  # for, the exact "fixture fails for the wrong reason" bug M-1.24's round 2
+  # review found in a different gate's fixture.
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+    | A ninth path NOT_YET_BUILT does not name | `bench-micro`, gated |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M-1.29: a required hot path has no benchmark and no allowlist entry")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_required() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
+# --- check-hot-path-bench.sh: a row is covered but NOT_YET_BUILT still
+# lists it -- the loophole that let a later regression go unnoticed --------
+setup_hot_path_bench_leftover() {
+  local dir; dir="$(new_scratch hot-path-bench-leftover)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/crates/oqueue-x/benches"
+  # A marker for a row the real, unmodified script's `NOT_YET_BUILT` already
+  # names -- exactly what landing that row's milestone and adding its
+  # benchmark produces, if the entry is not also deleted in the same
+  # commit. Without this check, this state passes silently and a later
+  # regression (the marker removed again) would too, since the leftover
+  # entry keeps protecting the row forever -- found by round 3 review
+  # reproducing the sequence, not by inspection.
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  cat > "$dir/crates/oqueue-x/benches/bench_micro.rs" <<'EOF'
+// hot-path: RecordBatch encode / decode
+fn bench_recordbatch() {}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.29: a covered row still has a NOT_YET_BUILT entry")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_leftover() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
@@ -478,6 +630,9 @@ run_case "build-index.sh --check"       setup_build_index         invoke_build_i
 run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace
 run_case "check-file-size.sh"           setup_file_size           invoke_file_size
 run_case "check-readmes.sh"             setup_readmes             invoke_readmes
+run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench
+run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required
+run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 
