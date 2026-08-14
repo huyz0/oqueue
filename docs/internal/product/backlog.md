@@ -36,7 +36,7 @@ comes before any gate because every gate sources it.
 | M-1.4 | `roadmap.md` + `backlog.md` — milestones with executable completion conditions | Every milestone's "done" is a command; only M-1 is decomposed | done |
 | M-1.5 | `standards/` — remaining code standards: `behavior`, `rust-style`, `error-handling`, `async-concurrency`, `contracts` | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | done |
 | M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | done |
-| M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | todo |
+| M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | done |
 | M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | todo |
 | M-1.9 | `review.sh` + `check-reviewed.sh` — the isolated reviewer and its gate | Review artifact keyed by staged-diff hash; amending one byte after review fails the commit | done |
 | M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | todo |
@@ -93,6 +93,94 @@ the two places-one-fact hazard M-1.33 already named for generated indexes. Every
 M-1.7 through M-1.12, none of which exist yet — consistent with every other
 standard in this repository, which routinely names a gate before the script
 behind it is written.
+
+**M-1.7** wires the second half of non-negotiable 2 — the first (never
+lower a threshold) is `check-drift.sh`, forward-looking and heuristic,
+since the repository has almost nothing for it to check yet: it flags a
+threshold-shaped identifier read from an environment variable on the same
+line, which is deliberately narrower than "any threshold ever weakened,"
+a claim no grep gate can make honestly without a real parser. The second
+(never delete a test to make a check pass) is `check-tests-kept.sh`, which
+diffs `#[test]`-attributed function names between a file's old and new
+content and demands a `Removes-test:` trailer for anything that
+disappears — it does not and cannot judge whether the stated reason is
+true, the same limit `check-commit-msg.sh` already accepts for task IDs.
+Both were run against a contrived positive case in a scratch git repository
+before being trusted, rather than only read — the same discipline M-1.6's
+retrospective names ("a gate nobody has watched fail is a gate nobody has
+tested"), ahead of M-1.15 making that a permanent, checked-in negative
+suite rather than a one-off manual run.
+
+⚠️ **That manual testing still missed the one check that mattered most: did
+`check-drift.sh` pass on the repository it was being added to.** Review
+found it did not — its own header comment states the two patterns the gate
+looks for side by side, as worked examples, and both matched its own regex,
+so the gate would have failed on itself forever from the moment this
+commit landed. Fixed by excluding the script's own file from the scan, with
+the reason written beside the exclusion rather than left implicit — it
+holds no threshold of its own to protect, so nothing is lost, and a
+scratch-file test with the same worked-example text under a different
+filename confirmed the exclusion is narrow rather than a general carve-out.
+Review also found a doc-comment claim in `check-tests-kept.sh` that was
+backwards: it said a test moved to another file under the same name is
+*not* flagged, when the per-file comparison the code actually performs
+flags exactly that case, in the file the test disappeared from — the safer
+direction to be wrong in, but the comment described the opposite of the
+code next to it.
+
+⚠️ **A second review round found the manual testing had checked the common
+shape and no other.** `extract_tests`'s awk cleared its "pending test" flag
+on any non-blank line that was not itself a `#[...]` attribute — so a
+`#[test]` immediately followed by a doc comment, or by a multi-line
+attribute's continuation lines, never reached a `fn` while the flag was
+still set, and the test underneath was invisible to both the old and the
+new side of the diff. A test deleted in that shape passed with `ok no test
+was removed`: the exact acceptance criterion this task exists to satisfy,
+silently unmet for two idiomatic Rust shapes. Fixed by letting the pending
+flag survive doc comments, plain comments, blank lines, and an unmatched
+multi-line attribute's continuation (tracked by an unbalanced `#[` with no
+`]` yet) — verified against both shapes in a scratch repository, plus a
+regression pass confirming the original cases (single-line attribute,
+whole-file deletion, rename via delete-and-add) still hold.
+
+⚠️ **A third review round found the second round's fix was still only the
+common shape.** The continuation tracker set `pending` on close without
+ever checking whether the attribute it had just spanned actually contained
+"test" anywhere — only the *opening* line was checked, and a wrapped,
+parameterized attribute like `#[tokio::test(\n  flavor =
+"multi_thread"\n)]` puts `test` on that opening line by coincidence of
+`tokio::test`'s name, while a differently-named or differently-wrapped
+multi-line test attribute would not be recognized at all. Verified directly
+with a `#[tokio::test(...)]`-shaped attribute deleted with no trailer: `ok
+no test was removed`, silently. Realistic for this specific project, not a
+contrived case — async test attributes wrapped across lines by `rustfmt`
+are exactly the shape `async-concurrency.md`'s own subject matter produces.
+Fixed by checking every line the attribute spans for "test", not only the
+first, and setting `pending` when the attribute closes if any of them
+matched. Verified against the exact wrapped-`tokio::test` case, a full
+regression re-run, and the disclosed nested-`[...]`-in-a-string gap,
+reconfirmed real. ⚠️ That reconfirmation needed a second try: the first
+attempt at constructing it wrote a single-line `cfg_attr`, which the
+single-line branch handles correctly regardless of the nested bracket and
+so never exercised the continuation-tracker code path it was meant to
+test — a version of the same lesson this task keeps producing, that a test
+which looks like it covers a case can silently cover a different one.
+Redone with a genuinely multi-line attribute, it reproduced.
+
+A fourth review round, asked to try shapes no prior round had, found one
+more: the `fn`-matching regex accepted `pub` and `pub async` but not
+`pub(crate)`, `pub(super)`, or `pub(in path)` — an everyday visibility
+modifier, not a contrived one, so a `#[test] pub(crate) fn ...` deleted
+with no trailer passed silently. The round judged it non-blocking (this
+repository has no `.rs` files yet, and a gap of this shape is the same
+tier as the already-accepted one), but it was a one-line regex fix rather
+than only a documentation addition, so it was fixed rather than deferred:
+`pub(\([^)]*\))?` in place of a bare `pub`, verified against `pub(crate)`
+and `pub(in crate::tests)` both being caught, plus the full regression set
+once more. Both gates are wired into the local `.git/hooks/pre-commit` and
+`commit-msg` scripts alongside M-1.6's and M-1.9's, following the same
+precedent: local wiring now, `.pre-commit-config.yaml`'s portable version
+in M-1.14.
 
 **M-1.9** is new to oqueue and has no precedent to port. The mechanism is in
 [docs/researches/21](../../researches/21-ai-development-loop.md) §5. The
