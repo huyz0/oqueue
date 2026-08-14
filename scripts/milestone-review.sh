@@ -209,10 +209,13 @@ TEXT
     p && /^## / { exit }
     p { print }
   ' "$ROADMAP" 2>/dev/null || true)"
-  # ⚠️ Say so rather than rendering nothing. The roadmap writes `## M2–M7` for a
-  # span and `## M0 — …` for one milestone, so this pattern will miss headings
-  # that exist; an empty section reads as "the milestone had no goals" and a
-  # cross-cutting review with no statement of intent is the wrong review.
+  # ⚠️ Say so rather than rendering nothing. Every milestone in the roadmap now
+  # has its own `## M<n> — …` heading, so an empty section means one was renamed
+  # or dropped — **not** that the milestone legitimately has no entry. Treat it
+  # as a defect in the roadmap; an empty section reads as "the milestone had no
+  # goals", and a cross-cutting review with no statement of intent is the wrong
+  # review. (The roadmap once carried a `## M2–M7` span heading covering six
+  # milestones at once; that is what this fallback was originally written for.)
   if [[ -z "${roadmap_section//[[:space:]]/}" ]]; then
     printf '⚠️ **No section for %s in %s.** Nothing here states what this\n' "$MS" "$ROADMAP"
     printf 'milestone was for; say so in the verdict rather than inferring it.\n'

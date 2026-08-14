@@ -85,11 +85,50 @@ criteria actually checkable.
 **Only the current milestone is decomposed in detail.** Tasks written three
 milestones ahead are wrong by the time they are reached — not because the plan
 was bad, but because the intervening work changes what the right task is.
-Future milestones stay as roadmap entries with a completion condition.
+
+### A plan is not a decomposition
+
+⚠️ That rule is about the **backlog**, and it is easy to over-read into "no
+forward planning", which would leave the project unable to say what it is
+building. Two artifacts, and confusing them is the actual failure:
+
+| | [`milestones/M<n>.md`](../product/milestones/) — the **plan** | [`backlog.md`](../product/backlog.md) — the **decomposition** |
+|---|---|---|
+| Covers | every milestone to v1 | the current milestone only |
+| Authority | a working hypothesis | binding; gates read it |
+| Task IDs | none — a plan's items are unnumbered | stable, cited by commits |
+| Expected to change | **yes, and silently** | no; a change is a decision |
+| Read by | whoever is deciding what to build next, and the `milestone` skill at decomposition — **both before the loop starts** | every gate, `next-task`, both review loops, and the `milestone` skill's loop |
+
+A plan says *what this milestone is for, which requirements it serves, what must
+be decided before its code, and roughly how much work it is*. That is answerable
+years ahead and is what makes sequencing and dependency arguments possible.
+A decomposition says *do this exact thing next*, and is only answerable once the
+milestone before it has actually landed.
+
+⚠️ **The `milestone` skill reads a plan exactly once — when it decomposes a
+milestone that has no backlog rows yet — and never again.** Its loop runs on the
+backlog and takes the completion condition from `roadmap.md`. A hypothesis has
+no place inside an unattended loop; it has every place in the step that produces
+what the loop will run.
+
+⚠️ **Opening a milestone means re-deriving its tasks from the plan, not copying
+them.** The plan's items are inputs. If they survive contact unchanged, the plan
+was lucky; if they do not, that is the plan working as intended, and the
+divergence is worth a line in the milestone's notes because it is evidence about
+how far ahead this project can usefully see.
+
+A plan item that turns out to be wrong is **not a spec that turned out to be
+wrong** and needs none of that ceremony — nothing was committed to it.
 
 A task is **one commit's worth**: one coherent change leaving the tree green. If
 it cannot be finished that way, split it before writing code, not after
 discovering it.
+
+**A milestone carries at most 20 tasks.** Past that it is two milestones wearing
+one name, its completion condition stops being a single coherent claim, and the
+cross-cutting review at its boundary exceeds what one reader can hold. ⚠️ M-1 is
+over this and is the evidence for the rule rather than an exception to it.
 
 Task IDs are stable. Completed tasks stay in the backlog with their commit
 reference, because the record of why something was done is worth more than a

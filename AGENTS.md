@@ -14,8 +14,9 @@ crate you are working in adds context specific to that crate.
 - [docs/internal/product/mission.md](docs/internal/product/mission.md) what this is and what it must never do
 - [docs/internal/product/requirements.md](docs/internal/product/requirements.md) functional and non-functional requirements, with the IDs specs cite
 - [docs/internal/product/architecture.md](docs/internal/product/architecture.md) crate map and dependency rules
-- [docs/internal/product/roadmap.md](docs/internal/product/roadmap.md) milestones and their completion conditions
-- [docs/internal/product/backlog.md](docs/internal/product/backlog.md) the current task list
+- [docs/internal/product/roadmap.md](docs/internal/product/roadmap.md) every milestone to v1, in execution order, each with a completion condition
+- [docs/internal/product/milestones/](docs/internal/product/milestones/README.md) one plan per milestone — ⚠️ a *plan*, not a decomposition
+- [docs/internal/product/backlog.md](docs/internal/product/backlog.md) the current task list — authoritative, current milestone only
 - [docs/internal/product/decisions/](docs/internal/product/decisions/) architecture decision records
 
 ## The research corpus

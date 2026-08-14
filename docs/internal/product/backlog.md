@@ -14,7 +14,12 @@ Task IDs are stable. Completed tasks stay here with their commit reference so
 the history of why something was done survives.
 
 Decomposition rule: only the current milestone is decomposed in detail. Future
-milestones stay as roadmap entries until their turn.
+milestones stay as [roadmap](roadmap.md) entries with a
+[plan](milestones/README.md) until their turn. ⚠️ **A plan is not a
+decomposition** — it is a hypothesis, it carries no task IDs, and its items are
+re-derived rather than copied when a milestone opens. Read the plan's
+"Decisions required first" before writing any of that milestone's code; see
+[`sdd.md`](../standards/sdd.md) §Decomposition.
 
 ## M-1: AI development system
 
@@ -64,6 +69,10 @@ comes before any gate because every gate sources it.
 | M-1.37 | The outer loop: `milestone-review` skill + `milestone-review.sh` + `check-milestone-review.sh` | Every commit in a milestone is covered by a review artifact naming the commits it read; a blocking or major finding must name a backlog task that exists, or be argued; an uncovered commit fails the gate | done |
 | M-1.39 | `known_task_ids` reads the backlog from the working tree | Every other input to `check-reviewed.sh` and `check-milestone-review.sh` is read from the index; an unstaged backlog row satisfies a gate locally and fails the same gate on CI. Shared by three gates, so it is not M-1.37's to change | todo |
 | M-1.38 | `check-reviewed.sh` matches a task id as a regex | `grep -qx "$task_id"` against the backlog's ids: an artifact whose `task_id` is `.*` matches every row. `grep -qxF`. Found by M-1.37's review at the sibling site | todo |
+| M-1.40 | The plan layer: `milestones/` + the plan-vs-backlog distinction | `sdd.md` states the difference between a *plan* (forward-looking, expected to be re-derived) and the *backlog* (authoritative, current milestone only); `roadmap.md` carries every milestone to v1 with a kind, the requirements it serves, its dependencies, and an execution order that is not numeric order; `milestones/README.md` says how a plan is consumed | done |
+| M-1.41 | Milestone plans: M0, M1, M2, M3, M10 | The build-out sequence — workspace, object store, protocol, coordinator, deterministic simulation. Each names its goal, kind, requirements, the ADRs that must be written before its code, ≤20 provisional tasks, and a completion condition that is a command | todo |
+| M-1.42 | Milestone plans: M9, M4, M11, M5, M6 | Security, consumer groups, idempotence, compaction, recovery. Same shape as M-1.41 | todo |
+| M-1.43 | Milestone plans: M7, M8, M12, M13, M14, M15 | Scale, encryption, admin, release engineering, performance validation, hardening. Same shape as M-1.41 | todo |
 
 ### Notes on specific tasks
 

@@ -17,7 +17,13 @@ Runs a milestone to completion without a human between tasks.
    roadmap first.
 3. If the milestone is not decomposed in `backlog.md`, decompose it now — with
    acceptance criteria, citing requirement IDs. Only this milestone; see
-   [`spec`](../spec/SKILL.md).
+   [`spec`](../spec/SKILL.md). ⚠️ **Read
+   `docs/internal/product/milestones/M<n>.md` first**: it names the decisions
+   that must be recorded *before* this milestone's code, and skipping them is
+   how a milestone acquires an architecture nobody chose. Its task list is an
+   input to re-derive from, never a list to copy.
+   ⚠️ **This is the only step that reads a plan.** The loop below runs on the
+   backlog, because a plan is a hypothesis.
 
 ## The loop
 
