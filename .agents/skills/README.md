@@ -46,7 +46,7 @@ rather than reading it.
 
 | Skill | Use when |
 |---|---|
-| [`goal`](goal/SKILL.md) | Driving a milestone to completion without a human in the loop |
+| [`milestone`](milestone/SKILL.md) | Driving a milestone to completion without a human in the loop |
 | [`next-task`](next-task/SKILL.md) | Starting work and needing to know what to do next |
 | [`spec`](spec/SKILL.md) | A milestone or feature needs specifying before code |
 | [`tdd`](tdd/SKILL.md) | Implementing a task |

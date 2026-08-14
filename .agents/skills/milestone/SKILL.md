@@ -1,9 +1,9 @@
 ---
-name: goal
+name: milestone
 description: Drive a milestone to completion autonomously, one task per commit, without asking between tasks. Use when told to work a milestone, to continue, to keep going, or to auto-proceed. Defines the loop and — more importantly — the conditions under which it must stop.
 ---
 
-# Goal: the autonomous loop
+# Milestone: the autonomous loop
 
 Runs a milestone to completion without a human between tasks.
 

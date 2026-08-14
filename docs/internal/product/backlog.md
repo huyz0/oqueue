@@ -37,7 +37,7 @@ comes before any gate because every gate sources it.
 | M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | todo |
 | M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | todo |
 | M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
-| M-1.13 | `.agents/skills/` — `goal`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
+| M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | todo |
 | M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | todo |
 | M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3 | todo |
@@ -60,6 +60,7 @@ comes before any gate because every gate sources it.
 | M-1.33 | Frontmatter on standards and product docs + `scripts/build-index.sh` | Every standard and product doc carries a `description` saying *when to read it*, so layer-1 disclosure works for them as it does for skills; generated index regions rebuild from frontmatter and `--check` fails a stale one | done |
 | M-1.34 | `applies_to:` frontmatter + `scripts/which-standards.sh` — route a change to the standards it is judged against | Every standard declares the paths it claims, and one without `applies_to` fails; a staged diff resolves to standards without anyone choosing | done |
 | M-1.35 | `check-commit-msg.sh` dies silently on an all-comments message | `grep -v '^#' \| head -1` under `pipefail` exits 1 with no output; the gate must name itself and the reason | done |
+| M-1.36 | Rename the `goal` skill to `milestone` | No skill, adapter, or index entry is named `goal`; every reference resolves and `build-index.sh --check` passes | done |
 
 ### Notes on specific tasks
 
@@ -244,6 +245,18 @@ correct and strictly worse, because the curated one is organised by *question*,
 which is how people look things up. The split now is: **mechanical things are
 generated (counts, tables, coverage), authored things stay authored**, and the
 generated tag list is filtered to tags that group three or more documents.
+
+**M-1.36** renames the `goal` skill because the name is one a tool is likely to
+claim. ⚠️ The collision would be **silent**: a slash command resolves to one
+procedure, and nothing announces that the other exists. `milestone` says what
+the skill drives and is far less likely to be taken. Nothing about the loop
+changed — only the name, the directory, the adapter, and the index entries.
+
+⚠️ The general rule this suggests, and which no gate holds: **a skill's name is
+part of its interface with the tool, not only with the reader.** `spec`, `tdd`,
+`adr`, `research`, and `review` are all short enough to be claimed the same way.
+M-1.30's `check-portability.sh` is the natural home for a check, if one is worth
+having.
 
 **M-1.35** is a defect M-1.9's work found in an already-`done` gate, and its
 review is a warning about fixing diagnostics. The first fix made the gate speak
