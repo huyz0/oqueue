@@ -52,7 +52,7 @@ comes before any gate because every gate sources it.
 | M-1.20 | Revise the encryption design for the clarified BYOK volume (~10K topics, not catalog-wide) | Segregation replaces universal per-region sealing; the KMS key-count conclusion corrected and marked as corrected | done |
 | M-1.21 | `requirements.md` — functional and non-functional, with stable IDs | Every entry names a verification; every NFR carries a number or is marked UNDERIVED with what blocks it; nothing invented | done |
 | M-1.22 | `standards/sdd.md` — the process standard | Defines the requirement→spec→task→commit chain, what a spec must contain, acceptance-criteria rules, definition of done, and what to do when a spec proves wrong | done |
-| M-1.23 | `standards/review.md` — the operational review standard | Turns [docs/researches/21](../../researches/21-ai-development-loop.md) §3–5 into a standard: reviewer context isolation, the deterministic/semantic split, fixed-or-argued resolution | todo |
+| M-1.23 | `standards/review.md` — the operational review standard | Turns [docs/researches/21](../../researches/21-ai-development-loop.md) §3–5 into a standard: reviewer context isolation, the deterministic/semantic split, fixed-or-argued resolution | done |
 | M-1.24 | Trace every milestone to the requirements it serves | Every roadmap entry names FR/NFR IDs; a gate fails on a milestone that names none | todo |
 | M-1.25 | `standards/security.md`, `performance.md`, `build.md`, `portability.md` | Each rule names its gate or is explicitly marked as having none; rationale delegated to the corpus rather than restated | done |
 | M-1.26 | `standards/code-structure.md` + `standards/testing.md` + `clippy.toml` | File ≤500 lines with a reasoned allowlist; function ≤50 lines, cognitive complexity ≤20, ≤5 arguments, all via `clippy.toml`; per-crate `README.md` and `AGENTS.md` required; fakes over mocks; the no-flake rules | done |
@@ -1594,6 +1594,43 @@ M-1 complete: a green `m-1-complete.sh` is not license to skip confirming
 M-1.38 and M-1.39 are actually closed. The roadmap's task-count cell is
 now stated as a snapshot rather than implied as current, since keeping it
 live would just be the next thing to go stale.
+
+**M-1.23** is `standards/review.md`, turning doc 21 §3–6 into rules rather
+than argument. It deliberately does not restate §3.1's deterministic/semantic
+table: this repository's actual gate set is smaller than the table's aspirational
+one (no `fmt`/clippy/mutation testing/coverage gates exist yet, since there is
+no Rust workspace), and a copied table would either lie about what exists today
+or need updating every time a new gate lands — the exact two-places-one-fact
+hazard `build-index.sh`'s header already names for the standards and skills
+tables. The rule is stated instead ("anything a script can decide must never
+be delegated to an agent"), with a pointer to doc 21 §3.1 for the worked
+example.
+
+The standard covers both review loops in one document rather than two,
+because they are the same mechanism — hash the artifact under review, spawn
+an isolated reviewer, gate on a matching verdict, resolve every blocking
+finding by fixing or arguing it — applied at two different scopes (one diff
+against one task; one milestone's commits as a whole). Writing them as two
+separate standards would have meant stating that same mechanism twice and
+letting the two copies drift, which is what `check-reviewed.sh` and
+`check-milestone-review.sh`'s own shared `baselines/review.txt` convention
+already refused to do in the gates themselves.
+
+`applies_to: ["*"]`, the same as `git.md`: review governs how every commit
+is examined, not a subset of paths. `scripts/build-index.sh` regenerated
+`AGENTS.md`'s standards table to add the new row.
+
+⚠️ **Corrected by review**: this paragraph first claimed review.md was "the
+first standard added since M-1.34 wired that generation" — wrong on both
+counts, found by re-reading `git log` rather than trusting the claim.
+`M-1.33` (`de169a6`) is what wired `build-index.sh`'s generation; `M-1.34`
+(`216dad3`) wired `applies_to:` and `which-standards.sh`, a different
+mechanism. And `M-1.5` (`7b244ad`), which added the five remaining code
+standards, already used that same generation mechanism and lands after both
+`M-1.33` and `M-1.34` in history — so the "first real confirmation" claim was
+also false; that confirmation already happened at `M-1.5`. What remains true:
+review.md is a standard added the ordinary way, one file plus a
+regeneration, not a file plus a hand-edited table.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every

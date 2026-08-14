@@ -45,6 +45,7 @@ required.
 | Family | Standard | Read when |
 |---|---|---|
 | Process | [git.md](docs/internal/standards/git.md) | Read before committing, when unsure whether a change is one commit or several, or before amending anything already pushed. |
+| Process | [review.md](docs/internal/standards/review.md) | Read when writing a review prompt, deciding whether a finding blocks a commit, or wondering why the reviewer was not given the author's reasoning. |
 | Process | [sdd.md](docs/internal/standards/sdd.md) | Read when specifying work, decomposing a milestone, writing acceptance criteria, or when a spec turns out to be wrong. |
 | Quality | [performance.md](docs/internal/standards/performance.md) | Read before optimizing, when adding or changing a benchmark, when a change touches a hot path, or when profiling. |
 | Quality | [security.md](docs/internal/standards/security.md) | Read when touching the wire protocol, anything parsing untrusted input, secrets, key material, tenant isolation, or unsafe. |
