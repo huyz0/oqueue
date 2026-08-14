@@ -300,6 +300,38 @@ invoke_reviewed() {
   bash "$1/scripts/check-reviewed.sh"
 }
 
+# --- check-reviewed.sh: a review artifact whose task_id is a regex ---------
+setup_reviewed_regex_task_id() {
+  local dir; dir="$(new_scratch reviewed-regex-task-id)"
+  copy_gate "$dir" check-reviewed.sh
+  mkdir -p "$dir/docs/internal/product" "$dir/target/review"
+  # A real backlog with one real task id -- `.*` is not one of them, so a
+  # `task_id` of `.*` must be rejected. Before `M-1.38`'s fix, `grep -qx`
+  # (no `-F`) read it as a regex instead of a literal string and matched
+  # every row, including this one.
+  cat > "$dir/docs/internal/product/backlog.md" <<'EOF'
+| M-1.1 | a real task | some criterion | done |
+EOF
+  echo "some content" > "$dir/file.txt"
+  (cd "$dir" && git add -A)
+  # Portable sha256, the same fallback lib.sh's own sha256_stdin uses --
+  # this file deliberately does not source lib.sh (see the header), so it
+  # cannot call that helper directly.
+  local h
+  if command -v sha256sum >/dev/null 2>&1; then
+    h="$(cd "$dir" && git diff --cached | sha256sum | cut -d' ' -f1)"
+  else
+    h="$(cd "$dir" && git diff --cached | shasum -a 256 | cut -d' ' -f1)"
+  fi
+  cat > "$dir/target/review/$h.json" <<EOF
+{"task_id": ".*", "diff_sha256": "$h", "reviewer": "fixture", "verdict": "pass", "findings": []}
+EOF
+  printf '%s\n' "$dir"
+}
+invoke_reviewed_regex_task_id() {
+  bash "$1/scripts/check-reviewed.sh"
+}
+
 # --- check-milestone-review.sh: a commit no review artifact covers ---------
 setup_milestone_review() {
   local dir; dir="$(new_scratch milestone-review)"
@@ -710,6 +742,7 @@ run_case "check-sans-io.sh"             setup_sans_io             invoke_sans_io
 run_case "check-core-contract.sh"       setup_core_contract       invoke_core_contract
 run_case "check-unsafe.sh"              setup_unsafe              invoke_unsafe
 run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewed
+run_case "check-reviewed.sh (regex task_id)" setup_reviewed_regex_task_id invoke_reviewed_regex_task_id
 run_case "check-milestone-review.sh"    setup_milestone_review    invoke_milestone_review
 run_case "build-index.sh --check"       setup_build_index         invoke_build_index
 run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace

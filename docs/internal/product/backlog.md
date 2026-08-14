@@ -68,7 +68,7 @@ comes before any gate because every gate sources it.
 | M-1.36 | Rename the `goal` skill to `milestone` | No skill, adapter, or index entry is named `goal`; every reference resolves and `build-index.sh --check` passes | done |
 | M-1.37 | The outer loop: `milestone-review` skill + `milestone-review.sh` + `check-milestone-review.sh` | Every commit in a milestone is covered by a review artifact naming the commits it read; a blocking or major finding must name a backlog task that exists, or be argued; an uncovered commit fails the gate | done |
 | M-1.39 | `known_task_ids` reads the backlog from the working tree | Every other input to `check-reviewed.sh` and `check-milestone-review.sh` is read from the index; an unstaged backlog row satisfies a gate locally and fails the same gate on CI. Shared by three gates, so it is not M-1.37's to change | todo |
-| M-1.38 | `check-reviewed.sh` matches a task id as a regex | `grep -qx "$task_id"` against the backlog's ids: an artifact whose `task_id` is `.*` matches every row. `grep -qxF`. Found by M-1.37's review at the sibling site | todo |
+| M-1.38 | `check-reviewed.sh` matches a task id as a regex | `grep -qx "$task_id"` against the backlog's ids: an artifact whose `task_id` is `.*` matches every row. `grep -qxF`. Found by M-1.37's review at the sibling site | done |
 | M-1.40 | The plan layer: `milestones/` + the plan-vs-backlog distinction | `sdd.md` states the difference between a *plan* (forward-looking, expected to be re-derived) and the *backlog* (authoritative, current milestone only); `roadmap.md` carries every milestone to v1 with a kind, the requirements it serves, its dependencies, and an execution order that is not numeric order; `milestones/README.md` says how a plan is consumed | done |
 | M-1.41 | Milestone plans: M0, M1, M2, M3, M10 | The build-out sequence — workspace, object store, protocol, coordinator, deterministic simulation. Each names its goal, kind, requirements, the ADRs that must be written before its code, ≤20 provisional tasks, and a completion condition that is a command | done |
 | M-1.42 | Milestone plans: M9, M4, M11, M5, M6 | Security, consumer groups, idempotence, compaction, recovery. Same shape as M-1.41 | done |
@@ -77,6 +77,7 @@ comes before any gate because every gate sources it.
 | M-1.45 | Backport the crash-safety wrapper (`try`/`except Exception` around the Python body, distinct exit code 3 for an uncaught crash) from `build-index.sh`/`check-unsafe.sh` to `check-layering.sh` and `check-core-contract.sh` | Both scripts were written after `fadd095` (M-1.33's follow-up) established the wrapper and after `check-unsafe.sh` reused it, but neither adopted it; both currently avoid a false *pass* on crash only because no `print` executes before their risky `git`/file-read calls — an undocumented, unenforced invariant one added diagnostic print away from silently reintroducing the exact false-pass class the wrapper exists to prevent. Acceptance: both scripts exit a distinct non-1/0 code on an uncaught exception, verified against a contrived non-UTF-8 input the way `check-unsafe.sh`'s own suite already does | todo |
 | M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | todo |
 | M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
+| M-1.48 | `check-commit-msg.sh` has the same pipe-form SIGPIPE misreport `check-reviewed.sh` and `check-milestone-review.sh` were fixed for | `printf '%s\n' "$known" \| grep -qx "$id"` at line 133 — a large enough backlog makes `grep -qx` exit at the first match, `printf`'s remaining write SIGPIPE, and `pipefail` report a real, listed task id as unlisted. A seventh site of the class `M-1.44` names; not in that task's own list of six. `grep -qxF "$id" <<< "$known"`, matching the sibling fix's shape. Found by M-1.38's review | todo |
 
 ### Notes on specific tasks
 
@@ -1122,6 +1123,33 @@ artifact claiming `task_id: ".*"` satisfies the one rule this gate calls the
 one with teeth. `-F` closes it here; **the identical site in
 `check-reviewed.sh` is M-1.38**, tracked rather than fixed in passing, because
 it belongs to M-1.9.
+
+**M-1.38** closes that tracked defect: `scripts/check-reviewed.sh:145` had
+the identical `grep -qx "$task_id"` its sibling was fixed for, unescaped
+against the backlog's known-id list. Reproducing before fixing, rather than
+trusting the sibling's diagnosis to transfer unchanged, found the site
+actually carried **two** bugs stacked on one line, not one: the regex
+issue the backlog row names (`task_id: ".*"` in a hand-written artifact
+matches every backlog row, satisfying non-negotiable 4 without naming a
+real task), and the same pipe-form SIGPIPE misreport `check-milestone-review.sh`'s
+own comment already describes for its sibling site — `printf '%s\n' "$known"
+| grep -qx "$task_id"` rather than a here-string. Reproduced directly: a
+~20,000-row `known` list with the real match on line 1 makes the pipe form
+report "not found" for a task id that is, in fact, present, because `grep
+-qx` exits at the first match, `printf`'s remaining write then SIGPIPEs, and
+`pipefail` reports that early exit as the pipeline's failure. Both fixed in
+one change — `grep -qxF "$task_id" <<< "$known"` — matching the sibling
+site's exact resulting shape, since the two bugs share one line and one
+`elif` and a fix for one without the other would leave the survivor
+live. `tests/gates/negative.sh` gained a case for the regex direction (a
+hand-written artifact with `task_id: ".*"` against a backlog with one real,
+unrelated task), mutant-tested: reverting to plain `grep -qx` makes the
+fixture wrongly pass. The SIGPIPE direction is real (reproduced above) but
+not separately fixture-tested, the same size-dependent, environment-sensitive
+shape `M-1.24`'s reachable-only-past-150x note and `check-milestone-review.sh`'s
+own eighth-round finding already describe for this exact bug class — a
+~20,000-line fixture is disproportionate to check into a suite that runs on
+every commit.
 
 A second round found two more blocking, and both are the same mistake in
 different clothes: **a check written against the example in front of it.**

@@ -142,7 +142,18 @@ esac
 known="$(known_task_ids)"
 if [[ -z "$known" ]]; then
   skip "backlog membership (the backlog lists no task ids)"
-elif ! printf '%s\n' "$known" | grep -qx "$task_id"; then
+# ⚠️ `-F`, and a here-string rather than `printf | grep`. `-F` because
+# without it the id is a regular expression, and a hand-written artifact
+# whose task_id is `.*` matches every backlog row — satisfying this check
+# while naming no real task. The here-string because `grep -qxF` exits at
+# the first match, `printf`'s remaining write can then SIGPIPE, and
+# `pipefail` reports that early exit as failure — misreporting a `task_id`
+# that genuinely exists as unknown. `M-1.38`: this is the sibling site
+# `check-milestone-review.sh` already fixed for both reasons; this one was
+# missed the first time. Reproduced before fixing: a ~20,000-row `known`
+# list with the real match on line 1 makes the old `printf | grep -qx` form
+# report "not found" for a task id that is, in fact, present.
+elif ! grep -qxF "$task_id" <<< "$known"; then
   fail "review names $task_id, which the backlog does not list"
   finish
 fi
