@@ -45,7 +45,7 @@ comes before any gate because every gate sources it.
 | M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | done |
 | M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | done |
-| M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3; calls `check-milestone-review.sh`, so the milestone cannot be completed while any of its commits has gone unread as a whole | todo |
+| M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3; calls `check-milestone-review.sh`, so the milestone cannot be completed while any of its commits has gone unread as a whole | done |
 | M-1.17 | Make the corpus and product docs self-contained before the repo goes public | No reference to any other repository, no absolute local path, no verbatim quotation of an external private source; every practice stated as this project's own standard | done |
 | M-1.18 | Public-facing files: `README.md`, `CONTRIBUTING.md`, `SECURITY.md` | README states plainly that no implementation exists; contributing says code is not yet accepted and why; security gives a private reporting route | done |
 | M-1.19 | Record the BYOK and FIPS requirements across mission, architecture, roadmap, and the corpus | New milestone M8; `KeyProvider` seam and `oqueue-crypto` crate in the architecture; the AEAD-algorithm-in-region-header constraint recorded against M1 | done |
@@ -1505,6 +1505,66 @@ runtime — which is what lands in the scratch repo's `budget.sh` and is what
 check-drift.sh, run against *that* file inside the case, is meant to catch.
 Reconfirmed after the fix: all ten cases still pass, and `check-drift.sh`
 run directly against the real repo's staged tree passes clean.
+
+**M-1.16** is `scripts/gates/m-1-complete.sh`, M-1's own completion
+condition. It does **not** re-list which script enforces which
+non-negotiable — that table already lives in `AGENTS.md`, and a second copy
+here would be exactly the two-places-one-fact hazard `build-index.sh`'s own
+header names for the standards and skills tables. Instead it parses
+`AGENTS.md`'s `## Non-negotiables` section itself (Python, for the same
+reason `build-index.sh` uses Python rather than bash to find where one
+numbered rule's text ends and the next begins), collects every
+`` `scripts/check-*.sh` `` a rule cites, and runs each one — asserting a rule
+either names a script that exists and passes, or is rule 3, which must say
+in its own words that no script can enforce it. Then it runs
+`tests/gates/negative.sh` (every gate has been watched to fail, not only to
+pass) and `check-milestone-review.sh --milestone M-1` (the outer loop, not
+only the inner one).
+
+The AGENTS.md parser reuses `build-index.sh`'s crash-safety wrapper
+(`try`/`except Exception`, a distinct exit 3) from the start, rather than
+being a fourth site M-1.45 would later need to backport it to — `check-unsafe.sh`
+already established the pattern is worth reusing, not just tolerating twice.
+
+Two defects, both caught before review by testing this script the same way
+every other gate in this milestone was tested: a scratch repo built to be
+genuinely, fully green (every non-negotiable script copied in and passing,
+a minimal backlog naming an unrelated M-2 task so `check-commit-msg.sh`'s
+own HEAD check has something real to pass, `tests/gates/negative.sh` and
+every gate it exercises copied in), confirmed to make `m-1-complete.sh`
+exit 0, and five separate scratch repos each breaking exactly one thing
+(a rule losing its script reference, a named script that genuinely fails,
+`tests/gates/negative.sh` itself failing to catch a broken artifact,
+`AGENTS.md` missing its `## Non-negotiables` section, and `AGENTS.md` fed
+non-UTF-8 bytes to exercise the crash wrapper specifically), each confirmed
+to make it fail for the stated reason.
+
+- A heredoc wrapped in `$(...)` had its closing `)"` written on the same
+  source line as the opening `<<'PYEOF'`, which bash parsed as closing the
+  command substitution *before* the heredoc body it was meant to enclose —
+  `build-index.sh`'s equivalent line works because it is not wrapped in a
+  substitution at all, and this script needed to be, to capture the parsed
+  `RULE`/`PROBLEM` lines rather than only inspect an exit code. Bash's own
+  "unterminated here-document" warning caught it immediately. Fixed by
+  moving the closing `)" || rc=$?` to its own line, after the heredoc's
+  `PYEOF` terminator.
+- The check for whether a rule is legitimately unenforced looked for the
+  literal substring "no script enforces this" in that rule's raw text, and
+  rule 3's own wording wraps across a line break in `AGENTS.md`'s Markdown
+  source ("No script enforces\n   this, and none can.") — so the one rule
+  this check exists to exempt was the one it flagged, reported as
+  `PROBLEM rule 3 names no scripts/check-*.sh script and is not marked as
+  the permanent exception`. Fixed by collapsing whitespace before the
+  search.
+
+Run against the real repo, this script currently and correctly reports
+**M-1 not yet complete**: every non-negotiable's gate passes and
+`tests/gates/negative.sh` proves each can fail, but `check-milestone-review.sh`
+finds three commits since the M-1.37 checkpoint (M-1.14, M-1.15, and the
+checkpoint commit itself) that have not been read as a whole. That is a true
+statement about the milestone's current state, not a defect in this script —
+a milestone-review checkpoint is due, and running one is a separate action
+from writing the condition that says so.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every
