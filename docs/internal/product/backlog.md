@@ -37,7 +37,7 @@ comes before any gate because every gate sources it.
 | M-1.5 | `standards/` — remaining code standards: `behavior`, `rust-style`, `error-handling`, `async-concurrency`, `contracts` | ⚠️ Every carried-over threshold is re-derived against oqueue or explicitly marked underived | done |
 | M-1.6 | `scripts/lib.sh` + `check-commit-msg.sh` | Commit subject must name a task this file lists; `require_tool` skips with a named remedy rather than failing | done |
 | M-1.7 | `check-drift.sh` + `check-tests-kept.sh` | A threshold made settable fails; a deleted test without `Removes-test:` fails | done |
-| M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | todo |
+| M-1.8 | `check-layering.sh` + `check-sans-io.sh` | Sideways dependency fails; a concrete socket type, real clock read, or object-store call in a library crate fails | done |
 | M-1.9 | `review.sh` + `check-reviewed.sh` — the isolated reviewer and its gate | Review artifact keyed by staged-diff hash; amending one byte after review fails the commit | done |
 | M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | todo |
 | M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | todo |
@@ -181,6 +181,84 @@ once more. Both gates are wired into the local `.git/hooks/pre-commit` and
 `commit-msg` scripts alongside M-1.6's and M-1.9's, following the same
 precedent: local wiring now, `.pre-commit-config.yaml`'s portable version
 in M-1.14.
+
+**M-1.8** wires non-negotiable 5 (sans-I/O) and the crate-layering rule
+`code-structure.md` rule 1 and `architecture.md` both already cited a gate
+for. `check-layering.sh` reads each crate's `Cargo.toml` well enough to
+answer one question — which workspace crates does this one depend on at
+runtime — without a real TOML parser: it tracks section headers and, inside
+`[dependencies]`, treats a bare `name = ...` line as a dependency and a
+`[dependencies.name]` header as one too, careful not to mistake that
+sub-table's own `path = ...` field for a second dependency named `path`.
+`oqueue-broker` and `bin/oqueue` (package `oqueue`) are the two named
+composer exceptions; `oqueue-testkit` may never appear in any crate's
+`[dependencies]` regardless of composer status. `check-sans-io.sh` greps
+every library-crate `.rs` file for three literal-identifier patterns — a
+concrete socket type, a real clock read, an object-storage SDK call — each
+exempting `oqueue-broker` (the I/O shell) and, for the object-storage
+pattern only, `oqueue-store` (the `ObjectStore` seam's implementor).
+
+Both were built against a fake scratch workspace rather than trusted from
+reading alone, since the real repository has no crates yet for either gate
+to exercise: a five-crate `Cargo.toml` tree (including a genuine
+`oqueue-testkit` crate, without which the dev-only check cannot fail —
+caught on the first attempt, when an empty scratch workspace made the
+testkit-in-runtime-deps case pass for the wrong reason, no `oqueue-testkit`
+crate existing at all to be flagged) confirmed every rule in both scripts:
+a sideways dependency, `oqueue-testkit` leaking into `[dependencies]`, the
+table-header dependency form parsing correctly, a socket type and a real
+clock read and an S3 SDK call each flagged in an ordinary library crate,
+and `oqueue-broker`/`oqueue-store` correctly exempt from exactly the
+patterns their own role requires and nothing more (`oqueue-store` calling
+the S3 SDK passed; `oqueue-store` opening a raw `TcpStream` still failed).
+
+⚠️ Review found two real gaps the happy-path testing above did not reach,
+each severe enough on its own that neither was left to a "does not catch"
+disclosure. `check-layering.sh`'s flow-form parser matched `name = ...` but
+not Cargo's dotted-key shorthand `name.workspace = true` — an ordinary,
+idiomatic way to centralize dependency versions across a workspace, not an
+obscure one — so a genuinely sideways dependency written that way passed
+clean, and the same gap would have let `oqueue-testkit` leak into a runtime
+`[dependencies]` block undetected. **Blocking**, because it defeats this
+task's first acceptance criterion outright for a realistic Cargo idiom, not
+a contrived one. Fixed by matching the key up to its first `.` rather than
+requiring the whole thing to be a bare identifier, verified against the
+exact `oqueue-index.workspace = true` sideways case and an
+`oqueue-testkit.workspace = true` runtime leak, both now caught. Second,
+`check-sans-io.sh`'s socket pattern used `\b` word-boundary anchors — the
+exact portability hazard `check-drift.sh` had already named and worked
+around one task earlier, reintroduced here with no note explaining why it
+was safe this time (it was not). **Major**, since GNU and BSD grep disagree
+about `\b` and portability.md makes macOS a first-class development
+platform this gate has to run on. Fixed by replacing it with an explicit
+non-identifier-character (or line-start/end) boundary — a different,
+equally portable answer to the same problem `check-drift.sh` solves by
+dropping any boundary at all and accepting the substring false-positive
+risk instead, which the second review round caught this file
+misdescribing as identical to `check-sans-io.sh`'s approach when the two
+scripts actually take opposite ones. Corrected here rather than left
+standing. Verified
+against start-of-line, end-of-line, and ordinary matches.
+
+A second review round passed both fixes and found two further minor
+issues, both fixed rather than deferred. `check-layering.sh` still has one
+disclosed gap left: a dependency renamed via Cargo's `package` key (e.g.
+`sideways = { package = "oqueue-other", path = "..." }`) records the local
+alias as the dependency name and never resolves what it actually points
+at, so a renamed sideways dependency is invisible to every rule in the
+script rather than checked under its real identity — nothing in this
+workspace's conventions calls for renaming an internal crate, so this is
+added to "What this does not catch" as a real, undisclosed-until-now gap
+rather than fixed outright, since closing it needs the value-parsing this
+script deliberately avoids. And this file's own paragraph above originally
+claimed the sans-I/O fix reused "the same" boundary technique
+`check-drift.sh` uses — false: `check-drift.sh` uses no boundary at all,
+by design, and says so in its own header; the two scripts solve the `\b`
+problem in opposite ways. Corrected above.
+
+Both gates currently skip cleanly on this repository (`has_rust()` for the
+layering gate, an empty `git ls-files` glob for sans-I/O) and stay
+unexercised here until M0.
 
 **M-1.9** is new to oqueue and has no precedent to port. The mechanism is in
 [docs/researches/21](../../researches/21-ai-development-loop.md) §5. The
