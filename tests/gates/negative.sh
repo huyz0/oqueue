@@ -393,6 +393,78 @@ invoke_requirements_trace() {
   bash "$1/scripts/check-requirements-trace.sh"
 }
 
+# --- check-file-size.sh: a file over the 500-line limit ---------------------
+setup_file_size() {
+  local dir; dir="$(new_scratch file-size)"
+  copy_gate "$dir" check-file-size.sh
+  mkdir -p "$dir/crates/oqueue-x/src"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  # `printf`'s format-string cycling, not `yes | head`: a pipe whose reader
+  # closes early (`head`) sends the writer (`yes`) SIGPIPE, and this file's
+  # own `pipefail` (inherited from lib.sh) would treat the writer's death as
+  # the pipeline's failure -- aborting this setup function under `set -e`
+  # before it ever got to commit a fixture, the exact idiom `M-1.44` exists
+  # to document. `printf` with a `%.0s` filler argument repeats the format
+  # string once per argument and involves no pipe at all.
+  printf 'pub fn f() {}\n%.0s' {1..501} > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M-1.1: a file over the 500-line limit")
+  printf '%s\n' "$dir"
+}
+invoke_file_size() {
+  bash "$1/scripts/check-file-size.sh"
+}
+
+# --- check-readmes.sh: a crate whose README Upstream section is stale ------
+setup_readmes() {
+  local dir; dir="$(new_scratch readmes)"
+  copy_gate "$dir" check-readmes.sh
+  mkdir -p "$dir/crates/oqueue-x/src"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1" }
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  cat > "$dir/crates/oqueue-x/README.md" <<'EOF'
+# oqueue-x
+
+## Upstream
+
+Nothing documented here, and Cargo.toml depends on tokio.
+
+## Downstream
+
+Nobody yet.
+EOF
+  cat > "$dir/crates/oqueue-x/AGENTS.md" <<'EOF'
+notes
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.1: Upstream section does not mention a real dependency")
+  printf '%s\n' "$dir"
+}
+invoke_readmes() {
+  bash "$1/scripts/check-readmes.sh"
+}
+
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
@@ -404,6 +476,8 @@ run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewe
 run_case "check-milestone-review.sh"    setup_milestone_review    invoke_milestone_review
 run_case "build-index.sh --check"       setup_build_index         invoke_build_index
 run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace
+run_case "check-file-size.sh"           setup_file_size           invoke_file_size
+run_case "check-readmes.sh"             setup_readmes             invoke_readmes
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 

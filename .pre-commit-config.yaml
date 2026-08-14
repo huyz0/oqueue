@@ -77,6 +77,20 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-file-size
+        name: "code-structure.md rules 16, 17, 24: a file is at most 500 lines, and no module is a dumping ground"
+        entry: scripts/check-file-size.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-readmes
+        name: "code-structure.md rules 13-15: every crate has a README.md and AGENTS.md, and the README's dependencies match Cargo.toml"
+        entry: scripts/check-readmes.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
 
       # --- commit-msg stage: the two gates that read the message file itself,
       # which pre-commit passes as this stage's one positional argument.

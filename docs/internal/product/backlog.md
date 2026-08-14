@@ -56,7 +56,7 @@ comes before any gate because every gate sources it.
 | M-1.24 | Trace every milestone to the requirements it serves | Every roadmap entry names FR/NFR IDs; a gate fails on a milestone that names none | done |
 | M-1.25 | `standards/security.md`, `performance.md`, `build.md`, `portability.md` | Each rule names its gate or is explicitly marked as having none; rationale delegated to the corpus rather than restated | done |
 | M-1.26 | `standards/code-structure.md` + `standards/testing.md` + `clippy.toml` | File ≤500 lines with a reasoned allowlist; function ≤50 lines, cognitive complexity ≤20, ≤5 arguments, all via `clippy.toml`; per-crate `README.md` and `AGENTS.md` required; fakes over mocks; the no-flake rules | done |
-| M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | todo |
+| M-1.27 | `check-file-size.sh` + `check-readmes.sh` | File-size limit with an allowlist whose entries carry reasons; every crate has both documents, and the README's stated dependencies match `Cargo.toml` | done |
 | M-1.28 | `scripts/profile.sh` + `scripts/bench.sh` | Every profiling mode is one command: instructions, flamegraph, heap, massif, cache, allocation counts. **Never gated** — available on demand | todo |
 | M-1.29 | `check-hot-path-bench.sh` | Every hot path named in `performance.md` rule 18 has a benchmark, so the list cannot silently rot | todo |
 | M-1.30 | `check-portability.sh` — tool portability of the agent system | `AGENTS.md` and every `SKILL.md` parse without vendor syntax; every skill has `name` and `description`; every `.claude/commands/*.md` is a pointer rather than a procedure | todo |
@@ -1704,6 +1704,64 @@ gate with the unknown-id check deleted, run against the corrected fixture,
 now passes — the opposite of what a real gate should do — which is what
 proves the fixture is actually constraining that check now, not merely
 inert.
+
+**M-1.27** is `check-file-size.sh` and `check-readmes.sh`, `code-structure.md`
+rules 13–18, 24. Both scoped to `*.rs`/`crates/*/` only — `Cargo.toml`,
+`README.md`, and `AGENTS.md` appear in that standard's `applies_to` because
+*other* rules in the same document govern them, not because the 500-line
+limit itself does; rule 16 sits under "## Files" grouped with the
+generated-table and match-arm examples that only make sense for source.
+`check-file-size.sh` also enforces rule 24 (no `util`/`common`/`helpers`/
+`misc` module) in the same pass, since both are properties of the same
+tracked-tree scan. Both `skip` cleanly against this repository today, the
+same bootstrap pattern `check-layering.sh`/`check-sans-io.sh`/
+`check-core-contract.sh`/`check-unsafe.sh` already established, since no
+crate exists until M0.
+
+`check-readmes.sh` is the more speculative of the two: nothing in this
+repository is a worked example of the `## Upstream` section rule 15
+requires, so this task is also the first place that section's shape is made
+concrete — a bullet list, one dependency per item, the name backtick-quoted
+at the *start* of the line — rather than left as prose a script could not
+reliably parse. Deliberately narrow: only the leading backtick token per
+bullet line counts as a stated dependency, so an incidental `` `Result` ``
+or `` `lib.rs` `` mentioned later in the same bullet's prose is not
+mistaken for one. Tested for exactly that trap in the positive scratch
+case, alongside a bullet naming `` `tokio` `` whose explanation also uses a
+backtick mid-sentence.
+
+Both gates' own test fixtures were mutant-tested before review, following
+the discipline `M-1.24`'s round 2 finding established two commits ago: for
+each gate, a copy with its one real check disabled (the line-length branch
+neutralized to `false`; the drift-detection sets replaced with empty ones)
+was run against that gate's own `tests/gates/negative.sh` fixture, and both
+mutants wrongly reported `ok` — confirming each fixture is actually
+constraining the behavior it claims to, not passing for an unrelated
+reason. Both gates get their own case in this same commit, and both are
+wired into `.pre-commit-config.yaml` and the local hook alongside the
+others, for the same reason `M-1.24` gave: adding a gate without either is
+the exact mistake `M-1.46` exists to have been the last instance of.
+
+⚠️ Writing `setup_file_size`'s fixture (`tests/gates/negative.sh`) first
+used `yes 'pub fn f() {}' | head -n 501` to build a 501-line file — caught
+before it ever ran: `yes`'s output pipe closes the moment `head` reads its
+501st line, `yes` receives `SIGPIPE`, and this file's own `pipefail`
+(inherited from `lib.sh`) treats that as the pipeline's failure, which
+would have aborted the whole setup function under `set -e` before ever
+committing a fixture — precisely the idiom `M-1.44` exists to document,
+nearly reproduced by the file whose own gate that idiom was written from.
+Fixed with `printf 'pub fn f() {}\n%.0s' {1..501}`, which repeats the
+format string once per brace-expanded argument and involves no pipe at all.
+
+`check-file-size.sh` itself had a separate, unrelated bug caught the same
+way, before ever reaching review: the loop called `fail()` on a violation
+but then unconditionally reached the trailing `ok` line regardless, so a
+run with a real violation printed a passing summary directly under its own
+`FAIL` line — the exact contradiction `check-milestone-review.sh`'s header
+already warns about. Reproduced with the raw (non-`grep`-filtered) output
+of the over-limit scratch case, which showed both lines side by side.
+Fixed with an explicit violation counter checked before the success
+message, the same shape `check-requirements-trace.sh` already uses.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every
