@@ -1,0 +1,162 @@
+# Push-triggered, not PR-triggered. `M-1.14`.
+#
+# Commits go directly to main; there are no pull requests for a gate to key
+# off. doc 10 (open question 1) names this adaptation explicitly: "PR-triggered
+# gates must become push-triggered. ... Anything keyed to `origin/main...`
+# needs rebasing onto the previous commit." No gate in this repository is
+# currently written against `origin/main...` -- none of them do PR-style
+# diff-narrowing yet, that is a later milestone's mutation-testing gate -- but
+# this workflow itself has the same shape of problem in miniature: the
+# pre-commit-stage gates below compare **the staged index against HEAD**,
+# which only means something if something is staged. After a push there is
+# nothing staged; everything is already committed. The direct-to-main
+# equivalent of "the staged index" is **a pushed commit's own tree**, and the
+# equivalent of "HEAD" is **its parent** -- so each commit in the pushed range
+# is checked out in turn and moved back one commit with `git reset --soft`,
+# which leaves that commit's changes staged against its own parent without
+# touching the working tree, and runs the same gates a local `pre-commit`
+# hook would have run at the moment that commit was made.
+#
+# ⚠️ **Every commit in the push, not just its tip.** The milestone skill's own
+# working style is many commits before one push ("never push unless asked"),
+# so a push routinely carries more than one. An earlier version of this
+# workflow checked only `github.sha` against its immediate parent, which
+# silently never examined any earlier commit in the same push -- found by
+# review, reproduced by stacking a deliberately malformed commit behind a
+# clean tip and confirming the job reported green. `github.event.before` is
+# the ref before the push; every commit in `before..sha` is walked in order.
+# `fetch-depth: 0` (full history, not a fixed shallow number) is required
+# because how many commits a push carries is unbounded by design here, and a
+# fixed depth just moves the same silent-miss failure to a bigger batch.
+#
+# Calls scripts/*.sh through `pre-commit run`, the same dispatcher and the
+# same .pre-commit-config.yaml a local clone installs -- doc 21 §9's rule
+# that a check implemented in two places drifts, and the version that
+# matters is whichever one nobody ran. Nothing here reimplements a check;
+# it only decides when, and against which commit, the existing ones run.
+#
+# ⚠️ **A commit is checked only against what existed at that commit.** This
+# task's own introduction is the concrete case, not a hypothetical one: at
+# the moment this workflow first runs for real, the push it runs against
+# will carry several already-`done`, already-reviewed commits made *before*
+# `.pre-commit-config.yaml` existed at all. Found by review: an earlier
+# version ran `pre-commit run` against every commit in the walked range
+# unconditionally, which failed with `.pre-commit-config.yaml is not a
+# file` for each of those — a false failure indistinguishable from a real
+# one, reproduced against this repository's actual pending history. The
+# same problem generalizes to any gate script the walk might reach further
+# back than its own introducing commit (the bootstrap "first push ever"
+# case walks the entire history). `present_at` (defined in the run step
+# below, where the shell actually executes) checks, at the specific commit
+# being examined, whether the file about to be invoked exists there at all.
+name: gates
+
+# Quoted: unquoted `on:` is YAML 1.1's boolean literal `true`, which GitHub's
+# own parser special-cases correctly but a generic YAML 1.1 loader (PyYAML's
+# `safe_load`, used to validate this file locally) does not -- confirmed by
+# running it here, not assumed.
+"on":
+  push:
+    branches: [main]
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: the walk below needs every commit back to
+          # `github.event.before`, and a push's size is not bounded, so no
+          # fixed shallow depth is honest here -- see the header.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: install pre-commit
+        run: pip install pre-commit
+
+      - name: gates, once per commit in this push
+        env:
+          # check-reviewed.sh reads target/review/<hash>.json, which
+          # .gitignore documents as "consumed on the machine that made
+          # [it]" -- gitignored on purpose, since the verdict gates
+          # *creating* the commit and is regenerable, not a durable record
+          # like reviews/ is. A fresh CI checkout never has it, for any
+          # commit, reviewed or not, so running this check here cannot
+          # distinguish "reviewed, but the artifact wasn't on this machine"
+          # from "never reviewed" -- it would fail every push regardless.
+          # This is not a workaround for a gap; per-commit review is
+          # architecturally a local, pre-commit-time-only gate: the commit
+          # cannot exist in history unless it already passed locally, under
+          # the honesty assumption non-negotiable 3 names as the one thing
+          # no script enforces. CI re-verifying it would require persisting
+          # every per-commit verdict somewhere durable, which is a real,
+          # separate design change -- not this task's to make.
+          SKIP: check-reviewed
+        run: |
+          set -euo pipefail
+
+          # Whether path $2 exists in commit $1's tree -- guards every
+          # invocation below against a commit older than the file it is
+          # about to call.
+          present_at() {
+            git cat-file -e "$1:$2" 2>/dev/null
+          }
+
+          before="${{ github.event.before }}"
+          after="${{ github.sha }}"
+
+          if [[ "$before" =~ ^0+$ ]]; then
+            # A new branch or the repository's first-ever push: there is no
+            # prior ref to diff from. This is a single-branch, direct-to-main
+            # repository, so the correct approximation is "every commit
+            # reachable from here" -- a one-time, bounded cost paid once.
+            echo "no prior ref (new branch or first push): checking every commit in history"
+            commits="$(git rev-list --reverse "$after")"
+          else
+            commits="$(git rev-list --reverse "$before..$after")"
+          fi
+
+          if [[ -z "$commits" ]]; then
+            echo "no new commits in this push to check"
+            exit 0
+          fi
+
+          gate_status=0
+          for c in $commits; do
+            echo "::group::$(git log -1 --pretty='%h %s' "$c")"
+
+            git checkout --quiet "$c"
+            if present_at "$c" ".pre-commit-config.yaml"; then
+              if git rev-parse "$c~1" >/dev/null 2>&1; then
+                git reset --soft "$c~1"
+              else
+                echo "root commit: no parent to rebase onto, running as-is"
+              fi
+              pre-commit run --all-files --hook-stage pre-commit || gate_status=1
+            else
+              echo ".pre-commit-config.yaml did not exist yet at this commit -- nothing to run pre-commit-stage gates against"
+            fi
+
+            # The soft reset above (if it ran) moved HEAD to c~1; the two
+            # gates below read HEAD's own subject and diff HEAD against its
+            # parent directly, not the index, so HEAD needs to be back at c.
+            git checkout --quiet "$c"
+            if present_at "$c" "scripts/check-commit-msg.sh"; then
+              scripts/check-commit-msg.sh || gate_status=1
+            else
+              echo "scripts/check-commit-msg.sh did not exist yet at this commit -- skipping"
+            fi
+            if present_at "$c" "scripts/check-tests-kept.sh"; then
+              scripts/check-tests-kept.sh || gate_status=1
+            else
+              echo "scripts/check-tests-kept.sh did not exist yet at this commit -- skipping"
+            fi
+
+            echo "::endgroup::"
+          done
+
+          git checkout --quiet "$after"
+          exit "$gate_status"

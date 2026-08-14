@@ -1,0 +1,85 @@
+# Wires every gate script in scripts/ as a local hook, so a fresh clone can
+# run `pre-commit install` once and inherit the exact same enforcement this
+# repository's own hand-installed .git/hooks only ever gave the machine they
+# were typed on. `M-1.14`. See AGENTS.md's non-negotiables for what each gate
+# enforces and why; this file only says when each one runs.
+#
+# `default_install_hook_types` covers both stages with the one command --
+# without it, `pre-commit install` wires `pre-commit` only, and a contributor
+# who never separately runs `pre-commit install --hook-type commit-msg` gets
+# half the enforcement without any indication the other half is missing.
+default_install_hook_types: [pre-commit, commit-msg]
+
+# `.github/workflows/gates.yml` runs `pre-commit run --all-files` against
+# this exact file, so a check written once here is never reimplemented in
+# CI -- doc 21 §9's rule that hooks and CI must call the same scripts, or
+# the version that matters is whichever one nobody ran.
+repos:
+  - repo: local
+    hooks:
+      # --- pre-commit stage: every gate that reads the staged index or the
+      # whole tracked tree, none of which take a file-list argument. Each
+      # already reports its own violations and its own "ok"/"skip"; pre-commit
+      # only needs to know whether the process exited zero.
+      - id: check-reviewed
+        name: "non-negotiable 4: every commit is reviewed, bound to the staged diff by hash"
+        entry: scripts/check-reviewed.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-drift
+        name: "non-negotiable 2: no threshold is read from an environment variable"
+        entry: scripts/check-drift.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-layering
+        name: "architecture.md: every crate depends on oqueue-core and nothing else in the workspace"
+        entry: scripts/check-layering.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-sans-io
+        name: "non-negotiable 5: business logic is sans-I/O"
+        entry: scripts/check-sans-io.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-core-contract
+        name: "non-negotiable 6: an oqueue-core trait change updates every implementor and the ADR in one commit"
+        entry: scripts/check-core-contract.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: check-unsafe
+        name: "non-negotiable 7: unsafe lives in three crates only, and every SAFETY block is baselined"
+        entry: scripts/check-unsafe.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+      - id: build-index-check
+        name: "M-1.33: generated index regions (standards table, skills table, research tag index) are current"
+        entry: scripts/build-index.sh --check
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
+      # --- commit-msg stage: the two gates that read the message file itself,
+      # which pre-commit passes as this stage's one positional argument.
+      - id: check-commit-msg
+        name: "non-negotiable 1: the commit subject names a real backlog task"
+        entry: scripts/check-commit-msg.sh
+        language: system
+        stages: [commit-msg]
+      - id: check-tests-kept
+        name: "non-negotiable 2: a removed test names its own removal"
+        entry: scripts/check-tests-kept.sh
+        language: system
+        stages: [commit-msg]

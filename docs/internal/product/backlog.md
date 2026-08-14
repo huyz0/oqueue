@@ -43,7 +43,7 @@ comes before any gate because every gate sources it.
 | M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | done |
 | M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
 | M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
-| M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | todo |
+| M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | done |
 | M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | todo |
 | M-1.16 | `scripts/gates/m-1-complete.sh` — the milestone's own completion condition | Asserts every non-negotiable names a passing script, except rule 3; calls `check-milestone-review.sh`, so the milestone cannot be completed while any of its commits has gone unread as a whole | todo |
 | M-1.17 | Make the corpus and product docs self-contained before the repo goes public | No reference to any other repository, no absolute local path, no verbatim quotation of an external private source; every practice stated as this project's own standard | done |
@@ -888,7 +888,150 @@ dependency graph is heavy. Derive it from measurement once M0's workspace
 exists; until then the task is blocked rather than guessed.
 
 **M-1.14** ⚠️ the CI adaptation that is easy to miss: with no pull requests, any
-gate triggered by one silently never runs.
+gate triggered by one silently never runs. `.pre-commit-config.yaml` wires
+every existing gate script as a local hook (`default_install_hook_types:
+[pre-commit, commit-msg]`, so one `pre-commit install` gets both stages),
+which is what makes a fresh clone inherit the same enforcement this repository
+only ever had by hand-copying scripts into `.git/hooks` — a gap M-1.9 and
+M-1.6 each left open in turn. `.github/workflows/gates.yml` runs the identical
+config via `pre-commit run`, on `push: branches: [main]` rather than
+`pull_request`, since there are none to trigger on.
+
+While wiring the local hook it turned out the hand-installed one on this
+machine had drifted: it ran only `check-reviewed.sh` and `check-drift.sh`,
+never picking up `check-layering.sh`, `check-sans-io.sh`,
+`check-core-contract.sh`, or `check-unsafe.sh` as each landed — exactly the
+"a gate nothing invokes is a preference too" warning `AGENTS.md` already
+carries, just discovered concretely rather than left abstract. Updated the
+local hook (untracked, machine-specific, superseded by this task's own
+tracked config) to match while pip access to install the real tool is
+unavailable here.
+
+The CI half surfaced two adaptations the acceptance criterion's own wording
+only gestures at:
+
+- **The "rebase onto the previous commit" adaptation is not just for a future
+  `origin/main...`-based gate — it is needed now.** Every current
+  pre-commit-stage gate compares the **staged index against HEAD**, which
+  means nothing after a push: there is no staged state, everything is already
+  committed. The direct-to-main equivalent of "staged" is the pushed commit's
+  own tree, and of "HEAD" is its parent — so the workflow does
+  `git reset --soft HEAD~1` before running the pre-commit-stage gates (which
+  leaves the last commit's changes staged against its parent, verified by
+  running this exact sequence against a disposable clone of this repository's
+  real history and confirming `git diff --cached --stat` showed the expected
+  commit's files), then `git reset --hard "$GITHUB_SHA"` before the two
+  commit-msg-stage gates, which read HEAD's own subject and its diff against
+  its parent directly rather than the index. `fetch-depth: 2` is required for
+  `HEAD~1` to resolve at all — the default shallow clone has no parent
+  commit; a guard (`git rev-parse HEAD~1`) handles the repository's actual
+  first commit, where no rebase target exists.
+- **`check-reviewed.sh` cannot run in CI at all, and this is not a gap to
+  close.** Its verdict lives in gitignored `target/review/`, which
+  `.gitignore`'s own comment says is "consumed on the machine that made
+  [it]" — deliberate, since the verdict gates *creating* the commit and is
+  regenerable, not a durable record the way `reviews/` is. A fresh CI
+  checkout never has it, for any commit, reviewed or not, so running the
+  check there cannot distinguish "reviewed, but off-machine" from "never
+  reviewed" — it would fail every push regardless of whether review actually
+  happened. Per-commit review is architecturally a local, pre-commit-time-only
+  gate: the commit cannot exist in history unless it already passed locally,
+  under the honesty assumption non-negotiable 3 names as the one thing no
+  script enforces. `SKIP: check-reviewed` in the CI job says why, not just
+  that.
+
+⚠️ **What could not be verified in this environment, disclosed rather than
+silently assumed correct: the `pre-commit` tool itself.** No `pip` module is
+available in this sandbox and no attempt was made to reach the network for
+one, so `pre-commit install` and `pre-commit run` were never actually
+executed here. What *was* verified directly: `.pre-commit-config.yaml` and
+`.github/workflows/gates.yml` both parse as valid YAML (`python3 -c "import
+yaml; yaml.safe_load(...)"`, catching a real defect this way — unquoted
+`on:` parses as the boolean key `true` under PyYAML's default loader, a
+known YAML 1.1 quirk GitHub's own parser special-cases but a generic one does
+not; quoted to `"on":` and reverified); every hook `entry` script exists and
+is executable; and every entry's actual command, run directly with the exact
+arguments `pre-commit` would pass (no arguments for the six pre-commit-stage
+hooks, one message-file path for the two commit-msg-stage hooks), behaves as
+each gate's own extensive existing test history already established — this
+task added no new check logic, only decided when the existing checks run.
+The `pre-commit` framework's own dispatch is trusted the way this project
+already trusts `git`, `bash`, and `python3` without re-verifying them from
+first principles: a widely used, independently maintained tool, not
+something built or owned here.
+
+Review found two real defects, both reproduced directly rather than reasoned
+about from the diff:
+
+- **blocking**: `.pre-commit-config.yaml`'s own header claimed it wired
+  "every gate script in scripts/," and it didn't — `build-index.sh --check`
+  (M-1.33's own stated pre-commit gate for the generated index regions) was
+  named nowhere in the new config, the CI workflow, or the pre-existing
+  hand-installed local hook, so nothing anywhere would have caught a stale
+  index once this task's hooks became the enforcement path. Fixed by adding
+  it as a ninth hook (`build-index-check`, pre-commit stage, `entry:
+  scripts/build-index.sh --check`) and to the local hook file.
+- **major**: the CI workflow's reset sequence only ever examined the
+  push's tip commit against its immediate parent — correct for a
+  single-commit push, silently wrong for the common case here, since the
+  `milestone` skill's own working style is many commits before one push.
+  Reproduced by building a disposable clone, stacking a deliberately
+  malformed commit (`wip: drop it, no task id, no trailer`) behind a clean
+  tip commit, and confirming the original workflow's exact commands
+  reported green — the malformed commit was never examined. Fixed by
+  walking every commit in `github.event.before..github.sha` in order,
+  checking each one out and running the same reset-and-check sequence
+  against it individually, rather than only the range's final commit.
+  `fetch-depth: 2` became `fetch-depth: 0` (full history) since a fixed
+  shallow depth just moves the identical silent-miss failure to whatever
+  batch size exceeds it, and how large a push can be is not bounded by
+  design here. Reverified the exact malformed-commit scenario against the
+  corrected loop: the buried commit is now caught (`gate_status=1`,
+  correctly distinguishing it from the two clean commits surrounding it in
+  the same simulated push).
+
+Round 2 found one more real defect, more severe in practical terms than
+either round-1 finding because it was not hypothetical: it is the literal
+state of this repository's own pending history.
+
+- **blocking**: the corrected multi-commit walk ran `pre-commit run`
+  against every commit in the pushed range unconditionally — including
+  commits older than the commit that introduces `.pre-commit-config.yaml`
+  itself. Reproduced against real history, not a contrived scenario: this
+  repository's actual `main` was, at review time, several commits ahead of
+  `origin/main` (M-1.5 through M-1.37), none of which contain the new
+  config file. Installing the real `pre-commit` tool and replaying the
+  workflow's exact commands against that real range failed every one of
+  those commits with `.pre-commit-config.yaml is not a file` — a false
+  failure indistinguishable from a real one, and "essentially guaranteed to
+  fire on the very first real push." The same problem generalizes past
+  this one file: `scripts/check-commit-msg.sh` and
+  `scripts/check-tests-kept.sh` themselves postdate several early
+  commits in the walked range (they were introduced by M-1.6), so calling
+  them unconditionally hits the identical class of false failure further
+  back. Fixed with one general guard (`present_at`, `git cat-file -e
+  "$commit:$path"`) applied to all three invocations, rather than three
+  separate special cases — a commit is now checked only against what
+  existed at that commit, matching `portability.md` rule 10's "a missing
+  prerequisite skips with a named reason; it does not fail" for a tool,
+  applied here to a file's own existence in history instead. Reverified
+  against the real repository's actual pending range (31 commits, `before`
+  set to the commit preceding this whole recent batch): the guard
+  correctly identifies exactly one commit (this task's own) as having the
+  config, correctly skips `check-tests-kept.sh` for the 25 commits that
+  predate M-1.7, correctly skips `check-commit-msg.sh` for the 10 that
+  predate M-1.6, runs every gate that does apply, and the loop exits 0 —
+  every one of those commits is genuinely already-valid, already-`done`
+  work. Reverified the round-1 buried-malformed-commit scenario once more
+  on top of this fix to confirm no regression: still caught,
+  `gate_status=1`.
+
+Round 3, with network access this time to install the real `pre-commit`
+tool, replayed the workflow's exact commands against this repository's
+actual unpushed history (`origin/main` at `75bf42d`, local `HEAD` six
+commits ahead) rather than a contrived one, and confirmed the concrete
+case round 2 found broken now exits 0 exactly as intended, with no
+regression on the round-1 scenario. **Pass, no findings.**
 
 **M-1.33** closed a hole in progressive disclosure: skills had layer-1
 descriptions and standards did not, so an agent could see *when* to load a skill
