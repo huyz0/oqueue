@@ -76,7 +76,7 @@ comes before any gate because every gate sources it.
 | M-1.44 | `portability.md` — a shell-scripting section documenting the `set -o pipefail` SIGPIPE-under-`grep -q`/`head`/early-exit idiom | Names the idiom that recurred nine times across six scripts in this milestone (`build-index.sh`, `check-reviewed.sh`, `check-layering.sh`, `check-core-contract.sh`, `milestone-review.sh`, `check-milestone-review.sh`), gives the `\|\| rc=$?` / here-string remedies as rules, and is cited by name from at least one gate script comment rather than left as tribal knowledge in commit messages and backlog prose | todo |
 | M-1.45 | Backport the crash-safety wrapper (`try`/`except Exception` around the Python body, distinct exit code 3 for an uncaught crash) from `build-index.sh`/`check-unsafe.sh` to `check-layering.sh` and `check-core-contract.sh` | Both scripts were written after `fadd095` (M-1.33's follow-up) established the wrapper and after `check-unsafe.sh` reused it, but neither adopted it; both currently avoid a false *pass* on crash only because no `print` executes before their risky `git`/file-read calls — an undocumented, unenforced invariant one added diagnostic print away from silently reintroducing the exact false-pass class the wrapper exists to prevent. Acceptance: both scripts exit a distinct non-1/0 code on an uncaught exception, verified against a contrived non-UTF-8 input the way `check-unsafe.sh`'s own suite already does | todo |
 | M-1.46 | `tests/gates/negative.sh` — a permanent case for `scripts/gates/m-1-complete.sh` | A broken artifact (`AGENTS.md` missing its `## Non-negotiables` section, and non-UTF-8 `AGENTS.md` bytes to exercise the crash wrapper) makes `m-1-complete.sh` fail, checked in and re-run on demand instead of the five ad hoc scratch repos M-1.16's own commit message and backlog retrospective describe running once and not preserving — the exact standard M-1.15 established for every other gate one commit earlier | todo |
-| M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | todo |
+| M-1.47 | Re-sync `milestones/M-1.md`'s "Notes for the boundary review" and `roadmap.md`'s M-1 task-count cell after a milestone-review checkpoint | `M-1.md` no longer says "no commit in M-1 has been read as a whole" / "the coverage is zero" once `reviews/` holds an artifact that says otherwise, and the roadmap's task-count cell for M-1 matches `backlog.md`'s actual row count — the `milestone-review` skill's "Then re-plan: amend the roadmap with what was learned" step, skipped after the M-1.37 checkpoint | done |
 
 ### Notes on specific tasks
 
@@ -1567,6 +1567,33 @@ checkpoint commit itself) that have not been read as a whole. That is a true
 statement about the milestone's current state, not a defect in this script —
 a milestone-review checkpoint is due, and running one is a separate action
 from writing the condition that says so.
+
+A second `milestone-review` checkpoint (`80574fc`) ran next, covering
+exactly those three commits plus M-1.16 itself. It found four things: no
+case in `tests/gates/negative.sh` for `m-1-complete.sh` (**M-1.46**); this
+file's and `roadmap.md`'s staleness, below (**M-1.47**); fresh confirmation
+that **M-1.38** and its sibling M-1.39 are still live, unfixed defects in
+the literal scripts non-negotiable 4 names — worth restating because
+`m-1-complete.sh` reports every non-negotiable green without them, which is
+structurally correct and not the same as M-1 being done; and one minor,
+untasked drift (`.pre-commit-config.yaml` hand-labels non-negotiable
+numbers, the exact mapping `m-1-complete.sh` was written to avoid
+hand-maintaining).
+
+**M-1.47** is that checkpoint's own second finding, closed by this edit:
+the `milestone-review` skill's "Then re-plan: amend the roadmap with what
+was learned" step was skipped after the first checkpoint, so
+`milestones/M-1.md`'s "Notes for the boundary review" still claimed zero
+review coverage and `roadmap.md`'s M-1 task-count cell still read 44,
+three commits after `reviews/` held a real 34-commit artifact saying
+otherwise. Fixed by rewriting both to state what each checkpoint actually
+found (with the resulting task IDs, so a reader does not have to cross-
+reference `reviews/*.json` to know what happened), and by adding forward
+guidance to `M-1.md` for whoever runs the boundary review before declaring
+M-1 complete: a green `m-1-complete.sh` is not license to skip confirming
+M-1.38 and M-1.39 are actually closed. The roadmap's task-count cell is
+now stated as a snapshot rather than implied as current, since keeping it
+live would just be the next thing to go stale.
 
 **M-1.13** implements progressive disclosure in four layers, because the
 alternative — loading seven standards and 110,000 words of research into every
