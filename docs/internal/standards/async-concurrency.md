@@ -3,7 +3,7 @@ title: "Async and concurrency"
 description: >
   Read when writing anything that spawns a task, holds a lock, awaits, or shares state across connections — the coordinator, the broker's I/O shell, and anywhere producers or consumers run concurrently.
 tags: [code, async, concurrency, tokio, locking, cancellation]
-applies_to: ["*oqueue-broker/*", "*oqueue-coordinator/*", "*oqueue-store/*", "*oqueue-compact/*", "*oqueue-crypto/*", "*/bin/oqueue/*"]
+applies_to: ["*oqueue-broker/*", "*oqueue-coordinator/*", "*oqueue-store/*", "*oqueue-compact/*", "*oqueue-crypto/*", "bin/oqueue/*", "*/bin/oqueue/*"]
 ---
 
 # Async and concurrency

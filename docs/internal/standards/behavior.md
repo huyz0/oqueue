@@ -3,7 +3,7 @@ title: "Behavior"
 description: >
   Read when a change is visible to a Kafka client, an operator, or another tenant — protocol responses, defaults, degradation under a dependency failure, logs, or the shape of anything persisted to object storage.
 tags: [code, compatibility, degradation, observability, defaults]
-applies_to: ["*oqueue-broker/*", "*oqueue-coordinator/*", "*oqueue-codec/*", "*oqueue-crypto/*", "*oqueue-store/*", "*oqueue-compact/*", "*/bin/oqueue/*", "docs/internal/product/requirements.md"]
+applies_to: ["*oqueue-broker/*", "*oqueue-coordinator/*", "*oqueue-codec/*", "*oqueue-crypto/*", "*oqueue-store/*", "*oqueue-compact/*", "bin/oqueue/*", "*/bin/oqueue/*", "docs/internal/product/requirements.md"]
 ---
 
 # Behavior

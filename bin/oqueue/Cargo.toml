@@ -1,0 +1,18 @@
+[package]
+name = "oqueue"
+description = "The oqueue broker: the composition root, and the only place a concrete type is chosen."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# ⚠️ **A composer**, and one of only two — `check-layering.sh`'s `COMPOSERS` set
+# is `{oqueue-broker, oqueue}`. Every other crate may depend on `oqueue-core`
+# and nothing else here; these two may depend on siblings, because choosing
+# which concrete type goes behind which seam is their whole job (FR-50).
+[dependencies]
+oqueue-core = { path = "../../crates/oqueue-core" }
+oqueue-crypto = { path = "../../crates/oqueue-crypto" }
+
+[lints]
+workspace = true

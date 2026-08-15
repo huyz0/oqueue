@@ -3,7 +3,7 @@ title: "Contracts"
 description: >
   Read when defining or changing a `pub trait` in `oqueue-core`, adding a fake, or deciding whether a new type belongs on a seam or beside one.
 tags: [code, traits, seams, core, fakes, versioning]
-applies_to: ["*oqueue-core/*", "*oqueue-buf/*", "*oqueue-codec/*", "*oqueue-checksum/*", "*oqueue-index/*", "*oqueue-store/*", "*oqueue-coordinator/*", "*oqueue-crypto/*", "*oqueue-compact/*", "*oqueue-broker/*", "*oqueue-testkit/*", "*/bin/oqueue/*", "docs/internal/product/decisions/*"]
+applies_to: ["*oqueue-core/*", "*oqueue-buf/*", "*oqueue-codec/*", "*oqueue-checksum/*", "*oqueue-index/*", "*oqueue-store/*", "*oqueue-coordinator/*", "*oqueue-crypto/*", "*oqueue-compact/*", "*oqueue-broker/*", "*oqueue-testkit/*", "bin/oqueue/*", "*/bin/oqueue/*", "docs/internal/product/decisions/*"]
 ---
 
 # Contracts
