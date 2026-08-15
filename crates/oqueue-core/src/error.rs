@@ -16,7 +16,13 @@
 /// compatibility with nobody. The cost is real and is the point: adding a
 /// variant breaks every exhaustive match, which is the compiler doing the
 /// review.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+///
+/// ⚠️ **Not `Clone`.** `SecretRejected` carries key material that
+/// [`Redacted`](crate::Redacted) does not zeroize, so every clone would leave
+/// another plaintext copy in freed heap — `security.md` rules 8-9. Nothing
+/// needs to clone an error, and the day something does, the question to answer
+/// first is whether it should be cloning a secret.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// A topic identifier was empty.
     #[error("topic id is empty")]
@@ -59,6 +65,29 @@ pub enum Error {
         base: i64,
         /// The amount that could not be added.
         delta: i64,
+    },
+
+    /// A credential or piece of key material was rejected by whatever owns it.
+    ///
+    /// ⚠️ **Nothing produces this yet**, and `error-handling.md` rule 6 is
+    /// against variants that cannot happen. It is here because `M0.6`'s job is
+    /// the redaction guarantee and a guarantee needs something to guard;
+    /// `M0.11`'s `KeyProvider` is the first thing that returns it. If `M0.11`
+    /// lands without producing it, this variant is the thing to delete.
+    ///
+    /// ⚠️ The material travels **inside [`Redacted`]**, which is what makes
+    /// this variant compatible with FR-44: the bytes are reachable by a caller
+    /// that asks for them explicitly, and reachable by no formatting path at
+    /// all. An error that dropped the material entirely would be safe and
+    /// useless — the caller could not zeroize it or retry.
+    #[error("secret rejected while {context}")]
+    SecretRejected {
+        /// What was being attempted, in terms an operator can act on. ⚠️ Never
+        /// names the secret, the key id, or the tenant — `error-handling.md`
+        /// rule 14.
+        context: &'static str,
+        /// The rejected material. Unprintable.
+        secret: crate::Redacted<Vec<u8>>,
     },
 
     /// An object key was empty.

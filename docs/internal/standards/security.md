@@ -50,6 +50,13 @@ attacker-controlled bytes from an unauthenticated peer.
    formatting macro. → `check-secrets.sh` holds the static half; the end-to-end
    suite searches every node's log for known values
 7. **Nothing holding a secret derives `Debug`.** → the same gate
+   ⚠️ **One carve-out, and it is a type rather than an exception:** a struct may
+   derive `Debug` when the secret is inside `oqueue_core::Redacted<T>`, whose
+   own `Debug` and `Display` take no `T: Debug`/`T: Display` bound and so cannot
+   reach the value at any format specifier. A gate implementing this rule
+   should treat a `Redacted<_>` field as satisfying it, not as a violation.
+   ⚠️ `Redacted` is a *formatting* guarantee only — it does not zeroize, so
+   rule 8 still applies to what goes inside it.
 8. **Key material is zeroized on drop.** A cached DEK is plaintext key material
    in process memory. → `zeroize` on every key type, checked by review
 9. **Key material never lands on disk**, including in a core dump, a heap

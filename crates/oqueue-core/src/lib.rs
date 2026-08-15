@@ -10,9 +10,11 @@
 //! # What is here so far
 //!
 //! The four core identifiers ([`TopicId`], [`PartitionId`], [`Offset`],
-//! [`ObjectKey`]) and the [`Error`] enum they can produce. The trait seams
-//! (`Clock`, `ObjectStore`, `KeyProvider`) arrive in `M0.9` through `M0.11`,
-//! shaped as ADR-0002 decided.
+//! [`ObjectKey`]), the [`Error`] enum they can produce, and [`Redacted`] — the
+//! wrapper that makes a secret unprintable so FR-44 holds by construction
+//! rather than by everyone remembering. The trait seams (`Clock`,
+//! `ObjectStore`, `KeyProvider`) arrive in `M0.9` through `M0.11`, shaped as
+//! ADR-0002 decided.
 //!
 //! # The property every identifier here shares
 //!
@@ -26,10 +28,12 @@ mod error;
 mod object_key;
 mod offset;
 mod partition;
+mod redacted;
 mod topic;
 
 pub use error::{Error, Result};
 pub use object_key::ObjectKey;
 pub use offset::Offset;
 pub use partition::PartitionId;
+pub use redacted::Redacted;
 pub use topic::TopicId;
