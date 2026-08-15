@@ -96,6 +96,17 @@ jobs:
           cargo --version
           rustc --version
 
+      # ⚠️ **Without this, `check-coverage.sh` skips and the job stays green.**
+      # The script turns a missing `cargo-llvm-cov` into a `skip` — correct
+      # behaviour for a developer's machine, and the one outcome worse than
+      # failing when it happens on CI, for the same reason the step above
+      # exists. `ubuntu-latest` ships rustup, cargo, clippy and rustfmt, and
+      # not this. `M0.15`.
+      - name: install cargo-llvm-cov
+        run: |
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --version
+
       - name: gates, once per commit in this push
         env:
           # check-reviewed.sh reads target/review/<hash>.json, which

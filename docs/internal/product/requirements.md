@@ -164,7 +164,7 @@ rather than tests. Full statements in `../standards/`.
 | NFR-52 | Crate dependencies are unidirectional. | `check-layering.sh` | agreed |
 | NFR-53 | `unsafe` confined to three named crates. | `check-unsafe.sh` | agreed |
 | NFR-54 | Every commit reviewed by an agent that did not author it. | `check-reviewed.sh` | agreed |
-| NFR-55 | Per-crate line coverage threshold. | `check-coverage.sh` against a constant | **UNDERIVED** — constant not yet chosen |
+| NFR-55 | Per-crate line coverage **≥ 85%**, excluding crates named in `check-coverage.sh`'s list with a reason. | `check-coverage.sh` against a literal no environment variable can move | agreed — derived in `M0.15`, measured 2026-08-16: lowest crate carrying logic was `oqueue-core` at 91.63% |
 | NFR-56 | Pre-commit suite completes within a time budget. | `check-budget.sh` against a constant | **UNDERIVED** — constant requires a workspace to measure |
 
 ---
@@ -196,7 +196,8 @@ requirement is not justified.** Both are findings for the milestone-boundary
 review, not facts to live with.
 
 ⚠️ Requirements marked **UNDERIVED** are the project's real open risk: NFR-13
-(throughput) gates several architectural decisions and blocks NFR-31, and both
-NFR-55 and NFR-56 are constants that cannot be chosen until there is something
-to measure. They are tracked in
+(throughput) gates several architectural decisions and blocks NFR-31. ⚠️ **NFR-55
+is no longer among them** — `M0.15` measured it on the finished workspace and
+set the floor at 85%. NFR-56 remains a constant that cannot be chosen until
+there is something to measure, and `M0.16` is where it is. They are tracked in
 [docs/researches/10-open-questions.md](../../researches/10-open-questions.md).

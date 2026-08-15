@@ -231,15 +231,13 @@ independently is how a project acquires an architecture nobody chose.
 
 ⚠️ Four milestones have completion conditions that cannot currently be written,
 because the requirement they check has no number. ⚠️ M0 is one of them and is
-not a `non-functional` milestone — two of its gates are constants, so this is
-not only a measurement problem.
+not a `non-functional` milestone — one of its gates is still a constant that needs measuring — NFR-56, in `M0.16`; NFR-55's was measured and set in `M0.15`.
 
 | Requirement | Milestone | Blocked on |
 |---|---|---|
 | NFR-13 aggregate ingest throughput | M14 | doc 10 #25 — also gates #7 and shared-WAL sizing |
 | NFR-22 recovery time objective | M6 | doc 10 #15 — hot-standby and cold rebuild are separate numbers |
 | NFR-23 availability target | M15 | no stakeholder figure |
-| NFR-55 coverage constant | M0 | needs a workspace to measure |
 | NFR-56 pre-commit time budget | M0 | needs a workspace to measure |
 
 **NFR-13 is the one that matters most.** It gates an architectural decision
@@ -268,7 +266,9 @@ after the code it governs has already been violated. Plan: [M-1](milestones/M-1.
 The Cargo workspace, the eleven crates, `oqueue-core`'s trait seams with a fake
 beside each, and the coverage and mutation gates wired to constants.
 ⚠️ Two of those constants (NFR-55, NFR-56) can only be chosen here, because
-choosing them needs a workspace to measure. ⚠️ **Benchmark gates are not among
+choosing them needs a workspace to measure. ⚠️ **NFR-55 is chosen**: `M0.15`
+measured line coverage per crate on the finished workspace and set the floor at
+85%, with the lowest crate carrying logic at 91.63%. NFR-56 is `M0.16`'s. ⚠️ **Benchmark gates are not among
 them**, though this sentence said so until M0 was decomposed: M0 has no hot
 path to benchmark, `check-hot-path-bench.sh` already exists from M-1.29, and
 `performance.md` rule 18's table is filled in as later milestones build the

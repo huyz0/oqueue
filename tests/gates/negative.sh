@@ -1083,6 +1083,71 @@ invoke_crate_test() {
   bash "$1/scripts/check-crate.sh"
 }
 
+setup_coverage_below_floor() {
+  local dir; dir="$(_crate_scratch coverage_floor)"
+  # ⚠️ A crate with executable lines and a test that exercises almost none of
+  # them. `f` is covered; the other three arms are not, which puts the crate
+  # well under any sane floor while still leaving the suite green -- so a run
+  # that fails here fails *only* on coverage.
+  cat > "$dir/crates/k/src/lib.rs" <<'EOF'
+pub fn f(n: u8) -> u8 {
+    if n == 0 {
+        return 1;
+    }
+    if n == 1 {
+        return 2;
+    }
+    if n == 2 {
+        return 3;
+    }
+    if n == 3 {
+        return 4;
+    }
+    if n == 4 {
+        return 5;
+    }
+    if n == 5 {
+        return 6;
+    }
+    0
+}
+
+#[test]
+fn only_the_first_arm() {
+    assert_eq!(f(0), 1);
+}
+EOF
+  # ⚠️ The gate itself, unmodified. The fixture's crate is named `k`, which
+  # appears in neither `UNTIL_FILLED` nor `ALWAYS`, so it is checked rather than
+  # excluded and the case fails on coverage. ⚠️ An earlier version rewrote an
+  # `EXCLUDED=(...)` array to be safe -- that array had already been split in
+  # two, so the rewrite matched nothing and silently did nothing. A no-op
+  # safeguard reads exactly like a working one, which is why the assertion
+  # below names what it depends on instead.
+  copy_gate "$dir" check-coverage.sh
+  # ⚠️ `[[:space:]]`, not `\s` -- the latter is a GNU extension and this repo
+  # runs on macOS too. A pattern that silently never matches would make this
+  # guard useless in exactly the case it exists for.
+  if grep -qE '^[[:space:]]*\[k\]=' "$dir/scripts/check-coverage.sh"; then
+    printf 'FIXTURE BROKEN: crate `k` is in an exclusion list; this case would pass vacuously\n' >&2
+    exit 1
+  fi
+  (cd "$dir" && cargo fmt --all >/dev/null 2>&1 || true)
+  (cd "$dir" && git add -A && git commit -q -m "M0.15: a crate below the coverage floor")
+  printf '%s\n' "$dir"
+}
+invoke_coverage_below_floor() {
+  bash "$1/scripts/check-coverage.sh"
+}
+# ⚠️ **Only runnable where `cargo-llvm-cov` is installed.** Without it the gate
+# *skips* and exits 0, which this suite would report as "reported ok on a broken
+# artifact" -- asserting a regression that does not exist, and turning
+# `m-1-complete.sh` red on any clone that has not installed the tool. Nothing in
+# this repository asks anyone to. So the case is registered conditionally and
+# says so, rather than failing for a missing tool: `lib.sh`'s own rule is that a
+# missing tool is a skip with a named remedy, never a failure.
+_have_llvm_cov() { cargo llvm-cov --version >/dev/null 2>&1; }
+
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
 run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_row invoke_commit_msg_unstaged_row
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
@@ -1112,6 +1177,13 @@ run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_f
 run_case "check-crate.sh (stale lockfile)" setup_crate_stale_lock invoke_crate_stale_lock
 run_case "check-crate.sh (clippy warning)" setup_crate_clippy     invoke_crate_clippy
 run_case "check-crate.sh (failing test)" setup_crate_test         invoke_crate_test
+if _have_llvm_cov; then
+  run_case "check-coverage.sh (crate below the floor)" setup_coverage_below_floor invoke_coverage_below_floor
+else
+  skip "check-coverage.sh (crate below the floor) -- cargo-llvm-cov not installed"
+  note "install: cargo install cargo-llvm-cov"
+  note "⚠️ this case did not run; the gate it covers is unproven on this machine"
+fi
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 

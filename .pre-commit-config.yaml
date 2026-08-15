@@ -105,7 +105,7 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
-      # Last among the pre-commit gates, and the only one that shells out to
+      # The first of the two pre-commit gates that shell out to cargo; `check-coverage` follows it
       # cargo. ⚠️ **Not for speed** — `fail_fast` is set nowhere, so pre-commit
       # runs every hook whatever the order, and no time is saved by putting the
       # slow one last. An earlier version of this comment claimed otherwise and
@@ -117,6 +117,18 @@ repos:
       - id: check-crate
         name: "rust-style.md: rustfmt, clippy with warnings denied, and the tests pass"
         entry: scripts/check-crate.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
+      # ⚠️ **Ordering here buys nothing** — `fail_fast` is unset, so this runs
+      # even after `check-crate` fails and pays the instrumented rebuild anyway.
+      # It is last because that is where a reader looks for the slowest gate,
+      # which is the same reason the comment above gives. `M0.15`.
+      - id: check-coverage
+        name: "testing.md rule 19: per-crate line coverage floor"
+        entry: scripts/check-coverage.sh
         language: system
         stages: [pre-commit]
         pass_filenames: false
