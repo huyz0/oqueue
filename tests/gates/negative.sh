@@ -1316,6 +1316,108 @@ invoke_coverage_below_floor() {
 # this repository asks anyone to. So the case is registered conditionally and
 # says so, rather than failing for a missing tool: `lib.sh`'s own rule is that a
 # missing tool is a skip with a named remedy, never a failure.
+# _m0_scaffold <dir> <name>: the two files `_crate_scratch` writes above and
+# for the identical reasons, which `M0.18`'s fixtures needed and did not have.
+#
+# ⚠️ **The pinned toolchain is what stops these cases going vacuously green.**
+# `m0-complete.sh` checks two targets, and `SCRATCH_ROOT` is under `mktemp -d`
+# where this repository's `rust-toolchain.toml` does not reach — so the aarch64
+# leg failed with `can't find crate for std` no matter what the fixture
+# contained. Measured by review: with the planted type error *replaced by
+# working code*, the case still reported green. That is the same vacuity the
+# comment in `_crate_scratch` calls "the third distinct way this one fixture
+# found to be vacuously green", found a fourth time, in a fixture written to
+# test the gate that exists to catch it.
+_m0_scaffold() {
+  cp "$REPO_ROOT/rust-toolchain.toml" "$1/rust-toolchain.toml"
+  mkdir -p "$1/.cargo"
+  cat > "$1/.cargo/config.toml" <<EOF
+[build]
+target-dir = "$REPO_ROOT/target/tmp/negative-$2"
+EOF
+}
+
+# --- m0-complete.sh: a workspace that does not compile ---------------------
+#
+# `M0.18`. ⚠️ **The assertion no other gate makes.** Every other gate here reads
+# files; `m0-complete.sh` is the only one that compiles the workspace, and
+# NFR-40 is a claim about two targets that nothing else checks. `M-1.46`'s
+# standard says the case is written when the gate is, not thirty commits later.
+#
+# ⚠️ The scratch repo has no `scripts/` beyond the gate and `lib.sh`, so the
+# later assertions fail too — hence the `expect` substring, which is what pins
+# this case to the defect it plants rather than to the scaffolding it lacks.
+setup_m0_complete_broken_workspace() {
+  local dir; dir="$(new_scratch m0-complete-broken)"
+  _m0_scaffold "$dir" m0-complete-broken
+  mkdir -p "$dir/scripts/gates"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  # Does not compile: a type error rustc reports on both targets.
+  echo 'pub fn f() -> u8 { "not a u8" }' > "$dir/crates/oqueue-core/src/lib.rs"
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.18: a workspace that does not compile")
+  printf '%s\n' "$dir"
+}
+invoke_m0_complete() {
+  bash "$1/scripts/gates/m0-complete.sh"
+}
+
+# --- m0-complete.sh: a pub trait in oqueue-core with no fake beside it ------
+#
+# `M0.18`. `contracts.md` rules 9 and 11 put every fake in the crate that owns
+# the trait. ⚠️ `milestones/M0.md`'s completion condition says `oqueue-testkit`
+# instead, contradicting both that standard and its own Goal section — so this
+# case is what makes the gate's reading of the two the enforced one.
+#
+# ⚠️ The workspace here **does** compile, so the trait assertion is what fires
+# rather than the cargo one above it.
+setup_m0_complete_trait_without_fake() {
+  local dir; dir="$(new_scratch m0-complete-no-fake)"
+  _m0_scaffold "$dir" m0-complete-no-fake
+  mkdir -p "$dir/scripts/gates"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  # ⚠️ **Indented, inside a `pub mod`**, which is not decoration: the scanner
+  # was anchored to column 0 and a trait one level in was invisible to it. A
+  # fixture declaring its trait at column 0 leaves that anchor unconstrained,
+  # and reverting the fix keeps the whole suite green.
+  cat > "$dir/crates/oqueue-core/src/lib.rs" <<'EOF'
+pub mod seam {
+    pub trait Clock: Send + Sync {
+        fn now(&self) -> u64;
+    }
+}
+EOF
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.18: a seam with no fake beside it")
+  printf '%s\n' "$dir"
+}
+
 _have_llvm_cov() { cargo llvm-cov --version >/dev/null 2>&1; }
 
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
@@ -1351,6 +1453,17 @@ run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required 
 run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover
 run_case "check-portability.sh"         setup_portability         invoke_portability
 run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence
+# ⚠️ The `expect` is `"fails for"`, not the full command line. The gate narrows
+# to `--workspace --exclude oqueue` for a non-host target with no cross `cc`, so
+# the exact wording depends on the host triple — on macOS, which
+# `portability.md` rule 2 makes first-class, *both* legs narrow and a substring
+# naming the wide form matches nothing. That would report "failed, but not for
+# the reason the fixture plants" for a defect that does not exist. Found by
+# review, on a platform this machine is not.
+run_case "m0-complete.sh (workspace does not compile)" setup_m0_complete_broken_workspace invoke_m0_complete \
+  "mismatched types"
+run_case "m0-complete.sh (pub trait with no fake beside it)" setup_m0_complete_trait_without_fake invoke_m0_complete \
+  "pub trait Clock has no FakeClock in oqueue-core"
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
 run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt
