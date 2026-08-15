@@ -89,12 +89,24 @@ copy_gate() {
 TOTAL=0
 FAILED_CASES=0
 
-# run_case <gate-label> <setup-fn> <invoke-fn>: calls setup-fn plainly (a
-# failure there aborts this whole suite, under the script-wide `set -e` --
-# see the header), then calls invoke-fn with the resulting scratch dir as
-# $1 and checks *that* command's exit code, and only that one, is non-zero.
+# run_case <gate-label> <setup-fn> <invoke-fn> [expected-substring]: calls
+# setup-fn plainly (a failure there aborts this whole suite, under the
+# script-wide `set -e` -- see the header), then calls invoke-fn with the
+# resulting scratch dir as $1 and checks *that* command's exit code, and only
+# that one, is non-zero.
+#
+# ⚠️ **The fourth argument is what stops a case going vacuously green**, and
+# `M0.21` is where that stopped being hypothetical. A gate that checks four
+# properties fails a fixture planting any one of them, so "exit non-zero"
+# stopped distinguishing the defect the fixture plants from an unrelated one
+# it happens to also have -- `check-layering.sh`'s two existing fixtures
+# tripped the new `[lints]` assertion, and would have passed with the layering
+# check deleted outright. Where it is given, the case additionally requires
+# the gate to have *said* what it caught. It is optional because most gates
+# check one thing, and the day one of those grows a second property is the day
+# its case needs this too.
 run_case() {
-  local label="$1" setup_fn="$2" invoke_fn="$3" rc=0
+  local label="$1" setup_fn="$2" invoke_fn="$3" expect="${4:-}" rc=0
   TOTAL=$((TOTAL + 1))
   local dir
   dir="$("$setup_fn")"
@@ -107,7 +119,13 @@ run_case() {
   # exit code is the thing being tested, not to any setup step upstream of
   # it.
   "$invoke_fn" "$dir" >/tmp/negative-gate-output.$$ 2>&1 || rc=$?
-  if (( rc != 0 )); then
+  if (( rc != 0 )) && [[ -n "$expect" ]] && ! grep -qF -- "$expect" /tmp/negative-gate-output.$$; then
+    fail "$label failed, but not for the reason the fixture plants"
+    note "expected the output to contain: $expect"
+    note "captured output:"
+    sed 's/^/     /' /tmp/negative-gate-output.$$ >&2
+    FAILED_CASES=$((FAILED_CASES + 1))
+  elif (( rc != 0 )); then
     ok "$label fails on a broken artifact (exit $rc)"
   else
     fail "$label reported ok on a broken artifact -- this is what the suite exists to catch"
@@ -212,10 +230,15 @@ invoke_drift() {
 setup_layering() {
   local dir; dir="$(new_scratch layering)"
   copy_gate "$dir" check-layering.sh
+  # ⚠️ Otherwise valid in every respect this gate checks *except* the one the
+  # case is named for -- see `run_case`'s fourth argument.
   cat > "$dir/Cargo.toml" <<'EOF'
 [workspace]
 members = ["crates/oqueue-buf", "crates/oqueue-codec"]
 resolver = "2"
+
+[profile.release]
+overflow-checks = true
 EOF
   mkdir -p "$dir/crates/oqueue-buf/src" "$dir/crates/oqueue-codec/src"
   cat > "$dir/crates/oqueue-buf/Cargo.toml" <<'EOF'
@@ -226,6 +249,9 @@ edition = "2021"
 
 [dependencies]
 oqueue-codec = { path = "../oqueue-codec" }
+
+[lints]
+workspace = true
 EOF
   echo 'pub fn f() {}' > "$dir/crates/oqueue-buf/src/lib.rs"
   cat > "$dir/crates/oqueue-codec/Cargo.toml" <<'EOF'
@@ -233,6 +259,9 @@ EOF
 name = "oqueue-codec"
 version = "0.1.0"
 edition = "2021"
+
+[lints]
+workspace = true
 EOF
   echo 'pub fn g() {}' > "$dir/crates/oqueue-codec/src/lib.rs"
   (cd "$dir" && git add -A && git commit -q -m "M-1.1: a leaf crate depending on a sibling leaf")
@@ -255,6 +284,9 @@ setup_layering_non_utf8() {
 [workspace]
 members = ["crates/oqueue-buf"]
 resolver = "2"
+
+[profile.release]
+overflow-checks = true
 EOF
   mkdir -p "$dir/crates/oqueue-buf/src"
   printf '[package]\nname = "oqueue-buf"\nversion = "0.1.0"\nedition = "2021"\n# \xff\xfe bad byte\n' \
@@ -265,6 +297,144 @@ EOF
 }
 invoke_layering_non_utf8() {
   bash "$1/scripts/check-layering.sh"
+}
+
+# --- check-layering.sh: a member manifest with no [lints] workspace --------
+#
+# `M0.21`. `rust-style.md` rule 3's whole enforcement is one line per manifest;
+# omitting it opts the crate out of pedantic, nursery and the `unwrap_used` ban
+# with nothing else changing and every other gate still green.
+setup_layering_no_lints() {
+  local dir; dir="$(new_scratch layering-no-lints)"
+  copy_gate "$dir" check-layering.sh
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-buf"]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true
+EOF
+  mkdir -p "$dir/crates/oqueue-buf/src"
+  cat > "$dir/crates/oqueue-buf/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-buf"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-buf/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M0.21: a manifest that opts out of the workspace lints")
+  printf '%s\n' "$dir"
+}
+
+# --- check-layering.sh: a [profile] section in a member manifest -----------
+#
+# `M0.21`. ⚠️ Cargo **ignores** this and exits 0 with a warning on stderr, so
+# the manifest says one thing and the build does another -- the failure mode is
+# a profile setting that looks configured and is not.
+setup_layering_member_profile() {
+  local dir; dir="$(new_scratch layering-member-profile)"
+  copy_gate "$dir" check-layering.sh
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-buf"]
+resolver = "2"
+
+[profile.release]
+overflow-checks = true
+EOF
+  mkdir -p "$dir/crates/oqueue-buf/src"
+  cat > "$dir/crates/oqueue-buf/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-buf"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+
+[profile.release]
+overflow-checks = true
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-buf/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M0.21: a member manifest carrying a profile cargo ignores")
+  printf '%s\n' "$dir"
+}
+
+# --- check-layering.sh: a release profile without overflow-checks ----------
+#
+# `M0.21`, and ⚠️ this is `security.md` rule 4's named gate, which did not
+# exist until here. The fixture is the exact shape rule 4 cites: the release
+# build wraps where the debug build panics, so every test passes and the
+# shipping binary is the one with the wrapping length offset.
+setup_layering_no_overflow_checks() {
+  local dir; dir="$(new_scratch layering-no-overflow)"
+  copy_gate "$dir" check-layering.sh
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-buf"]
+resolver = "2"
+
+[profile.release]
+lto = "fat"
+EOF
+  mkdir -p "$dir/crates/oqueue-buf/src"
+  cat > "$dir/crates/oqueue-buf/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-buf"
+version = "0.1.0"
+edition = "2021"
+
+[lints]
+workspace = true
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-buf/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M0.21: a release profile with no overflow-checks")
+  printf '%s\n' "$dir"
+}
+
+# --- check-readmes.sh: bin/oqueue, the crate that was excluded ------------
+#
+# `M0.21` widened the glob to `bin/*/`. ⚠️ **This case is what makes the
+# widening load-bearing** rather than a comment: with the glob back at
+# `crates/*/` the fixture below produces no manifests at all and the gate
+# reports its own SKIP, which is exit 0 and this suite's failure.
+setup_readmes_bin() {
+  local dir; dir="$(new_scratch readmes-bin)"
+  copy_gate "$dir" check-readmes.sh
+  mkdir -p "$dir/bin/oqueue/src"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["bin/oqueue"]
+resolver = "2"
+EOF
+  cat > "$dir/bin/oqueue/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+mimalloc = { version = "0.1" }
+EOF
+  echo 'fn main() {}' > "$dir/bin/oqueue/src/main.rs"
+  cat > "$dir/bin/oqueue/README.md" <<'EOF'
+# oqueue
+
+## Upstream
+
+Nothing documented here, and Cargo.toml depends on mimalloc.
+
+## Downstream
+
+Nobody yet.
+EOF
+  echo notes > "$dir/bin/oqueue/AGENTS.md"
+  (cd "$dir" && git add -A && git commit -q -m "M0.21: bin/oqueue Upstream does not mention a real dependency")
+  printf '%s\n' "$dir"
+}
+invoke_readmes_bin() {
+  bash "$1/scripts/check-readmes.sh"
 }
 
 # --- check-sans-io.sh: a concrete socket type in a library crate -----------
@@ -1152,8 +1322,16 @@ run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_
 run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_row invoke_commit_msg_unstaged_row
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
-run_case "check-layering.sh"            setup_layering            invoke_layering
-run_case "check-layering.sh (non-UTF-8 crash)" setup_layering_non_utf8 invoke_layering_non_utf8
+run_case "check-layering.sh"            setup_layering            invoke_layering \
+  "depends on oqueue-codec, not oqueue-core"
+run_case "check-layering.sh (non-UTF-8 crash)" setup_layering_non_utf8 invoke_layering_non_utf8 \
+  "the scanner raised UnicodeDecodeError"
+run_case "check-layering.sh (no [lints] workspace)" setup_layering_no_lints invoke_layering \
+  "no [lints] workspace = true"
+run_case "check-layering.sh ([profile] in a member)" setup_layering_member_profile invoke_layering \
+  "has a [profile] section"
+run_case "check-layering.sh (no overflow-checks)" setup_layering_no_overflow_checks invoke_layering \
+  "does not set overflow-checks = true"
 run_case "check-sans-io.sh"             setup_sans_io             invoke_sans_io
 run_case "check-core-contract.sh"       setup_core_contract       invoke_core_contract
 run_case "check-core-contract.sh (non-UTF-8 crash)" setup_core_contract_non_utf8 invoke_core_contract_non_utf8
@@ -1166,6 +1344,8 @@ run_case "build-index.sh --check"       setup_build_index         invoke_build_i
 run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace
 run_case "check-file-size.sh"           setup_file_size           invoke_file_size
 run_case "check-readmes.sh"             setup_readmes             invoke_readmes
+run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readmes_bin \
+  "mimalloc"
 run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench
 run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required
 run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover

@@ -6,11 +6,15 @@
 #
 # ## Scope
 #
-# Every directory under `crates/*/` with a `Cargo.toml` — `bin/oqueue` is the
-# composition root, not a library crate in `architecture.md`'s crate map, and
-# rule 13's tree diagram is drawn under `crates/oqueue-foo/`, so this does
-# not require it to carry the same two documents. If that turns out wrong,
-# it is a one-line change to the manifest glob below.
+# Every directory under `crates/*/` **and `bin/*/`** with a `Cargo.toml`.
+#
+# ⚠️ `bin/oqueue` was excluded until `M0.21`, on the reasoning that the
+# composition root is not a library crate in `architecture.md`'s crate map. That
+# was written before it had documents. `M0.12` gave it a `README.md` and an
+# `AGENTS.md`, `M0.13` added two dependencies to its manifest, and `M0.14`'s
+# gate census made the gap visible: rule 15's README-matches-manifest property
+# was ungated for exactly the crate whose dependency list was changing, and
+# changes again at `M1`.
 #
 # ## The "Upstream" convention this gate enforces
 #
@@ -119,9 +123,11 @@ def build():
                 names.add(bm.group(1))
         return names
 
-    manifests = sorted((root / "crates").glob("*/Cargo.toml"))
+    manifests = sorted((root / "crates").glob("*/Cargo.toml")) + sorted(
+        (root / "bin").glob("*/Cargo.toml")
+    )
     if not manifests:
-        print("SKIP no crate manifests found under crates/")
+        print("SKIP no crate manifests found under crates/ or bin/")
         return
 
     problems = []

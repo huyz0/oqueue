@@ -36,7 +36,7 @@ repos:
         pass_filenames: false
         always_run: true
       - id: check-layering
-        name: "architecture.md: every crate depends on oqueue-core and nothing else in the workspace"
+        name: "architecture.md + rust-style.md rule 3 + security.md rule 4: crate manifests hold"
         entry: scripts/check-layering.sh
         language: system
         stages: [pre-commit]

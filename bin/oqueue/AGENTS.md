@@ -6,7 +6,16 @@ it.
 ## Which gates run
 
 `check-layering.sh` (as a composer), `check-unsafe.sh`, `check-file-size.sh`,
-and `scripts/check-crate.sh oqueue`.
+`check-readmes.sh`, and `scripts/check-crate.sh oqueue`.
+
+⚠️ **`check-readmes.sh` covers this crate only since `M0.21`.** It asserts
+`code-structure.md` rule 15 over **every runtime dependency, workspace-internal
+and external alike, in both directions**: a dependency in `Cargo.toml` missing
+from `README.md`'s `## Upstream` fails, and so does an `## Upstream` entry with
+no dependency behind it. `oqueue-core` and `oqueue-crypto` are in scope. This crate's
+manifest is the one that changes — `M0.13` added the allocator, `M1` adds a
+runtime and a storage SDK — so **adding a dependency here means editing
+`README.md` in the same commit**, and the gate refuses the commit otherwise.
 
 ⚠️ **`check-sans-io.sh` does not scan `bin/` at all.** Everything this crate is
 allowed to do that no other crate may — name a backend, read a clock, open a

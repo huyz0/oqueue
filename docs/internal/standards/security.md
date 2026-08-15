@@ -37,8 +37,10 @@ attacker-controlled bytes from an unauthenticated peer.
    in every profile including release, and `unchecked_add`/`sub`/`mul` are
    banned outright. ⚠️ The precedent is RUSTSEC-2026-0007: an unchecked addition
    produced an out-of-bounds slice from entirely safe calling code, and debug
-   builds panicked while release wrapped, so tests could not see it. → gate on
-   the profile setting; grep gate on the `unchecked_*` family
+   builds panicked while release wrapped, so tests could not see it. →
+   `scripts/check-layering.sh` asserts `overflow-checks = true` under the root
+   `[profile.release]` (`M0.21`); ⚠️ **the `unchecked_*` grep gate is not
+   written** — no backlog row names it, so it is unscheduled rather than done
 5. **Every decoder has a fuzz target**, seeded from a corpus and run in the
    nightly tier. → `scripts/fuzz.sh`
 

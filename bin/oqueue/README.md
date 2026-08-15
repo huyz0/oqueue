@@ -41,6 +41,7 @@ Nothing. It is the top of the graph.
 | No `oqueue-testkit` in `[dependencies]` | `scripts/check-layering.sh` — ⚠️ the *only* dependency rule it enforces here, since a composer is exempt from the star-topology one |
 | Depends only on `oqueue-core` and the crates it composes | ⚠️ **No gate.** Composer exemption means `check-layering.sh` accepts any workspace dependency; review's |
 | No `unsafe` | `#![forbid(unsafe_code)]`, `scripts/check-unsafe.sh` |
+| Every dependency in `Cargo.toml` is named in `## Upstream` below | `scripts/check-readmes.sh` — ⚠️ **only since `M0.21`**; this crate was outside its glob while `M0.13` added the allocator |
 | The global allocator is set here and in no library crate | ⚠️ **No gate.** ADR-0007; one `grep` from being checkable, review's until it is |
 
 ## Notes for whoever touches this

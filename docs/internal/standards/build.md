@@ -40,7 +40,15 @@ ignored.
    strictly worse than the stock profile. Setting cgu=1 without setting `lto` is
    a mistake that looks like tuning.
 7. **`overflow-checks = true` in every profile, including release.** →
-   `security.md` rule 4
+   `security.md` rule 4. ⚠️ **The gate asserts `[profile.release]` only** —
+   `scripts/check-layering.sh` (`M0.21`) — and that is the profile where it
+   matters, because it is the one whose cargo default is wrong: measured, a
+   crate with no `overflow-checks` line anywhere panics on `u8` 255+1 under
+   `dev` and prints `0` under `release`. The root's other three profiles reach
+   it by inheritance — `dist` and `release-checked` from `release` directly,
+   `bench` from `dist`, which rule 10 pins deliberately — so gating `release`
+   gates all four. **`[profile.dev]`'s explicit line is ungated** and deleting
+   it changes nothing today, because it restates the default.
 8. **`panic = "unwind"`** — a decoder panic must not kill a node serving other
    tenants.
 9. **`debug = "line-tables-only"` in release**, so production flamegraphs

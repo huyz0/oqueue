@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Every crate depends on oqueue-core and nothing else in the workspace. `M-1.8`.
+# Crate manifests: layering, lints, profiles, overflow-checks. `M-1.8`, `M0.21`.
 #
 #   scripts/check-layering.sh
 #
@@ -9,6 +9,19 @@
 # low-level crate depending on a high-level one is perfectly acyclic and
 # perfectly wrong. See `docs/researches/19` §2 and `architecture.md`'s
 # dependency rule.
+#
+# ⚠️ **`M0.21` widened this past layering**, because three more properties are
+# read off the same manifests this script already parses and none had a gate:
+#
+#   * `lints.workspace = true` in every member — `rust-style.md` rule 3
+#   * no `[profile]` in a member — cargo ignores it silently
+#   * `overflow-checks = true` in the root's `[profile.release]` —
+#     `security.md` rule 4, which names a gate that did not exist
+#
+# The name is now narrower than what it does. Renaming a script every gate,
+# hook and standards table references is a bigger change than adding three
+# assertions, so the header carries the truth instead. ⚠️ A reader grepping for
+# `security.md` rule 4's gate will not find "overflow" in a filename.
 #
 # ## The rule
 #
@@ -135,14 +148,77 @@ def runtime_deps(toml_path):
         # header, e.g. `path = "..."` -- never a new dependency name.
     return deps
 
+def sections(text):
+    r"""Yield `(table, line)` for every non-header line, `table` being the name
+    of the table it sits under or None at top level.
+
+    This file reads manifests without a TOML library on purpose (`M-1.8`), so
+    what counts as a section boundary has to be decided once, here.
+
+    ⚠️ **Any line starting with `[` ends the previous table**, even one this
+    parser cannot name. That is the whole point, and getting it wrong is a
+    *silent pass* rather than a crash: an earlier version matched headers with
+    `^\[([A-Za-z0-9_.\-]+)\]$` and simply skipped anything else, so a quoted
+    sub-table left the previous section **sticky** and its keys were read as
+    the parent's. Measured: a root manifest whose `[profile.release]` sets only
+    `lto`, followed by `[profile.release.package."*"]` setting
+    `overflow-checks = true`, passed the assertion below — `security.md`
+    rule 4's gate reporting ok on exactly the configuration it exists to
+    reject. The real root manifest already writes `[profile.dev.package."*"]`.
+    Found by review.
+
+    ⚠️ **And a header may carry a trailing comment.** `[profile.release]  #
+    tuned` is legal TOML and this repository comments densely; an anchored
+    `$` match rejected it, which failed in the other direction — the gate
+    refusing every commit while naming a key that was present."""
+    section = None
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s or s.startswith("#"):
+            continue
+        if s.startswith("["):
+            close = s.find("]")
+            # An unterminated header is not a header this parser can trust
+            # either; drop to top level rather than carry the old one forward.
+            section = s[1:close].strip() if close > 0 else None
+            continue
+        yield section, s
+
+
+def table_names(text):
+    """Every table header in `text`, including ones holding no keys.
+
+    ⚠️ Separate from `sections()`, which yields *keys*: a present-but-empty
+    `[profile.release]` yields none, so asking `sections()` about it reported
+    "no [profile.release] section" against a manifest that has one. The two
+    questions — does this table exist, does it say this — are genuinely
+    different and one traversal cannot answer both."""
+    names = []
+    for raw in text.splitlines():
+        s = raw.strip()
+        if not s.startswith("["):
+            continue
+        close = s.find("]")
+        if close > 0:
+            names.append(s[1:close].strip())
+    return names
+
+
+def section_says(text, table, pattern):
+    """True if `pattern` matches a line inside the `[table]` table."""
+    return any(sec == table and re.match(pattern, ln) for sec, ln in sections(text))
+
+
 def build():
     manifests = sorted((root / "crates").glob("*/Cargo.toml"))
-    bin_manifest = root / "bin/oqueue/Cargo.toml"
-    if bin_manifest.exists():
-        manifests.append(bin_manifest)
+    # ⚠️ `bin/*/`, matching `check-readmes.sh`. Hardcoding `bin/oqueue` meant a
+    # second binary would be README-gated and not lints-gated — and since
+    # `M0.21`, `rust-style.md` rule 3 names this script as its only
+    # enforcement. Found by review.
+    manifests += sorted((root / "bin").glob("*/Cargo.toml"))
 
     if not manifests:
-        print("SKIP no crate manifests found under crates/ or bin/oqueue/")
+        print("SKIP no crate manifests found under crates/ or bin/")
         sys.exit(0)
 
     names_by_manifest = {}
@@ -156,9 +232,84 @@ def build():
         names_by_manifest[m] = name
         all_names.add(name)
 
+    # ⚠️ **The root manifest, which is not a member and has no `[package]`.**
+    # `security.md` rule 4 names a gate for `overflow-checks` -- "→ gate on the
+    # profile setting" -- and until `M0.21` none existed. Dropping that line
+    # leaves every test green while a wrapping length offset ships: the debug
+    # build panics and the release build wraps, which is verbatim the
+    # RUSTSEC-2026-0007 shape rule 4 cites.
+    #
+    # ⚠️ **`[profile.release]` and not every profile**, which is narrower than
+    # `build.md` rule 7's wording and is the profile that matters: measured, a
+    # crate with no `overflow-checks` line anywhere panics on `u8` 255+1 under
+    # `dev` and prints `0` under `release`, and the root's other profiles reach
+    # it by inheritance (`bench` via `dist`, not via `release` directly).
+    # `build.md` rule 7 records what this does not cover.
+    root_toml = (root / "Cargo.toml").read_text(encoding="utf-8")  # crash -> CRASH, below
+    # ⚠️ Both halves through `sections()`, not a scan of its own. The first
+    # version tested presence with an anchored regex and the value with the
+    # helper, and the two disagreed about what a header is in *both*
+    # directions — see `sections()`. Found by review, twice.
+    if "profile.release" not in table_names(root_toml):
+        problems.append("Cargo.toml: no [profile.release] section")
+    elif not section_says(root_toml, "profile.release", r"overflow-checks\s*=\s*true"):
+        problems.append(
+            "Cargo.toml: [profile.release] does not set overflow-checks = true "
+            "-- security.md rule 4"
+        )
+
     checked = 0
     for m, name in names_by_manifest.items():
         checked += 1
+        text = m.read_text(encoding="utf-8")
+
+        # ⚠️ **`lints.workspace = true`, in every member.** `rust-style.md`
+        # rule 3 promised this gate "once Cargo.toml exists, M0". Without it a
+        # crate silently opts out of pedantic, nursery and the `unwrap_used`
+        # ban by omitting one line -- and `M0.8` added ten manifests at once.
+        # ⚠️ Section-scoped, not two independent searches. `[lints]` present
+        # anywhere plus a bare `workspace = true` under some *other* table --
+        # `[dependencies.foo]` has exactly that shape -- would otherwise pass a
+        # manifest whose lints table is empty.
+        if not (
+            section_says(text, "lints", r"workspace\s*=\s*true")
+            # ⚠️ **And the dotted shorthand**, which is the spelling
+            # `rust-style.md` rule 3 uses in its prose. No manifest here writes
+            # it today; `runtime_deps` already handles Cargo's dotted keys, and
+            # rejecting the form the standard states would fail closed.
+            # ⚠️ **At top level only.** The first version of this scanned every
+            # line of the file regardless of table, which is the bug the
+            # `[lints]` branch above exists to avoid, reintroduced beside it:
+            # measured, `lints.workspace = true` misplaced inside `[package]`
+            # makes cargo say `unused manifest key: package.lints`, exit 0, and
+            # drop every workspace lint for that crate — and this gate said ok.
+            # Found by review.
+            or any(
+                sec is None and re.match(r"^lints\.workspace\s*=\s*true", ln)
+                for sec, ln in sections(text)
+            )
+        ):
+            problems.append(
+                f"{m.relative_to(root)} ({name}): no [lints] workspace = true "
+                f"-- rust-style.md rule 3"
+            )
+
+        # ⚠️ **No `[profile]` in a member.** Cargo **ignores** it, warns on
+        # stderr and exits 0, so a profile setting written here is invisible
+        # rather than wrong -- worse than being wrong, because the file says
+        # one thing and the build does another. `build.md`'s Profiles section
+        # and ADR-0001.
+        # ⚠️ Through `sections()` like the rest. `re.search` with `^` was the
+        # one check in this loop reading raw lines, and an **indented**
+        # `  [profile.release]` — which `tomllib` parses as a real
+        # `profile.release` table and cargo warns-and-ignores — walked past it.
+        # Measured by review.
+        if any(t == "profile" or t.startswith("profile.") for t in table_names(text)):
+            problems.append(
+                f"{m.relative_to(root)} ({name}): has a [profile] section, which "
+                f"cargo ignores in a member -- profiles live in the root manifest"
+            )
+
         deps = runtime_deps(m) & all_names
         dev_only_hit = deps & DEV_ONLY
         if dev_only_hit:
@@ -216,13 +367,14 @@ if (( crashed > 0 )); then
 elif (( skipped > 0 )); then
   skip "crate layering (no crate manifests found)"
 elif (( rc == 0 )) && [[ -z "$problems" ]]; then
-  ok "crate layering (${checked:-0} manifest(s) hold)"
+  ok "crate manifests (${checked:-0} manifest(s) hold)"
 elif [[ -n "$problems" ]]; then
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
-    fail "layering violation: $p"
+    fail "manifest violation: $p"
   done <<< "$problems"
-  note "every crate depends on oqueue-core and nothing else in the workspace"
+  note "manifests must: depend only on oqueue-core, carry lints.workspace = true,"
+  note "hold no [profile] section, and (root) set overflow-checks in [profile.release]"
   note "the named exceptions are oqueue-broker and bin/oqueue (package: oqueue)"
 else
   fail "layering check died (exit $rc); the tree was not checked"

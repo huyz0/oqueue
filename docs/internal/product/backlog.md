@@ -83,7 +83,7 @@ see — and a count is not that evidence if it is only asserted.
 | M0.17 | Mutation testing wired with diff-narrowing: `scripts/mutants.sh` and `check-mutants.sh` | ⚠️ **Both paths are named by `testing.md` rules 16 and 17 and by the `tdd` skill, and neither exists** — this row creates them under those exact names, because a standard citing a script nobody wrote is the shape M0.1 is cleaning up elsewhere in this same milestone. `scripts/mutants.sh <crate>` runs only over what the staged diff touched, so cost is O(change) rather than O(workspace); a surviving mutant in changed code fails unless it is in `check-mutants.sh`'s baseline with a reason, which is a list nobody grows quietly (rule 17); the run's own wall clock is measured against NFR-56's budget. ⚠️ **Wired into `.pre-commit-config.yaml` or CI and given a `tests/gates/negative.sh` case** proving a deliberately weakened test lets a mutant survive and fails the gate — the same rule M0.15 and M0.16 apply to themselves, and it matters more here than for either of them: `testing.md` rule 15 and doc 19 make mutation testing the **primary** anti-slop gate, so a version of it that has never been observed to fail is the one gate whose silent uselessness would be least visible. ⚠️ If mutation testing does not fit the budget it belongs outside pre-commit and in CI — that is a decision to record, never a threshold to lower, and either way it is invoked by something | done |
 | M0.18 | `scripts/gates/m0-complete.sh`, and its case in `tests/gates/negative.sh` | The gate asserts: the workspace checks on both targets and links on the host; **every `pub trait` in `oqueue-core` has a fake beside it in `oqueue-core`** — ⚠️ *not* in `oqueue-testkit`, which is what `milestones/M0.md`'s completion condition says and what `contracts.md` rules 9 and 11 forbid; that plan sentence also contradicts the plan's own Goal section, which says "a fake beside it"; `check-layering.sh`, `check-sans-io.sh` and `check-unsafe.sh` pass, because three of M0's requirements name exactly those three as their whole verification, and **all five gates M0.14 instruments report a non-zero inspected count**, `check-file-size.sh` and `check-readmes.sh` included, since a count nothing re-checks regresses the first time a matcher stops matching — ⚠️ `check-core-contract.sh` is not among them because it is diff-scoped and this gate runs standalone; **both** NFR-55's and NFR-56's constants are literals in their scripts rather than environment variables; **every gate M0 added — `check-crate.sh`, `check-coverage.sh`, `check-budget.sh` and the mutation-testing run — is invoked by `.pre-commit-config.yaml` or CI and has a case in `tests/gates/negative.sh`**, since M0 adds four gates and a gate nothing invokes is a preference; and `check-milestone-review.sh` covers every M0 commit. ⚠️ **and `m0-complete.sh` runs `tests/gates/negative.sh` itself**, because nothing else will: `m-1-complete.sh` runs it today as part of the *previous* milestone's condition, and neither the hooks nor CI do — so M0's four cargo fixtures, each of which was vacuously green at some point, would be exercised only by a finished milestone's gate. `tests/gates/negative.sh` gains a case proving `m0-complete.sh` fails on a broken workspace — M-1.46's standard, applied when the gate is written rather than thirty commits later | todo |
 | M0.20 | Act on the M0 checkpoint review: amend the rows it names, argue what has no row, and record why M0 exceeds the task cap | `reviews/` holds the verdict, staged; every major finding either names a row that now carries it (`M0.8`, `M0.10`, `M0.11`, `M0.16`, `M0.18`) or is argued in `baselines/review.txt`; `sdd.md`'s cap says the number is a heuristic and that exceeding it costs a recorded argument; `roadmap.md`'s deferral table names `fuzz.sh` and `check-secrets.sh` with receiving milestones; the five claims the review found false at HEAD are true; `check-milestone-review.sh` passes. ⚠️ Serves no FR/NFR — `sdd.md`'s outer-loop step, like `M0.0`'s opening one | done |
-| M0.21 | The three manifest assertions in `check-layering.sh`, split out of `M0.8` | The gate rejects a crate manifest without `lints.workspace = true`, a **member** manifest carrying a `[profile]` section, and a root manifest whose `[profile.release]` lacks `overflow-checks = true` — ⚠️ the last is named by `security.md` rule 4 ("→ gate on the profile setting") and exists nowhere; each gets a `tests/gates/negative.sh` case; ⚠️ `check-layering.sh`'s header, its `name:` in `.pre-commit-config.yaml`, and its row in the standards tables are updated to say it checks manifests rather than layering alone, or `security.md` rule 4's gate ends up under a name nobody would grep for. ⚠️ **This row also widens `check-readmes.sh` to cover `bin/oqueue`**, whose `README.md` and `AGENTS.md` exist since `M0.12` and are checked by nothing — so `code-structure.md` rule 15's README-matches-manifest property is ungated for the one crate whose dependencies changed in `M0.13` and change again at `M1`. `M0.14` recorded it; recording it a third time would be the failure `M-1.47` names. ⚠️ Names no FR/NFR — it is gate work split out of `M0.8`, and `M0.0`'s criterion that every other row names one was true when `M0.0` closed | todo |
+| M0.21 | The three manifest assertions in `check-layering.sh`, split out of `M0.8` | The gate rejects a crate manifest without `lints.workspace = true`, a **member** manifest carrying a `[profile]` section, and a root manifest whose `[profile.release]` lacks `overflow-checks = true` — ⚠️ the last is named by `security.md` rule 4 ("→ gate on the profile setting") and exists nowhere; each gets a `tests/gates/negative.sh` case; ⚠️ `check-layering.sh`'s header, its `name:` in `.pre-commit-config.yaml`, and its row in the standards tables are updated to say it checks manifests rather than layering alone, or `security.md` rule 4's gate ends up under a name nobody would grep for. ⚠️ **This row also widens `check-readmes.sh` to cover `bin/oqueue`**, whose `README.md` and `AGENTS.md` exist since `M0.12` and are checked by nothing — so `code-structure.md` rule 15's README-matches-manifest property is ungated for the one crate whose dependencies changed in `M0.13` and change again at `M1`. `M0.14` recorded it; recording it a third time would be the failure `M-1.47` names. ⚠️ Names no FR/NFR — it is gate work split out of `M0.8`, and `M0.0`'s criterion that every other row names one was true when `M0.0` closed | done |
 | M0.19 | Two rules in `review.md` that bound the loop: a claim about tool behaviour is measured before it is written, and a `minor` on a `pass` is recorded rather than re-reviewed | `review.md` gains both; `which-standards.sh` selects `review.md` for a shell script and a research document, which is where two of the three worked examples lived; the `review` and `milestone` skills that duplicate the resolution rules agree with rule 15, including that nothing is staged for a minor. ⚠️ Comment-density, criterion-length and ADR-length rules were cut from this task — no gate, and the criterion-length one made the 20-task cap binding in the commit that filled slot 20. ⚠️ Names no FR/NFR; `M0.0`'s criterion that every other row does was true when `M0.0` closed | done |
 
 ⚠️ **M0.15 through M0.18 are not blocked by NFR-55 and NFR-56 being
@@ -498,15 +498,44 @@ crate manifests.
   review's.
 - `check-layering.sh` sees **12**: every crate plus `bin/oqueue`, which it
   treats as a composer.
-- `check-readmes.sh` sees **11**: `crates/` only. ⚠️ **This one is a defect.**
-  `bin/oqueue` has a `README.md` and an `AGENTS.md` as of `M0.12` and neither is
-  checked, so `code-structure.md` rule 15's README-matches-manifest property is
-  ungated for the crate whose dependency list changed in `M0.13` — and will
-  change again when `M1` adds a runtime and a storage SDK to the composition
-  root. ⚠️ **Recorded twice already** (`M0.12`'s commit body named `M0.13` as the
-  commit that would make it bite, and it did), which is the signal that prose is
-  the wrong place for it. **Scheduled into `M0.21`**, the row that already
-  widens a gate's scope, rather than into a twenty-third row.
+- `check-readmes.sh` saw **11**: `crates/` only. ⚠️ **That one was a defect**,
+  and `M0.21` closed it — the glob is `crates/*/` and `bin/*/` now.
+  ⚠️ **The census above still reads 11, and must**: it is introduced as
+  verbatim output on 2026-08-16 at commit `05b3b08`, so re-deriving it would
+  destroy the `M0.14` record rather than update it. A live count comes from
+  running the gate. `bin/oqueue` had a `README.md` and an `AGENTS.md`
+  as of `M0.12` and neither was checked, so `code-structure.md` rule 15's
+  README-matches-manifest property was ungated for the crate whose dependency
+  list changed in `M0.13` — and changes again when `M1` adds a runtime and a
+  storage SDK to the composition root. ⚠️ **Recorded twice before it was
+  scheduled** (`M0.12`'s commit body named `M0.13` as the commit that would make
+  it bite, and it did), which is the signal that prose is the wrong place for a
+  defect. ⚠️ **Two of the census lines are now text no run reproduces**, for the same
+  reason: `check-readmes.sh` reports 12 today, and `crate layering (12
+  manifest(s) hold)` became `crate manifests (12 manifest(s) hold)` when
+  `M0.21` renamed that gate's output. Both are correct as a dated record and
+  wrong as a current one.
+
+**M0.21** fixed a sticky-section bug in the manifest parser it added, and
+⚠️ **left the same bug in the three parsers around it**, deliberately, because
+fixing them is not what the row asked for: `package_name()` and
+`runtime_deps()` in the same file, and ⚠️ **`check-readmes.sh`'s, which is the
+parser this very commit widened to `bin/*/`**. `sections()` now ends a table on any
+line starting with `[`, including a header it cannot name; `package_name()` and
+`runtime_deps()` still use `^\[([A-Za-z0-9_.\-]+)\]$` and *skip* what does not
+match, carrying the previous section forward. The reachable shape is a quoted or
+`cfg`-gated table — `[target."cfg(unix)".dependencies]`, which nothing in this
+workspace writes today and `M1` plausibly will. Direction matters: for the star
+topology it mostly fails *closed* (keys of an unparseable table get read as the
+previous section's dependencies, producing a false violation), but a runtime
+dependency declared only under a `[target...]` table is invisible to it, which
+is a **silent pass on NFR-52**. One helper now exists that gets this right;
+routing the other two through it is a small change and is **for M0's boundary
+review to schedule**, not for the row that happened to notice. ⚠️ **Prose is
+the wrong place for a defect** — this section says so eight lines down — and
+the only thing that makes it acceptable here is that the boundary review is
+the *next* action after `M0.18`, not a distant one. If `M0` closes without a
+row for this, that is the failure `M-1.47` names, happening again.
 
 **M0.12** found that three standards had an `applies_to` glob that never
 matched. `contracts.md`, `behavior.md` and `async-concurrency.md` all listed

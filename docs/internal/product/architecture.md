@@ -24,7 +24,10 @@ crates and build scripts break that pipelining and are therefore kept few, tiny,
 and at the root. See
 [docs/researches/19](../../researches/19-workspace-engineering.md) §1–2.
 
-Enforced by `scripts/check-layering.sh` (M-1.8). `[dev-dependencies]` are exempt,
+Enforced by `scripts/check-layering.sh` (M-1.8), which `M0.21` widened to the
+three other properties it can read off the same manifests — `lints.workspace`,
+no member `[profile]`, and `overflow-checks` in the root release profile.
+`[dev-dependencies]` are exempt,
 because a test may compose and because Cargo permits a dev-dependency cycle,
 which is what makes a shared testkit usable at all.
 

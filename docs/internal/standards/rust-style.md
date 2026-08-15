@@ -32,8 +32,8 @@ configuration.
    `#![warn(...)]` block repeated at the top of every crate's `lib.rs` —
    that is the same "two places holding one fact" hazard
    [`M-1.33`](../product/backlog.md) already names for generated indexes,
-   applied to lint configuration. → grep gate: every crate's `Cargo.toml`
-   carries `lints.workspace = true` (lands once `Cargo.toml` exists, M0)
+   applied to lint configuration. → `scripts/check-layering.sh`, which reads
+   every crate manifest already (`M0.21`)
 4. **`clippy::pedantic` and `clippy::nursery` are denied workspace-wide.**
    An allowance is a named exception with a reason in the lint table, not a
    silent `#[allow]` at the call site — a silent one is indistinguishable

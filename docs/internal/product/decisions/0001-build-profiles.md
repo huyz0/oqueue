@@ -234,9 +234,12 @@ not because the decision is expensive to reverse — three of the five entries
 above are here to prevent a specific silent failure, and a silent failure is one
 whose absence leaves no evidence that anything was avoided.
 
-⚠️ **What has no gate.** All of it. Nothing in `.pre-commit-config.yaml` reads
-this table, so every commitment above is a preference in this project's own
-sense of the word:
+⚠️ **What has no gate.** ⚠️ **Most of it** — this said "all of it" until
+`M0.21`, which gated the fourth and fifth bullets below. The sixth is still
+ungated, and deliberately: see **The last is neither** at the end. Nothing in `.pre-commit-config.yaml`
+reads the *table*, so every commitment above about `lto`, `codegen-units`,
+`strip` or `debug` remains a preference in this project's own sense of the
+word; the two correctness properties are now checks:
 
 - Deleting `lto = "thin"` leaves the tree green, and the resulting binary is
   slower in a way only `M14`'s benchmarks would reveal.
@@ -246,7 +249,9 @@ sense of the word:
 - ⚠️ **Deleting `overflow-checks = true` from `[profile.release]` leaves the
   tree green**, and this one is different from the three above because
   `security.md` rule 4 does not merely imply a gate, it **names** one —
-  "→ gate on the profile setting" — and no such script exists. The failure it
+  "→ gate on the profile setting". ⚠️ **`M0.21` wrote it** — into
+  `check-layering.sh`, which already parses every manifest; see the resolution
+  at the end of this bullet. Until then no such script existed. The failure it
   guards is the one that standard cites: an unchecked addition producing an
   out-of-bounds slice from entirely safe code, where **the debug build panics
   and the release build wraps**, so every test in this repository passes while
@@ -255,13 +260,17 @@ sense of the word:
   commit and split the manifest assertions out. It lands alongside the
   member-`[profile]` one and for the same reason: in `check-layering.sh`, which
   already parses manifests, with that row's obligation to add a
-  `tests/gates/negative.sh` case. Until then nothing enforces it, and no task
-  between here and `M0.21` touches a profile.
+  `tests/gates/negative.sh` case. ⚠️ **Done, in `M0.21`** — the assertion is
+  there and its negative case plants a release profile that sets `lto` and not
+  `overflow-checks`. Nothing enforced it between here and there, and no task in
+  that window touched a profile.
 - A `[profile]` section in a **member** crate is ignored by cargo, which warns
   on stderr and exits 0 — so it is invisible unless someone reads the warning.
-  `M0.8` adds ten member manifests at once, which is where this becomes likely;
-  ⚠️ the check itself is `M0.21`'s, in `check-layering.sh`, which already parses
-  every crate manifest — split out of `M0.8` by M0's checkpoint review.
+  `M0.8` added ten member manifests at once, which is where this became likely;
+  ⚠️ the check itself was `M0.21`'s, in `check-layering.sh`, which already
+  parses every crate manifest — split out of `M0.8` by M0's checkpoint review,
+  and **done there**, including an indented `  [profile.release]`, which cargo
+  still reads as a real table and still ignores.
 - ⚠️ **Nothing builds four of the five profiles, ever.** `check-crate.sh`,
   `.pre-commit-config.yaml` and `gates.yml` compile `dev` and `test` and
   nothing else. `M0.3` observed `cargo check` passing under all five on both
@@ -277,9 +286,9 @@ The first three are review's job and are stated here so a reviewer has something
 to check against; a gate asserting a TOML table matches a TOML table it is
 generated from would be a tautology, and the interesting property — "is thin LTO
 still buying anything" — is a benchmark, which is `M14`. **Two of the six are
-scheduled** rather than left to review: the member-`[profile]` check and the
-`overflow-checks` assertion both land in `M0.21`, in `check-layering.sh`, which
-already parses every manifest. **The last is neither**, and it is recorded as a
+gated** rather than left to review: the member-`[profile]` check and the
+`overflow-checks` assertion, both landed in `M0.21` in `check-layering.sh`,
+which already parses every manifest. **The last is neither**, and it is recorded as a
 finding for M0's boundary review rather than acted on here: adding a CI step is
 not what `M0.3` was asked for, and `M0` should not end having decided by
 omission that four profiles go unbuilt.
