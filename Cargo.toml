@@ -22,7 +22,19 @@
 # specific mistake to avoid.
 resolver = "3"
 
-members = ["crates/oqueue-core"]
+members = [
+    "crates/oqueue-core",
+    "crates/oqueue-buf",
+    "crates/oqueue-checksum",
+    "crates/oqueue-codec",
+    "crates/oqueue-index",
+    "crates/oqueue-store",
+    "crates/oqueue-coordinator",
+    "crates/oqueue-crypto",
+    "crates/oqueue-compact",
+    "crates/oqueue-broker",
+    "crates/oqueue-testkit",
+]
 
 [workspace.package]
 # One version for the whole workspace. `0.0.0` because nothing here is

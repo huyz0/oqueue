@@ -108,11 +108,81 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "oqueue-broker"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-buf"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-checksum"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-codec"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-compact"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-coordinator"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
 name = "oqueue-core"
 version = "0.0.0"
 dependencies = [
  "proptest",
  "thiserror",
+]
+
+[[package]]
+name = "oqueue-crypto"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-index"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-store"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+]
+
+[[package]]
+name = "oqueue-testkit"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
 ]
 
 [[package]]

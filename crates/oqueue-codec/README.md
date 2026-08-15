@@ -1,0 +1,34 @@
+# `oqueue-codec`
+
+## What is it?
+
+The Kafka wire protocol: request and response framing, and RecordBatch encode/decode.
+
+## Why does it exist?
+
+Because protocol compatibility is the product. Every byte a client sends or expects is decided here, and keeping it in one crate is what makes a golden-byte corpus and a fuzz target possible against a single surface.
+
+## Upstream
+
+- `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+
+## Downstream
+
+`oqueue-broker`, and through it `bin/oqueue`.
+
+⚠️ **Only a composer may consume this crate.** `check-layering.sh` allows a
+non-composer to depend on `oqueue-core` alone, so a sibling that needs a type
+from here does not depend on here — the type belongs in `oqueue-core`.
+
+## Invariants
+
+| Must stay true | Held by |
+|---|---|
+| Nothing sized by a client-supplied length is allocated unbounded | review; `security.md` |
+| Every decoder has a fuzz target | ⚠️ **no gate today** — `scripts/fuzz.sh` is named by `security.md` rule 5 and deferred into `M2` |
+
+## Notes for whoever touches this
+
+- **This crate parses untrusted input.** `security.md`'s rules on bounded allocation apply to every length field a client controls, and `testing.md` rule 24 puts a fuzz target on every decoder.
+- ⚠️ **CRC-32C, not CRC-32/IEEE.** Doc 18 §4.3 records that `crc32fast` implements the wrong polynomial — no compile error, no runtime error, just batches every client rejects. The checksum lives in `oqueue-checksum`.
+- **Hot-path `pub fn`s crossing into another crate carry `#[inline]`** — ADR-0003, which measured the band where it matters.

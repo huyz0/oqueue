@@ -52,7 +52,7 @@ which is what makes a shared testkit usable at all.
 | `oqueue-crypto` | AEAD, envelope encryption, DEK cache, nonce construction | forbid |
 | `oqueue-compact` | Compaction planning and execution | forbid |
 | `oqueue-broker` | **Composer.** The I/O shell, generic over its seams | forbid |
-| `oqueue-testkit` | Fakes, generators, harness. **Dev-only.** | forbid |
+| `oqueue-testkit` | Harness and generators. **Dev-only.** ⚠️ **No fakes** — `contracts.md` rules 9 and 11 put every fake beside its trait in `oqueue-core`, so a downstream crate is testable without depending on the testkit. Corrected in `M0.8`; this cell said "Fakes, generators, harness" | forbid |
 | `bin/oqueue` | Composition root — where concrete types are chosen | forbid |
 
 The `unsafe` column is a three-crate budget, and it falls out of the split for

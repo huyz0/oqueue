@@ -1,0 +1,15 @@
+[package]
+name = "oqueue-broker"
+description = "The I/O shell: the connection loop, request dispatch, and the batching that turns many small produces into few large PUTs."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# ⚠️ `oqueue-core` and nothing else in this workspace — `architecture.md`'s star
+# topology, enforced by `check-layering.sh`. This crate is a named composer, so it may also depend on other workspace crates as it grows.
+[dependencies]
+oqueue-core = { path = "../oqueue-core" }
+
+[lints]
+workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "oqueue-index"
+description = "The offset→object index and its search: given an offset, which object holds it and where inside it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# ⚠️ `oqueue-core` and nothing else in this workspace — `architecture.md`'s star
+# topology, enforced by `check-layering.sh`. A dependency on a sibling crate is a layering violation, not a shortcut.
+[dependencies]
+oqueue-core = { path = "../oqueue-core" }
+
+[lints]
+workspace = true
