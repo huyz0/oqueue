@@ -38,9 +38,13 @@ rust-version = "1.97.1"
 license = "Apache-2.0"
 
 # Every third-party version is decided once, here, and every crate writes
-# `foo.workspace = true`. Empty until a crate needs something: the async runtime
-# arrives with `M0.4`'s ADR, not before, because a dependency added ahead of the
-# decision that justifies it is a decision made by accident.
+# `foo.workspace = true`. Empty until a crate needs something. ⚠️ **`M0.4`'s
+# ADR-0002 chooses Tokio and adds nothing**, because a decision is not a use and
+# a workspace dependency nothing references compiles nothing. That is a
+# statement about M0.4, not a prediction about the rest of M0: `M0.13` wires an
+# allocator, and `M0.10`/`M0.11` may want a runtime under `[dev-dependencies]`
+# to poll a boxed future — ⚠️ which `check-layering.sh` never reads, so it lands
+# green and nothing here would notice.
 [workspace.dependencies]
 
 # ── Lints ───────────────────────────────────────────────────────────────────

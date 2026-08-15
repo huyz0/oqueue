@@ -54,7 +54,8 @@ false.
 ⚠️ That is narrower than "this table is free at commit time", which is not true:
 `[profile.dev.package."*"] opt-level = 2` is in this table, applies to exactly
 the profiles pre-commit builds, and becomes the most expensive line in it the
-moment `M0.4` adds an async runtime. It is a deliberate trade — pay once, cached
+moment a crate first takes an async dependency — ⚠️ not `M0.4`, which decides
+the runtime without adding it (ADR-0002), and no other M0 task adds one either. It is a deliberate trade — pay once, cached
 forever, against integration tests that are unusably slow with an unoptimized
 compression or crypto dependency in the loop — and `M0.16` measures NFR-56's
 constant with it already in place.
