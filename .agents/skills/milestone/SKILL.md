@@ -34,7 +34,8 @@ until completion condition exits 0:
     tdd                → failing test, watch it fail, implement, watch it pass
     deterministic gates→ scripts/check-crate.sh <crate>, coverage, layering
     review             → an agent that did not write it            ← never skip
-    fix or argue       → findings resolved
+    fix or argue       → blocking (and, on changes-requested, major) resolved;
+                         minors recorded, not fixed-and-re-reviewed
     commit             → subject names the task ID
     tick the backlog   → with the commit reference
 ```

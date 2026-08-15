@@ -110,5 +110,11 @@ says so by returning `pass`, which records them and warns.
 ⚠️ The entry must be **staged**. An unstaged one is ignored, because a line that
 never reaches the commit suppresses a finding while leaving no trace of it.
 
+⚠️ **On a `pass` verdict, a `minor` finding is recorded in the commit body and
+the commit lands.** Nothing is staged for it — a staged row changes the hash and
+re-runs this whole procedure, which is the loop the rule exists to stop. Fixing
+it is permitted and usually wrong: the new round's surface is the prose the fix
+just added. `review.md` rule 15.
+
 ⚠️ A growing argued-list is itself a signal: somebody is being systematically
 overruled, and one side is systematically wrong.

@@ -93,6 +93,21 @@ milestone loop is called out.
     author, with genuinely isolated context — and saying so plainly is the
     same discipline non-negotiable 3 already asks of test claims.
 
+## Claims
+
+12a. ⚠️ **A claim about compiler, cargo, or tool behaviour is measured before it
+    is written, or it is not written** — in a comment, a commit body, an ADR, a
+    standard, or a research document alike. Three were written in this project
+    and were wrong, each caught in review: "edition 2024 implies resolver 3"
+    (false for a virtual manifest), "`--all-targets` covers doc tests" (it
+    excludes them), "`release` and `bench` evict each other" (they coexist).
+    Each was plausible, each cost a review round, each took under a minute to
+    check. If measuring is not worth the minute, the sentence is not worth
+    writing. ⚠️ **Stated here rather than in `rust-style.md`** because two of
+    the three defects above lived in a shell script and in a research document.
+    Verified: `which-standards.sh` on those two paths selects this file and not
+    `rust-style.md`, so this is the standard a reviewer of either is given.
+
 ## Fix or argue
 
 13. **A blocking finding is resolved exactly one of two ways: fixed, or
@@ -105,12 +120,22 @@ milestone loop is called out.
     finding.** A reviewer who judges a major finding non-blocking says so by
     returning `pass` — which still records the finding and warns, but does
     not require it to be fixed or argued before the commit lands.
-15. **The milestone loop's argued baseline is the same file, the same
+15. ⚠️ **A `minor` finding on a `pass` verdict is recorded, not re-reviewed.**
+    Record it in the **commit body**, which is not hashed and is therefore
+    free. ⚠️ Nothing else, and deliberately: staging a backlog row would change
+    the hash and force the re-review this rule exists to prevent. If the minor
+    is work worth scheduling, that is a decision and a later commit. Fixing it is
+    permitted and usually wrong: the hash changes, review re-runs, and the new
+    round's surface is the prose the fix just added. ⚠️ **Rule 13's
+    "fixed means review re-runs" governs blocking findings only**; reading it
+    onto minors is what turns one review into five; M0.3's commit body records
+    that count.
+16. **The milestone loop's argued baseline is the same file, the same
     discipline**, with one addition: a blocking or major finding must name a
     backlog `task_id` that exists, or be argued the same way — a finding that
     lives only in a review artifact is one nothing will act on, since
     `next-task` and everyone else reads the backlog, not `reviews/`.
-16. ⚠️ **A growing argued list is itself a signal.** Reviewed at milestone
+17. ⚠️ **A growing argued list is itself a signal.** Reviewed at milestone
     boundaries, a `baselines/review.txt` that only grows means a reviewer is
     being systematically overruled, and one side of that is systematically
     wrong. Nobody may grow it quietly — the same discipline `testing.md`
