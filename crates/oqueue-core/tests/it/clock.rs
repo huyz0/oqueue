@@ -125,3 +125,13 @@ fn concurrent_advances_neither_lose_updates_nor_go_backwards() {
         "an observer saw the clock run backwards"
     );
 }
+
+/// ⚠️ Kills the `< ` -> `<=` mutant in `FakeClock::advance`: advancing by zero
+/// is valid and must not be rejected as negative.
+#[test]
+fn advancing_by_zero_is_valid() {
+    let clock = FakeClock::new();
+    clock.advance(10).expect("valid");
+    assert_eq!(clock.advance(0).map(Timestamp::as_millis), Ok(10));
+    assert_eq!(clock.now().as_millis(), 10);
+}

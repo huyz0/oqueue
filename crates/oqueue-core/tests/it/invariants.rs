@@ -15,7 +15,7 @@
 // panic here means the generator is wrong, not the code under test.
 #![allow(clippy::expect_used)]
 
-use oqueue_core::{Error, ObjectKey, Offset, PartitionId, TopicId};
+use oqueue_core::{Error, ObjectKey, Offset, PartitionId, Timestamp, TopicId};
 use proptest::prelude::*;
 
 proptest! {
@@ -115,4 +115,71 @@ fn offset_add_at_the_boundary_errors_rather_than_wrapping() {
         })
     );
     assert_eq!(max.add(0).map(Offset::get), Ok(i64::MAX));
+}
+
+/// ⚠️ Mutation testing found these gaps; each assertion below kills a specific
+/// surviving mutant that the property tests above let through.
+///
+/// The property tests assert what *cannot* be produced, which is the invariant.
+/// They do not assert that an accessor returns what was put in, or that
+/// `Display` renders anything — so `as_str -> "xyzzy"` and
+/// `fmt -> Ok(Default::default())` both survived. Those are not invariant
+/// violations, they are the ordinary correctness a round trip catches, and
+/// `M0.5` was right that a round trip alone would have constrained nothing.
+/// Both are needed.
+mod kills_surviving_mutants {
+    use super::{Error, ObjectKey, Offset, PartitionId, Timestamp, TopicId};
+
+    #[test]
+    fn accessors_return_what_was_constructed() {
+        assert_eq!(TopicId::new("orders").expect("valid").as_str(), "orders");
+        assert_eq!(
+            ObjectKey::new("a/b.seg").expect("valid").as_str(),
+            "a/b.seg"
+        );
+        assert_eq!(PartitionId::new(7).expect("valid").get(), 7);
+        assert_eq!(Offset::new(42).expect("valid").get(), 42);
+        assert_eq!(Timestamp::from_millis(9).expect("valid").as_millis(), 9);
+    }
+
+    #[test]
+    fn display_renders_the_value() {
+        assert_eq!(TopicId::new("orders").expect("valid").to_string(), "orders");
+        assert_eq!(
+            ObjectKey::new("a/b.seg").expect("valid").to_string(),
+            "a/b.seg"
+        );
+        assert_eq!(PartitionId::new(7).expect("valid").to_string(), "7");
+        assert_eq!(Offset::new(42).expect("valid").to_string(), "42");
+        assert_eq!(Timestamp::from_millis(9).expect("valid").to_string(), "9ms");
+    }
+
+    /// ⚠️ Zero is the boundary every `< 0` guard turns on, and `< ` mutated to
+    /// `<=` rejects it. A generator reaches 0 only by luck; this does not.
+    #[test]
+    fn zero_is_valid_everywhere_it_should_be() {
+        assert_eq!(PartitionId::new(0).expect("zero is a partition").get(), 0);
+        assert_eq!(Offset::new(0).expect("zero is an offset").get(), 0);
+        assert_eq!(Timestamp::from_millis(0).expect("epoch").as_millis(), 0);
+        let start = Offset::new(5).expect("valid");
+        assert_eq!(
+            start.add(0).map(Offset::get),
+            Ok(5),
+            "advancing by zero is valid"
+        );
+    }
+
+    /// And that the guards still reject one below the boundary.
+    #[test]
+    fn minus_one_is_rejected_everywhere() {
+        assert_eq!(
+            PartitionId::new(-1),
+            Err(Error::NegativePartitionId { got: -1 })
+        );
+        assert_eq!(Offset::new(-1), Err(Error::NegativeOffset { got: -1 }));
+        assert_eq!(
+            Timestamp::from_millis(-1),
+            Err(Error::NegativeTimestamp { got: -1 })
+        );
+    }
 }

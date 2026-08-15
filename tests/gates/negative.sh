@@ -1211,7 +1211,74 @@ else
   note "install: cargo install cargo-llvm-cov"
   note "⚠️ this case did not run; the gate it covers is unproven on this machine"
 fi
+setup_mutants_weakened() {
+  local dir; dir="$(_crate_scratch mutants_weakened)"
+  copy_gate "$dir" mutants.sh
+  copy_gate "$dir" check-mutants.sh
+  mkdir -p "$dir/baselines"
+  printf '# fixture: nothing argued\n' > "$dir/baselines/mutants.txt"
+  # ⚠️ A function with a real branch, and a test that **executes it without
+  # constraining it** — the characteristic failure `testing.md` rule 15 names.
+  # Coverage is 100%; `cargo mutants` replaces the body and the test still
+  # passes. That is exactly the case this gate exists for.
+  cat > "$dir/crates/k/src/lib.rs" <<'EOF'
+pub fn classify(n: i32) -> &'static str {
+    if n < 0 { "negative" } else { "non-negative" }
+}
+
+#[test]
+fn it_returns_something() {
+    // Executes the line, constrains nothing about it.
+    let _ = classify(-1);
+    let _ = classify(1);
+}
+EOF
+  (cd "$dir" && cargo fmt --all >/dev/null 2>&1 || true)
+  (cd "$dir" && git add -A && git commit -q -m "M0.17: a test that constrains nothing")
+  printf '%s\n' "$dir"
+}
+invoke_mutants_weakened() {
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
+setup_mutants_narrowed() {
+  local dir; dir="$(setup_mutants_weakened)"
+  # ⚠️ The **narrowed** mode, which is the one pre-commit runs and the one both
+  # vacuous-pass paths were found in. `--in-diff` needs a staged *modification*,
+  # not merely a staged file: re-adding an unchanged file leaves
+  # `git diff --cached` empty and the gate correctly skips — which is what this
+  # fixture did on its first attempt, and a case passing on that skip would
+  # prove nothing.
+  cat >> "$dir/crates/k/src/lib.rs" <<'EOF'
+
+pub fn also_unconstrained(n: i32) -> &'static str {
+    if n > 100 { "big" } else { "small" }
+}
+
+#[test]
+fn it_runs_the_other_one_too() {
+    let _ = also_unconstrained(1);
+    let _ = also_unconstrained(1000);
+}
+EOF
+  (cd "$dir" && cargo fmt --all >/dev/null 2>&1 || true)
+  (cd "$dir" && git add crates/k/src/lib.rs)
+  printf '%s\n' "$dir"
+}
+invoke_mutants_narrowed() {
+  bash "$1/scripts/check-mutants.sh"
+}
+
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
+_have_mutants() { cargo mutants --version >/dev/null 2>&1; }
+if _have_mutants; then
+  run_case "check-mutants.sh (test constrains nothing)" setup_mutants_weakened invoke_mutants_weakened
+  run_case "check-mutants.sh (narrowed, test constrains nothing)" setup_mutants_narrowed invoke_mutants_narrowed
+else
+  skip "check-mutants.sh (test constrains nothing) -- cargo-mutants not installed"
+  note "install: cargo install cargo-mutants"
+  note "⚠️ this case did not run; the gate it covers is unproven on this machine"
+fi
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 

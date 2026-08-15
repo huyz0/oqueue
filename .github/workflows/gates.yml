@@ -115,6 +115,15 @@ jobs:
           cargo install cargo-llvm-cov --locked
           cargo llvm-cov --version
 
+      # ⚠️ CI runs the **full** mutation pass; pre-commit runs the narrowed one.
+      # Both halves of `testing.md` rule 16, and no conflict with NFR-56 — a
+      # narrowed run is ~4.8 s warm, not the 23 s an unnarrowed one costs.
+      # `M0.17`.
+      - name: install cargo-mutants
+        run: |
+          cargo install cargo-mutants --locked
+          cargo mutants --version
+
       - name: gates, once per commit in this push
         env:
           # check-reviewed.sh reads target/review/<hash>.json, which
@@ -203,3 +212,16 @@ jobs:
 
           git checkout --quiet "$after"
           exit "$gate_status"
+
+      # ⚠️ The **full** run, which is CI's half of `testing.md` rule 16 — the
+      # narrowed one is a pre-commit hook. ⚠️ **After** the per-commit gate loop,
+      # deliberately: a full mutation pass over a workspace whose tests do not
+      # pass is 23 s of noise, and the loop is what says so plainly.
+      # ⚠️ `CARGO_INCREMENTAL` is **not** inherited here: the gate loop sets it
+      # in its own *step* env, which never reaches a sibling step. It arrives
+      # only because `Swatinem/rust-cache` exports it into `GITHUB_ENV` — and
+      # that action returns early when the cache service is unavailable, so this
+      # step can run incremental. `build.md` rule 21 wants it always; setting it
+      # at job level is the fix and is a workflow change beyond this row.
+      - name: mutation testing (full)
+        run: scripts/check-mutants.sh --full

@@ -63,7 +63,11 @@ BACKLOG="docs/internal/product/backlog.md"
 #                        the planted `.git` it fails; before that plant existed
 #                        it did something worse and reported `passed` for a
 #                        milestone whose every commit was unread.
-GATES_EXCLUDED=(check-commit-msg.sh check-reviewed.sh check-milestone-review.sh)
+# ⚠️ `check-mutants.sh` is here because it *cannot* run meaningfully in this
+# harness: it narrows to `git diff --cached`, and the staged tree this script
+# plants has no usable index, so the gate skips — which rendered as "passed" in
+# every packet and told the reviewer a gate had run when it had not. `M0.17`.
+GATES_EXCLUDED=(check-commit-msg.sh check-reviewed.sh check-milestone-review.sh check-mutants.sh)
 
 staged_hash() {
   # --diff-filter is deliberately absent: a deletion is part of what is being

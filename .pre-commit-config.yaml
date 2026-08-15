@@ -134,6 +134,18 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # ⚠️ Narrowed to the staged diff, so cost is proportional to the change:
+      # ~4.8 s warm for a 13-mutant diff, and a skip when a diff produces none.
+      # `testing.md` rule 17 — a survivor is killed or argued; rule 16 is what
+      # puts the narrowed run here and the full one in CI. `M0.17`.
+      - id: check-mutants
+        name: "testing.md rule 17: a surviving mutant is killed or argued"
+        entry: scripts/check-mutants.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
       # ⚠️ **Genuinely last**, and this one has to be: it adds up the timings
       # every gate above recorded, so anything after it would be uncounted.
       # `M0.16`.

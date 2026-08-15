@@ -108,6 +108,10 @@ _record_timing() {
   # `review.sh && git commit` in one shell would charge review time to the
   # pre-commit suite. `PRE_COMMIT=1` is set by pre-commit and by nothing else.
   [[ -n "${PRE_COMMIT:-}" ]] || return 0
+  # ⚠️ A gate that shells out to another gate sets this, so one hook contributes
+  # one row. Without it `check-mutants.sh` -> `mutants.sh` recorded twice and
+  # `check-budget.sh` counted a phantom gate.
+  [[ -z "${OQUEUE_SUPPRESS_TIMING:-}" ]] || return 0
   local now ms pgid
   now="$(_now_ms)"
   [[ -n "$now" && -n "$_GATE_STARTED_MS" ]] || return 0

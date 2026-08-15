@@ -1,0 +1,22 @@
+# Argued surviving mutants.
+#
+# A surviving mutant means a test executed the line without constraining it —
+# `testing.md` rule 15 calls that the characteristic failure of generated tests,
+# and rule 17 says such a mutant is killed or argued.
+#
+# ⚠️ **Killing is the default.** An entry here is a claim that the mutation
+# produces behaviour genuinely indistinguishable from the original, not that
+# writing the test was inconvenient.
+#
+# ⚠️ **This is a list nobody grows quietly.** It is reviewed at every milestone
+# boundary, the same discipline `baselines/review.txt` and `baselines/unsafe.txt`
+# carry, and a baseline that only grows means the tests are losing.
+#
+# Format: <file>:<line>:<col>: <mutation>  <reason>
+#
+# ⚠️ The reason is required. A location on its own suppresses a survivor while
+# recording nothing about why.
+#
+# Empty as of `M0.17`: the first full run over `oqueue-core` found 11 survivors
+# and all 11 were killed by writing tests rather than argued here. That is the
+# ratio to keep.

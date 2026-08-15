@@ -8,6 +8,11 @@
 # and cargo-mutants copies the workspace per worker; both land here.
 /target-cov/
 /target-mutants/
+# cargo-mutants writes its report tree here, and rotates the previous one.
+# ⚠️ It contains absolute paths, the hostname and the username — `lock.json`
+# carries all three. `M0.17` staged 572 of these files before review caught it.
+/mutants.out/
+/mutants.out.old/
 
 # Test scratch. Everything lands under target/ so `cargo clean` reclaims it and
 # nothing touches the system temp dir, which is a 16 GB tmpfs on WSL2.
