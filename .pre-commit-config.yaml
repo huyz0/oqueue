@@ -105,6 +105,22 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      # Last among the pre-commit gates, and the only one that shells out to
+      # cargo. ⚠️ **Not for speed** — `fail_fast` is set nowhere, so pre-commit
+      # runs every hook whatever the order, and no time is saved by putting the
+      # slow one last. An earlier version of this comment claimed otherwise and
+      # review disproved it with a two-hook config. The order is for the *output*:
+      # a run that fails several gates is read top-down, and the cargo output is
+      # by far the longest, so anything below it would be scrolled past.
+      # Run with no argument, so a commit touching two crates is not checked
+      # against whichever one somebody named.
+      - id: check-crate
+        name: "rust-style.md: rustfmt, clippy with warnings denied, and the tests pass"
+        entry: scripts/check-crate.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
 
       # --- commit-msg stage: the two gates that read the message file itself,
       # which pre-commit passes as this stage's one positional argument.

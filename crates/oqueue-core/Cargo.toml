@@ -1,0 +1,17 @@
+[package]
+name = "oqueue-core"
+description = "Types, IDs, errors, and every trait seam. No I/O, no async runtime, no workspace dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# ⚠️ Deliberately empty, and this is the crate where that is a rule rather than
+# a coincidence: `architecture.md`'s star topology has every other crate
+# depending on `oqueue-core` and on nothing else in the workspace, which only
+# holds if `oqueue-core` itself depends on nothing. `check-layering.sh` enforces
+# the direction; this emptiness is what makes the depth-2 DAG possible at all.
+[dependencies]
+
+[lints]
+workspace = true

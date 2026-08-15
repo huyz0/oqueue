@@ -77,6 +77,25 @@ jobs:
       - name: install pre-commit
         run: pip install pre-commit
 
+      # `M0.2`. `check-crate.sh` shells out to cargo, and `lib.sh`'s
+      # `require_tool` turns a missing tool into a *skip* rather than a
+      # failure -- deliberately, so a missing tool is never mistaken for a
+      # failing check. The consequence here is that a runner without cargo
+      # would make the workspace's fmt, clippy and test gate skip silently,
+      # which is the one outcome worse than it failing.
+      #
+      # ⚠️ No third-party toolchain action, and no version named here.
+      # `rustup` ships on the runner image, and `rust-toolchain.toml` is what
+      # decides the version -- `rustup show` reads it and installs what it
+      # pins, including both Linux targets. A version written here would be a
+      # second place holding the toolchain fact, which is exactly what
+      # `build.md` rule 1 exists to prevent.
+      - name: install the pinned toolchain
+        run: |
+          rustup show
+          cargo --version
+          rustc --version
+
       - name: gates, once per commit in this push
         env:
           # check-reviewed.sh reads target/review/<hash>.json, which
@@ -95,6 +114,11 @@ jobs:
           # every per-commit verdict somewhere durable, which is a real,
           # separate design change -- not this task's to make.
           SKIP: check-reviewed
+          # `build.md` rule 21. Incremental compilation is pure overhead where
+          # every build starts clean, and this step is the first one in this
+          # workflow that compiles anything -- `check-crate.sh` runs clippy and
+          # the tests. `M0.2`.
+          CARGO_INCREMENTAL: "0"
         run: |
           set -euo pipefail
 

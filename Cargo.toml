@@ -1,0 +1,81 @@
+# The workspace root. `M0.2`.
+#
+# Everything a crate can inherit lives here rather than in the crate: the
+# edition, the toolchain floor, the licence, every dependency version, and every
+# lint. A crate's own `Cargo.toml` should say what makes that crate different,
+# and nothing else — `rust-style.md` rule 3 states this for lints specifically,
+# and the reasoning generalises: two places holding one fact is two places to
+# fix when it changes, and only one of them gets fixed.
+#
+# ⚠️ No `[profile]` sections yet. They are `M0.3`, with the ADR that explains
+# them, because `lto = false` next to `codegen-units = 1` performs no LTO at all
+# and `cargo bench` silently inherits `release` — both are traps worth landing
+# with their reasoning attached rather than as a block of numbers.
+
+[workspace]
+# ⚠️ Resolver 3, not the 2 the milestone plan assumed — and this line is
+# **load-bearing, not merely explicit**. Edition 2024 implies resolver 3 for a
+# *package* manifest, but this is a **virtual** manifest with no `[package]`, so
+# there is no edition to imply anything: without this line cargo warns and falls
+# back to resolver 1, silently reverting feature unification and MSRV-aware
+# version selection. Deleting it because "edition 2024 already does this" is the
+# specific mistake to avoid.
+resolver = "3"
+
+members = ["crates/oqueue-core"]
+
+[workspace.package]
+# One version for the whole workspace. `0.0.0` because nothing here is
+# published, and a number that pretends otherwise invites someone to depend on
+# it. `M13` is where release engineering decides what versioning becomes.
+version = "0.0.0"
+edition = "2024"
+# The same floor `rust-toolchain.toml` pins. ⚠️ Two files, one fact — but they
+# are not redundant: the toolchain file decides what *this* checkout compiles
+# with, and this field decides what a *consumer* is told they need. Bumping is
+# `build.md` rule 1's task-with-a-commit either way.
+rust-version = "1.97.1"
+license = "Apache-2.0"
+
+# Every third-party version is decided once, here, and every crate writes
+# `foo.workspace = true`. Empty until a crate needs something: the async runtime
+# arrives with `M0.4`'s ADR, not before, because a dependency added ahead of the
+# decision that justifies it is a decision made by accident.
+[workspace.dependencies]
+
+# ── Lints ───────────────────────────────────────────────────────────────────
+#
+# Declared once, opted into per crate with `lints.workspace = true`.
+# `rust-style.md` rules 3-6. ⚠️ An allowance is a named exception with a reason
+# *here*, never a silent `#[allow]` at a call site — a silent one is
+# indistinguishable from an oversight the next time somebody reads that
+# function.
+
+[workspace.lints.rust]
+# Backs `contracts.md` rule 5: a seam's types are inspectable in a test failure.
+missing_debug_implementations = "warn"
+# Backs `code-structure.md` rule 12: a `pub` item unreachable from the crate
+# root is a module boundary someone forgot to finish.
+unreachable_pub = "deny"
+unused_qualifications = "warn"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# ⚠️ `priority = -1` is not load-bearing *today* and is here anyway. Cargo
+# applies this table in priority order, and the moment one entry is a group and
+# another is a member of that group being allowed, the group needs the lower
+# priority or the build fails outright. Nothing below is such a member —
+# `unwrap_used` and `expect_used` are restriction lints, in neither group — so
+# removing this would build. It stays because the first named exception to
+# pedantic or nursery is exactly the change most likely to be made in a hurry,
+# and a hard error at that moment reads as "the lint config is broken" rather
+# than "add a priority".
+pedantic = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+
+# `code-structure.md` rule 26 / `rust-style.md` rule 6. ⚠️ Denied here and
+# allowed per test module rather than the reverse: a test may unwrap, and
+# expressing "outside `#[cfg(test)]`" is not something a lint table can say, so
+# the allowance is written where a reader can see which tests took it.
+unwrap_used = "deny"
+expect_used = "deny"

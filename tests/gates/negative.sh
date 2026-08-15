@@ -917,6 +917,172 @@ invoke_m1_complete_non_utf8() {
   bash "$1/scripts/gates/m-1-complete.sh"
 }
 
+# `M0.2`. `scripts/check-crate.sh` is the first gate in this suite that shells
+# out to `cargo`, which makes it the first one whose scratch fixture has to be a
+# *compilable* workspace rather than a plausible-looking tree of text. Three
+# cases, one per check the script runs, because the script's own contract is
+# that all three run even when an earlier one fails — a single fixture that
+# breaks all three would pass while proving only that the first one works.
+#
+# ⚠️ Each fixture pins `edition = "2021"` and `resolver = "2"` rather than
+# inheriting this repository's own choices. The point of a scratch fixture is
+# that it exercises the gate, not that it mirrors the workspace; tying it to the
+# real root manifest would make an unrelated edition bump fail these tests.
+_crate_scratch() {
+  local dir; dir="$(new_scratch "$1")"
+  copy_gate "$dir" check-crate.sh
+
+  # ⚠️ **Both of the following are written as files, not exported.** Every
+  # `setup_*` here is called through `dir="$(setup_fn)"`, so its body runs in a
+  # command-substitution subshell and any `export` is gone before `invoke_*`
+  # runs the gate. A file in the fixture is read by cargo at invoke time, which
+  # is the only moment that matters.
+
+  # ⚠️ **The pinned toolchain, explicitly.** `SCRATCH_ROOT` is under `mktemp -d`,
+  # outside the repository, so this repository's own `rust-toolchain.toml` does
+  # not reach it and cargo runs whatever `rustup` last defaulted to. A default
+  # without the `clippy` component makes all four cases below fail on a missing
+  # subcommand — which is still a failure, so the suite still reports green
+  # while testing nothing. That is the third distinct way this one fixture found
+  # to be vacuously green; the other two are in the comment below. Found by
+  # review.
+  cp "$REPO_ROOT/rust-toolchain.toml" "$dir/rust-toolchain.toml"
+
+  # ⚠️ **Build output under the repository's own `target/`, never the system
+  # temp directory** — `build.md` rule 19. Four fixtures at ~7 MB each is not
+  # much, but the rule exists because the system temp directory is a tmpfs on
+  # some developer machines, and a suite that quietly fills it is a suite people
+  # stop running.
+  mkdir -p "$dir/.cargo"
+  cat > "$dir/.cargo/config.toml" <<EOF
+[build]
+target-dir = "$REPO_ROOT/target/tmp/negative-$1"
+EOF
+
+  mkdir -p "$dir/crates/k/src"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/k"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/k/Cargo.toml" <<'EOF'
+[package]
+name = "k"
+version = "0.0.0"
+edition = "2021"
+EOF
+  # ⚠️ A placeholder source *before* the lockfile, then the lockfile. Both
+  # matter, and both were got wrong once:
+  #
+  #   - `check-crate.sh` passes `--locked` (build.md rule 2), so a fixture with
+  #     no `Cargo.lock` fails on the missing lock rather than on the thing it
+  #     was written to break. It still goes red, so the suite still reports
+  #     green while the case tests nothing.
+  #   - `cargo generate-lockfile` needs the package to be valid, and a package
+  #     whose `src/lib.rs` does not exist yet is not. Called before this line
+  #     it fails, `|| true` swallows it, and no lockfile appears -- which is
+  #     the first failure again, wearing a different hat.
+  #
+  # Both were found by mutant-testing rather than by reading: disabling the fmt
+  # check left the unformatted fixture still failing, which is exactly the
+  # signal a fixture that has stopped constraining anything gives off.
+  echo 'pub fn placeholder() {}' > "$dir/crates/k/src/lib.rs"
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1 || true)
+  if [[ ! -f "$dir/Cargo.lock" ]]; then
+    printf 'negative.sh: could not create a lockfile in %s\n' "$dir" >&2
+    return 1
+  fi
+  printf '%s\n' "$dir"
+}
+
+setup_crate_stale_lock() {
+  local dir; dir="$(_crate_scratch crate_stale_lock)"
+  echo 'pub fn f() {}' > "$dir/crates/k/src/lib.rs"
+  (cd "$dir" && cargo fmt --all >/dev/null 2>&1 || true)
+  # A dependency the committed lockfile knows nothing about. `--locked` must
+  # refuse to resolve it rather than silently rewriting Cargo.lock -- build.md
+  # rule 2's whole point, and the reason the flag is on the hook and not only in
+  # CI.
+  #
+  # ⚠️ **A path dependency inside the fixture, not a crates.io one.** The first
+  # version named `serde = "1"` and claimed `--locked` would fail before
+  # resolution; it does not. With a network cargo hits the index first, and
+  # *without* one the case fails identically with and without `--locked` --
+  # which means on any machine that cannot reach crates.io it passed while
+  # constraining nothing, the same vacuous-green shape the lockfile bug above
+  # already produced once in this file. A path dependency needs no index, so
+  # the only thing that can fail is the lock check. Found by review.
+  mkdir -p "$dir/crates/dep/src"
+  cat > "$dir/crates/dep/Cargo.toml" <<'EOF'
+[package]
+name = "dep"
+version = "0.0.0"
+edition = "2021"
+EOF
+  echo 'pub fn g() {}' > "$dir/crates/dep/src/lib.rs"
+  cat >> "$dir/crates/k/Cargo.toml" <<'EOF'
+
+[dependencies]
+dep = { path = "../dep" }
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M0.2: dependency added without regenerating the lockfile")
+  printf '%s\n' "$dir"
+}
+invoke_crate_stale_lock() {
+  bash "$1/scripts/check-crate.sh"
+}
+
+setup_crate_fmt() {
+  local dir; dir="$(_crate_scratch crate_fmt)"
+  # Deliberately misformatted and otherwise clean: no clippy lint fires on this
+  # and it has no tests, so a run that fails here fails *only* on rustfmt.
+  printf 'pub fn f( ) ->u8{1}\n' > "$dir/crates/k/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M0.2: unformatted source")
+  printf '%s\n' "$dir"
+}
+invoke_crate_fmt() {
+  bash "$1/scripts/check-crate.sh"
+}
+
+setup_crate_clippy() {
+  local dir; dir="$(_crate_scratch crate_clippy)"
+  # `let_and_return` is a default-level clippy lint, so this fires without the
+  # fixture having to reproduce the workspace's pedantic/nursery configuration
+  # — which it deliberately does not carry.
+  cat > "$dir/crates/k/src/lib.rs" <<'EOF'
+pub fn f() -> u8 {
+    let x = 1;
+    x
+}
+EOF
+  (cd "$dir" && cargo fmt --all >/dev/null 2>&1 || true)
+  (cd "$dir" && git add -A && git commit -q -m "M0.2: clippy warning")
+  printf '%s\n' "$dir"
+}
+invoke_crate_clippy() {
+  bash "$1/scripts/check-crate.sh"
+}
+
+setup_crate_test() {
+  local dir; dir="$(_crate_scratch crate_test)"
+  cat > "$dir/crates/k/src/lib.rs" <<'EOF'
+pub fn f() -> u8 {
+    1
+}
+
+#[test]
+fn f_is_two() {
+    assert_eq!(f(), 2);
+}
+EOF
+  (cd "$dir" && cargo fmt --all >/dev/null 2>&1 || true)
+  (cd "$dir" && git add -A && git commit -q -m "M0.2: failing test")
+  printf '%s\n' "$dir"
+}
+invoke_crate_test() {
+  bash "$1/scripts/check-crate.sh"
+}
+
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
 run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_row invoke_commit_msg_unstaged_row
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
@@ -942,6 +1108,10 @@ run_case "check-portability.sh"         setup_portability         invoke_portabi
 run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
+run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt
+run_case "check-crate.sh (stale lockfile)" setup_crate_stale_lock invoke_crate_stale_lock
+run_case "check-crate.sh (clippy warning)" setup_crate_clippy     invoke_crate_clippy
+run_case "check-crate.sh (failing test)" setup_crate_test         invoke_crate_test
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 

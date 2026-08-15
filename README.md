@@ -9,9 +9,9 @@ A Kafka-protocol-compatible message broker in Rust that uses object storage
 
 > ## ⚠️ Status: no implementation yet
 >
-> **There are zero lines of Rust in this repository.** It currently contains a
-> research corpus and the development system that will build the broker. If you
-> came here looking for something to run, there is nothing to run.
+> **There is nothing to run.** The broker does not exist. What is here is a
+> research corpus, the development system that builds it, and — as of milestone
+> M0 — a Cargo workspace whose crates are still empty of behaviour.
 >
 > What is here is worth reading if you are interested in the design space:
 > ~110,000 words of cited research on object-storage-native streaming, and an
