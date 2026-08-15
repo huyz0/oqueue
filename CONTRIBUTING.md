@@ -5,9 +5,17 @@ Thanks for looking. Being honest about the current state saves your time.
 ## Right now
 
 **Code contributions are not being accepted yet.** Not because they are
-unwelcome in principle, but because the system that would review them is itself
-still being built (milestone M-1), and merging code into a project whose gates
-do not exist yet would defeat the point of having them.
+unwelcome in principle, but because there is no implementation to contribute
+to. The system that reviews changes is finished — that was milestone M-1 — and
+milestone M0, which creates the Cargo workspace and the crates, is in progress.
+There will be something to build on once it lands.
+
+Two honest qualifications, because the alternative is a claim that reads
+stronger than it is. Some gates the standards describe are still unwritten, and
+a rule whose script is missing is a preference until it lands. And one rule can
+never have a script: *never claim a test passes without having run it* is a
+rule about what an agent says, and nothing checks a claim against an intention.
+Every other rule rests on it.
 
 **Issues and design discussion are very welcome.** Particularly:
 

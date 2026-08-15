@@ -13,6 +13,15 @@ task cannot be finished in one green commit, split it before writing code.
 Task IDs are stable. Completed tasks stay here with their commit reference so
 the history of why something was done survives.
 
+**The current milestone's section is first; finished milestones follow it, most
+recent first.** ⚠️ Written down rather than left to convention, because
+`scripts/lib.sh` deliberately does *not* derive the current milestone from this
+file's headings — it derives it from the commits, and its own comment says
+reading the last heading instead "would only trade that for a dependency on an
+unwritten ordering convention". Nothing reads the order; `next-task` reads "the
+top unblocked task" and a human reads the top of the file, and both want the
+milestone actually being built.
+
 Decomposition rule: only the current milestone is decomposed in detail. Future
 milestones stay as [roadmap](roadmap.md) entries with a
 [plan](milestones/README.md) until their turn. ⚠️ **A plan is not a
@@ -20,6 +29,210 @@ decomposition** — it is a hypothesis, it carries no task IDs, and its items ar
 re-derived rather than copied when a milestone opens. Read the plan's
 "Decisions required first" before writing any of that milestone's code; see
 [`sdd.md`](../standards/sdd.md) §Decomposition.
+
+## M0: Workspace, contracts, and quality gates
+
+The Cargo workspace, the eleven crates, every `oqueue-core` trait seam with a
+fake beside it, and the two gates whose constants needed a workspace before they
+could be chosen. No broker behaviour: what M0 delivers is the shape everything
+else is written into, plus the first real exercise of gates M-1 wrote against an
+imagined codebase.
+
+Plan: [milestones/M0.md](milestones/M0.md). ⚠️ **The plan was an input, not this
+list.** Eighteen plan items became nineteen tasks, and the mapping is not
+one-to-one: six items merged into three, one dissolved into two others, and five
+tasks have no plan item at all. "Where this decomposition diverged from the
+plan" below carries the item-by-item mapping, because `sdd.md` §Decomposition
+says the divergence is evidence about how far ahead this project can usefully
+see — and a count is not that evidence if it is only asserted.
+
+| ID | Task | Acceptance | State |
+| --- | --- | --- | --- |
+| M0.0 | Open M0: decompose it here, correct `milestones/M0.md`'s `**Serves:**` line and `roadmap.md`'s requirement-coverage row to name every requirement M0's tasks actually cite, flip the State cells in `roadmap.md`, `milestones/M-1.md` and `README.md`, and record where this decomposition diverges from the plan | `check-requirements-trace.sh` passes with M0's plan and the roadmap row agreeing; every **other** M0 row names at least one FR/NFR that `requirements.md` lists; M-1 reads `complete` and M0 `in progress` in all three files that state it; `build-index.sh --check` and `check-portability.sh` pass. ⚠️ Serves no FR/NFR itself and says so — it is `sdd.md`'s milestone-opening step, and a process task claiming a requirement would be worse than one admitting it has none | done |
+| M0.1 | Correct the two agent-facing files that still say M-1's gates do not exist — `AGENTS.md` and `.agents/skills/README.md` | ⚠️ "M-1.7 through M-1.12" names six **tasks**, not six scripts: five landed and one did not. Every script those five produced exists and passes — `check-drift.sh`, `check-tests-kept.sh` (M-1.7), `check-layering.sh`, `check-sans-io.sh` (M-1.8), `check-reviewed.sh` (M-1.9), `check-core-contract.sh` (M-1.10), `check-unsafe.sh` (M-1.11) — and only M-1.12's `check-budget.sh` does not, which `M0.16` writes. Both files currently tell a reader that `check-drift.sh`, `check-tests-kept.sh`, `check-layering.sh`, `check-sans-io.sh`, `check-core-contract.sh` and `check-unsafe.sh` are unenforced preferences — the exact gates M0.2's acceptance requires to run and pass, so an executor reading `AGENTS.md` first is told the milestone's first real task is unverifiable (NFR-50). ⚠️ `README.md` and `CONTRIBUTING.md` said the same and were corrected in M0.0's own commit rather than left to this row: M0.0 flipped the roadmap table eighteen lines above README's Contributing paragraph, and the two public-facing files disagreeing with each other — and with the table directly above one of them — is not a state to ship for the length of a task, however short. ⚠️ Correcting the *reason* is not the same as opening the project to code — whether contributions are accepted is a decision, not a consequence of M-1 finishing, so state the true reason and leave the policy alone unless someone changes it deliberately. Acceptance: neither file claims a script is missing that is present, or that M-1 is still in progress; neither enumerates which scripts are still missing, both say where that is recorded, and a reader following the pointer reaches rows that are true on the day they read them. ⚠️ **The correction must not replace one hand-maintained list with another.** `AGENTS.md` is loaded into every session, five of the scripts it would name land during M0 itself, and a list written here goes stale at M0.2 and stays stale for sixteen tasks — which is precisely the failure `M-1.47`, `M-1.49` and `M-1.52` chased three times before the fix was to delete the list and point at `backlog.md`. Both files say instead that M-1's gates exist and run, that a rule whose script is still missing is still a preference, and that **`backlog.md` is where to look for which** — it is authoritative, every gate reads it, and it is updated by the task that closes each row. ⚠️ `security.md` rule 5's `scripts/fuzz.sh` and rules 6–7's `check-secrets.sh` are absent too and are **scheduled nowhere**, in M0 or after it — pointing at `backlog.md` covers them honestly where an enumeration of what M0 happens to build would not, and **their being unscheduled is a finding for M0's boundary review**, recorded here so the review need not rediscover it. A file that says "these gates are missing" and then lists the wrong set is no more use than one that says nothing; `check-portability.sh` and `build-index.sh --check` pass. ⚠️ First because `AGENTS.md` is loaded into every session before anything else is read | todo |
+| M0.2 | Workspace root manifest, the `oqueue-core` skeleton, and `scripts/check-crate.sh` — the smallest tree that actually compiles **and is checked** | `cargo check --workspace --all-targets` exits 0 for both `x86_64-unknown-linux-gnu` and `aarch64-unknown-linux-gnu` (NFR-40); the root manifest pins the resolver, `[workspace.package]`, `[workspace.dependencies]` and `[workspace.lints]`; `oqueue-core` carries `#![forbid(unsafe_code)]` and no workspace dependency (NFR-52, NFR-53) with a `README.md` and `AGENTS.md`; `check-layering.sh`, `check-sans-io.sh`, `check-unsafe.sh`, `check-file-size.sh` and `check-readmes.sh` each run against real Rust for the first time and pass. ⚠️ **`scripts/check-crate.sh <crate>` is in this commit too**, and this is not scope creep: the `tdd` skill's definition of done and the `milestone` skill's own loop both name it, doc 19 §5 specifies it (fmt and clippy scoped to one crate for in-session speed, workspace-wide in CI), and it exists nowhere — so without it this commit introduces the first Rust in the repository and nothing in `.pre-commit-config.yaml` runs a single cargo command against it. A commit that adds code no gate checks is the shape `NFR-50` exists to prevent. ⚠️ **`README.md`'s status banner — "There are zero lines of Rust in this repository" — is corrected in this same commit**, by the row that makes it false rather than by a later one; the project's most-read sentence being wrong for sixteen tasks is not a thing to schedule. Acceptance for that half: `check-crate.sh` runs `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test`, scoped to a named crate and workspace-wide with no argument; it is wired into `.pre-commit-config.yaml` and the push-triggered CI; and `tests/gates/negative.sh` gains a case proving it fails on unformatted code, on a clippy warning, and on a failing test — M-1.15's standard, which is why this is one commit and not two | todo |
+| M0.3 | The build profiles, and **ADR-0001** recording them | The profiles doc 18 **§3.6** names are present in the **root** manifest — member-crate `[profile]` sections are ignored — with `release` at `lto = "thin"` and `codegen-units = 16`, a separate `dist` at fat LTO and `codegen-units = 1`, and `bench` inheriting `dist` and differing from it in **exactly one way**, `debug = true`. ⚠️ Two traps doc 18 §3.2 names, both silent: `lto = false` with `codegen-units = 1` performs **no LTO at all** — strictly worse than the stock profile — and `cargo bench` inherits `release` unless pinned, so out of the box you benchmark codegen you never ship. ADR-0001 records why thin LTO is mandatory rather than optional in a multi-crate workspace (doc 18 §3.1: without it a non-generic `pub fn` does not inline across an rlib boundary) and why fat LTO is **not** in `release` but is in `dist`: doc 18 §3.3 measures fat LTO with `codegen-units = 1` at **~2.3× build time**, paid by every developer and CI release build. ⚠️ That cost is *not* NFR-56's — the pre-commit suite builds dev and test profiles and never touches `release`, so an ADR arguing fat LTO out of `release` "against the pre-commit budget" would be recording a reason that is not true. `cargo check --workspace` exits 0 under every profile on **both** targets (NFR-40), and `cargo build --profile bench --workspace` exits 0 on the host — ⚠️ `build`, not `check`, only on the host, because aarch64 has no cross-linker until M13 and a criterion that outruns that would have to be weakened the moment M0.12 adds a binary | todo |
+| M0.4 | **ADR-0002**: the async runtime, and how `oqueue-core` expresses an async seam | The ADR chooses the runtime; states that `oqueue-core` names it nowhere (NFR-51); decides native `async fn` in trait versus `#[async_trait]` for `ObjectStore` and `KeyProvider` **with the `dyn`-compatibility consequence stated**, since that decides whether the broker's I/O shell can hold a trait object at all; cites doc 05 §3 and doc 10 #32, including that doc 10's resolved log supersedes #32's "touches every crate that does async" with madsim swapping the runtime by `cfg`. No code. Blocks M0.9, M0.10, M0.11 | todo |
+| M0.5 | Core types and IDs: `TopicId`, `PartitionId`, `Offset`, `ObjectKey` | Each is a newtype whose invariant is documented and unconstructible-around — a value violating it is either impossible to build or returns an error; `Offset` arithmetic that would wrap returns an error rather than wrapping, so the monotonicity M3's sequencing rests on cannot be broken by a type-level accident; a property test per type asserts the **documented invariant cannot be produced** — ⚠️ not a constructor/accessor round trip, which at this point would constrain nothing, since no encoding exists until M2 and `oqueue-core` may take no workspace dependency to borrow one; no type names a concrete I/O type, a socket, or a clock, which is what lets every seam below be written in terms of them without acquiring I/O (NFR-51); `cargo test -p oqueue-core` passes. ⚠️ This row's justification is foundational, not behavioural — it cites NFR-51 because that is the criterion that can actually fail here, and deliberately claims none of the produce/fetch requirements these types will later carry | todo |
+| M0.6 | The error taxonomy in `oqueue-core`, with the redaction rules FR-44 will need | Errors follow `error-handling.md`; a redaction wrapper exists whose `Debug` **and** `Display` never reproduce the wrapped value; a test asserts that formatting an error carrying secret material yields no substring of that material (FR-44); `check-core-contract.sh` passes | todo |
+| M0.7 | **ADR-0003**: the four-crate leaf split (`buf`, `codec`, `checksum`, `index`) and the cross-crate inlining policy | ADR-0003 states either that every hot-path entry point crossing those boundaries carries `#[inline]`, or that the split is merged — and argues the rejected option's cost from doc 18 §0.4, which calls a non-generic `pub fn` without `#[inline]` "ruinous" for a byte-level codec split across rlib boundaries without LTO; it names both sides of the trade explicitly: **NFR-2**, the 10 ms cached tail read, where CPU work is the entire budget and a lost inline is paid on every batch, against **NFR-56**, whose pre-commit wall clock merging would raise by widening the rebuild unit and removing sideways parallelism — ⚠️ **not by changing DAG depth**, which stays 2 whichever way four siblings in a star are grouped (doc 19 §1.1–1.2); and it engages doc 19 §1.2's standing position that this exact tension "is resolved by thin LTO in release, not by merging crates", since an ADR that merges them is overturning a recorded assessment rather than choosing freely. It names what will check the runtime half once M2 has a hot path (`check-hot-path-bench.sh`, `performance.md` rule 18). ⚠️ M0 **decides** NFR-2's exposure here and measures nothing — M14 measures. Decided now, not when M2 is slow. ⚠️ **If ADR-0003 merges any of the four, it amends `architecture.md`'s crate table, this backlog's M0.8 row, and every "eleven crates" count in the same commit** — otherwise M0.8's acceptance is falsified by a decision made one row earlier, and the milestone carries two contradictory crate counts. Blocks M0.8 | todo |
+| M0.8 | The ten remaining crate skeletons | `buf`, `codec`, `checksum`, `index`, `store`, `coordinator`, `crypto`, `compact`, `broker` and `testkit` each exist with a `README.md` and an `AGENTS.md`; `#![forbid(unsafe_code)]` in every one but `buf`, `codec` and `checksum` (NFR-53); each depends on `oqueue-core` and on nothing else in the workspace except `broker`, which composes (NFR-52); `oqueue-testkit` is `publish = false` and appears in no runtime `[dependencies]`, only `[dev-dependencies]`, and its `README.md`/`AGENTS.md` say it holds harness and generators and **no fake** — ⚠️ `architecture.md`'s crate table still says `oqueue-testkit` holds "Fakes, generators, harness", which `contracts.md` rule 11 contradicts directly; **that cell is corrected in this commit**, because the crate's own documents and the crate map disagreeing is how the wrong convention gets re-established later; `check-readmes.sh` confirms every README's stated dependencies match its `Cargo.toml`; `cargo check --workspace` passes on both targets (NFR-40). ⚠️ `oqueue-crypto` is absent from doc 19's ten-crate layout and exists only in `architecture.md` — dropping it is an ADR, not a silent omission. ⚠️ Before the seams, not after: `contracts.md` rule 9 puts every fake in `oqueue-core`, but M0.11's *no-op* `KeyProvider` is production code and belongs in `oqueue-crypto`, which this row creates | todo |
+| M0.9 | The `Clock` seam, its fake **beside the trait in `oqueue-core`**, and **ADR-0004** | `Clock` is the only way to read time and nothing else in the workspace reads a real clock (NFR-51); the fake, with manual advance, lives in `oqueue-core` next to the trait — ⚠️ **not in `oqueue-testkit`**: `contracts.md` rule 9 and `testing.md` rule 4 both put it in core so every downstream crate is testable without a testkit dependency, and rule 11 calls a fake found in the testkit a layering violation to flag in review; a test asserting two `now()` calls with no advance between them return the same instant; `check-sans-io.sh` and `check-layering.sh` pass; **ADR-0004 is in this commit** and records what an implementor of `Clock` must guarantee — ⚠️ `contracts.md` rule 15 requires an ADR for a wholly new trait, and `check-core-contract.sh` enforces it mechanically: a new trait makes `old_traits.get(name)` `None`, which counts as a changed method set, so the commit is refused unless a file under `docs/internal/product/decisions/` is staged with it. An ADR in an *earlier* commit does not satisfy it — the gate reads `git diff --cached` | todo |
+| M0.10 | The `ObjectStore` seam, a **trivial** in-memory fake beside it in `oqueue-core`, and **ADR-0005** | The trait is `Send + Sync + fmt::Debug`, names no S3 or GCS type, and nothing outside it reaches object storage (NFR-51); it is expressed as ADR-0002 decided; the fake sits beside the trait in `oqueue-core` per `contracts.md` rule 9, **not** in `oqueue-store` — ⚠️ `oqueue-store`'s in-memory *implementation* (`testing.md` rule 6, `architecture.md`) is a real backend and is M1's, and this fake is what M1 task 5 replaces; a put/get round-trip test exercises the fake, which is what makes its existence observable in this commit — ⚠️ `check-core-contract.sh` checks **implementors present and an ADR in the same commit** (`contracts.md` rule 14) and knows nothing about fakes, so the fake-per-trait property is asserted across the milestone by `m0-complete.sh` (M0.18). ADR-0005 is in this commit for the same rule-15 reason as M0.9. `check-core-contract.sh` and `check-sans-io.sh` pass. ⚠️ **Exactly one `ObjectStore` fake exists in the tree, and M1 rewrites this one rather than adding beside it** — two fakes with divergent conditional-write semantics is the highest-risk defect class in the project (`architecture.md`, doc 10 #33) | todo |
+| M0.11 | The `KeyProvider` seam, its fake in `oqueue-core`, a no-op provider in `oqueue-crypto`, and **ADR-0006** | The seam is wrap/unwrap only and deliberately **not** generate-data-key, because GCP Cloud KMS has no equivalent (doc 22 §4); nothing outside the seam touches key material (NFR-51), and neither implementation can print a wrapped key (FR-44); ⚠️ the **fake** lives beside the trait in `oqueue-core` (`contracts.md` rule 9) while the **no-op** provider — production code for the unencrypted path, not a test double — lives in `oqueue-crypto`, which M0.8 created; both are exercised by a test rather than merely present, so the encrypted and unencrypted paths never diverge (doc 22 §8); ADR-0006 is in this commit for the same rule-15 reason as M0.9 and records that the seam's guarantee is wrap/unwrap and nothing more; `check-core-contract.sh`, `check-layering.sh` and `check-sans-io.sh` pass | todo |
+| M0.12 | `bin/oqueue`: the composition root that starts, does nothing, and exits | `cargo run -p <bin>` exits 0 with a version line and no other side effect; it is the only place a concrete type is chosen (NFR-51, FR-50); `check-layering.sh` accepts it as a composer. ⚠️ `cargo build` links it on x86_64 only — aarch64 stays `cargo check` until a cross-linker exists, which is M13's work, and M0's completion condition must say so rather than claim a link it never performed | todo |
+| M0.13 | Allocator selection, wired with the profiling feature gate, and **ADR-0007** | ADR-0007 argues mimalloc, jemalloc, snmalloc and the system allocator with the rejected reasons (doc 18 §3.5, doc 10 #30) and states explicitly what the choice costs NFR-42, because `AGENTS.md` forbids adding a dependency that pulls in a C toolchain without recording why; ⚠️ it must also address doc 18 §3.5's jemalloc ARM page-size trap, where a binary built assuming 4 KB aborts at startup on 64 KB-page aarch64 kernels — NFR-40 makes aarch64 first-class, so this is a correctness question and not a footnote; the allocator is set in `bin/oqueue` and in no library crate; the heap-profiling allocator sits behind a non-default feature; `cargo check --workspace` passes with the feature off and on | todo |
+| M0.14 | Run every tree-scanning M-1 gate against the finished workspace and **record what each one actually inspected** | ⚠️ All five already *print* a count — `check-file-size.sh` "$checked .rs file(s) checked", `check-layering.sh` "manifest(s) hold", `check-sans-io.sh` "file(s) scanned", `check-unsafe.sh` "$total .rs file(s) scanned", `check-readmes.sh` "crate documents (${checked:-0} crate(s) checked)" — so adding the reporting is **not** the work and a row asking for it would close as a no-op. The work is that nobody has ever seen those numbers against Rust, and a matcher written for an imagined tree can return zero while the gate exits 0, leaving NFR-51, NFR-52 and NFR-53 unverified while reporting green. Acceptance: each gate is run on the completed workspace, its count recorded verbatim under "Notes on specific tasks" below, and every count is non-zero; any gate reporting zero is fixed here, and its fix is the commit's substance. ⚠️ If all five are already non-zero, **the recorded evidence is the deliverable**, and M0.18 is what stops it regressing. ⚠️ `check-core-contract.sh` is deliberately excluded: alone among the five it is scoped to `git diff --cached -- '*.rs'` and skips outright when no Rust is staged, so an "inspected count on this workspace" is not a thing it can report. The evidence that it fires on real Rust is M0.9, M0.10 and M0.11, each of which it refuses without an ADR staged beside the new trait | todo |
+| M0.15 | `check-coverage.sh`, and **measuring** NFR-55's constant | `cargo llvm-cov` reports line coverage **per crate**, and the gate fails on the *lowest* crate rather than on a workspace aggregate — ⚠️ NFR-55 and `testing.md` rule 19 both say **per-crate floor**, and a workspace-aggregate gate satisfies every other word of this criterion while letting one crate sit at zero behind the average; the threshold is a single literal in the script that no environment variable can move (`check-drift.sh` passes); the number is measured **on this workspace** and the measurement — command, output, date, and the per-crate breakdown — is recorded under "Notes on specific tasks" below. ⚠️ **Most of the eleven crates are empty skeletons at this point** — only `oqueue-core` (types, errors, three traits and their fakes) and `oqueue-crypto` (the no-op `KeyProvider`) hold executable code — so a naive per-crate minimum is 0 and enshrining it would satisfy this row and M0.18 while requiring nothing. The floor is derived from crates that contain **testable logic**; anything else is excluded by a **named list in the script carrying a reason per entry**, in the shape `check-file-size.sh`'s allowlist already uses, never silently — and an entry must be removed when its crate acquires logic. ⚠️ Two distinct kinds land in that list here and the rule must cover both, or the executor widens it silently: the empty skeletons, and **`bin/oqueue`**, which M0.12 gives a `main()` that starts and exits — a composition root by `check-layering.sh`'s own `COMPOSERS` set, whose whole job is choosing concrete types and which a per-crate floor would fail at 0% forever. ⚠️ If the code that exists is too little to support a defensible floor, **say so and record it** rather than writing down a number the workspace did not earn; that is a finding for M0's boundary review, not a 0 to enshrine. `check-coverage.sh` is wired into `.pre-commit-config.yaml` and CI and gains a `tests/gates/negative.sh` case proving it fails a crate below the floor — ⚠️ M-1's own standard is that a gate nothing invokes is a preference and a gate with no negative test is unproven, and M0 must not end having added two of them; `requirements.md`'s NFR-55 row loses its **UNDERIVED** marking and names the number, **and every other place that says the number cannot be chosen is corrected in the same commit** — ⚠️ **there are three, not one**: the NFR-55 row's status column, `requirements.md`'s own closing paragraph ("both NFR-55 and NFR-56 are constants that cannot be chosen until there is something to measure"), and `roadmap.md`'s "The numbers that do not exist yet" table. Striking the row and leaving the other two is the drift `M-1.47` and `M-1.52` were both created after the fact to repair, and no gate compares them. ⚠️ That paragraph also names the aggregate-throughput requirement, which stays underived and is M14's — correct the paragraph, do not delete it. ⚠️ Recording a number without measuring it here would make every later threshold argument rest on a fiction, and a guessed threshold is indistinguishable from a measured one a month later | todo |
+| M0.16 | `check-budget.sh` and **measuring** NFR-56's constant — closes `M-1.12` | The pre-commit suite's wall clock is measured on this workspace and recorded under "Notes on specific tasks" below with the command that produced it; the budget is a literal in the script; a suite over budget fails; timings are written as an artifact so erosion shows as a trend rather than as one sudden failure; ⚠️ the measured suite **includes `check-coverage.sh` and `check-crate.sh`**, both of which land before this row — a budget measured without them is a budget for a suite that no longer exists; `check-budget.sh` is itself wired into `.pre-commit-config.yaml` and CI and gains a `tests/gates/negative.sh` case proving an over-budget suite fails; the same three sites M0.15 names are corrected for NFR-56: the row's status column, `requirements.md`'s closing paragraph, and `roadmap.md`'s "The numbers that do not exist yet" table — including the paragraph above that table, which says M0 is one of the four milestones whose condition cannot be written, since M0 is then no longer one of them; `M-1.12`'s row is marked `done` against this commit. ⚠️ `milestones/M0.md` assumed the script already existed and that "only the number waits" — it does not exist, so this task writes both | todo |
+| M0.17 | Mutation testing wired with diff-narrowing: `scripts/mutants.sh` and `check-mutants.sh` | ⚠️ **Both paths are named by `testing.md` rules 16 and 17 and by the `tdd` skill, and neither exists** — this row creates them under those exact names, because a standard citing a script nobody wrote is the shape M0.1 is cleaning up elsewhere in this same milestone. `scripts/mutants.sh <crate>` runs only over what the staged diff touched, so cost is O(change) rather than O(workspace); a surviving mutant in changed code fails unless it is in `check-mutants.sh`'s baseline with a reason, which is a list nobody grows quietly (rule 17); the run's own wall clock is measured against NFR-56's budget. ⚠️ **Wired into `.pre-commit-config.yaml` or CI and given a `tests/gates/negative.sh` case** proving a deliberately weakened test lets a mutant survive and fails the gate — the same rule M0.15 and M0.16 apply to themselves, and it matters more here than for either of them: `testing.md` rule 15 and doc 19 make mutation testing the **primary** anti-slop gate, so a version of it that has never been observed to fail is the one gate whose silent uselessness would be least visible. ⚠️ If mutation testing does not fit the budget it belongs outside pre-commit and in CI — that is a decision to record, never a threshold to lower, and either way it is invoked by something | todo |
+| M0.18 | `scripts/gates/m0-complete.sh`, and its case in `tests/gates/negative.sh` | The gate asserts: the workspace checks on both targets and links on the host; **every `pub trait` in `oqueue-core` has a fake beside it in `oqueue-core`** — ⚠️ *not* in `oqueue-testkit`, which is what `milestones/M0.md`'s completion condition says and what `contracts.md` rules 9 and 11 forbid; that plan sentence also contradicts the plan's own Goal section, which says "a fake beside it"; `check-layering.sh`, `check-sans-io.sh` and `check-unsafe.sh` pass, because three of M0's requirements name exactly those three as their whole verification, and **all five gates M0.14 instruments report a non-zero inspected count**, `check-file-size.sh` and `check-readmes.sh` included, since a count nothing re-checks regresses the first time a matcher stops matching — ⚠️ `check-core-contract.sh` is not among them because it is diff-scoped and this gate runs standalone; **both** NFR-55's and NFR-56's constants are literals in their scripts rather than environment variables; **every gate M0 added — `check-crate.sh`, `check-coverage.sh`, `check-budget.sh` and the mutation-testing run — is invoked by `.pre-commit-config.yaml` or CI and has a case in `tests/gates/negative.sh`**, since M0 adds four gates and a gate nothing invokes is a preference; and `check-milestone-review.sh` covers every M0 commit. `tests/gates/negative.sh` gains a case proving `m0-complete.sh` fails on a broken workspace — M-1.46's standard, applied when the gate is written rather than thirty commits later | todo |
+
+⚠️ **M0.15 through M0.18 are not blocked by NFR-55 and NFR-56 being
+UNDERIVED, and `next-task`'s step 3 must not be read as saying they are.**
+That rule skips a task that *depends on* an underived requirement — one
+that cannot proceed until somebody supplies a number. M0.15 and M0.16 are
+the tasks that **produce** the two numbers, and a task blocked by its own
+output strands the milestone at exactly the point it was created to
+unblock; M-1 spent its whole life with both constants underived precisely
+so M0 could measure them. ⚠️ M0.17 and M0.18 genuinely do *consume* those
+constants, so they are blocked in the ordinary way — **by M0.15 and M0.16
+being unfinished, not by `requirements.md` carrying an UNDERIVED marking**.
+The distinction matters if M0.16 stalls: the answer is to finish M0.16, not
+to treat the marking as a reason to skip past it.
+
+### Notes on M0
+
+Two kinds of note live here, and they are separated because they are read for
+different reasons. **Where this decomposition diverged from the plan** is
+written once, when M0 opened, and is never updated afterwards — it is evidence
+about planning horizon. **Notes on specific tasks** grow as tasks land, and are
+where M0.14's gate counts and M0.15's and M0.16's measurements are recorded:
+the command, its output, and the date, so anything those tasks fix can be
+re-derived by someone who doubts it rather than taken on trust.
+
+#### Where this decomposition diverged from the plan
+
+⚠️ These record where the task table above departs from
+[`milestones/M0.md`](milestones/M0.md)'s eighteen provisional items. A plan item
+that turned out to be wrong is not a spec that turned out to be wrong and needs
+none of that ceremony — nothing was committed to it. It is written down because
+`sdd.md` asks for it as evidence about how far ahead this project can usefully
+see, not as a correction.
+
+The mapping first, so the claims after it can be checked rather than believed:
+
+| Plan item | Became | Changed? |
+|---|---|---|
+| 1 workspace `Cargo.toml` | M0.2 | merged with item 3 |
+| 2 five build profiles | M0.3 | gained ADR-0001 |
+| 3 `oqueue-core` skeleton | M0.2 | merged with item 1 |
+| 4 `Clock` seam + fake | M0.9 | gained ADR-0004; fake relocated to `oqueue-core` |
+| 5 `ObjectStore` seam + fake | M0.10 | gained ADR-0005; fake relocated to `oqueue-core` |
+| 6 `KeyProvider` seam + fakes | M0.11 | gained ADR-0006; fake and no-op split across two crates |
+| 7 core types and IDs | M0.5 | — |
+| 8 error taxonomy | M0.6 | — |
+| 9 nine crate skeletons | M0.8 | merged with item 10, so ten |
+| 10 `oqueue-testkit` | M0.8 | merged with item 9; holds no fake |
+| 11 `#![forbid(unsafe_code)]` everywhere | M0.2 + M0.8 | dissolved |
+| 12 `check-layering.sh` vs real crates | M0.14 | merged with 13, restated |
+| 13 `check-sans-io.sh` likewise | M0.14 | merged with 12, restated |
+| 14 allocator + profiling gate | M0.13 | gained ADR-0007 |
+| 15 `check-coverage.sh` + NFR-55 | M0.15 | — |
+| 16 `check-budget.sh`'s constant | M0.16 | premise wrong |
+| 17 mutation testing | M0.17 | — |
+| 18 `bin/oqueue` | M0.12 | — |
+| — | M0.0 | no plan item: opening the milestone |
+| — | M0.1 | no plan item: correcting M-1's stale bootstrap notes |
+| — | M0.4 | no plan item: ADR-0002, the async runtime |
+| — | M0.7 | no plan item: ADR-0003, the leaf split |
+| — | M0.18 | no plan item: M0's own completion gate |
+
+Thirteen of the eighteen changed, and five tasks answer to no plan item. The
+reasons:
+
+1. **The plan puts the fakes in the wrong crate, and its own Goal section
+   disagrees with its completion condition.** The condition says "every `pub
+   trait` in `oqueue-core` has a fake in `oqueue-testkit`"; the Goal two
+   sections earlier says "every trait seam in `oqueue-core` has a fake beside
+   it". The Goal is right and the condition is wrong: `contracts.md` rule 9 and
+   `testing.md` rule 4 both put every fake beside its trait in `oqueue-core`,
+   precisely so a downstream crate is testable without a testkit dependency,
+   and `contracts.md` rule 11 calls a fake found in `oqueue-testkit` a layering
+   violation to flag in review. A standard beats a plan, so M0.9, M0.10 and
+   M0.11 put their fakes in core, `oqueue-testkit` lands in M0.8 as a skeleton
+   holding no fake, and M0.18's gate asserts the standard's location rather
+   than the plan's. ⚠️ This is the divergence with the most reach: had it gone
+   the plan's way, eleven crates would have been built around a layering
+   violation that no script checks for.
+2. **That relocation is also why the crate skeletons come before the seams.**
+   M0.11's *no-op* `KeyProvider` is production code for the unencrypted path,
+   not a test double, so rule 9 does not apply to it and it belongs in
+   `oqueue-crypto` — which means the crate has to exist first. The plan
+   ordered the seams before the skeletons, which works only if every
+   implementation is a fake.
+3. **The plan lists no ADR tasks, but names four decisions that must be made
+   before M0's code.** Seven ADRs are in the list — four for those decisions,
+   and three more that `contracts.md` rule 15 forces, one per new
+   `oqueue-core` trait (M0.9, M0.10, M0.11): a wholly new trait defines what an
+   implementor must guarantee, and `check-core-contract.sh` refuses the commit
+   without a `decisions/` file staged beside it. Those three have no discretion
+   in their placement. The other four are placed by one test: **could the
+   answer change what the next task *is*?** If so the ADR stands alone, because
+   a decision reached inside the commit that depends on it is a decision made
+   under pressure to keep the diff small. M0.4 decides how an async seam is
+   expressed, which decides what M0.9, M0.10 and M0.11 are; M0.7 decides
+   whether M0.8 creates ten crates or fewer. If not, the ADR travels with the
+   change it governs, where its consequence is in the same diff and can be
+   checked against it: the root manifest gets profiles either way (M0.3) and
+   the binary sets some allocator either way (M0.13) — those ADRs record *why
+   these values*, not *what to build*. ⚠️ Note this is **not** "how many later
+   tasks does it block" — M0.7 blocks only M0.8 and still stands alone, because
+   blocking one task whose shape it decides is the case that matters. ⚠️ The
+   ADR numbers run in execution order: 0001 profiles, 0002 the async seam, 0003
+   the leaf split, 0004–0006 the three seams, 0007 the allocator.
+4. **Plan items 1 and 3 merge, and `scripts/check-crate.sh` joins them.** A
+   workspace manifest with no members compiles nothing, so "the tree is green"
+   would be vacuously true of a commit holding only item 1. M0.2 pairs the root
+   manifest with `oqueue-core` — the smallest tree that actually compiles — and
+   item 2's profiles stay their own task because they carry ADR-0001 and nothing
+   depends on them landing first. ⚠️ **No plan anywhere names `check-crate.sh`**,
+   yet the `tdd` skill's definition of done and the `milestone` skill's loop both
+   invoke it and doc 19 §5 specifies it. It does not exist, and neither does any
+   pre-commit hook that runs a cargo command — so the plan as written has M0
+   introducing eleven crates of Rust that no gate compiles, formats, lints or
+   tests. It lands in M0.2 rather than as a twentieth task because a commit that
+   adds the first Rust and a commit that makes Rust checkable are the same
+   change; splitting them means deliberately committing code nothing checks.
+5. **Plan items 9 and 10 merge.** With no fake in it, `oqueue-testkit` in M0 is
+   a skeleton exactly like the other nine: `Cargo.toml`, `README.md`,
+   `AGENTS.md`, `publish = false`. A commit creating one empty crate is not a
+   task, and the fake-per-trait convention item 10 wanted enforced turns out to
+   be enforced somewhere else entirely — in core, by M0.18's gate.
+6. **Plan item 11 dissolves rather than becoming a task.** "`#![forbid(unsafe_code)]`
+   everywhere except `buf`, `codec`, `checksum`" is one attribute line per crate
+   and cannot be a commit of its own without every crate first existing without
+   it — which would mean deliberately committing a tree `check-unsafe.sh` is
+   meant to reject. The attribute lands with each crate, in M0.2 and M0.8, and
+   both rows carry it in their acceptance.
+7. **Plan items 12 and 13 became one task, restated twice.** "Run
+   `check-layering.sh` against real crates; fix what it gets wrong" has no
+   checkable acceptance when nothing turns out to be wrong. The first restating
+   asked each gate to *report* what it inspected — which turned out to be
+   already true of all five, making the row a no-op. What is left, and what
+   M0.14 asks for, is that the numbers be **seen and recorded**: a matcher
+   written against an imagined tree can return zero while the gate exits 0, and
+   three requirements name these gates as their entire verification.
+8. **Plan item 16 is wrong about `check-budget.sh` already existing.** It says
+   "the script is M-1.12; only the number waits for this milestone". `M-1.12` is
+   the one M-1 row that never landed, so no script exists and M0.16 writes both
+   the script and the constant, then closes `M-1.12`.
+9. **The plan lists no task for M0's own completion gate.** It states the
+   completion condition, which is not the same as writing the script that
+   asserts it — M-1 learned this twice (`M-1.16` wrote the gate, `M-1.46` had to
+   come back and write its negative test). M0.18 does both at once.
+10. **M0.1 has no plan item because the plan could not have known.** Declaring
+    M-1 complete makes `AGENTS.md`'s and `.agents/skills/README.md`'s "these
+    gates do not exist yet" notes false, and they are the first thing an agent
+    reads in any session. It was found by M0.0's own review.
+
+Two things the plan asserts that this decomposition deliberately does **not**
+widen to match. The M0.10 and M0.11 rows cite NFR-51 — the seam exists and
+nothing outside it does I/O — rather than FR-31 and FR-41, which are about
+behaviour those fakes do not have: M1 writes the S3 and GCS backends, M8 writes
+the KMS providers. ⚠️ The plan calls the `ObjectStore` fake **trivial** in as
+many words (item 5); it gives no such instruction for `KeyProvider` (item 6), so
+that half of the argument rests only on the second ground, which is the
+sufficient one anyway. Claiming FR-31 here would leave M1 looking like a
+refinement of a requirement already served.
+
+#### Notes on specific tasks
+
+Empty until M0's first task lands. ⚠️ **M0.14's gate counts, M0.15's coverage
+measurement and M0.16's pre-commit timing belong here**, each with the command
+that produced it and the date, because two of those tasks strike an
+**UNDERIVED** marking off `requirements.md` and a constant recorded without its
+derivation is indistinguishable from a guessed one a month later.
 
 ## M-1: AI development system
 
@@ -41,7 +254,7 @@ comes before any gate because every gate sources it.
 | M-1.9 | `review.sh` + `check-reviewed.sh` — the isolated reviewer and its gate | Review artifact keyed by staged-diff hash; amending one byte after review fails the commit | done |
 | M-1.10 | `check-core-contract.sh` | A `pub trait` method-set change without every implementor and an ADR in the same commit fails | done |
 | M-1.11 | `check-unsafe.sh` | `unsafe` outside the three named crates fails; every `SAFETY:` block has a baseline entry | done |
-| M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend | todo |
+| M-1.12 | `check-budget.sh` — the pre-commit time budget as an enforced constant | Suite over budget fails; timings written as an artifact so erosion shows as a trend. ⚠️ **Blocked, and structurally so** — NFR-56's constant cannot be chosen without a workspace to measure, which is why `m-1-complete.sh` names no non-negotiable that depends on it and M-1 completed with this row open. **`M0.16` writes both the script and the number and closes this row**; it is not a task to pick up before then | todo |
 | M-1.13 | `.agents/skills/` — `milestone`, `next-task`, `spec`, `tdd`, `review`, `adr`, `research`; `.claude/` adapters and the isolated reviewer subagent | Each parses as the Agent Skills spec; each calls `scripts/`, never a tool built-in; no vendor syntax outside `CLAUDE.md`; adapters contain pointers, not procedures | done |
 | M-1.14 | `.pre-commit-config.yaml` (direct-to-main) + push-triggered CI | ⚠️ No gate keyed to `origin/main...`; PR-triggered gates rebased onto the previous commit | done |
 | M-1.15 | `tests/gates/negative.sh` — prove every gate can fail | Each gate invoked against a broken artefact and observed to fail | done |

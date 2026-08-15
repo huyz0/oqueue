@@ -131,8 +131,8 @@ workspace standard in
 
 | Milestone | | State |
 |---|---|---|
-| M-1 | AI development system | in progress |
-| M0 | Workspace, contracts, quality gates | not started |
+| M-1 | AI development system | complete |
+| M0 | Workspace, contracts, quality gates | in progress |
 | M1 | Object store seam and conformance suite | not started |
 | M2 | Kafka wire protocol: produce and fetch | not started |
 | M3 | Coordinator: offset sequencing and the index | not started |
@@ -149,7 +149,9 @@ See [roadmap.md](docs/internal/product/roadmap.md).
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Short version: issues and design
 discussion are welcome now; code contributions are not being accepted yet,
-because the development system that would review them is still being built.
+because there is no implementation to contribute to — the development system
+that reviews changes is finished (M-1), and M0, which creates the workspace and
+the crates, is in progress.
 
 ## License
 

@@ -58,8 +58,8 @@ original ten did not reach a shippable v1. Sequence:
 
 | # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
 |---|---|---|---|---|---|---|---|
-| 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | see `backlog.md` ⚠️ | `scripts/gates/m-1-complete.sh` | in progress |
-| 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | 18 | `scripts/gates/m0-complete.sh` | not started |
+| 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | see `backlog.md` ⚠️ | `scripts/gates/m-1-complete.sh` | complete |
+| 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | see `backlog.md` ⚠️ | `scripts/gates/m0-complete.sh` | in progress |
 | 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | 18 | `scripts/gates/m1-complete.sh` | not started |
 | 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | 18 | `scripts/gates/m2-complete.sh` | not started |
 | 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | 19 | `scripts/gates/m3-complete.sh` | not started |
@@ -103,6 +103,24 @@ paragraph stopped writing one down at all — the fourth recurrence of the
 identical failure mode `milestones/M-1.md`'s own boundary-review section
 tracks as **M-1.52**.
 
+⚠️ **An open milestone's Tasks cell reads `see backlog.md`.** A number here is
+a plan's estimate and stops being true the moment the milestone opens: M0's
+count moved from 18 to 19 during the review of the very commit that decomposed
+it, which is the same drift this paragraph's M-1 half records going stale twice
+before the number was deleted. No gate compares this cell to `backlog.md`'s row
+count, so the only cell that cannot be wrong is the one that carries no number.
+A `not started` row keeps its estimate, because an estimate is all it has.
+
+⚠️ **M-1 is `complete` with one row still `todo`, and that is not a
+contradiction.** A milestone is done when its completion condition exits 0;
+`m-1-complete.sh` names every non-negotiable in `AGENTS.md`, and none of them
+depends on `M-1.12` — NFR-56's constant cannot be chosen without a workspace to
+measure, so the row was blocked from the first day of the milestone rather than
+left undone at the end of it. **M0.16 writes it.** Recording this here matters
+because "the gate passed but a row is open" is exactly the shape a milestone
+declared complete on a technicality would also have, and the difference is
+whether the open row was structurally excluded or quietly skipped.
+
 ### Why this order
 
 Three placements are not obvious and are the ones worth arguing about:
@@ -138,7 +156,7 @@ and it is not what M-1.24 asked for.
 | Milestone | Serves |
 |---|---|
 | M-1 | NFR-50, NFR-54 |
-| M0 | NFR-51, NFR-52, NFR-53, NFR-55, NFR-56 |
+| M0 | FR-44, FR-50, NFR-2, NFR-40, NFR-42, NFR-50, NFR-51, NFR-52, NFR-53, NFR-55, NFR-56 |
 | M1 | FR-30, FR-31, NFR-30 |
 | M2 | FR-1, FR-2, FR-3 |
 | M3 | FR-10, FR-11, FR-12, FR-13, FR-32, NFR-2, NFR-3, NFR-21 |
@@ -246,9 +264,14 @@ after the code it governs has already been violated. Plan: [M-1](milestones/M-1.
 ## M0 — Workspace, contracts, and quality gates
 
 The Cargo workspace, the eleven crates, `oqueue-core`'s trait seams with a fake
-beside each, and the coverage/mutation/benchmark gates wired to constants.
+beside each, and the coverage and mutation gates wired to constants.
 ⚠️ Two of those constants (NFR-55, NFR-56) can only be chosen here, because
-choosing them needs a workspace to measure.
+choosing them needs a workspace to measure. ⚠️ **Benchmark gates are not among
+them**, though this sentence said so until M0 was decomposed: M0 has no hot
+path to benchmark, `check-hot-path-bench.sh` already exists from M-1.29, and
+`performance.md` rule 18's table is filled in as later milestones build the
+paths it names — `check-hot-path-bench.sh`'s `NOT_YET_BUILT` allowlist assigns
+its rows across M2, M3 and later work, not to M2 alone — and measured by M14.
 
 ## M1 — Object store seam and conformance suite
 
