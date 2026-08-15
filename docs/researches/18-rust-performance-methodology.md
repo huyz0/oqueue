@@ -28,7 +28,7 @@ Marked **[Documented]**, **[Measured]** (published benchmark with methodology), 
 1. **`iai-callgrind` has been renamed to `gungraun`.** The old crate stopped at 0.16.1 (Jul 2025); `gungraun` is at 0.19.4 (Jul 2026) and releasing monthly. Every tutorial you find describes the old name, old env prefix (`IAI_CALLGRIND_*` → `GUNGRAUN_*`), and old output dir (`target/iai` → `target/gungraun`).
 2. **Valgrind cannot execute AVX-512 or SVE.** Not "slowly" — at all. This makes instruction-count benchmarking and SIMD work **partly incompatible**, and the failure mode is silent (§2.3).
 3. **GitHub-hosted runners have no PMU.** `perf stat` hardware events do not work. Confirmed in [actions/runner-images #11789](https://github.com/actions/runner-images/issues/11789).
-4. **In a multi-crate workspace, crate boundaries are optimization barriers by default.** A non-generic `pub fn` without `#[inline]` is not inlinable across crates without LTO. For a byte-level codec split across crates, this is ruinous.
+4. **In a multi-crate workspace, crate boundaries are optimization barriers by default.** A non-generic `pub fn` without `#[inline]` is not inlinable across crates without LTO. For a byte-level codec split across crates, this is ruinous. ⚠️ **Qualified by [ADR-0003](../internal/product/decisions/0003-leaf-crate-split-and-inlining.md), measured on 1.97.1: a *small* non-generic `pub fn` with no annotation does inline across an rlib boundary at `opt-level = 3` with no LTO** — rustc encodes MIR for small functions automatically, which postdates the sources cited here. The statement holds for functions past that size. At `opt-level = 0` nothing inlines across crates except `#[inline(always)]`, which does.
 5. **Bounds-check elimination is worth 1–3%.** If you're trading soundness for 2%, stop. Four of our five hot paths need no unsafe at all.
 
 ---
@@ -143,6 +143,8 @@ Mitigations: pin the effective ISA (`-C target-cpu=x86-64-v3`); pin glibc via a 
 | Generic (any) | Yes — monomorphized in the caller's crate |
 
 matklad puts it bluntly: *"Without `#[inline]`, even the most trivial of functions can't be inlined across the crate boundary."*
+
+⚠️ **Qualified by [ADR-0003](../internal/product/decisions/0003-leaf-crate-split-and-inlining.md), measured on 1.97.1.** The table above and the matklad quote describe rustc before automatic cross-crate inlining. A non-generic `pub fn` under `-Zcross-crate-inline-threshold` (**default 100 MIR cost units**) now has its MIR encoded and *is* inlinable with no annotation and no LTO; the quote's "most trivial of functions" is precisely the case that changed. Past the threshold the row is still correct — so consequence 3 below stands, while consequence 2 ("keep the true hot path in one crate") rests on a premise that is now conditional. ⚠️ And LTO does not subsume `#[inline]` either: it makes the callee's IR available, while the annotation separately raises LLVM's inline cost threshold, so a ~28-35 statement function inlines only when annotated — under thin *and* fat LTO. ADR-0003 reads consequence 2 narrowly for these reasons.
 
 **[Assessment] Three consequences for the workspace layout in [15](15-scale-architecture-position.md):**
 
@@ -337,7 +339,7 @@ Three properties follow: `cargo clean` reclaims it, nothing lands in the system 
 
 **`cargo-hakari` matters specifically for our layout.** In a multi-crate workspace, building crate A then crate B can *rebuild* shared dependencies, because feature unification differs between the two invocations. A generated "workspace-hack" crate pins the union of features so each dependency compiles once. Directly implied by §3.1 pushing us toward many crates.
 
-This all pulls **with** §3.1, not against it: many small crates give build parallelism and tight incremental scope, and thin LTO recovers the cross-crate inlining at release time. *"Keep the hot path in one crate"* is about the hot path, not the workspace shape.
+This all pulls **with** §3.1, not against it: many small crates give build parallelism and tight incremental scope, and thin LTO recovers the cross-crate inlining at release time. ⚠️ **Qualified by ADR-0003:** thin LTO recovers it in the sense of making the IR available — `#[inline]` is still what decides the ~28-35 statement band, so the recovery is the build **plus one annotation**. *"Keep the hot path in one crate"* is about the hot path, not the workspace shape.
 
 The diagnostic is always `cargo build --timings` — the critical path is usually one fat leaf crate or proc-macro serialization (`serde_derive`, `async-trait`), not total crate count.
 

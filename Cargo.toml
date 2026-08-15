@@ -101,8 +101,8 @@ expect_used = "deny"
 # The three settings worth knowing without opening it:
 #
 #   * `lto = "thin"` in `release` is **mandatory, not tuning** — without it a
-#     non-generic `pub fn` does not inline across an rlib boundary, and this
-#     workspace is eleven crates by `M0.8`.
+#     non-generic `pub fn` past ~100 MIR cost units does not inline across an
+#     rlib boundary, and this workspace is eleven crates by `M0.8`. ADR-0003.
 #   * Fat LTO is in `dist` and not in `release` because it costs ~2.3x build
 #     time, paid by every developer on every release build.
 #   * `bench` pins `inherits = "dist"` because it would otherwise inherit
@@ -138,7 +138,12 @@ opt-level = 3
 # ⚠️ **Mandatory, not an optimization** — `build.md` rule 5. A crate boundary is
 # an optimization barrier: without LTO, a non-generic `pub fn` with no
 # `#[inline]` cannot be inlined by a caller in another crate, because its MIR is
-# not in the rlib. In a monolith LTO is worth a few percent; here it decides
+# not in the rlib. ⚠️ ADR-0003 qualifies this — measured on 1.97.1, rustc
+# encodes MIR automatically below ~100 MIR cost units, so small functions do
+# inline unannotated. ⚠️ And LTO does not subsume `#[inline]`: it makes the
+# callee's IR available, while the annotation separately raises LLVM's inline
+# cost threshold, and from ~28 statements up the annotation is what decides.
+# In a monolith LTO is worth a few percent; here it decides
 # whether the codec inlines at all. ⚠️ And `lto = false` with
 # `codegen-units = 1` performs **no LTO whatsoever** — strictly worse than the
 # stock profile (`build.md` rule 6). Deleting this line while keeping a low

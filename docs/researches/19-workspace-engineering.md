@@ -83,6 +83,8 @@ Depth is **2** for every library but the composer. A sixteen-package workspace b
 
 **Bad reasons to split:** conceptual tidiness with no dependency benefit, and anything finer than "more crates than you have cores." Note the tension with [18](18-rust-performance-methodology.md) §3.1 — crate boundaries are optimization barriers — which is resolved by thin LTO in release, not by merging crates. *"Keep the hot path in one crate"* applies to the hot path only.
 
+⚠️ **Qualified by [ADR-0003](../internal/product/decisions/0003-leaf-crate-split-and-inlining.md), measured on 1.97.1.** Thin LTO makes a callee's IR available across the boundary, and rustc inlines functions under ~100 MIR cost units with no annotation at all — but neither covers the ~28-35 statement band, the size of a codec entry point, where `#[inline]` decides. The position holds; the resolution is the build **plus one annotation**, not merging crates.
+
 ### 1.3 Proposed oqueue layout
 
 **[Assessment]** Same star, adapted:

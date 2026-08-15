@@ -24,7 +24,12 @@ by function kind:
 
 So a `pub fn read_varint(&mut self) -> u32` in `oqueue-codec`, called from
 `oqueue-broker`, is a real function call with a real prologue unless something
-intervenes. In a monolith, link-time optimization is worth a few percent. Here
+intervenes. ⚠️ **[ADR-0003](0003-leaf-crate-split-and-inlining.md) later
+qualified this**: measured on 1.97.1, a *small* such function inlines with no
+LTO and no annotation. Thin LTO stays mandatory here — it is what makes a callee's IR available
+across the boundary at all, though ⚠️ it does not by itself inline the 28-35
+statement band, where `#[inline]` is the difference (ADR-0003) — but the argument is
+narrower than this paragraph first made it. In a monolith, link-time optimization is worth a few percent. Here
 it decides whether the codec inlines at all.
 
 The requirement that makes this matter is **NFR-2**: tail-read p99 ≤ 10 ms with
@@ -186,8 +191,14 @@ means a **SIGILL on a customer's machine** rather than a slow build. They are
 ## Consequences
 
 **Easy.** A `pub fn` crossing a crate boundary is inlinable in every shipping
-build without anyone annotating it, so `M0.7` can split the leaf crates on
-design grounds rather than on inlining grounds. Benchmarks, once `M14` writes
+build, so `M0.7` can split the leaf crates on design grounds. ⚠️ **Not
+*without anyone annotating it*, which this ADR originally claimed and
+[ADR-0003](0003-leaf-crate-split-and-inlining.md) measured false**: LTO makes
+the callee's IR available, but `#[inline]` separately raises LLVM's inline cost
+threshold from 225 to 325, and there is a size band — around 28-35 statements,
+which is the size of a codec entry point — where the annotated function inlines
+under thin *and* fat LTO and the unannotated one does not. ADR-0003 is the
+authority on the annotation policy; this ADR is the authority on the profiles. Benchmarks, once `M14` writes
 any, measure `dist` codegen by construction. A release build that overflows an
 offset panics instead of wrapping.
 

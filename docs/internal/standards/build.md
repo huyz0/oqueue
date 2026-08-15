@@ -32,7 +32,9 @@ ignored.
 
 5. **`lto = "thin"` in release is mandatory, not an optimization.** ⚠️ Crate
    boundaries are optimization barriers by default: a non-generic `pub fn`
-   without `#[inline]` is not inlinable across crates without LTO. In a
+   without `#[inline]` is not inlinable across crates without LTO — ⚠️ **above
+   ~100 MIR cost units**; below that rustc encodes the MIR and inlines it
+   unannotated (ADR-0003, measured on 1.97.1). In a
    multi-crate workspace this decides whether the codec inlines at all.
 6. ⚠️ **`lto = false` with `codegen-units = 1` performs no LTO whatsoever** —
    strictly worse than the stock profile. Setting cgu=1 without setting `lto` is
