@@ -243,6 +243,8 @@ debug-assertions = true
 
 **[Assessment] The governing principle: the bench profile should differ from the shipping profile in exactly one way — `debug = true` — and no other.** Every other divergence silently optimizes a different program. `debug-assertions` accidentally left on is the most common way people invalidate a Rust benchmark.
 
+⚠️ **[ADR-0001](../internal/product/decisions/0001-build-profiles.md) is the table this project actually ships, and it declines one line above.** `[profile.bench] strip = false` breaks the governing principle on sight for no effect: `dist` already inherits `strip = "none"` from `release`, and the two spellings emit byte-identical rustc invocations — neither passes `-C strip` at all. The protection it reaches for is real and is kept as a rule on the *other* profile instead: **`release` must not strip**, because `dist` and `bench` both inherit from it and a stripped binary defeats the symbol attribution `debug = true` exists to buy. Everything else in §3.6 is implemented as written. See also the corrections under §3.7.2 and §3.7.3 item 6.
+
 One piece of free money: **`rust-lld` is the default linker on x86-64 Linux since Rust 1.90** — **[Measured]** 7× faster linking, 40% end-to-end reduction on incremental rebuilds. Check the toolchain before configuring anything else. And **[Measured]** `mold` was **0.7% *slower*** on release builds in Depot's study; don't cargo-cult it.
 
 ### 3.7 Build hygiene: disk growth, caches, and test scratch
@@ -279,6 +281,8 @@ One piece of free money: **`rust-lld` is the default linker on x86-64 Linux sinc
 
 **§3.6's five profiles are five independent trees**, and `bench` carries fat LTO *and* `debug = true`. Budget **30–60 GB steady state** for a broker-sized dependency graph, **per worktree**, before tooling. A direct cost of the profile split — plan for it rather than discovering it.
 
+⚠️ **Corrected by [ADR-0001](../internal/product/decisions/0001-build-profiles.md): it is four trees, not five.** Verified on 1.97.1 — `--profile dist` writes `target/dist` and `--profile release-checked` writes `target/release-checked`, but cargo gives the built-in `bench` profile **no directory of its own** and writes it to `target/release`. Since `bench` inherits `dist` while `release` does not, those are different programs in one directory: a `cargo bench` run replaces `target/release/` with a fat-LTO, full-debuginfo binary, anything packaging "whatever is in `target/release`" ships it. ⚠️ **The swap is silent and free**, which is what makes it dangerous: compilation units are keyed by a metadata hash that includes the profile settings, so both profiles' rlibs and objects coexist in `target/release/deps` and alternating between them rebuilds nothing — measured on 1.97.1, `release` → `bench` → `release` finishes in 0.01 s each way while the uplifted `target/release/<name>` flips between two different binaries. There is no rebuild cost to notice and no disk saved either; `target/release` holds both. The 30–60 GB figure is therefore unaffected in the other direction too — it is dominated by dependency debuginfo, not by profile count. The fix is a separate `CARGO_TARGET_DIR` for anything that benchmarks, which `scripts/bench.sh` and `scripts/profile.sh` set.
+
 #### 3.7.3 Disk fixes, by leverage
 
 1. **`[profile.dev.package."*"] debug = false`** (already in §3.6). Dependencies are ~90% of compiled code and debuginfo is 60–70% of `target/debug`. Roughly halves it, and costs nothing — nobody steps into `tokio`'s internals.
@@ -286,7 +290,7 @@ One piece of free money: **`rust-lld` is the default linker on x86-64 Linux sinc
 3. **Cut duplicate dependency versions.** `cargo tree --duplicates`; 19 duplicates in a 258-crate graph is typical and means compiling e.g. both `syn` majors. Then `cargo machete` for unused deps.
 4. **Give rust-analyzer its own target dir** (`"rust-analyzer.cargo.targetDir": true`). Otherwise every save contends with `cargo build` for the target lock — a serialization most people pay without noticing. Costs a second tree, buys back the inner loop.
 5. **`cargo-sweep` on a timer** — the missing GC. Prunes by fingerprint mtime: `--time <days>`, `--installed`, `--recursive`. Always `--dry-run` first.
-6. **Delete `dist` and `bench` between uses.** Build-on-demand, not steady state.
+6. **Delete `dist` and `bench` between uses.** Build-on-demand, not steady state. ⚠️ **`target/bench` does not exist for a bare `cargo bench`** — see the correction under §3.7.2; `rm -rf target/bench` is a silent no-op unless the run went through `scripts/bench.sh` or `scripts/profile.sh`, which set `CARGO_TARGET_DIR` precisely so that it is not.
 7. **`sccache` for worktrees and CI only.** It has what Cargo lacks — a **bounded, self-evicting LRU cache** (`SCCACHE_CACHE_SIZE`), converting unbounded growth into a fixed ceiling. But it is **incompatible with incremental compilation**, so it wins across worktrees and branch switches and loses in the inner loop. Not a global default.
 
 #### 3.7.4 Test scratch

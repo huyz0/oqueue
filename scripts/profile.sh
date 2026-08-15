@@ -96,6 +96,21 @@ if ! has_rust; then
   finish
 fi
 
+# ⚠️ Same reason as `scripts/bench.sh`: cargo gives the `bench` profile no
+# directory of its own and writes it to **`target/release`**, which since `M0.3`
+# holds different codegen (`bench` inherits `dist` — fat LTO,
+# `codegen-units = 1`, full debuginfo), so profiling would otherwise leave a
+# binary that is not the release build sitting where a release artifact is
+# expected. ADR-0001 commitment 4.
+# ⚠️ Set for **every** mode, and deliberately without asserting which profile
+# each one picks. The four gungraun modes go through `cargo bench`, so they get
+# `bench`. `flame` goes through `cargo flamegraph`, which is a third-party tool
+# whose profile choice is its own and is not verifiable here — nothing in this
+# environment has it installed. Either way the export is what keeps
+# `target/release` intact, and the reason it is right does not depend on
+# knowing the answer.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/bench"
+
 case "$MODE" in
   instructions|heap|massif|cache)
     require_tool valgrind "apt-get install valgrind, or the equivalent for this system" || finish

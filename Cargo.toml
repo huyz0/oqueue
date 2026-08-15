@@ -7,10 +7,10 @@
 # and the reasoning generalises: two places holding one fact is two places to
 # fix when it changes, and only one of them gets fixed.
 #
-# ⚠️ No `[profile]` sections yet. They are `M0.3`, with the ADR that explains
-# them, because `lto = false` next to `codegen-units = 1` performs no LTO at all
-# and `cargo bench` silently inherits `release` — both are traps worth landing
-# with their reasoning attached rather than as a block of numbers.
+# The `[profile]` sections are at the bottom, and why each number is that number
+# is [ADR-0001](docs/internal/product/decisions/0001-build-profiles.md) rather
+# than this file — a profile table reads as tuning, and two of its entries exist
+# to avoid traps that are invisible in the result.
 
 [workspace]
 # ⚠️ Resolver 3, not the 2 the milestone plan assumed — and this line is
@@ -79,3 +79,108 @@ nursery = { level = "deny", priority = -1 }
 # the allowance is written where a reader can see which tests took it.
 unwrap_used = "deny"
 expect_used = "deny"
+
+# ── Profiles ────────────────────────────────────────────────────────────────
+#
+# Five, per `build.md` rule 10, and **root-only**: a `[profile]` section in a
+# member crate is ignored, and cargo says so on stderr while still exiting 0 —
+# which is why `check-crate.sh` reads `cargo metadata`'s stderr separately
+# rather than folding it into the JSON.
+#
+# Reasoning is [ADR-0001](docs/internal/product/decisions/0001-build-profiles.md).
+# The three settings worth knowing without opening it:
+#
+#   * `lto = "thin"` in `release` is **mandatory, not tuning** — without it a
+#     non-generic `pub fn` does not inline across an rlib boundary, and this
+#     workspace is eleven crates by `M0.8`.
+#   * Fat LTO is in `dist` and not in `release` because it costs ~2.3x build
+#     time, paid by every developer on every release build.
+#   * `bench` pins `inherits = "dist"` because it would otherwise inherit
+#     `release`, and you would benchmark codegen you never ship.
+
+[profile.dev]
+opt-level = 0
+debug-assertions = true
+# `build.md` rule 7 / `security.md` rule 4. In `dev` this is already the
+# default; it is written out because the rule is "every profile" and a reader
+# checking compliance should not have to know which defaults happen to agree.
+overflow-checks = true
+# ⚠️ Linux and macOS only, which is the whole supported set — `portability.md`
+# rule 3 makes Windows a non-target and WSL2 the path on it. A Windows-msvc
+# build would reject this value.
+split-debuginfo = "unpacked"
+
+# Dependencies are ~90% of the compiled code and debuginfo is 60-70% of
+# `target/debug`. `build.md` rule 11. ⚠️ `opt-level = 2` here is not about the
+# binary: it is what makes a debug integration test finish, once compression and
+# crypto are in the loop, and it is cached across every later build.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
+
+# Proc macros and build scripts. They run at compile time, so their optimization
+# level is build *speed*, not runtime speed, and they are compiled once.
+[profile.dev.build-override]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+# ⚠️ **Mandatory, not an optimization** — `build.md` rule 5. A crate boundary is
+# an optimization barrier: without LTO, a non-generic `pub fn` with no
+# `#[inline]` cannot be inlined by a caller in another crate, because its MIR is
+# not in the rlib. In a monolith LTO is worth a few percent; here it decides
+# whether the codec inlines at all. ⚠️ And `lto = false` with
+# `codegen-units = 1` performs **no LTO whatsoever** — strictly worse than the
+# stock profile (`build.md` rule 6). Deleting this line while keeping a low
+# `codegen-units` is the mistake that looks like tuning.
+lto = "thin"
+codegen-units = 16
+# A decoder panic must not kill a node serving other tenants. `build.md` rule 8.
+panic = "unwind"
+# Production flamegraphs symbolicate without carrying full debuginfo.
+debug = "line-tables-only"
+strip = "none"
+# ⚠️ In `release` too, not only in `dev`. `build.md` rule 7 and `security.md`
+# rule 4: a silently wrapping offset is a correctness bug this project cannot
+# detect any other way, and the branch is predictable.
+overflow-checks = true
+
+# Tagged artifacts only. ⚠️ ~2.3x build time over `release`, which is why it is
+# a separate profile rather than a stronger `release` — see ADR-0001.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+
+# ⚠️ **Differs from `dist` in exactly one way, and that is the rule** —
+# `build.md` rule 10, "`dist` + `debug = true`, nothing else". Every other
+# divergence silently benchmarks a different program, and `debug-assertions`
+# left on is the most common way a Rust benchmark is invalidated.
+#
+# ⚠️ Doc 18 §3.6 also lists `strip = false` here. It is omitted because it is
+# not a difference: `dist` inherits `strip = "none"` from `release`, and
+# `false` is that same value spelled differently, so writing it would be a
+# second key that changes nothing while breaking the "exactly one" property on
+# sight. The protection it was reaching for is real, so it is stated as a rule
+# instead: **`release` must not strip**, because `bench` inherits from it and a
+# stripped binary defeats the symbol attribution `debug = true` is here for.
+#
+# ⚠️ **`bench` has no target directory of its own — it writes to
+# `target/release`.** `dist` gets `target/dist` and `release-checked` gets
+# `target/release-checked`, but cargo gives the built-in `bench` profile the
+# `release` directory, so a benchmark run replaces `target/release/` with a
+# fat-LTO, full-debuginfo binary that is *not* the release build, and the two
+# swap costs nothing and rebuilds nothing — both profiles' objects coexist in
+# `target/release/deps`, and only the uplifted artifact is a single slot — so
+# there is no slow rebuild to notice it by. Anything that benchmarks sets its
+# own `CARGO_TARGET_DIR`. ADR-0001, commitment 4.
+[profile.bench]
+inherits = "dist"
+debug = true
+
+# A CI safety net: production codegen with the assertions `release` turns off,
+# so an overflow or a broken invariant surfaces under the optimizer that will
+# actually ship rather than only under `dev`.
+[profile.release-checked]
+inherits = "release"
+debug-assertions = true

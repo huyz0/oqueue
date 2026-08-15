@@ -73,5 +73,30 @@ fi
 require_tool cargo "https://rustup.rs" || finish
 
 TARGET="bench-$SUITE"
+
+# ⚠️ **A separate target directory, and this is not hygiene — it is the only
+# way to keep `target/release` from being replaced by a benchmark build.**
+# Cargo gives the built-in `bench` profile no directory of its own: `dist`
+# writes `target/dist` and `release-checked` writes `target/release-checked`,
+# but `bench` writes **`target/release`**, the same path `--profile release`
+# writes. Since `M0.3` those two are different programs — `bench` inherits
+# `dist`, so fat LTO, `codegen-units = 1` and full debuginfo — so without this
+# line one `scripts/bench.sh` run leaves a fat-LTO binary sitting where a
+# release artifact is expected, and any later step packaging "whatever is in
+# `target/release`" ships it. ⚠️ And the swap is silent: both profiles' objects
+# coexist in `target/release/deps` under different metadata hashes, so
+# alternating rebuilds nothing and only the uplifted artifact changes. A
+# collision that cost a rebuild would at least announce itself.
+# ADR-0001 commitment 4; `build.md` rule 18 sets coverage aside for the same
+# kind of reason.
+# ⚠️ A **subdirectory of** any outer `CARGO_TARGET_DIR`, not a fallback for one.
+# Written as `${CARGO_TARGET_DIR:-...target/bench}` an outer setting — a CI
+# cache, a worktree, rust-analyzer — would put benchmarks straight back into the
+# same tree as that setting's `release` directory, which is the collision this
+# line exists to avoid. Honouring the override and then always descending keeps
+# both properties.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$REPO_ROOT/target}/bench"
+
 ok "running $SUITE via cargo bench --bench $TARGET --workspace"
+note "target dir: $CARGO_TARGET_DIR  (keeps target/release intact)"
 exec cargo bench --bench "$TARGET" --workspace "${EXTRA_ARGS[@]}"
