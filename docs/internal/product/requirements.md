@@ -165,7 +165,7 @@ rather than tests. Full statements in `../standards/`.
 | NFR-53 | `unsafe` confined to three named crates. | `check-unsafe.sh` | agreed |
 | NFR-54 | Every commit reviewed by an agent that did not author it. | `check-reviewed.sh` | agreed |
 | NFR-55 | Per-crate line coverage **≥ 85%**, excluding crates named in `check-coverage.sh`'s list with a reason. | `check-coverage.sh` against a literal no environment variable can move | agreed — derived in `M0.15`, measured 2026-08-16: lowest crate carrying logic was `oqueue-core` at 91.63% |
-| NFR-56 | Pre-commit suite completes within a time budget. | `check-budget.sh` against a constant | **UNDERIVED** — constant requires a workspace to measure |
+| NFR-56 | Pre-commit suite completes within **10 s**. | `check-budget.sh` against a literal, summing each gate's own recorded wall clock | agreed — derived in `M0.16`, measured 2026-08-16 at 2.27 s across 14 hooks — 15 once this gate joined them. ⚠️ A **floor**: no async runtime or cloud SDK is compiled yet |
 
 ---
 
@@ -196,8 +196,16 @@ requirement is not justified.** Both are findings for the milestone-boundary
 review, not facts to live with.
 
 ⚠️ Requirements marked **UNDERIVED** are the project's real open risk: NFR-13
-(throughput) gates several architectural decisions and blocks NFR-31. ⚠️ **NFR-55
-is no longer among them** — `M0.15` measured it on the finished workspace and
-set the floor at 85%. NFR-56 remains a constant that cannot be chosen until
-there is something to measure, and `M0.16` is where it is. They are tracked in
-[docs/researches/10-open-questions.md](../../researches/10-open-questions.md).
+(throughput) gates several architectural decisions and blocks NFR-31. ⚠️ **Neither
+NFR-55 nor NFR-56 is among them any more** — `M0.15` measured coverage on the
+finished workspace and set the floor at 85%, and `M0.16` measured the pre-commit
+suite at 2.27 s and set the budget at 10 s. ⚠️ Both were measured on a workspace
+that compiles no async runtime, so both are floors rather than steady state.
+
+⚠️ Of the three that remain, **two** are tracked in
+[docs/researches/10-open-questions.md](../../researches/10-open-questions.md) —
+NFR-13 as #25 and NFR-22 as #15. ⚠️ **NFR-23 is not**, and is tracked instead in
+`milestones/M15.md`, which carries it under *Decisions required first* — it has
+no stakeholder figure, which is a different kind of gap from a number nobody has
+measured, and it wants a person rather than a benchmark. NFR-55 and NFR-56 never
+appeared in doc 10 and do not now.

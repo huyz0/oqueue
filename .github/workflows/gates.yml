@@ -96,6 +96,14 @@ jobs:
           cargo --version
           rustc --version
 
+      # ⚠️ **Cache the cargo build, or every run is a cold one.** Doc 18 §3.7.6
+      # names this action specifically: it prunes to the actual dependency graph,
+      # which is why hand-rolled `actions/cache` setups grow forever and this one
+      # does not. `M0.16` needs it for a second reason — `check-budget.sh`
+      # measures the warm inner loop, and an uncached runner makes every CI run a
+      # compiling run, which that gate then declines to measure at all.
+      - uses: Swatinem/rust-cache@v2
+
       # ⚠️ **Without this, `check-coverage.sh` skips and the job stays green.**
       # The script turns a missing `cargo-llvm-cov` into a `skip` — correct
       # behaviour for a developer's machine, and the one outcome worse than

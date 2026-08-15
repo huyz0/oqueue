@@ -134,6 +134,17 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # ⚠️ **Genuinely last**, and this one has to be: it adds up the timings
+      # every gate above recorded, so anything after it would be uncounted.
+      # `M0.16`.
+      - id: check-budget
+        name: "NFR-56: the pre-commit suite stays within its time budget"
+        entry: scripts/check-budget.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
       # --- commit-msg stage: the two gates that read the message file itself,
       # which pre-commit passes as this stage's one positional argument.
       - id: check-commit-msg

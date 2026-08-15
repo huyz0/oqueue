@@ -111,8 +111,10 @@ before the number was deleted. No gate compares this cell to `backlog.md`'s row
 count, so the only cell that cannot be wrong is the one that carries no number.
 A `not started` row keeps its estimate, because an estimate is all it has.
 
-⚠️ **M-1 is `complete` with one row still `todo`, and that is not a
-contradiction.** A milestone is done when its completion condition exits 0;
+⚠️ **M-1 was `complete` with one row still `todo`, and that was not a
+contradiction.** ⚠️ It is no longer the case — `M0.16` measured NFR-56 and
+closed `M-1.12`, so M-1's rows are all `done`. The reasoning is kept because it
+is the general rule, not a fact about one row: A milestone is done when its completion condition exits 0;
 `m-1-complete.sh` names every non-negotiable in `AGENTS.md`, and none of them
 depends on `M-1.12` — NFR-56's constant cannot be chosen without a workspace to
 measure, so the row was blocked from the first day of the milestone rather than
@@ -229,16 +231,21 @@ independently is how a project acquires an architecture nobody chose.
 
 ## The numbers that do not exist yet
 
-⚠️ Four milestones have completion conditions that cannot currently be written,
-because the requirement they check has no number. ⚠️ M0 is one of them and is
-not a `non-functional` milestone — one of its gates is still a constant that needs measuring — NFR-56, in `M0.16`; NFR-55's was measured and set in `M0.15`.
+⚠️ Three milestones have completion conditions that cannot currently be written,
+because the requirement they check has no number.
+
+⚠️ **M0 was the fourth and no longer is.** Both of its gate constants are
+measured: NFR-55's per-crate coverage floor at 85% (`M0.15`, lowest crate
+carrying logic 91.63%) and NFR-56's pre-commit budget at 10 s (`M0.16`, suite
+measured at 2.27 s across 14 hooks — 15 once the budget gate itself joined them). ⚠️ Both are **floors** — the workspace they
+were measured on compiles no async runtime and no cloud SDK, which `M1` changes
+— and neither is resolved by raising the literal when it is first breached.
 
 | Requirement | Milestone | Blocked on |
 |---|---|---|
 | NFR-13 aggregate ingest throughput | M14 | doc 10 #25 — also gates #7 and shared-WAL sizing |
 | NFR-22 recovery time objective | M6 | doc 10 #15 — hot-standby and cold rebuild are separate numbers |
 | NFR-23 availability target | M15 | no stakeholder figure |
-| NFR-56 pre-commit time budget | M0 | needs a workspace to measure |
 
 **NFR-13 is the one that matters most.** It gates an architectural decision
 (#7, the fast tier), not just a benchmark, so it is wanted well before M14.
@@ -266,9 +273,11 @@ after the code it governs has already been violated. Plan: [M-1](milestones/M-1.
 The Cargo workspace, the eleven crates, `oqueue-core`'s trait seams with a fake
 beside each, and the coverage and mutation gates wired to constants.
 ⚠️ Two of those constants (NFR-55, NFR-56) can only be chosen here, because
-choosing them needs a workspace to measure. ⚠️ **NFR-55 is chosen**: `M0.15`
-measured line coverage per crate on the finished workspace and set the floor at
-85%, with the lowest crate carrying logic at 91.63%. NFR-56 is `M0.16`'s. ⚠️ **Benchmark gates are not among
+choosing them needs a workspace to measure. ⚠️ **Both are now chosen**: `M0.15`
+measured line coverage per crate and set the floor at 85% (lowest crate carrying
+logic: 91.63%), and `M0.16` measured the pre-commit suite at 2.27 s across 14
+hooks and set the budget at 10 s. ⚠️ Both are **floors** — measured on a
+workspace compiling no async runtime, which `M1` changes. ⚠️ **Benchmark gates are not among
 them**, though this sentence said so until M0 was decomposed: M0 has no hot
 path to benchmark, `check-hot-path-bench.sh` already exists from M-1.29, and
 `performance.md` rule 18's table is filled in as later milestones build the

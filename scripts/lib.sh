@@ -56,8 +56,77 @@ note() {
   printf '     %s%s%s\n' "$_DIM" "$1" "$_OFF"
 }
 
+# ── Timings ─────────────────────────────────────────────────────────────────
+#
+# ⚠️ **Every gate records its own wall clock, and `check-budget.sh` adds them
+# up.** The alternative — a budget gate that runs the suite itself — would
+# double the suite it is measuring, which is a strange thing for a gate about
+# suite duration to do. `M0.16`.
+#
+# The grouping key is the **process group**, not the parent pid: `pre-commit`
+# spawns each hook with a different `PPID` but the same `PGID`, so `PGID` is
+# what identifies one run of the suite. Measured, not assumed.
+# ⚠️ **Portably.** `date +%s%N` is a GNU extension: BSD `date` emits a literal
+# `N`, and `portability.md` rule 2 makes macOS a first-class development
+# platform. An earlier version used it unguarded, and the arithmetic below then
+# aborted every gate under `set -e` *after* it had printed `ok` — inverting this
+# file's own rule that a missing tool is a skip, never a failure. Found by
+# review. Order: bash 5's builtin, then GNU `date`, then second resolution.
+_now_ms() {
+  local raw
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then
+    # e.g. 1786819635.123456 -> milliseconds, no external command at all.
+    # ⚠️ `[.,]`, not `.` — bash formats EPOCHREALTIME with the LC_NUMERIC
+    # decimal point, so a comma-radix locale (de_DE, fr_FR, ...) yields
+    # `1786820364,006124`. Stripping only `.` left the comma in place and the
+    # arithmetic below silently returned a two-digit number, making the budget
+    # gate vacuous on those locales. Found by review, reproduced under de_DE.
+    raw="${EPOCHREALTIME//[.,]/}"
+    printf '%s\n' "$(( 10#${raw:0:16} / 1000 ))"
+    return 0
+  fi
+  raw="$(date +%s%N 2>/dev/null)"
+  if [[ "$raw" =~ ^[0-9]{16,}$ ]]; then
+    printf '%s\n' "$(( 10#$raw / 1000000 ))"
+    return 0
+  fi
+  raw="$(date +%s 2>/dev/null)"
+  if [[ "$raw" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$(( 10#$raw * 1000 ))"
+    return 0
+  fi
+  printf '\n'   # unusable clock: callers treat empty as "do not record"
+}
+
+_GATE_STARTED_MS="$(_now_ms)"
+_TIMINGS_FILE="$REPO_ROOT/target/timings/gates.tsv"
+
+_record_timing() {
+  # ⚠️ **Only under `pre-commit`.** Every script sourcing this file calls
+  # `finish()` — including `review.sh`, `milestone-review.sh` and the negative
+  # suite — and `check-budget.sh` groups by process group, so a
+  # `review.sh && git commit` in one shell would charge review time to the
+  # pre-commit suite. `PRE_COMMIT=1` is set by pre-commit and by nothing else.
+  [[ -n "${PRE_COMMIT:-}" ]] || return 0
+  local now ms pgid
+  now="$(_now_ms)"
+  [[ -n "$now" && -n "$_GATE_STARTED_MS" ]] || return 0
+  ms=$(( now - _GATE_STARTED_MS ))
+  (( ms < 0 )) && return 0
+  pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" || pgid=""
+  [[ -n "$pgid" ]] || return 0
+  mkdir -p "$(dirname "$_TIMINGS_FILE")" 2>/dev/null || return 0
+  # ⚠️ Best effort, and silent on failure. A gate must never fail because it
+  # could not write a timing — that would make an observability feature into a
+  # source of red builds.
+  printf '%s\t%s\t%s\t%s\n' \
+    "$pgid" "$(basename "${BASH_SOURCE[-1]}")" "$ms" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    >> "$_TIMINGS_FILE" 2>/dev/null || true
+}
+
 # Exit with the verdict. Every gate ends by calling this.
 finish() {
+  _record_timing
   if (( _FAILURES > 0 )); then
     printf '\n%s%d of %d checks failed%s\n' "$_RED" "$_FAILURES" "$_CHECKS" "$_OFF" >&2
     exit 1

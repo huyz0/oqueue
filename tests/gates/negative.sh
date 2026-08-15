@@ -1177,6 +1177,33 @@ run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_f
 run_case "check-crate.sh (stale lockfile)" setup_crate_stale_lock invoke_crate_stale_lock
 run_case "check-crate.sh (clippy warning)" setup_crate_clippy     invoke_crate_clippy
 run_case "check-crate.sh (failing test)" setup_crate_test         invoke_crate_test
+setup_budget_over() {
+  local dir; dir="$(new_scratch budget_over)"
+  copy_gate "$dir" check-budget.sh
+  # ⚠️ A timings artifact whose entries belong to *this* process group and
+  # exceed the budget. Written directly rather than by running a slow suite:
+  # the thing under test is the comparison, and a fixture that took 10 real
+  # seconds to prove a 10-second budget would be its own budget problem.
+  mkdir -p "$dir/target/timings"
+  local pg; pg="$(ps -o pgid= -p $$ | tr -d ' ')"
+  # ⚠️ **No single entry over `COMPILING_GATE_MS` (5000).** The gate exempts a
+  # run where one gate dominates, because that is a build rather than an eroded
+  # suite -- so a fixture with a 7000 ms entry tests the *exemption* and reports
+  # the gate as broken. This models the case the budget is actually for: many
+  # gates each a little slower, summing past the line.
+  {
+    printf '%s\tcheck-slow-one.sh\t4200\t%s\n' "$pg" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '%s\tcheck-slow-two.sh\t4100\t%s\n' "$pg" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '%s\tcheck-slow-three.sh\t3900\t%s\n' "$pg" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  } > "$dir/target/timings/gates.tsv"
+  printf '%s\n' "$dir"
+}
+invoke_budget_over() {
+  # ⚠️ Run in the *same* process group as the setup that wrote the artifact,
+  # which is what the gate keys on.
+  bash "$1/scripts/check-budget.sh"
+}
+
 if _have_llvm_cov; then
   run_case "check-coverage.sh (crate below the floor)" setup_coverage_below_floor invoke_coverage_below_floor
 else
@@ -1184,6 +1211,7 @@ else
   note "install: cargo install cargo-llvm-cov"
   note "⚠️ this case did not run; the gate it covers is unproven on this machine"
 fi
+run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 
