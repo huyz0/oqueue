@@ -83,6 +83,10 @@ comfortably; if ours approaches ~40, the pre-planned split is `core-types`
   convenience for the test that happens to use it first. An over-permissive fake
   is worse than no fake, and the `ObjectStore` one is the highest-risk component
   in the project for exactly this reason.
+- **`ObjectStore` is the seam everything else leans on** — `M0.10`, ADR-0005.
+  ⚠️ Exactly one fake exists in this tree and `M1` **rewrites** it rather than
+  adding another: two fakes with divergent conditional-write semantics is the
+  highest-risk defect class in the project.
 - **`Clock` is the first seam, and its fake is beside it** — `M0.9`, ADR-0004.
   `FakeClock::advance` is the only way its time moves, and it refuses a
   negative delta so a test cannot build a clock no real implementor could be.

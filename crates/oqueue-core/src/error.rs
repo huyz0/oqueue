@@ -118,6 +118,27 @@ pub enum Error {
         delta: i64,
     },
 
+    /// No object is stored under that key.
+    #[error("no object stored under key {key}")]
+    ObjectNotFound {
+        /// The key that was looked up.
+        ///
+        /// ⚠️ **An object key is derived from a topic name, so it names a
+        /// tenant** — and `Error::SecretRejected` above deliberately refuses to
+        /// do that. The two variants apply `error-handling.md` rule 14 in
+        /// opposite directions, so the trade is worth stating: rule 14 says
+        /// default to less and name a resource by something that does not
+        /// double as a capability. An object key is not a capability — holding
+        /// one grants nothing without credentials — while "not found" with no
+        /// key is unactionable for the operator who has to find out why.
+        ///
+        /// ⚠️ **This depends on the variant not reaching a client**, which
+        /// nothing yet enforces: `M2` decides what a fetch failure looks like
+        /// on the wire, and `error-handling.md` rule 12 says that shape is not
+        /// this enum's `Display`.
+        key: crate::ObjectKey,
+    },
+
     /// An object key was empty.
     #[error("object key is empty")]
     EmptyObjectKey,

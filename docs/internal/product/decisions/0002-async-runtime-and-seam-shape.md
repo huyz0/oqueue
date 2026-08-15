@@ -40,7 +40,10 @@ pub trait ObjectStore: Send + Sync + fmt::Debug {
 
 ⚠️ `Payload` is a placeholder, and deliberately not `bytes::Bytes`. What the
 seam carries is `M0.10`'s decision; what this ADR fixes is that it must be a
-type **`oqueue-core` owns** (`contracts.md` rule 8), because core takes no
+type **`oqueue-core` owns** (`contracts.md` rule 8) — ⚠️ **narrowed by
+[ADR-0005](0005-object-store-seam.md), which chose `Vec<u8>`**: `std`, owned by
+nobody, satisfying this rule's *reason* (no dependency at the centre of the
+star) rather than its letter. `M0.11` inherits that reading, because core takes no
 dependency and `oqueue-buf` is downstream of it. ⚠️ Nothing enforces this:
 `check-layering.sh` intersects each manifest's dependencies with *workspace*
 crate names, so an external crate added to `oqueue-core` passes every gate.

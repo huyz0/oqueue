@@ -31,6 +31,7 @@ mod object_key;
 mod offset;
 mod partition;
 mod redacted;
+mod store;
 mod topic;
 
 pub use clock::{Clock, FakeClock, Timestamp};
@@ -39,4 +40,5 @@ pub use object_key::ObjectKey;
 pub use offset::Offset;
 pub use partition::PartitionId;
 pub use redacted::Redacted;
+pub use store::{BoxFuture, FakeObjectStore, ObjectStore};
 pub use topic::TopicId;
