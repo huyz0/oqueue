@@ -4,8 +4,8 @@
 
 The types, IDs, errors, and trait seams every other crate in the workspace is
 written against. It is the one crate everything depends on, and the one crate
-that depends on nothing — not on another workspace crate, and not, today, on
-anything outside the workspace either.
+that depends on **no other crate in the workspace**. Externally it takes exactly
+one dependency, `thiserror`, for the reason under *Upstream*.
 
 ## Why does it exist?
 
@@ -25,14 +25,27 @@ a seam, it is a description of that implementation.
 
 ## Upstream
 
-Nothing. Deliberately, and this is a rule rather than a coincidence: the star
-topology holds only if its centre is a leaf. `check-layering.sh` enforces the
-direction of every other crate's dependencies; this crate having none is what
-makes depth 2 achievable at all.
+**No workspace crate**, ever. That is the rule rather than a coincidence: the
+star topology holds only if its centre is a leaf. `check-layering.sh` enforces
+the direction of every other crate's dependencies; this crate having none is
+what makes depth 2 achievable at all.
+
+Externally, exactly one:
+
+- `thiserror` — `error-handling.md` rule 3 requires each crate to define its
+  error enum with it, and `M0.5` brought the first one. A proc macro: no C
+  toolchain, and nothing in the runtime graph but `proc-macro2`, `quote`, `syn`
+  and `unicode-ident`.
+
+`proptest` is a **dev**-dependency, for the invariant tests, so it is absent
+from the list above and from the shipped graph. ⚠️ `check-layering.sh` and
+`check-readmes.sh` both read `[dependencies]` only, so nothing gates what lands
+in `[dev-dependencies]`.
 
 ⚠️ **Adding a dependency here is a decision that costs the whole workspace.**
 Every crate rebuilds when this one changes, so a dependency added here is a
-dependency every crate now waits for.
+dependency every crate now waits for. Each one needs a reason written beside it
+in `Cargo.toml`.
 
 ## Downstream
 

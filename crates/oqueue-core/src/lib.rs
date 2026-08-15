@@ -1,17 +1,35 @@
-//! Types, IDs, errors, and every trait seam in oqueue.
+//! Types, IDs, errors, and every trait seam the rest of the workspace is
+//! written against.
 //!
-//! This crate is the centre of the workspace's star topology: every other crate
-//! depends on it, and it depends on nothing. That is what keeps the build DAG
-//! two links deep however many crates are added sideways, and what lets each of
-//! them be tested without constructing the system.
+//! This is the one crate everything depends on, and the one crate that depends
+//! on no other crate here — the centre of `architecture.md`'s star. It performs
+//! no I/O, reads no clock, and names no socket or object store; anything that
+//! needs those is expressed as a trait seam whose implementations live
+//! downstream (NFR-51).
 //!
-//! Nothing here performs I/O, reads the real clock, or names an async runtime.
-//! Those arrive through the seams defined here and are supplied by
-//! `oqueue-broker` and `bin/oqueue`.
+//! # What is here so far
 //!
-//! It is empty for now. `M0.5` brings the core types and IDs, `M0.6` the error
-//! taxonomy, and `M0.9` through `M0.11` the three seams, each with its fake
-//! beside it — `contracts.md` rule 9 puts fakes here rather than in
-//! `oqueue-testkit`, so that a crate can be tested without a testkit dependency.
-
+//! The four core identifiers ([`TopicId`], [`PartitionId`], [`Offset`],
+//! [`ObjectKey`]) and the [`Error`] enum they can produce. The trait seams
+//! (`Clock`, `ObjectStore`, `KeyProvider`) arrive in `M0.9` through `M0.11`,
+//! shaped as ADR-0002 decided.
+//!
+//! # The property every identifier here shares
+//!
+//! ⚠️ **Each one's invariant is unconstructible-around**, not merely checked at
+//! the door. The field is private, the only constructor validates, and there is
+//! no setter — so a value that violates the invariant is not a value this crate
+//! can hand out. That is what lets everything downstream stop re-checking.
 #![forbid(unsafe_code)]
+
+mod error;
+mod object_key;
+mod offset;
+mod partition;
+mod topic;
+
+pub use error::{Error, Result};
+pub use object_key::ObjectKey;
+pub use offset::Offset;
+pub use partition::PartitionId;
+pub use topic::TopicId;

@@ -6,12 +6,26 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# ⚠️ Deliberately empty, and this is the crate where that is a rule rather than
-# a coincidence: `architecture.md`'s star topology has every other crate
-# depending on `oqueue-core` and on nothing else in the workspace, which only
-# holds if `oqueue-core` itself depends on nothing. `check-layering.sh` enforces
-# the direction; this emptiness is what makes the depth-2 DAG possible at all.
+# ⚠️ **No *workspace* dependency, ever**, and that is the rule this crate exists
+# to hold: `architecture.md`'s star topology has every other crate depending on
+# `oqueue-core` and on nothing else here, which only works if `oqueue-core`
+# depends on no workspace crate. `check-layering.sh` enforces that direction.
+#
+# ⚠️ External dependencies are a different question and are **not** forbidden —
+# `architecture.md:45` says "no dependencies on anything else *here*". They are
+# expensive rather than banned: every crate rebuilds when this one changes. Each
+# one needs a reason at this line.
 [dependencies]
+# `error-handling.md` rule 3: each crate defines its error enum with thiserror.
+# Proc macro, no C toolchain, no runtime cost — verified with `cargo tree`.
+thiserror.workspace = true
+
+[dev-dependencies]
+# `testing.md` rule 20 (property tests over example tests) and doc 18 §5.6,
+# which lists proptest as mandatory on every PR. ⚠️ A dev-dependency, so it is
+# never in the shipped graph -- and invisible to `check-layering.sh`, which
+# reads `[dependencies]` only.
+proptest.workspace = true
 
 [lints]
 workspace = true

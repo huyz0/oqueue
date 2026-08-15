@@ -97,8 +97,9 @@ a decision to leave the ecosystem, and nothing here needs that.
 
 **Easy.** The composition root holds `Arc<dyn ObjectStore>` and chooses S3, GCS,
 or the in-memory backend at startup. Every seam is one trait, so a fake is one
-fake and `check-core-contract.sh`'s implementor check covers it. `oqueue-core`
-still compiles with no dependency at all.
+fake and `check-core-contract.sh`'s implementor check covers it. This shape
+adds no dependency to `oqueue-core` — ⚠️ which is not the same as the crate
+having none: `M0.5` added `thiserror`, as `error-handling.md` rule 3 requires.
 
 **Hard.** One heap allocation per seam call, unconditionally, including from
 code that statically knows its backend. If a future benchmark shows it matters

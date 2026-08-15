@@ -46,6 +46,10 @@ license = "Apache-2.0"
 # to poll a boxed future — ⚠️ which `check-layering.sh` never reads, so it lands
 # green and nothing here would notice.
 [workspace.dependencies]
+# `error-handling.md` rule 3: each crate defines its error enum with thiserror.
+thiserror = "2"
+# Property testing. `testing.md` rule 20; doc 18 §5.6 makes it mandatory per PR.
+proptest = "1"
 
 # ── Lints ───────────────────────────────────────────────────────────────────
 #

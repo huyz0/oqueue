@@ -33,10 +33,12 @@ a green run says nothing about this crate unless this crate is in the commit.
 
 ## Easy to get wrong here
 
-1. **Adding a dependency.** `[dependencies]` is empty on purpose. Every crate in
-   the workspace rebuilds when this one changes, so anything added here is
-   added to everyone's critical path. If it seems necessary, that is usually a
-   sign the thing being written belongs in a crate downstream of this one.
+1. **Adding a dependency.** `[dependencies]` holds exactly one — `thiserror`,
+   which `error-handling.md` rule 3 requires — and every crate in the workspace
+   rebuilds when this one changes, so anything added here goes on everyone's
+   critical path. If it seems necessary, that is usually a sign the thing being
+   written belongs in a crate downstream of this one. ⚠️ **A workspace crate is
+   never a dependency here**; that one `check-layering.sh` does enforce.
 2. **A wholly new `pub trait` needs an ADR in the same commit.**
    `check-core-contract.sh` treats a new trait as a changed method set — the
    old signature set is `None`, the new one is not — so the commit is refused
