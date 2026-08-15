@@ -90,6 +90,34 @@ pub enum Error {
         secret: crate::Redacted<Vec<u8>>,
     },
 
+    /// A timestamp was negative.
+    #[error("timestamp must not be negative, got {got}")]
+    NegativeTimestamp {
+        /// The rejected value.
+        got: i64,
+    },
+
+    /// A clock was asked to move backwards.
+    ///
+    /// ⚠️ Distinct from [`Error::NegativeTimestamp`] for the same reason
+    /// [`Error::NegativeOffsetDelta`] is distinct from
+    /// [`Error::NegativeOffset`]: a negative timestamp means a peer or a
+    /// decoder got it wrong, a negative advance means our own code did.
+    #[error("cannot advance a clock by a negative amount, got {got}")]
+    NegativeClockAdvance {
+        /// The rejected delta.
+        got: i64,
+    },
+
+    /// A clock advance would have left the protocol's `int64` range.
+    #[error("timestamp {base} + {delta} exceeds the maximum timestamp")]
+    TimestampOverflow {
+        /// The timestamp the advance started from.
+        base: i64,
+        /// The amount that could not be added.
+        delta: i64,
+    },
+
     /// An object key was empty.
     #[error("object key is empty")]
     EmptyObjectKey,

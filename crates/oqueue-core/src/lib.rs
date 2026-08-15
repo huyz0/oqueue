@@ -14,7 +14,8 @@
 //! wrapper that makes a secret unprintable so FR-44 holds by construction
 //! rather than by everyone remembering. The trait seams (`Clock`,
 //! `ObjectStore`, `KeyProvider`) arrive in `M0.9` through `M0.11`, shaped as
-//! ADR-0002 decided.
+//! ADR-0002 decided — [`Clock`] and its [`FakeClock`] are the first, from
+//! `M0.9`.
 //!
 //! # The property every identifier here shares
 //!
@@ -24,6 +25,7 @@
 //! can hand out. That is what lets everything downstream stop re-checking.
 #![forbid(unsafe_code)]
 
+mod clock;
 mod error;
 mod object_key;
 mod offset;
@@ -31,6 +33,7 @@ mod partition;
 mod redacted;
 mod topic;
 
+pub use clock::{Clock, FakeClock, Timestamp};
 pub use error::{Error, Result};
 pub use object_key::ObjectKey;
 pub use offset::Offset;

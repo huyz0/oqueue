@@ -83,6 +83,9 @@ comfortably; if ours approaches ~40, the pre-planned split is `core-types`
   convenience for the test that happens to use it first. An over-permissive fake
   is worse than no fake, and the `ObjectStore` one is the highest-risk component
   in the project for exactly this reason.
+- **`Clock` is the first seam, and its fake is beside it** — `M0.9`, ADR-0004.
+  `FakeClock::advance` is the only way its time moves, and it refuses a
+  negative delta so a test cannot build a clock no real implementor could be.
 - **The crate is nearly empty today and that is the plan, not neglect.** `M0.5`
   brings the core types and IDs, `M0.6` the error taxonomy with FR-44's
   redaction rules, and `M0.9` through `M0.11` the `Clock`, `ObjectStore` and
