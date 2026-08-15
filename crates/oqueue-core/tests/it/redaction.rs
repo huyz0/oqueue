@@ -9,8 +9,9 @@
 //!
 //! ⚠️ **Pinning narrows that gap; it does not close it, and claiming otherwise
 //! would be the same mistake one level up.** These tests pin the specifiers
-//! listed below. `Formatter` exposes flags none of them set — `sign_plus`,
-//! `sign_minus`, `sign_aware_zero_pad` — and an impl branching on one of those
+//! listed below, `sign_plus` among them. `Formatter` exposes three more that
+//! nothing here sets — `sign_minus`, `sign_aware_zero_pad` and a non-default
+//! `fill` — and an impl branching on one of those
 //! would leak past every assertion here. **What actually makes a leak
 //! impossible is in `redacted.rs`, not in this file**: neither formatting impl
 //! takes a `T: Debug` or `T: Display` bound, so there is no expression that

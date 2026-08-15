@@ -42,3 +42,7 @@
 # two sides is systematically wrong. Read it at every milestone boundary.
 #
 # Empty is the correct state.
+
+# ── M0 checkpoint review, 2026-08-15 ────────────────────────────────────────
+b501a554054b  M0 sat at sdd.md's 20-task cap, so the review had no legal output. Resolved by amending the cap rather than by splitting M0 or ignoring the finding: the cap's own rationale is "two milestones wearing one name", and M0 is named "Workspace, contracts, and quality gates" — its gate tail is the third thing it is named for. sdd.md now says the number is a heuristic and that exceeding it costs a recorded argument; this is that argument. M0.20 and M0.21 are the rows it permits.
+f44f87664480  security.md's fuzz.sh (rule 5) and check-secrets.sh (rules 6-7) are named by a standard and scheduled nowhere. Not a backlog row, because neither belongs to M0: a decoder fuzz target needs a decoder (testing.md rule 24 puts it with M2) and a secrets gate needs secrets (M8). Recorded instead in roadmap.md's "Deferred into a later milestone" table, which exists for exactly this and which the finding correctly notes was the thing nobody updated.

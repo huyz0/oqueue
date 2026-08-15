@@ -239,17 +239,18 @@ sense of the word:
   guards is the one that standard cites: an unchecked addition producing an
   out-of-bounds slice from entirely safe code, where **the debug build panics
   and the release build wraps**, so every test in this repository passes while
-  the shipped binary is wrong. `M0.8`'s acceptance now carries the check,
-  alongside the member-`[profile]` one and for the same reason: it lands in
-  `check-layering.sh`, which already parses manifests, and it lands with that
-  row's obligation to add a `tests/gates/negative.sh` case. ⚠️ Until then the
-  window is `M0.4` through `M0.7` — four tasks, none of which touches a
-  profile — which is why it is scheduled rather than folded in here.
+  the shipped binary is wrong. ⚠️ **`M0.21`'s acceptance carries the check** —
+  it was `M0.8`'s until M0's checkpoint review found that row had grown past one
+  commit and split the manifest assertions out. It lands alongside the
+  member-`[profile]` one and for the same reason: in `check-layering.sh`, which
+  already parses manifests, with that row's obligation to add a
+  `tests/gates/negative.sh` case. Until then nothing enforces it, and no task
+  between here and `M0.21` touches a profile.
 - A `[profile]` section in a **member** crate is ignored by cargo, which warns
   on stderr and exits 0 — so it is invisible unless someone reads the warning.
   `M0.8` adds ten member manifests at once, which is where this becomes likely;
-  its acceptance now carries the check, in `check-layering.sh`, which already
-  parses every crate manifest.
+  ⚠️ the check itself is `M0.21`'s, in `check-layering.sh`, which already parses
+  every crate manifest — split out of `M0.8` by M0's checkpoint review.
 - ⚠️ **Nothing builds four of the five profiles, ever.** `check-crate.sh`,
   `.pre-commit-config.yaml` and `gates.yml` compile `dev` and `test` and
   nothing else. `M0.3` observed `cargo check` passing under all five on both
@@ -266,7 +267,7 @@ to check against; a gate asserting a TOML table matches a TOML table it is
 generated from would be a tautology, and the interesting property — "is thin LTO
 still buying anything" — is a benchmark, which is `M14`. **Two of the six are
 scheduled** rather than left to review: the member-`[profile]` check and the
-`overflow-checks` assertion both land in `M0.8`, in `check-layering.sh`, which
+`overflow-checks` assertion both land in `M0.21`, in `check-layering.sh`, which
 already parses every manifest. **The last is neither**, and it is recorded as a
 finding for M0's boundary review rather than acted on here: adding a CI step is
 not what `M0.3` was asked for, and `M0` should not end having decided by

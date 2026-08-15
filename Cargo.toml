@@ -42,9 +42,11 @@ license = "Apache-2.0"
 # ADR-0002 chooses Tokio and adds nothing**, because a decision is not a use and
 # a workspace dependency nothing references compiles nothing. That is a
 # statement about M0.4, not a prediction about the rest of M0: `M0.13` wires an
-# allocator, and `M0.10`/`M0.11` may want a runtime under `[dev-dependencies]`
-# to poll a boxed future — ⚠️ which `check-layering.sh` never reads, so it lands
-# green and nothing here would notice.
+# allocator. ⚠️ **`M0.10` and `M0.11` do not take a runtime**, not even under
+# `[dev-dependencies]`: both rows require `Waker::noop()` and a busy poll to
+# drive a boxed future, because `M0.16` rests NFR-56's floor on no M0 task
+# compiling one — and `check-layering.sh` never reads `[dev-dependencies]`, so a
+# violation would land green and nothing here would notice.
 [workspace.dependencies]
 # `error-handling.md` rule 3: each crate defines its error enum with thiserror.
 thiserror = "2"

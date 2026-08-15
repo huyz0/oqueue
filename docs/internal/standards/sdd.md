@@ -130,6 +130,21 @@ one name, its completion condition stops being a single coherent claim, and the
 cross-cutting review at its boundary exceeds what one reader can hold. ⚠️ M-1 is
 over this and is the evidence for the rule rather than an exception to it.
 
+⚠️ **The number is a heuristic for that reasoning, not the reasoning itself, and
+exceeding it costs a recorded argument** — in the backlog section's own notes,
+saying why the rows are still one milestone. Two things forced this to be
+written down. A milestone at exactly 20 has **no legal way to act on its own
+boundary review**, since `review.md` rule 16 requires a major finding to name a
+backlog row; M0 hit that at its checkpoint, and a decomposition rule that
+forbids the outer loop from working is the rule being wrong. And the test is
+whether the rows are *one milestone*, which the count cannot see: M0 is named
+"Workspace, contracts, and quality gates", so its gate tail is the third thing
+it is named for rather than a second milestone in disguise.
+
+⚠️ **This is not licence to grow a milestone rather than finish it.** The
+argument must be about coherence — a milestone whose extra rows are new *scope*
+is the case the cap exists for, and the answer there is still to split.
+
 Task IDs are stable. Completed tasks stay in the backlog with their commit
 reference, because the record of why something was done is worth more than a
 tidy list.

@@ -111,8 +111,8 @@ if ! cargo metadata --locked --format-version 1 >/dev/null 2>"$lock_err_file"; t
   # ⚠️ cargo's own message is shown rather than swallowed, and the diagnosis is
   # made from it rather than assumed. Resolution can fail for reasons that have
   # nothing to do with staleness -- an offline cold registry, a checksum
-  # mismatch, a `[patch]` that does not apply -- and once `M0.4` adds the first
-  # external dependency, printing "Cargo.lock is stale" with a remedy that
+  # mismatch, a `[patch]` that does not apply -- and now that `M0.5` has added the
+  # first external dependency, printing "Cargo.lock is stale" with a remedy that
   # cannot work would send the reader somewhere there is nothing to find. Found
   # by review, which noted this is the same misreporting the metadata read above
   # was already fixed for.

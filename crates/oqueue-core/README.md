@@ -33,9 +33,9 @@ what makes depth 2 achievable at all.
 Externally, exactly one:
 
 - `thiserror` — `error-handling.md` rule 3 requires each crate to define its
-  error enum with it, and `M0.5` brought the first one. A proc macro: no C
-  toolchain, and nothing in the runtime graph but `proc-macro2`, `quote`, `syn`
-  and `unicode-ident`.
+  error enum with it, and `M0.5` brought the first one. A proc macro, so no C toolchain. ⚠️ The
+  runtime graph is `thiserror` alone: `proc-macro2`, `quote`, `syn` and
+  `unicode-ident` are host-only, nested under `thiserror-impl`.
 
 `proptest` is a **dev**-dependency, for the invariant tests, so it is absent
 from the list above and from the shipped graph. ⚠️ `check-layering.sh` and

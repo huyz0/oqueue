@@ -2,9 +2,9 @@
 //!
 //! `error-handling.md` rule 3 puts one error enum per crate and builds it with
 //! `thiserror`; rule 5 says it classifies rather than wraps. ⚠️ This is the
-//! *start* of that taxonomy, not the whole of it — `M0.6` adds the redaction
-//! rules FR-44 needs, and the variants below are the ones `M0.5`'s four types
-//! can actually produce.
+//! *start* of that taxonomy, not the whole of it: `M0.5` brought the variants
+//! its four identifiers produce and `M0.6` the redaction FR-44 needs, and the
+//! seams of `M0.9`-`M0.11` will bring more.
 
 /// Everything `oqueue-core` can fail at.
 ///

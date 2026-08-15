@@ -1,0 +1,90 @@
+{
+  "commits": [
+    "8ff9fb34a1e7c91767dcdd3a7aeccc11b883c766",
+    "cc5b722bf734b04e6d3c95a4f2dbb065dcbd2cc8",
+    "a0f16ecb6ce89a51b2a3570f25c89e03f80891d7",
+    "c09944d2b160ff9fddf11cf8d447ffc5ab6e3604",
+    "a150725c80c54c3909195e3a87a22151a9f9ad91",
+    "dd459586e6481a9d7cfeddb17f8eede2fea39a55",
+    "c2b85e1720a56b47199f51750af65e8330f34b1b",
+    "319ae6800726f1facdbe158061a3049f03c744f1"
+  ],
+  "findings": [
+    {
+      "evidence": "backlog.md lists M0.0 through M0.19 = 20 rows (grep -c '^| M0\\.' = 20), twelve of them still todo. sdd.md:128 'A milestone carries at most 20 tasks.' review.md rule 16 and .agents/skills/milestone-review/SKILL.md Sec.'Findings become backlog tasks' both require a blocking/major finding to name a backlog row; backlog.md's own M0 header says M0.19 was 'a twentieth, added mid-milestone from what the loop itself turned up' -- i.e. the loop consumed the last slot. Commit a150725's body already saw this shape ('the criterion-length rule made sdd.md's 20-task cap explicitly binding on growth in the commit that filled slot 20 -- leaving the next finding nowhere legal to go') and resolved it by cutting the other rule, leaving the cap itself binding and unenforced by any script. Compare: sdd.md:128, backlog.md:51-72, review.md:133-137. The outcome is a decision -- split M0 (the gate-writing tail M0.14-M0.18 is a coherent second milestone) or restate the cap as a planning heuristic that a review-derived row may exceed -- not a task, which is why no task_id is named.",
+      "id": "b501a554054b",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "M0 already holds exactly 20 rows, which is sdd.md's hard cap, so the checkpoint review's own mechanism -- every blocking or major finding names a backlog row -- has no legal output, and the same cap blocks splitting any overloaded row.",
+      "task_id": ""
+    },
+    {
+      "evidence": "Cargo.toml:41-47 ('M0.13 wires an allocator, and M0.10/M0.11 may want a runtime under [dev-dependencies] to poll a boxed future -- which check-layering.sh never reads, so it lands green and nothing here would notice') against decisions/0002-async-runtime-and-seam-shape.md:114-119 ('No M0 task adds an async dependency'), decisions/0001-build-profiles.md:57-58 ('no other M0 task adds one either'), and backlog.md's M0.16 row ('No M0 task adds an async dependency ... so the suite is measured on a workspace that compiles none'). All four were written or edited by the same commit dd45958 (git log -L 41,48:Cargo.toml). dd45958's body records this as a major, pass-verdict finding and states the resolution -- 'drive the boxed future with Waker::noop() and a busy poll ... adopted as a constraint on M0.10 and M0.11' -- but grep for Waker/noop/busy poll over the whole tree returns nothing: the constraint is in no backlog row, no ADR, and no comment. check-layering.sh:109 and 167 confirm the gate reads [dependencies] only. If M0.10 or M0.11 takes a dev-dependency runtime, M0.16 records an unraisable constant whose stated reason is false.",
+      "id": "f6e8d05e68da",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "Three artifacts state flatly that no M0 task adds an async dependency and one -- the root Cargo.toml -- says M0.10/M0.11 may take a runtime under [dev-dependencies]; the resolution the M0.4 review adopted lives only in a commit body, so neither constrained row carries it and no gate reads [dev-dependencies].",
+      "task_id": "M0.10"
+    },
+    {
+      "evidence": "backlog.md M0.16 requires 'the budget is a literal in the script; a suite over budget fails' and that the number be 'a floor', with the floor's only stated cause being the absent async dependency. But the suite it measures is itself still being assembled: M0.15 wires check-coverage.sh (a separate instrumented build -- build.md rule 18) into .pre-commit-config.yaml, and M0.17 may wire a mutation run into it, both landing before M0.16. AGENTS.md non-negotiable 2 and check-drift.sh then make the number immovable, while M1 adds the runtime and an object-store SDK compiled under [profile.dev.package.'*'] opt-level = 2 (Cargo.toml:125-127). 'Record it as a floor' does not answer the question the row exists to answer -- what number goes in the script, and by what headroom rule -- so the first honest breach at M1 has only two legal exits, shrink the suite or move gates to CI, neither of which any row anticipates. This is the same shape as the deadlock a150725's body describes cutting from sdd.md.",
+      "id": "6c03e355267d",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "M0.16 turns a one-off measurement into a constant non-negotiable 2 forbids raising, on the emptiest workspace this project will ever have, and names no rule for deriving the threshold from the floor or for what is legal when the suite legitimately grows.",
+      "task_id": "M0.16"
+    },
+    {
+      "evidence": "crates/oqueue-core/src/error.rs:70-91 adds SecretRejected { context, secret: Redacted<Vec<u8>> }. security.md:47-51 rule 6: 'No secret reaches a log, span, metric label, error variant, or admin response' -- unamended; the carve-out commit 319ae68 added sits on rule 7 (security.md:52-59) and covers deriving Debug, not carrying a secret in a variant. error-handling.md:48-51 rule 6: 'A variant that can never happen from this function's inputs is not added for completeness.' The deferral lives at error.rs:72-76 ('If M0.11 lands without producing it, this variant is the thing to delete'), and backlog.md's M0.11 row mentions neither the variant nor the obligation to produce or delete it. Both points were recorded as minors in 319ae68's body, where nothing reads them. security.md's own gate for rules 6-7, check-secrets.sh, does not exist, so the literal text is what the next author will read.",
+      "id": "7e840efdc393",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "Error::SecretRejected puts key material in an error variant, which security.md rule 6 bans in as many words, and is produced by nothing, which error-handling.md rule 6 bans; M0.6 amended rule 7 only, and the deferral is recorded in a code comment rather than in M0.11's row.",
+      "task_id": "M0.11"
+    },
+    {
+      "evidence": "backlog.md's M0.8 row now requires: ten crates x (Cargo.toml + README.md + AGENTS.md), plus a lints.workspace = true assertion (routed there by a0f16ec's body), plus rejection of member-crate [profile] sections, plus root [profile.release] overflow-checks = true (routed there by c09944d and decisions/0001-build-profiles.md:235-252), plus a tests/gates/negative.sh case for each, plus a correction to architecture.md:55's testkit cell. sdd.md:124-126: 'A task is one commit's worth ... split before writing code, not after discovering it.' Each addition was individually reasonable ('the cheap home for the check' -- backlog.md:347-357) and no per-commit reviewer saw the total. Secondary effect: scripts/check-layering.sh:1-2 describes itself as 'Every crate depends on oqueue-core and nothing else in the workspace' and .pre-commit-config.yaml's check-layering hook name says the same, while the script would then fail a commit for a missing profile key -- and security.md rule 4's named gate ('gate on the profile setting') stays findable under no name a reader would grep for.",
+      "id": "4eaf0e5f7999",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "M0.8 has accreted three unrelated manifest gates from two earlier commits' reviews on top of ten crate skeletons, and is no longer one commit's worth; it also makes check-layering.sh enforce three things its name, its header and its hook label all misdescribe.",
+      "task_id": "M0.8"
+    },
+    {
+      "evidence": "scripts/gates/m-1-complete.sh:187-194 runs 'bash tests/gates/negative.sh' as part of M-1's completion condition. tests/gates/negative.sh:1111-1114 now carries four check-crate.sh cases added by a0f16ec, whose commit body records that all four were vacuously green at some point and were fixed only by mutant-testing them one at a time. grep over .pre-commit-config.yaml and .github/workflows/gates.yml for negative.sh returns nothing. backlog.md's M0.18 row requires that 'every gate M0 added ... has a case in tests/gates/negative.sh' and that a case prove m0-complete.sh fails, but never that m0-complete.sh run the suite -- so M0 can be declared complete without its own negative cases having been executed in this tree, which is precisely the 'a gate nobody has watched fail is a gate nobody has tested' standard negative.sh:8-15 states.",
+      "id": "b4e1ed8fdbe1",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "M-1's completion gate runs tests/gates/negative.sh; M0.18's acceptance requires cases in it but requires nothing to run it, and neither .pre-commit-config.yaml nor CI does -- so after M0 the four cargo-based cases M0.2 added are exercised only by the previous milestone's gate.",
+      "task_id": "M0.18"
+    },
+    {
+      "evidence": "security.md:43 ('-> scripts/fuzz.sh') and security.md:50 ('-> check-secrets.sh holds the static half'); ls scripts/ shows neither. grep for 'fuzz.sh' and 'check-secrets' across backlog.md returns only M0.1's row, which says they are 'scheduled nowhere, in M0 or after it' and hands the point to this review verbatim: 'their being unscheduled is a finding for M0's boundary review'. roadmap.md:'Deferred into a later milestone' exists for exactly this ('a deferral that exists in nobody's plan is indistinguishable from a decision nobody made') and lists neither. 319ae68 then wrote a carve-out into security.md rule 7 'worded conditionally, since check-secrets.sh does not exist' -- a standard now shaped around a gate nobody has scheduled. The receiving milestones are identifiable (testing.md rule 24 puts the request decoder first, which is M2; the secrets subject exists from M0.6 and matures at M8/M9), so the outcome is a roadmap deferral row plus a plan line, not an M0 task -- hence no task_id.",
+      "id": "f44f87664480",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "security.md rules 5, 6 and 7 name scripts/fuzz.sh and check-secrets.sh; neither exists and neither appears in any backlog row or in roadmap.md's 'Deferred into a later milestone' table, and M0.6 has now shipped the first code whose correctness those rules govern.",
+      "task_id": ""
+    },
+    {
+      "evidence": "backlog.md:232-357 holds notes for M0.2, M0.1 and M0.3 -- including M0.3's boundary-review finding about four unbuilt profiles, written into the file everything reads. M0.4, M0.5, M0.6 and M0.19 produced one unresolved major, one cross-task constraint and nine minors between them (see the commit bodies of dd45958, c2b85e1, 319ae68, a150725) and added nothing here. backlog.md:87-95 states the section's own purpose ('Notes on specific tasks grow as tasks land'). This is the mechanism by which the two findings above went missing: review.md rule 15 sends a minor to the commit body and says scheduling it 'is a decision and a later commit', and nothing between the commit body and this review reads it.",
+      "id": "b02669f5a9da",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "backlog.md's 'Notes on specific tasks' carries entries for M0.1, M0.2 and M0.3 and then stops, so the durable record of what a task learned was abandoned exactly when the findings started needing to be acted on by a later row.",
+      "task_id": ""
+    },
+    {
+      "evidence": "(1) crates/oqueue-core/README.md:35-38 says proc-macro2, quote, syn and unicode-ident are 'in the runtime graph'; they are host-only under the proc macro -- recorded in c2b85e1's body, not fixed. (2) crates/oqueue-core/src/error.rs:1-7 still says 'M0.6 adds the redaction rules' in the future tense and 'the variants below are the ones M0.5's four types can actually produce', which SecretRejected falsifies in the same file. (3) crates/oqueue-core/tests/it/redaction.rs:12-13 lists sign_plus among flags 'none of them set' 35 lines above the assertion that pins {:+?}, and omits fill, which 319ae68's body names as a genuine surviving mutant. (4) scripts/check-crate.sh:114 says 'once M0.4 adds the first external dependency' -- M0.4 added none and M0.5 added thiserror. (5) README.md:12-14 describes 'a Cargo workspace whose crates are still empty of behaviour' while c2b85e1's subject line is 'the first Rust with behaviour'. Compare against a0f16ec's precedent (README's status banner corrected by the commit that falsified it) and c09944d's (doc 18 corrected in place).",
+      "id": "10030c61e3c0",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Five documentation claims are false at HEAD, four of them recorded as minors in commit bodies and one never noticed, in a milestone whose own convention is that the commit falsifying a sentence is the commit that fixes it.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M0",
+  "recorded_at": "2026-08-15T11:29:11Z",
+  "reviewer": "claude-opus-5 (fresh milestone-review agent, did not drive M0)",
+  "verdict": "changes-requested"
+}
