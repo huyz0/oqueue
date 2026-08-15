@@ -60,9 +60,20 @@ required.
 | Code | [rust-style.md](docs/internal/standards/rust-style.md) | Read when naming a type or function, choosing between a generic and `impl Trait`, deciding what a lint attribute or `clippy.toml` entry should say, or when a diff is hard to read for reasons `code-structure.md` doesn't cover. |
 <!-- index:standards:end -->
 
-⚠️ Most gate scripts these standards name do not exist yet — that is
-M-1.7 through M-1.12. Until then, a rule that names a script it can't yet
-run is a preference, same as the non-negotiables below.
+⚠️ **A rule whose script is missing is a preference**, and some of the scripts
+these standards name are still missing. M-1 is complete — but it completed with
+one of its own gate rows still open — blocked, from its first day, on a
+constant that cannot be chosen without a workspace — and the standards name
+scripts M-1 was never scoped to write at all.
+
+⚠️ **Do not look for the list here.** A hardcoded list of what is outstanding
+went stale four separate times elsewhere in this repository before the fix
+turned out to be deleting it;
+`docs/internal/product/backlog.md` is where the answer is true on the day you
+read it, because each task updates it as it closes. So: **check whether
+`scripts/` has the file** before treating a rule as enforced, and if it is
+missing, look for its backlog row — ⚠️ finding no row means *unscheduled*,
+never "already done".
 
 ## Skills
 
@@ -95,18 +106,25 @@ that contains a procedure rather than a pointer is a fork waiting to drift.
 
 ## Non-negotiables
 
-⚠️ **Bootstrap state, M-1.** Each rule below should name the script that
-enforces it. **Every rule now does except rule 3, which cannot** — see rule 3
-itself for why that one is the permanent exception rather than a remaining
-task.
+Each rule below names the script that enforces it. **Every rule does except
+rule 3, which cannot** — see rule 3 itself for why that one is the permanent
+exception rather than a remaining task. M-1 is complete, so this list now
+describes a working system rather than a checklist, and every script named
+below exists and passes. ⚠️ That is a claim about *these seven rules only*;
+the standards above name gates beyond them, and a rule whose script is missing
+is still a preference.
 
-Until that task lands, the rule is a preference. That is precisely the state
-this project exists not to be in, so treat the list below as M-1's checklist and
-not as a description of a working system. A rule with no gate is a preference.
-
-⚠️ **And a gate nothing invokes is a preference too.** `.git/hooks` is not
-tracked, so a fresh clone runs none of these until the hooks are installed by
-hand. M-1.14 is what makes a checkout inherit them.
+⚠️ **A gate nothing invokes is a preference too**, and neither of the two ways
+to invoke these covers everything on its own. `.github/workflows/gates.yml`
+runs `pre-commit run --all-files` on every push — but with `SKIP:
+check-reviewed`, because a verdict artifact lives under gitignored `target/`
+and CI has nothing to read. **Rule 4 is therefore enforced only by the local
+hook**, and that is by design rather than by omission: a commit cannot exist in
+history unless it passed locally, which rests on rule 3. Locally, `.git/hooks`
+is not tracked and a fresh clone enforces nothing until someone runs
+`pre-commit install` once — `.pre-commit-config.yaml` sets
+`default_install_hook_types` so that one command wires both stages. A clone
+where nobody ran it, pushing to CI, has rule 4 enforced by nothing at all.
 
 1. **One task equals one commit equals one change that leaves the tree green.**
    Split anything that cannot meet that. The commit subject starts with the

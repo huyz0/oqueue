@@ -56,15 +56,19 @@ rather than reading it.
 | [`contract-change`](contract-change/SKILL.md) | A `pub trait`'s method set in `oqueue-core` is gaining, losing, or changing a method |
 | [`research`](research/SKILL.md) | A question might already be answered in the corpus |
 
-## ⚠️ Bootstrap state
+## ⚠️ When a skill names a script that is not there
 
-Several skills invoke scripts that **do not exist yet** — the remaining gates
-are M-1.7 through M-1.12. Until those land, a skill that says "run the gate"
-describes an intended step rather than an available one, and the honest response
-is to say the gate did not run, not to proceed as though it passed.
+M-1 is complete and every gate it built exists, but a few scripts these skills
+invoke were never in M-1's scope and are still unwritten. A skill that says
+"run the gate" then describes an intended step rather than an available one,
+and **the honest response is to say the gate did not run** — not to proceed as
+though it passed. That is the same discipline as `AGENTS.md`'s rule 3, and it
+is the one thing no script can check.
 
-`review` is no longer in that state: `scripts/review.sh` and
-`scripts/check-reviewed.sh` exist and its verdict is bound to the staged diff by
-hash.
-
-See [backlog.md](../../docs/internal/product/backlog.md).
+⚠️ **This section deliberately names no scripts.** A list here would be a
+second copy of a fact that moves, and the version in
+[`backlog.md`](../../docs/internal/product/backlog.md) is the one every gate
+reads and every task updates. Check `scripts/` for the file before assuming it
+is there. ⚠️ A missing script does not guarantee a backlog row either — some
+are named by a standard and scheduled nowhere — so "no row" means unscheduled,
+not "already done".
