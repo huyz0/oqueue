@@ -30,6 +30,13 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 
 ## Notes for whoever touches this
 
+- **`NoOpKeyProvider` is the only thing here, and it refuses.** `M0.11`,
+  ADR-0006. ⚠️ It is *production* code for the unencrypted path, not a fake —
+  which is why it lives here and the fake lives beside the trait in
+  `oqueue-core`. It returns `EncryptionDisabled` rather than passing the
+  plaintext DEK through, because an identity provider would write a plaintext
+  data encryption key into object storage looking exactly like a real wrap.
+
 - ⚠️ **Nonces are constructed, never random.** `security.md` — a repeated nonce under the same key is a total loss of confidentiality for both messages.
 - **Key material is zeroized on drop** (`security.md` rule 8) and never reaches a formatted string. `oqueue_core::Redacted` gives the formatting half; zeroization is this crate's.
 - ⚠️ **This crate is absent from doc 19's ten-crate layout** and exists only in `architecture.md`. It is kept because doc 22's envelope design needs somewhere to live that is not the broker; dropping it would be an ADR, not a tidy-up.

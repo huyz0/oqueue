@@ -27,6 +27,7 @@
 
 mod clock;
 mod error;
+mod key;
 mod object_key;
 mod offset;
 mod partition;
@@ -36,6 +37,7 @@ mod topic;
 
 pub use clock::{Clock, FakeClock, Timestamp};
 pub use error::{Error, Result};
+pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use object_key::ObjectKey;
 pub use offset::Offset;
 pub use partition::PartitionId;

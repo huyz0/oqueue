@@ -5,5 +5,6 @@
 
 mod clock;
 mod invariants;
+mod key;
 mod redaction;
 mod store;

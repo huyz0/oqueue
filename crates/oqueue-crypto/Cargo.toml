@@ -11,5 +11,11 @@ license.workspace = true
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
 
+# ⚠️ Empty on purpose, and worth a word because it is the one section
+# `check-layering.sh` never reads: nothing here may take an async runtime.
+# `M0.16` measures NFR-56's floor on a workspace that compiles none, and the
+# seam's futures are driven by `Waker::noop()` and a busy poll instead.
+[dev-dependencies]
+
 [lints]
 workspace = true

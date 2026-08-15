@@ -18,7 +18,9 @@
 //! renders the value at all. These tests are the regression guard on that
 //! property, not the property.
 
-use oqueue_core::{Error, Redacted};
+#![allow(clippy::expect_used)]
+
+use oqueue_core::{Error, KeyId, Redacted};
 
 /// Distinctive enough that an accidental match is not plausible, and chosen so
 /// its hex, decimal and escaped forms are all different from each other.
@@ -54,28 +56,37 @@ fn redacted_renderings_are_exactly_these_and_nothing_else() {
     assert_eq!(format!("{r:.3}"), "<re");
 }
 
-/// The requirement as written: an error carrying secret material, formatted.
+/// An error raised about secret material, formatted.
+///
+/// ⚠️ `M0.11` removed the secret from this variant entirely — it now carries a
+/// key *identifier*, which names material without being it. The test stays
+/// because the property worth pinning is unchanged: nothing about a rejected
+/// key renders its bytes.
 #[test]
-fn error_carrying_a_secret_renders_exactly_these_and_nothing_else() {
+fn error_about_a_secret_renders_exactly_these_and_nothing_else() {
     let err = Error::SecretRejected {
         context: "unwrapping the data encryption key",
-        secret: Redacted::new(secret_bytes()),
+        key_id: KeyId::new("arn:aws:kms:eu-west-1:123456789012:key/abcd").expect("non-empty"),
     };
 
+    // ⚠️ Pinned, not screened — this file's header says why, and a previous
+    // version of this very test was caught screening.
     assert_eq!(
         format!("{err}"),
-        "secret rejected while unwrapping the data encryption key"
+        "secret rejected while unwrapping the data encryption key \
+         (key arn:aws:kms:eu-west-1:123456789012:key/abcd)"
     );
     assert_eq!(
         format!("{err:?}"),
         "SecretRejected { context: \"unwrapping the data encryption key\", \
-         secret: Redacted(<redacted>) }"
+         key_id: KeyId(\"arn:aws:kms:eu-west-1:123456789012:key/abcd\") }"
     );
     assert_eq!(
         format!("{err:#?}"),
         "SecretRejected {\n    \
          context: \"unwrapping the data encryption key\",\n    \
-         secret: Redacted(<redacted>),\n}"
+         key_id: KeyId(\n        \
+         \"arn:aws:kms:eu-west-1:123456789012:key/abcd\",\n    ),\n}"
     );
 
     // ⚠️ The `source()` chain is a distinct path to a log: an operator's

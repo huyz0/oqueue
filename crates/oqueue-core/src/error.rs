@@ -17,11 +17,11 @@
 /// variant breaks every exhaustive match, which is the compiler doing the
 /// review.
 ///
-/// ⚠️ **Not `Clone`.** `SecretRejected` carries key material that
-/// [`Redacted`](crate::Redacted) does not zeroize, so every clone would leave
-/// another plaintext copy in freed heap — `security.md` rules 8-9. Nothing
-/// needs to clone an error, and the day something does, the question to answer
-/// first is whether it should be cloning a secret.
+/// ⚠️ **Not `Clone`.** `M0.6` added `SecretRejected` carrying key material and
+/// dropped `Clone` so no clone could leave another plaintext copy in freed heap
+/// (`security.md` rules 8-9). `M0.11` removed the material, so that reason is
+/// spent — but the derive stays off, because nothing needs to clone an error
+/// and adding it back should require someone to want it.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// A topic identifier was empty.
@@ -67,29 +67,6 @@ pub enum Error {
         delta: i64,
     },
 
-    /// A credential or piece of key material was rejected by whatever owns it.
-    ///
-    /// ⚠️ **Nothing produces this yet**, and `error-handling.md` rule 6 is
-    /// against variants that cannot happen. It is here because `M0.6`'s job is
-    /// the redaction guarantee and a guarantee needs something to guard;
-    /// `M0.11`'s `KeyProvider` is the first thing that returns it. If `M0.11`
-    /// lands without producing it, this variant is the thing to delete.
-    ///
-    /// ⚠️ The material travels **inside [`Redacted`]**, which is what makes
-    /// this variant compatible with FR-44: the bytes are reachable by a caller
-    /// that asks for them explicitly, and reachable by no formatting path at
-    /// all. An error that dropped the material entirely would be safe and
-    /// useless — the caller could not zeroize it or retry.
-    #[error("secret rejected while {context}")]
-    SecretRejected {
-        /// What was being attempted, in terms an operator can act on. ⚠️ Never
-        /// names the secret, the key id, or the tenant — `error-handling.md`
-        /// rule 14.
-        context: &'static str,
-        /// The rejected material. Unprintable.
-        secret: crate::Redacted<Vec<u8>>,
-    },
-
     /// A timestamp was negative.
     #[error("timestamp must not be negative, got {got}")]
     NegativeTimestamp {
@@ -118,15 +95,52 @@ pub enum Error {
         delta: i64,
     },
 
+    /// A wrapped key was not produced under the key id it was presented with.
+    ///
+    /// ⚠️ **Carries the key *identifier*, never the material.** `M0.6` created
+    /// this variant holding the rejected bytes inside a `Redacted`, which was
+    /// safe from formatting but still read literally against FR-44 and
+    /// `security.md` rule 6 — both of which say a secret must not reach an
+    /// error variant at all. `M0.11` resolved that by removing the secret
+    /// rather than by amending the standard, which is the outcome that needed
+    /// no exception. A key id is an identifier: it names material without
+    /// being it, and it is the thing an operator needs to act.
+    #[error("secret rejected while {context} (key {key_id})")]
+    SecretRejected {
+        /// What was being attempted, in terms an operator can act on.
+        context: &'static str,
+        /// Which key it was attempted under.
+        ///
+        /// ⚠️ **A key id names a tenant, and under BYOK a KMS ARN carries the
+        /// customer's account id** — `error-handling.md` rule 14 says default
+        /// to less. It is here anyway, on the same trade as
+        /// [`Error::ObjectNotFound`]'s key: an identifier is not a capability,
+        /// holding one grants nothing without credentials, and "a key was
+        /// rejected" with no id is unactionable for the operator who has to
+        /// find out which. ⚠️ Like that variant, this depends on not reaching
+        /// a client — `error-handling.md` rule 12, and `M2`'s decision.
+        key_id: crate::KeyId,
+    },
+
+    /// A key id was empty.
+    #[error("key id is empty")]
+    EmptyKeyId,
+
+    /// The configured key provider does not encrypt.
+    ///
+    /// ⚠️ Returned by `oqueue-crypto`'s no-op provider rather than silently
+    /// succeeding — see ADR-0006.
+    #[error("encryption is not enabled on this deployment")]
+    EncryptionDisabled,
+
     /// No object is stored under that key.
     #[error("no object stored under key {key}")]
     ObjectNotFound {
         /// The key that was looked up.
         ///
         /// ⚠️ **An object key is derived from a topic name, so it names a
-        /// tenant** — and `Error::SecretRejected` above deliberately refuses to
-        /// do that. The two variants apply `error-handling.md` rule 14 in
-        /// opposite directions, so the trade is worth stating: rule 14 says
+        /// tenant** — as does `Error::SecretRejected`'s key id, and both are
+        /// the same trade rather than opposite ones. Rule 14 says
         /// default to less and name a resource by something that does not
         /// double as a capability. An object key is not a capability — holding
         /// one grants nothing without credentials — while "not found" with no

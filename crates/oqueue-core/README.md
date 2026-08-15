@@ -83,6 +83,9 @@ comfortably; if ours approaches ~40, the pre-planned split is `core-types`
   convenience for the test that happens to use it first. An over-permissive fake
   is worse than no fake, and the `ObjectStore` one is the highest-risk component
   in the project for exactly this reason.
+- **`KeyProvider` is wrap/unwrap only** — `M0.11`, ADR-0006. ⚠️ No
+  `generate_data_key`: AWS KMS has one, GCP Cloud KMS has no equivalent, so a
+  seam carrying it is a seam only one cloud can implement.
 - **`ObjectStore` is the seam everything else leans on** — `M0.10`, ADR-0005.
   ⚠️ Exactly one fake exists in this tree and `M1` **rewrites** it rather than
   adding another: two fakes with divergent conditional-write semantics is the
