@@ -13,6 +13,26 @@ license.workspace = true
 [dependencies]
 oqueue-core = { path = "../../crates/oqueue-core" }
 oqueue-crypto = { path = "../../crates/oqueue-crypto" }
+# ⚠️ The global allocator, and the only place one may be set — ADR-0007.
+mimalloc.workspace = true
+# ⚠️ Heap profiling, **off by default**. jemalloc bakes in the *build host's*
+# page size, so a binary built on a 4 KB-page host aborts at startup on a
+# 64 KB-page aarch64 kernel; NFR-40 makes aarch64 first-class, so this cannot be
+# the default. See ADR-0007 and doc 18 §3.5.
+tikv-jemallocator = { workspace = true, optional = true }
+
+[features]
+default = []
+## Swaps the global allocator for jemalloc, whose `prof` support is what makes
+## a "memory grows under a specific consumer pattern" bug findable.
+## ⚠️ Needs `JEMALLOC_SYS_WITH_LG_PAGE=16` whenever the deployment host may have
+## a larger page than the build host, or it aborts at startup.
+## ⚠️ **`tikv-jemallocator/profiling` is the load-bearing half.** Without it
+## the allocator is swapped but jemalloc is configured with profiling compiled
+## out — `MALLOC_CONF=prof:true` is rejected as an invalid conf pair and no
+## dump is ever written. A feature named `heap-profiling` that does not profile
+## is the defect this line exists to prevent; review found it.
+heap-profiling = ["dep:tikv-jemallocator", "tikv-jemallocator/profiling"]
 
 [lints]
 workspace = true

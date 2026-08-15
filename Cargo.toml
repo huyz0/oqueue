@@ -65,6 +65,13 @@ license = "Apache-2.0"
 thiserror = "2"
 # Property testing. `testing.md` rule 20; doc 18 §5.6 makes it mandatory per PR.
 proptest = "1"
+# The global allocator, set in `bin/oqueue` only. ADR-0007. ⚠️ Pulls a C
+# toolchain — permitted by NFR-42 ("cargo and a C compiler"), recorded here
+# because `AGENTS.md` forbids it happening without a reason.
+mimalloc = "0.1"
+# Heap profiling, behind a non-default feature. ⚠️ Its ARM page-size trap is
+# why the feature is off by default — see ADR-0007.
+tikv-jemallocator = "0.6"
 
 # ── Lints ───────────────────────────────────────────────────────────────────
 #

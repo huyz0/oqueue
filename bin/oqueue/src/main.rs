@@ -12,6 +12,21 @@
 //! proof that `check-layering.sh` treats this package as a composer.
 #![forbid(unsafe_code)]
 
+// ⚠️ **The global allocator, set here and in no library crate** — ADR-0007.
+// A library that sets one imposes it on every consumer, including tests and
+// benchmarks that did not ask for it.
+#[cfg(not(feature = "heap-profiling"))]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// ⚠️ Behind a non-default feature because jemalloc bakes the page size in at
+/// build time: a binary built assuming 4 KB **aborts at startup** on a 64 KB-page
+/// aarch64 kernel, and NFR-40 makes aarch64 first-class. Build with
+/// `JEMALLOC_SYS_WITH_LG_PAGE=16` for those hosts. doc 18 §3.5.
+#[cfg(feature = "heap-profiling")]
+#[global_allocator]
+static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 use oqueue_core::KeyProvider;
 use oqueue_crypto::NoOpKeyProvider;
 

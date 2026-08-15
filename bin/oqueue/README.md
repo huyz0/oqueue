@@ -18,6 +18,12 @@ credentials and no container.
 
 - `oqueue-core` — the seams and the types.
 - `oqueue-crypto` — `NoOpKeyProvider`, the default when no KMS is configured.
+- `mimalloc` — the global allocator. ⚠️ C, compiled by `cc` at build time;
+  within NFR-42 ("cargo and a C compiler") and recorded in ADR-0007.
+- `tikv-jemallocator` — **optional**, behind the non-default `heap-profiling`
+  feature. ⚠️ It bakes in the *build host's* page size, so a binary built on a
+  4 KB-page host aborts at startup on a 64 KB-page aarch64 kernel. Build with
+  `JEMALLOC_SYS_WITH_LG_PAGE=16` when those hosts are in scope. ADR-0007.
 
 ⚠️ **A composer.** `check-layering.sh`'s `COMPOSERS` set is
 `{oqueue-broker, oqueue}`; every other crate may depend on `oqueue-core` and
@@ -35,6 +41,7 @@ Nothing. It is the top of the graph.
 | No `oqueue-testkit` in `[dependencies]` | `scripts/check-layering.sh` — ⚠️ the *only* dependency rule it enforces here, since a composer is exempt from the star-topology one |
 | Depends only on `oqueue-core` and the crates it composes | ⚠️ **No gate.** Composer exemption means `check-layering.sh` accepts any workspace dependency; review's |
 | No `unsafe` | `#![forbid(unsafe_code)]`, `scripts/check-unsafe.sh` |
+| The global allocator is set here and in no library crate | ⚠️ **No gate.** ADR-0007; one `grep` from being checkable, review's until it is |
 
 ## Notes for whoever touches this
 

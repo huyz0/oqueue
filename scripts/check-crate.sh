@@ -198,14 +198,36 @@ test_rc=0
 # lib + bins + tests + doc tests, which is what should gate a commit. Benches
 # and examples are still compiled: clippy runs `--all-targets` immediately
 # above, so nothing goes uncompiled by being left out here.
-# ⚠️ `--all-features`, matching clippy above. Without it the two disagree about
-# which code they are looking at: clippy would lint a feature-gated module that
-# the tests never compile, and a failing test behind a feature flag would report
-# green. ⚠️ **Neither invocation covers the default-feature-only build**, and
-# that becomes a real gap at `M0.13`, which adds the workspace's first optional
-# feature (the heap-profiling allocator). Today no crate has a feature at all,
-# so the gap is theoretical -- but it is a gap, not an oversight.
-test_out="$(cargo test --locked --all-features "${scope[@]}" 2>&1)" || test_rc=$?
+# ⚠️ **No `--all-features` here, unlike clippy above, and the asymmetry is
+# deliberate -- it is the split `M0.13` forced.** Clippy *checks*; the tests
+# *run*, and what should be run is the configuration that ships. With
+# `--all-features` the gate ran a `bin/oqueue` linked against jemalloc and never
+# once ran the mimalloc build that is actually shipped -- the default feature
+# set was compiled by nothing.
+#
+#   clippy --all-features  compiles and lints every `cfg(feature)` line
+#   test (default)         runs the configuration that ships
+#
+# ⚠️ **An earlier version of this comment justified the split by jemalloc's ARM
+# page-size trap, and that reason was wrong -- twice, in opposite directions.**
+# The truth: jemalloc bakes in the **build host's** page size, natively as well
+# as when cross-compiled (this workspace's own `config.log` probes and writes
+# `#define LG_PAGE 12`), and a binary aborts when the kernel it *runs on* has a
+# larger page than the one baked in. A gate that builds and runs on one machine
+# therefore never mismatches itself, which is why the trap is not this script's
+# problem -- it is M13's, where a build host and a deployment host can differ.
+# ADR-0007, doc 18 §3.5.
+#
+# ⚠️ Three costs, all real. A *failing test* behind a feature flag reports green;
+# a doc example on a feature-gated item is compiled by nothing, since clippy
+# `--all-targets` skips doc tests; and ⚠️ **`#[cfg(not(feature = ...))]` code is
+# linted by nothing at all** -- `--all-features` cfg's it out of the only clippy
+# run, and `cargo test` does not apply `[workspace.lints.clippy]`. This commit
+# introduces exactly such a branch (`bin/oqueue/src/main.rs`'s mimalloc arm), so
+# an `unwrap()` there would pass both gates under `unwrap_used = "deny"`.
+# The moment any of the three bites, this needs a per-feature matrix rather than
+# a blanket flag.
+test_out="$(cargo test --locked "${scope[@]}" 2>&1)" || test_rc=$?
 if (( test_rc == 0 )); then
   ok "tests ($label)"
 else
