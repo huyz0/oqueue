@@ -72,7 +72,8 @@ impl Error {
             | Self::PartTooLarge { .. }
             | Self::TooManyParts { .. }
             | Self::ObjectTooLarge { .. }
-            | Self::PreconditionFailed { .. } => RetryClass::Never,
+            | Self::PreconditionFailed { .. }
+            | Self::Permanent => RetryClass::Never,
         }
     }
 }

@@ -72,14 +72,58 @@ mimalloc = "0.1"
 # Heap profiling, behind a non-default feature. ⚠️ Its ARM page-size trap is
 # why the feature is off by default — see ADR-0007.
 tikv-jemallocator = "0.6"
-# `oqueue-store`'s S3 and GCS backends. ADR-0008 (`M1.1`). ⚠️ No default
-# features and no crypto-provider feature pinned here — `default-features =
-# false` avoids the crate's `fs` default (walkdir/nix, irrelevant to this
-# project), and the TLS backend is `oqueue-store`'s choice to make (`M1.15`,
-# `M1.17`) when it actually compiles this in; unused here, an unpicked
-# provider is not yet a build failure. Not wired into any crate's own
-# `[dependencies]` by this commit — that is M1.15's and M1.17's job.
-object_store = { version = "0.14", default-features = false }
+# `oqueue-store`'s S3 and GCS backends. ADR-0008 (`M1.1`). `aws` for `M1.15`'s
+# S3 backend; `gcp` reserved for `M1.17`, added when that commit actually
+# needs it rather than compiled unused here. `ring`, not `aws-lc-rs`: ADR-0012
+# keeps the default build's dependency footprint at cargo + a C compiler
+# (NFR-42) — `aws-lc-rs`'s FIPS-validated path needs CMake and Go, a cost `M8`
+# alone should pay.
+object_store = { version = "0.14", default-features = false, features = [
+    # ⚠️ Not the `aws` convenience feature — it bundles `aws-lc-rs`
+    # unconditionally (`aws = [..., "aws-lc-rs"]` in its own Cargo.toml),
+    # which needs CMake and Go and would put both in the default build's
+    # toolchain (ADR-0012). `aws-base` compiles the same `aws` module
+    # (`#[cfg(feature = "aws-base")]` gates it, not `feature = "aws"`) without
+    # bundling a crypto provider. `reqwest`'s own `rustls` feature *also*
+    # bundles `aws-lc-rs` unconditionally (`reqwest`'s Cargo.toml, not this
+    # project's) — there is no Cargo feature that reaches through `object_store`
+    # into `reqwest`'s feature set from here, so avoiding it needs
+    # `oqueue-store`'s own feature-only `reqwest` and `rustls` entries below,
+    # plus code that installs `ring`'s `CryptoProvider` at runtime instead of
+    # letting a Cargo feature pick one at compile time.
+    "aws-base",
+    "reqwest",
+    "ring",
+] }
+# The runtime ADR-0002 chose. `oqueue-core` names it nowhere and no crate
+# takes the dependency until it does real I/O — `M1.15` is the first. Feature
+# set kept to what `object_store`'s HTTP client and this crate's own tests
+# (driving real calls against MinIO) actually need — no `full`.
+tokio = { version = "1", default-features = false, features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+] }
+# ⚠️ Not used directly in any crate's code — present purely to steer Cargo's
+# feature unification for the *shared* `reqwest` instance `object_store`
+# already depends on, away from the `rustls` feature's bundled `aws-lc-rs`
+# (ADR-0012). `rustls-no-provider` gets TLS wired up with no crypto provider
+# picked at compile time; `oqueue-store` installs `ring`'s at runtime instead
+# (`crates/oqueue-store/src/tls.rs`). Pinned to the same major version
+# `object_store` 0.14.1 itself requires, so Cargo resolves one `reqwest`, not
+# two.
+reqwest = { version = "0.13", default-features = false, features = [
+    "http2",
+    "rustls-no-provider",
+] }
+# The crypto-provider install call itself needs the `rustls` crate directly —
+# reqwest re-exports no such API. `default-features = false` avoids rustls's
+# own default, which is `aws_lc_rs` (ADR-0012, same reasoning).
+rustls = { version = "0.23", default-features = false, features = [
+    "ring",
+    "std",
+    "tls12",
+] }
 
 # ── Lints ───────────────────────────────────────────────────────────────────
 #

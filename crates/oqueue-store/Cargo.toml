@@ -6,10 +6,35 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
-# ⚠️ `oqueue-core` and nothing else in this workspace — `architecture.md`'s star
-# topology, enforced by `check-layering.sh`. A dependency on a sibling crate is a layering violation, not a shortcut.
+# ⚠️ `oqueue-core` and nothing else *in this workspace* — `architecture.md`'s
+# star topology, enforced by `check-layering.sh`, which reads only workspace
+# crates. External dependencies are unrestricted by that rule and are exactly
+# what this crate exists to hold (ADR-0008, ADR-0012) — the vendor SDKs
+# `oqueue-core` is forbidden from ever naming.
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
+object_store.workspace = true
+# ⚠️ Feature-only — nothing in this crate's own code calls `reqwest` or
+# `rustls` directly. Their sole purpose is steering Cargo's feature
+# unification (ADR-0012, and the workspace `Cargo.toml` comment beside each):
+# `object_store`'s own `reqwest` dependency requests no TLS feature at all,
+# and its "aws"/"gcp"/"http" convenience features that would add one bundle
+# `aws-lc-rs` unconditionally. Declaring `reqwest`/`rustls` here, pinned to
+# the same versions `object_store` already resolves, requests
+# `rustls-no-provider` instead — TLS wired up, no crypto provider chosen at
+# compile time — and `tls::install_ring_provider` (called once, before any
+# `S3Store` is built) installs `ring`'s at runtime.
+reqwest.workspace = true
+rustls.workspace = true
+
+[dev-dependencies]
+# ⚠️ Not a production dependency. This crate's own code never touches a
+# runtime handle or `tokio::spawn` directly — it hands back `object_store`'s
+# futures wrapped in `ObjectStore`'s plain `BoxFuture`, and whichever crate
+# eventually drives one (`bin/oqueue`, later) owns the runtime. Only this
+# crate's own tests need one, to drive real calls against MinIO. Features
+# (`rt-multi-thread`, `macros`, `time`) come from the workspace pin.
+tokio.workspace = true
 
 [lints]
 workspace = true

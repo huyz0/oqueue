@@ -11,6 +11,9 @@ Because the seam is in `oqueue-core` and the concrete backends must live somewhe
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `object_store` — the S3/GCS client library ADR-0008 chose; this crate's backends are thin adapters over it.
+- `reqwest` — feature-only, not called directly; steers Cargo's feature unification for the shared HTTP client `object_store` also depends on, away from `aws-lc-rs` (ADR-0012).
+- `rustls` — feature-only for the same reason as `reqwest`, plus the crypto-provider install call `tls.rs` makes at runtime.
 
 ## Downstream
 

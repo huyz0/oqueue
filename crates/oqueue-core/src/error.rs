@@ -1,15 +1,15 @@
 //! The crate's error type.
 //!
 //! `error-handling.md` rule 3 puts one error enum per crate and builds it with
-//! `thiserror`; rule 5 says it classifies rather than wraps. ⚠️ This is the
-//! *start* of that taxonomy, not the whole of it: the identifiers, redaction
-//! and the three seams are all here, and `M1` brings a storage backend's
-//! classes — `NotFound`, `PreconditionFailed`, `SlowDown`, `Throttled`,
-//! `Transient`, `Permanent`.
-//! ⚠️ **Whose enum those land in is an open decision**, not this one by
-//! default: M0's boundary review found both seams returning `crate::Error`
-//! against `contracts.md` rule 17, and `M1.md` blocks its taxonomy task on an
-//! ADR.
+//! `thiserror`; rule 5 says it classifies rather than wraps. ⚠️ `M1` brought
+//! a storage backend's classes — `ObjectNotFound`, `PreconditionFailed`,
+//! `SlowDown`, `Throttled`, `Transient`, `Permanent` — landing one at a time,
+//! each beside the first code able to actually produce it
+//! (`docs/internal/product/backlog.md`'s `M1.4` row records where each one
+//! moved and why). **All six exist now**: `Permanent` was the last, in
+//! `M1.15`. Whose enum they live in was the open question `M0`'s boundary
+//! review raised against `contracts.md` rule 17 — ADR-0009 settled it: this
+//! one, not `oqueue-store`'s.
 
 /// Everything `oqueue-core` can fail at.
 ///
@@ -251,6 +251,20 @@ pub enum Error {
         /// The maximum total object size.
         max: u64,
     },
+
+    /// A backend failure that will not succeed on retry: bad credentials, a
+    /// malformed request, an unsupported operation, a config that does not
+    /// describe a usable endpoint.
+    ///
+    /// ⚠️ **`M1.4`'s last dissolved variant, landing where it first has a
+    /// producer** (`M1.15`, `backlog.md`) — `error-handling.md` rule 6.
+    /// Unlike [`Error::SlowDown`]/[`Error::Throttled`]/[`Error::Transient`],
+    /// nothing about this ever resolves itself; retrying is never worth it,
+    /// same [`crate::RetryClass::Never`] as [`Error::PreconditionFailed`],
+    /// but for the opposite reason — this is not a lost race to respect, it
+    /// is a request that was never going to succeed.
+    #[error("backend failure will not succeed on retry")]
+    Permanent,
 }
 
 /// The crate's result alias.

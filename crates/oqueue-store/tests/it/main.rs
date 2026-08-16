@@ -5,3 +5,4 @@
 
 pub mod conformance;
 mod fake;
+mod s3_minio;
