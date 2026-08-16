@@ -6,9 +6,10 @@ Thanks for looking. Being honest about the current state saves your time.
 
 **Code contributions are not being accepted yet.** Not because they are
 unwelcome in principle, but because there is no implementation to contribute
-to. The system that reviews changes is finished — that was milestone M-1 — and
-milestone M0, which creates the Cargo workspace and the crates, is in progress.
-There will be something to build on once it lands.
+to. The system that reviews changes is finished — that was milestone M-1 — the
+Cargo workspace and its crates are built — that was milestone M0 — and
+milestone M1, which gives the object store seam real S3 and GCS backends, is
+in progress. There will be something to build on once it lands.
 
 Two honest qualifications, because the alternative is a claim that reads
 stronger than it is. Some gates the standards describe are still unwritten, and

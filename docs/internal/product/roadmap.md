@@ -59,8 +59,8 @@ original ten did not reach a shippable v1. Sequence:
 | # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
 |---|---|---|---|---|---|---|---|
 | 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | see `backlog.md` ⚠️ | `scripts/gates/m-1-complete.sh` | complete |
-| 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | see `backlog.md` ⚠️ | `scripts/gates/m0-complete.sh` | in progress |
-| 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | 18 | `scripts/gates/m1-complete.sh` | not started |
+| 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | see `backlog.md` ⚠️ | `scripts/gates/m0-complete.sh` | complete |
+| 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | see `backlog.md` ⚠️ | `scripts/gates/m1-complete.sh` | in progress |
 | 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | 18 | `scripts/gates/m2-complete.sh` | not started |
 | 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | 19 | `scripts/gates/m3-complete.sh` | not started |
 | 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | 14 | `scripts/gates/m10-complete.sh` | not started |

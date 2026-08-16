@@ -30,6 +30,116 @@ re-derived rather than copied when a milestone opens. Read the plan's
 "Decisions required first" before writing any of that milestone's code; see
 [`sdd.md`](../standards/sdd.md) §Decomposition.
 
+## M1: Object store seam and conformance suite
+
+`ObjectStore` and its three implementations — in-memory, S3, GCS — plus the
+backend-agnostic conformance suite that decides whether the fake can be
+trusted. No broker code: this crate is deliberately buildable and testable
+without one. Plan: [milestones/M1.md](milestones/M1.md).
+
+⚠️ **M1 carries 33 rows, over `sdd.md`'s cap of 20, and here is the argument
+the standard requires.** The milestone is named *Object store seam and
+conformance suite*: `M1.1`-`M1.21` are that seam — two ADRs it needs before any
+code lands, three real implementations (fake, S3, GCS) sharing one error
+taxonomy, one precondition mapping, one retry policy, one rate governor, one
+key layout and one conformance suite, plus the region-header field pulled
+forward from M8 because doc 10 #40 dates it from here. None of that is a
+second milestone wearing this name — it is the actual size of "three backends
+behind one seam, proven equivalent by one suite". `M1.22` is the madsim spike
+the plan itself carries as non-code, so it costs a row without costing scope.
+`M1.23`-`M1.32` are not new scope either: they are the ten concrete,
+reproducible findings M0's boundary reviews recorded and did not fix —
+`milestones/M1.md`'s own "Inherited from M0's boundary review" section —
+and `sdd.md`'s third-bucket reasoning from M0's own decomposition note applies
+here unchanged: a milestone's own inherited claims-not-yet-true are a reason to
+carry rows, not the growth the cap exists to stop. ⚠️ **That reasoning has a
+limit and this paragraph is not licence to reuse it indefinitely.** If M1's own
+boundary review turns up a further crop of undone findings, those are M2's to
+carry, the same way M0 stopped absorbing its own residue at its closing review
+rather than inventing a further bucket; `roadmap.md`'s deferred-procedure row
+is where the unbounded version of this problem is tracked, not here.
+
+⚠️ **Two decisions gate this milestone's code, and both are ADR tasks —
+`M1.1` and `M1.2`.** `milestones/M1.md`'s "Decisions required first" names a
+third, decision #7 (whether the storage tier stays pluggable): it is **not** a
+task here, because it is blocked on NFR-13, which carries no number yet
+(`roadmap.md`'s "numbers that do not exist yet" table) — deciding it now would
+mean inventing the number `sdd.md` forbids inventing. What this milestone
+builds must not foreclose the answer either way; no task below does.
+
+⚠️ **The plan was an input, not this list.** Eighteen provisional tasks became
+nineteen (one merge, two splits below), the four "decisions required" became two
+ADR tasks and one deliberately-not-a-task, and the madsim spike stayed
+non-code. `M1.23`-`M1.32` have no plan item at all — they come from
+`milestones/M1.md`'s inherited-findings section, not from its provisional-task
+list. "Where this decomposition diverged from the plan" below carries the
+item-by-item mapping.
+
+| ID | Task | Acceptance | State |
+| --- | --- | --- | --- |
+| M1.0 | Open M1: decompose it here, flip the State cells in `roadmap.md` and `README.md` (`M0` → complete, `M1` → in progress) and correct the one sentence in `README.md`'s prose that still calls M0 "in progress", and record where this decomposition diverges from the plan | `scripts/check-requirements-trace.sh` passes with `milestones/M1.md`'s `**Serves:**` line and `roadmap.md`'s requirement-coverage row agreeing (already true — FR-30, FR-31, NFR-30 on both); every row `M1.1`-`M1.21` names at least one of FR-30, FR-31 or NFR-30; `M1.7` (a field pulled forward from M8's FR-41-43, not one of M1's own) and `M1.22`-`M1.32` (the spike and the inherited gate/documentation fixes) name none, each with an explicit note saying so — the same shape as `M0`'s own gate-tail rows; `roadmap.md`, `README.md` all read `M0` complete and `M1` in progress; `scripts/build-index.sh --check` and `scripts/check-portability.sh` pass. ⚠️ Serves no FR/NFR itself, for the same reason `M0.0` did not | done |
+| M1.1 | **ADR-0008**: `object_store` vs `opendal` vs provider SDKs (decision #3) | Serves FR-31. The ADR names the crate `oqueue-store`'s backends are built on; states the alternatives doc 05 §1 lists and why each is rejected; and states explicitly whether the choice supports native `PutMode`/precondition CAS on both S3 and GCS, since `M1.5`'s precondition mapping depends on the answer. No code changes outside `Cargo.toml`'s `[workspace.dependencies]` gaining the chosen crate (pinned, no default features that pull a C toolchain — `build.md`'s dependency rule) | todo |
+| M1.2 | **ADR-0009**: whose enum holds `ObjectStore`'s errors, and whether `list()` belongs on the trait | Serves FR-31, NFR-30. Resolves the gap M0's boundary review found (`a4d96f6ba946`): states that `oqueue-store::Error` (not `oqueue-core::Error`) carries the six variants `M1.4` names, per `contracts.md` rule 17 and `error-handling.md` rules 3/7-8; and decides `list()`'s placement per doc 12 §8.1 — on `ObjectStore` or on a separate `MaintenanceStore` seam so "never LIST on the read path" (NFR-30) is checkable at compile time rather than only by a runtime gate. `architecture.md` gains a line recording whichever seam split is chosen. No code beyond what the ADR needs to state precisely | todo |
+| M1.3 | `ObjectStore` trait + core types, replacing `oqueue-core`'s M0 placeholder trait | Serves FR-30, FR-31. `put`, `get(ByteRange)`, `delete(set)` on the trait `ADR-0009` names; `ObjectKey` (never reused), `ByteRange`, `ObjectMeta`, and an opaque `PreconditionToken` — not comparable across backends, not a content hash (multipart/SSE-KMS break that). `check-sans-io.sh` and `check-layering.sh` pass; `scripts/check-crate.sh oqueue-store` (and `oqueue-core` if the trait's home changes) green | todo |
+| M1.4 | Error taxonomy and classification | Serves FR-31. `NotFound`, `PreconditionFailed`, `SlowDown`, `Throttled`, `Transient`, `Permanent` on the enum `ADR-0009` names; classification is a function of the seam (a `From`/mapping layer), not duplicated per backend — a unit test constructs each backend-shaped raw error and asserts the classified variant | todo |
+| M1.5 | `Precondition` enum | Serves FR-31. Maps S3's `If-None-Match: *` / `If-Match` to GCS's `ifGenerationMatch=0` / `=N`; a round-trip test for each backend's encoding, and a test that an unrepresentable combination is a compile-time impossibility, not a runtime error | todo |
+| M1.6 | In-memory fake, **replacing** M0's placeholder rather than sitting beside it | Serves FR-31. Whole-object atomic `put`; strong single-key read-after-write; last-writer-wins on unconditioned concurrent writers; conditional writes obey `Precondition` and return `PreconditionFailed` on a losing race. `oqueue-core::FakeObjectStore` is deleted or reduced to a re-export — `contracts.md` rule 9's "exactly one fake" holds structurally, checked by `check-core-contract.sh` | todo |
+| M1.7 | Region header's `alg` field | Serves no FR/NFR of M1's own — pulled forward from M8, which serves FR-41-43 (doc 10 #40); M1 carries the field so a FIPS and non-FIPS build stay able to read each other's data, M8 is where a decoder acts on a non-`none` value. Pulled forward from M8 (doc 10 #40). The region header/footer type gains an `alg` field; default path writes `none`; a round-trip test proves a reader on this milestone's code can read its own writer's output with the field present. No decoder yet reads a non-`none` value — that is M8's | todo |
+| M1.8 | Fault injection on the fake | Serves FR-31. Latency distributions, 503-storm injection, conditional-write race interleavings, and crash-after-`PUT`-before-commit, each behind an explicit knob the fake exposes (not always-on) — a test proves each fault mode is reachable and that the fake with all knobs off is unchanged from `M1.6`'s behaviour | todo |
+| M1.9 | Multipart/resumable abstraction types | Serves FR-31. 5 MiB minimum part size except the last, 5 GiB maximum part, 10,000 parts, 5 TiB object — each bound encoded as a type or a constructor that rejects violation, not a comment. Unit tests prove each bound is enforced at the boundary (one under, one at, one over) | todo |
+| M1.10 | Conformance harness + capability matrix, run against the fake | Serves FR-31 — its own verification method ("conformance suite run against every backend"). One parameterized test body executed once per registered backend; a recorded "which backends has this run against" artifact; a capability matrix so a backend can declare an operation unsupported and have the suite skip (and record) rather than silently pass. Running it now registers only the fake; `check-crate.sh oqueue-store` green with the harness in the suite | todo |
+| M1.11 | Key layout: computable, offset-aligned keys with hash fan-out | Serves FR-31. A pure function from `(topic, partition, offset-or-generation)` to `ObjectKey`, with no dependence on lexicographic order (S3 Express directory buckets do not preserve it) — a property test asserts fan-out distributes across the configured prefix count and that no two logically distinct inputs collide | todo |
+| M1.12 | Retry policy driven by error class | Serves FR-31. Retries `Transient`/`SlowDown`/`Throttled` with backoff; **never** retries `PreconditionFailed` — a test proves a `412`-classified error reaches the caller on the first attempt, and that retrying it would have silently converted a lost CAS to last-writer-wins is stated in the doc comment, not just tested | todo |
+| M1.13 | Per-prefix request-rate governor | Serves FR-31. Sized to S3's 3,500 write / 5,500 read per second per prefix, and GCS's ramp (roughly doubling every 20 minutes) as a distinct, swappable policy — a test using a fake clock proves the governor admits at the configured ceiling and rejects or delays above it, with no `sleep` (`tdd.md`'s no-flake rule) | todo |
+| M1.14 | Op-class accounting | Serves FR-31. Every call through the seam increments a per-op-class counter (`Get`, `Put`, `List` if it survives `M1.2`, `MultipartUploadPart`, …) exposed for a caller to read — a test drives a sequence of calls through the fake and asserts the counts, making cost a property the conformance suite (and later NFR-31's cost model, M14) can assert rather than a review convention | todo |
+| M1.15 | S3 backend: core ops + conditional `PUT` | Serves FR-30, FR-31. `get`/`put`/`delete` against an S3-compatible endpoint using the crate `ADR-0008` chose; conditional `PUT` maps to `M1.5`'s `Precondition`; the conformance harness (`M1.10`) registers it and passes against MinIO in CI. Credentials come from the environment, never a literal in code or test fixture (`security.md`) | todo |
+| M1.16 | S3 multipart + conditional `CompleteMultipartUpload` | Serves FR-31. Completes plan item 8: multipart upload using `M1.9`'s types, and `CompleteMultipartUpload` honours the same `Precondition` as a whole-object `put` — a conformance-suite case proves a losing racer's `CompleteMultipartUpload` fails `PreconditionFailed` rather than silently overwriting | todo |
+| M1.17 | GCS backend | Serves FR-31. Resumable upload sessions, chunk sizes that are multiples of 256 KiB, `compose`; conditional writes map to `ifGenerationMatch=0`/`=N`; the conformance harness registers it and passes against a GCS emulator or fake-mode fixture — real GCS is not required, matching the MinIO-not-real-S3 precedent for S3 | todo |
+| M1.18 | `copy_range` server-side (S3 `UploadPartCopy`, GCS `compose`) | Serves FR-31. A method on the trait or an extension seam that copies a byte range without a round trip through the caller; M5 needs it and it is cheaper to land with the backends than to retrofit. A conformance case proves the copied range matches a client-side copy of the same bytes | todo |
+| M1.19 | Ranged-GET read path: request merging + sparsity gate | Serves NFR-30, FR-31. Overlapping or adjacent `get(ByteRange)` calls in flight are merged into one backend request below a configured sparsity threshold, and left separate above it — a test with a fake backend counting calls proves merging happens under the threshold and does not above it | todo |
+| M1.20 | 4 MiB-aligned chunk addressing + single-flight | Serves NFR-30, FR-31. Reads are addressed in 4 MiB-aligned chunks; concurrent readers requesting the same chunk share one in-flight backend request — a test with 500 concurrent readers against a call-counting fake asserts far fewer than 500 GETs reach the backend | todo |
+| M1.21 | Conformance suite completion: run against MinIO, record the backend matrix | Serves FR-31. The suite (`M1.10`) runs to green against the fake, the S3 backend (`M1.15`/`M1.16`, MinIO) and the GCS backend (`M1.17`); the recorded matrix names exactly those three and states real S3/real GCS as not-yet-run, matching doc 10 #33's deferral. This is the task `scripts/gates/m1-complete.sh` exists to check | todo |
+| M1.22 | madsim / `object_store` feasibility spike — not a code task | Serves no FR/NFR — a deferred spike shaping `standards/testing.md`, not an implementation of anything `requirements.md` lists (`roadmap.md`'s deferral table). A written finding: whether `object_store`'s (or `ADR-0008`'s chosen crate's) I/O can run under a deterministic simulator via `cfg`-swapped runtime, without changing crate structure (doc 10's resolved log). Recorded in `standards/testing.md` as the answer this spike was deferred from M-1 to produce, with the finding dated and reasoned rather than asserted | todo |
+| M1.23 | Fix `scripts/gates/m0-complete.sh`'s no-PyYAML fallback: strip quotes in the block-form branch the way the flow-sequence branch already does | Serves no FR/NFR — gate-correctness inherited from M0's boundary review, the same class as M0's own gate-tail rows. A YAML fixture with `- "pre-commit"` in block form parses identically with and without PyYAML available — a case in `tests/gates/negative.sh` (or an equivalent fixture test) proves the two code paths agree. Finding recorded in `milestones/M1.md`'s inherited section | todo |
+| M1.24 | Fix `scripts/check-drift.sh`'s header, which claims `_ms` matched `_message` | Serves no FR/NFR — same class as `M1.23`. The comment states what the pattern actually matches; no behavioural change | todo |
+| M1.25 | Fix `tests/gates/negative.sh`'s `skip_case`: validate its third argument (not its fourth), and append to `SKIPPED_GATES` on the rejection path | Serves no FR/NFR — same class as `M1.23`. A case proves a malformed third argument is now rejected, and that a legitimately skipped gate is now counted — `m0-complete.sh`'s (and `m1-complete.sh`'s) "every gate's negative case actually ran" check reflects reality rather than an undercount | todo |
+| M1.26 | Harden `gates.yml`'s `SKIPPED_COUNT` step: the `if [ -z "$n" ]` guard is unreachable under `pipefail` (a non-matching grep kills the step before the guard runs), and the step has no `if: always()` | Serves no FR/NFR — same class as `M1.23`. `\|\| true` on the assignment restores the guard's reachability; `if: always()` added so an earlier failing gate in the same job does not skip the check that would have caught a second commit's defect. CI's own log is the check — a deliberately broken fixture pushed to a scratch branch would show the step still running and still catching it, described in the commit body since this repo has no PRs to attach it to | todo |
+| M1.27 | Correct the nine dependency pins `M0.30` added: the justifying comment is wrong for eight of them, and the clippy pin embeds `workspace` as a label only because that fixture happened to pass no crate argument | Serves no FR/NFR — same class as `M1.23`. Each pin's comment states the actual reason for that pin; the clippy pin's label is corrected or the fixture is given an explicit crate argument, whichever makes the label true | todo |
+| M1.28 | Correct `bin/oqueue/README.md`'s claim, falsified by M1's first commit that writes a connection loop: "every library crate in this workspace is written against traits rather than against S3, a socket or a clock" | Serves no FR/NFR — same class as `M1.23`. The sentence is scoped to what remains true once `oqueue-store` and `bin/oqueue` hold real I/O — the broker's I/O shell holds the connection loop by design (`architecture.md`), and the README says that rather than a universal claim the milestone's own code disproves | todo |
+| M1.29 | Correct the `Clock` cell that frames `architecture.md` and ADR-0004 as opposing sides of a disagreement neither states | Serves no FR/NFR — same class as `M1.23`. The cell (wherever it lives — `architecture.md`'s crate table or ADR-0004's consequences) says that `check-sans-io.sh` is the document that answers where a `Clock` implementation lives, not the two documents it currently frames as disagreeing | todo |
+| M1.30 | Fix `check-budget.sh`'s NFR-56 blind spot: a run containing one gate over `COMPILING_GATE_MS` currently has the whole suite judged against the *remainder*, silently granting the other gates the full 10 s budget instead of what is actually left | Serves NFR-56. The gate compares the **whole suite's** wall time against `BUDGET_MS` regardless of which individual gate is slow, or explicitly documents and tests the alternative rule chosen instead; a fixture proves the new behaviour on a suite containing one over-`COMPILING_GATE_MS` gate and several ordinary ones | todo |
+| M1.31 | Route `security.md` to the code that actually holds secrets: its `applies_to` excludes `oqueue-core` (which holds `Redacted`, `WrappedKey`, `KeyId`, `Error::SecretRejected`, `FakeKeyProvider`) and `bin/oqueue` (which holds the `KeyProvider` choice) | Serves no FR/NFR — same class as `M1.23`. `security.md`'s `applies_to` names both crates; `which-standards.sh` (or its equivalent) selects `security.md` for a diff touching either, verified by a case in its own test suite | todo |
+| M1.32 | Consolidate the triple-duplicated hand-rolled TOML parser: `check-layering.sh`'s `package_name()` and `runtime_deps()`, and `check-readmes.sh`'s `sections()`, disagree on `[[bench]]` after `[dependencies]` and on `[target."cfg(unix)".dependencies]` | Serves no FR/NFR — same class as `M1.23`. One shared parsing helper (or three call sites proven to agree by a shared fixture) handles a manifest with a `[[bench]] harness = false` table after `[dependencies]` and a target-scoped dependency table without misreading either; regression fixtures for both cases pass in all call sites | todo |
+
+### Where this decomposition diverged from the plan
+
+| Plan item | Task(s) | How |
+| --- | --- | --- |
+| 1. `ObjectStore` trait | M1.3 | merged with item 2 |
+| 2. Core types | M1.3 | merged with item 1 |
+| 3. Error taxonomy | M1.4 | blocked on M1.2's ADR, restated |
+| 4. `Precondition` enum | M1.5 | — |
+| 5. In-memory fake | M1.6 | — |
+| 6. Fault injection | M1.8 | — |
+| 7. Multipart/resumable types | M1.9 | — |
+| 8. S3 backend | M1.15, M1.16 | split: core ops from multipart, mirroring `M0.21`'s pattern of splitting a row too large for one commit |
+| 9. GCS backend | M1.17 | — |
+| 10. `copy_range` | M1.18 | — |
+| 11. Retry policy | M1.12 | — |
+| 12. Rate governor | M1.13 | — |
+| 13. Key layout | M1.11 | — |
+| 14. Ranged-GET | M1.19 | — |
+| 15. Chunk addressing + single-flight | M1.20 | — |
+| 16. Op-class accounting | M1.14 | — |
+| 17. Conformance harness | M1.10, M1.21 | split: harness-against-the-fake from the MinIO/GCS run that is the completion condition's real content |
+| 18. Region header `alg` | M1.7 | — |
+| — | M1.0 | no plan item: opening the milestone |
+| — | M1.1 | no plan item: ADR-0008, from "Decisions required first" |
+| — | M1.2 | no plan item: ADR-0009, from "Decisions required first" |
+| — | M1.22 | plan names it as non-code, carried as a row anyway so it is tracked |
+| — | M1.23–M1.32 | no plan item: `milestones/M1.md`'s inherited-findings section, not its provisional-task list |
+
+
 ## M0: Workspace, contracts, and quality gates
 
 The Cargo workspace, the eleven crates, every `oqueue-core` trait seam with a
