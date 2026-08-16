@@ -49,11 +49,17 @@ not a plan and changing one is a decision.**
 
 ⚠️ **Numeric order is not execution order.** IDs M-1 through M8 predate this
 plan and are kept stable because the corpus's decision log cites them — doc 10
-#40 requires the region header to name its AEAD algorithm "from M1", and the
-resolved-decisions entry repeats it. ⚠️ Doc 22's *region-header* requirement
-names no milestone — it says only that "the region header names its algorithm",
-and the timing is doc 10's. Doc 22 does cite **M5** elsewhere, for compaction
-re-sealing, so renumbering would strand both the decision log and that line. M9 through M15 were added when planning end to end showed the
+#40 requires the region header to name its AEAD algorithm from its first
+commit, originally read as "from M1" and corrected in doc 10 itself
+(2026-08-16) once `M1.7` found no region header exists for `M1` to add a field
+to — `oqueue-store` stores opaque bytes and stays unaware of any object
+structure. The timing lands on **M3** instead, the first milestone that
+assembles a bundled object (multi-topic flush batching, FR-32); see the
+deferred-into-a-later-milestone table below. ⚠️ Doc 22's *region-header*
+requirement names no milestone — it says only that "the region header names
+its algorithm", and the timing is doc 10's. Doc 22 does cite **M5** elsewhere,
+for compaction re-sealing, so renumbering would strand both the decision log
+and that line. M9 through M15 were added when planning end to end showed the
 original ten did not reach a shippable v1. Sequence:
 
 | # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
@@ -70,7 +76,7 @@ original ten did not reach a shippable v1. Sequence:
 | 10 | [M5](milestones/M5.md) | Compaction and retention | functional | M3, M10 | 20 | `scripts/gates/m5-complete.sh` | not started |
 | 11 | [M6](milestones/M6.md) | Recovery and failover | non-functional | M3, M10 | 16 | `scripts/gates/m6-complete.sh` | not started |
 | 12 | [M7](milestones/M7.md) | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | not started |
-| 13 | [M8](milestones/M8.md) | Encryption: BYOK and the FIPS build | feature | M1, M5, M9 | 18 | `scripts/gates/m8-complete.sh` | not started |
+| 13 | [M8](milestones/M8.md) | Encryption: BYOK and the FIPS build | feature | M3, M5, M9 | 18 | `scripts/gates/m8-complete.sh` | not started |
 | 14 | [M12](milestones/M12.md) | Admin API and operability | functional | M4, M9 | 16 | `scripts/gates/m12-complete.sh` | not started |
 | 15 | [M13](milestones/M13.md) | Release engineering and the artifact matrix | build | M12 | 15 | `scripts/gates/m13-complete.sh` | not started |
 | 16 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | M5, M13 | 16 | `scripts/gates/m14-complete.sh` | not started |
@@ -137,9 +143,12 @@ Three placements are not obvious and are the ones worth arguing about:
   principal can see). That is unbuildable without a principal, so the
   security milestone is a hard prerequisite rather than a parallel track.
 - **M8 (encryption) after the object format settles, but its header field
-  lands in M1.** Per-region sealing changes the footer and the index entry, so
+  lands in M3.** Per-region sealing changes the footer and the index entry, so
   the milestone is late. ⚠️ But the region header must name its AEAD algorithm
-  from M1, or a FIPS and a non-FIPS build become mutually unable to read each
+  from the first commit that defines one — `M3`'s multi-topic flush batching,
+  not `M1`'s object-store seam, which has no object format to carry the field
+  (`M1.7` found this; corrected from an original "M1" reading of doc 10 #40) —
+  or a FIPS and a non-FIPS build become mutually unable to read each
   other's data — a field now, a migration later. Doc 22; doc 10 #40.
 
 ## Requirement coverage
@@ -188,7 +197,7 @@ from a decision nobody made. Each must appear in the receiving milestone's plan.
 |---|---|---|
 | The madsim / `object_store` feasibility spike | M1 | Deferred from M-1 because it needs a repo and gates to land properly. Its answer shapes **`standards/testing.md`** — and, per doc 10's resolved log, *not* `architecture.md` or the crate split: madsim swaps the runtime via `cfg` rather than changing crate structure. ⚠️ Doc 10 #32's open-list entry still says it touches "every crate that does async", which the resolved log supersedes — the same un-struck-entry inconsistency as #8. Take the resolved log |
 | Verification against **real S3** | M1 | The conformance suite runs against the fake and MinIO now. ⚠️ **Conditional-write behaviour stays marked unverified until it runs against real S3** — doc 10 #33. If the fake and MinIO are both more permissive than S3, the result is an architectural error, not a test gap |
-| The region header's `alg` field | M1 (from M8) | A few bytes now against a migration later; doc 10 #40 |
+| The region header's `alg` field | M3 (from M8) | A few bytes now against a migration later; doc 10 #40. ⚠️ **Moved here from a first reading of "M1" — `M1.7` found `M1`'s object-store seam has no object format to carry the field**; `oqueue-store` stores opaque bytes (`architecture.md`'s Encryption section). `M3`'s multi-topic flush batching (FR-32) is the first milestone that assembles a bundled object, so it is the first commit with a region header to put the field in |
 | `security.md` rule 5's `scripts/fuzz.sh` | M2 | Named by a standard, written by nobody, and scheduled nowhere until M0's checkpoint review found it. ⚠️ **The rule reads as enforced and is not.** It belongs with a decoder rather than with M0: `testing.md` rule 24 puts a fuzz target on every decoder, and the first decoder is M2's |
 | `security.md` rules 6-7's `scripts/check-secrets.sh` | M8 | Same shape, same review. It needs secrets to check, and the first key material is M8's. ⚠️ Until it exists, rule 7 is held by review alone — and `M0.6` already had to shape a carve-out around its absence |
 | **How a `minor` review finding gets scheduled** | M2 | ⚠️ `review.md` rule 15 sends a minor to the commit body and rule 16 just below it calls a finding living where nothing reads it one nobody will act on. M0's second half recorded upwards of thirty that way and none became a row until `M0.27`-`M0.29` harvested them by hand. The fix is a **procedure** — some step that harvests commit bodies at a milestone boundary — and choosing one is a decision for whoever owns the loop, not a repair a review may make; M0's boundary review recorded it as `bcf5d6f697f2` rather than re-specifying. ⚠️ **M2 because that is the first milestone whose minors will be about protocol code rather than about prose**, and because the interim rule that rule 15 now states — write the row in the *next* commit — is a workaround that removes the pressure to decide, so a date matters |
@@ -288,9 +297,12 @@ its rows across M2, M3 and later work, not to M2 alone — and measured by M14.
 ## M1 — Object store seam and conformance suite
 
 `ObjectStore` and its three implementations (in-memory, S3, GCS), plus the
-backend-agnostic conformance suite. Carries three deferrals: the madsim
-feasibility spike, real-S3 verification, and the region header's `alg` field.
-⚠️ Doc 12 §8.1 proposes keeping `list()` **off** the trait so that "never LIST
+backend-agnostic conformance suite. Carries two deferrals: the madsim
+feasibility spike and real-S3 verification. ⚠️ **Not** the region header's
+`alg` field — `M1.7` found it belongs to `M3` instead, the first milestone
+with an object format to carry it; see the deferred-into-a-later-milestone
+table.
+⚠️ Doc 12 §8 proposes keeping `list()` **off** the trait so that "never LIST
 on the read path" becomes a compile-time property rather than NFR-30's runtime
 gate. That is a proposal for M1's ADR, not a decision — `architecture.md`
 records no such split, and decision #14's recovery-scanner branch would need
@@ -308,7 +320,12 @@ implements the wrong polynomial with no compile error.
 Offsets that are monotonic and gap-free under concurrent producers, the
 offset→object index, the metadata cache, and the high watermark. The
 serialization point is the log append, not the flush, which is what lets many
-writers PUT concurrently without coordinating.
+writers PUT concurrently without coordinating. ⚠️ **Carries one deferral**:
+the region header's `alg` field, moved here from an original "M1" reading of
+doc 10 #40 — `M1.7` found `M1`'s object-store seam has no object format to
+carry it, and M3's multi-topic flush batching (FR-32) is the first milestone
+that assembles a bundled object, so its first commit is where the field must
+land.
 
 ## M10 — Deterministic simulation and fault injection
 

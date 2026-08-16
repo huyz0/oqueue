@@ -105,7 +105,7 @@ every one of them.
 
 16. **Anything persisted to object storage names its own format.** The
     region header's algorithm field (`alg`, value `none` on the default
-    path — see [milestones/M1.md](../product/milestones/M1.md) task 18)
+    path — see [milestones/M3.md](../product/milestones/M3.md) task 19)
     exists so a future reader does not have to assume; every persisted
     format this project adds follows the same rule.
 17. **A FIPS build reads what a non-FIPS build wrote, and vice versa where
