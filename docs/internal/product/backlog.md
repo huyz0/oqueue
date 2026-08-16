@@ -116,7 +116,7 @@ see — and a count is not that evidence if it is only asserted.
 | M0.26 | `m0-complete.sh` cannot report a skipped negative case as watched | ⚠️ The gate prints "every gate fails on a broken artifact" while the `check-coverage.sh` and `check-mutants.sh` cases sit behind `_have_llvm_cov`/`_have_mutants` and skip when the tool is absent — so on a machine without them, half of M0's four new gates are declared complete having never been watched to fail. That is the skip-is-a-pass shape **the same script refuses for `cargo`**, with the note "a skip here would report M0 complete having checked nothing". Acceptance: `tests/gates/negative.sh` reports how many cases skipped, `m0-complete.sh` fails when a gate it names in `M0_GATES` has a case that did not run, and a negative case proves it. Serves NFR-56's neighbours only indirectly — it is non-negotiable 4's `M0` instance | done |
 | M0.27 | The minors M0 recorded against `check-drift.sh` and `m0-complete.sh` | ⚠️ **Harvested from commit bodies**, which is the collection step `review.md` rule 15 names no owner for — finding `bcf5d6f697f2` defers *the procedure* to M2, and doing it once by hand does not decide it. Fixes: `_ms` matches `_msg`, and the script has no suppression mechanism, so a legitimate `err_msg = env::var(...)` is refused with a remedy that misdiagnoses it; `m0-complete.sh`'s `THRESHOLD_RE` extraction has no `\|\| true` under `pipefail`, making its own fail branch unreachable and skipping sections 6-8; the hook-count extraction is line-oriented, so reflowing a 240-character line turns the gate red; the YAML fallback misses a block-sequence `stages:` and `YAMLError` escapes `except ImportError`; a `stages: [manual]` hook counts as invoked. Each gets a `tests/gates/negative.sh` case or a stated reason it cannot. Serves NFR-55, NFR-56 | done |
 | M0.28 | `check-portability.sh` check 3's four sub-properties, each watched to fail | ⚠️ Three of the four delete cleanly with the whole negative suite green — the population split, the positive direction, and the inspected-nothing guard — which is the property `m0-complete.sh` itself calls untested. `M0.24`'s body named `M0.26` as their home and `M0.26` did not do it. Also: the claim patterns are four literal phrasings and the docstring implies the only limit is timing; `skip_case` records per *gate* where the row asked for a count, and its argument is an unvalidated bare filename nothing checks against `M0_GATES`; and two comment paragraphs are orphaned from what they document. Serves no FR/NFR — it is non-negotiable 4's own coverage | done |
-| M0.29 | Every documentation minor M0 recorded and did not fix | ⚠️ **Bounded by what is written down**, not by a fresh audit: the `Recorded, not fixed` sections of M0's commit bodies plus the two boundary-review artifacts. `review.md`'s "four lines below" is fourteen and was replicated into two more documents; `roadmap.md` says 31 minors where two other files say roughly thirty, and carries a doubled word; rule 15's interim sentence is in neither skill that loads at review time, which `M0.19`'s acceptance required; `AGENTS.md` explains a missing script by an M-1 row `M0.16` closed; `.agents/skills/README.md` says seven standards where there are fourteen; `backlog.md` quotes `THRESHOLD_RE`'s pre-`M0.23` value; `build.md` rule 7 says gating `release` gates all four profiles, which is a property of today's manifest and not of the gate; three rustdoc bodies still render a literal `[ADR-000n]`; `testing.md` still calls the full run sharded; `bin/oqueue`'s manifest still names `MALLOC_CONF`. ⚠️ Each is either fixed or given a stated reason it stays. Serves no FR/NFR | todo |
+| M0.29 | Every documentation minor M0 recorded and did not fix | ⚠️ **Bounded by what is written down**, not by a fresh audit: the `Recorded, not fixed` sections of M0's commit bodies plus the two boundary-review artifacts. `review.md`'s "four lines below" is fourteen and was replicated into two more documents; `roadmap.md` says 31 minors where two other files say roughly thirty, and carries a doubled word; rule 15's interim sentence is in neither skill that loads at review time, which `M0.19`'s acceptance required; `AGENTS.md` explains a missing script by an M-1 row `M0.16` closed; `.agents/skills/README.md` says seven standards where there are fourteen; `backlog.md` quotes `THRESHOLD_RE`'s pre-`M0.23` value; `build.md` rule 7 says gating `release` gates all four profiles, which is a property of today's manifest and not of the gate; three rustdoc bodies still render a literal `[ADR-000n]`; `testing.md` still calls the full run sharded; `bin/oqueue`'s manifest still names `MALLOC_CONF`. ⚠️ Each is either fixed or given a stated reason it stays. Serves no FR/NFR | done |
 | M0.19 | Two rules in `review.md` that bound the loop: a claim about tool behaviour is measured before it is written, and a `minor` on a `pass` is recorded rather than re-reviewed | `review.md` gains both; `which-standards.sh` selects `review.md` for a shell script and a research document, which is where two of the three worked examples lived; the `review` and `milestone` skills that duplicate the resolution rules agree with rule 15, including that nothing is staged for a minor. ⚠️ Comment-density, criterion-length and ADR-length rules were cut from this task — no gate, and the criterion-length one made the 20-task cap binding in the commit that filled slot 20. ⚠️ Names no FR/NFR; `M0.0`'s criterion that every other row does was true when `M0.0` closed | done |
 
 ⚠️ **M0.15 through M0.18 are not blocked by NFR-55 and NFR-56 being
@@ -434,7 +434,13 @@ the **process group**: measured first, because `pre-commit` gives each hook a
 different `PPID` and the same `PGID`, and an earlier design keyed on `PPID`
 would have seen one gate per group. Two artifacts: `target/timings/gates.tsv`
 holds per-gate rows and is **consumed** by this gate each run (aged at 1 day, so
-an abandoned run's rows cannot be summed into somebody else's), and
+an abandoned run's rows cannot be summed into somebody else's — ⚠️ **by the
+ageing, not by the PGID**, which is the part worth being precise about: the
+prune runs *after* the sum, so a live run is separated from a concurrent one by
+its group id, and an abandoned run's rows are separated from a **later** run
+that the kernel gave the same recycled group id by their age. Without the
+ageing those rows are immortal and the next suite in that group adds seconds it
+never spent), and
 `target/timings/suite.tsv` is the 30-day trend, one row per suite run written
 once the verdict is known, statused `ok`, `over`, or `compiling:<gate>` — so a
 failing run, an exempted run and a clean one are three distinguishable things
@@ -481,7 +487,9 @@ first version silently dropped 215 lines of `oqueue-core` when its name was
 added to the single list.
 
 ⚠️ **The constant is called `COVERAGE_FLOOR`, and the name is load-bearing.**
-`check-drift.sh` matches on `threshold|_limit|_budget|_ceiling|_floor`; the
+`check-drift.sh` matched, **on the day `M0.15` closed**, on
+`threshold|_limit|_budget|_ceiling|_floor` — ⚠️ `M0.23` and `M0.27` have since
+widened it, and the live value is in that script; the
 first version called it `MIN_CRATE_COVERAGE`, which matches none of them — so it
 could be made environment-settable and `check-drift.sh` passed anyway. The
 acceptance clause "(`check-drift.sh` passes)" was being satisfied by a gate that
@@ -525,8 +533,15 @@ crate manifests.
 - `check-sans-io.sh` sees **28**: `crates/` only, because `bin/oqueue` is where
   choosing a concrete socket, clock or backend is the *job*. Correct by design.
   ⚠️ It does **not** mean the "only place a concrete type is chosen" property is
-  unheld: the gate exempts `oqueue-broker` and `oqueue-store` by name and holds
-  it for the other nine crates. What excluding `bin/` leaves ungated is business
+  unheld: ⚠️ **the two exemptions are not the same size**, which every version of
+  this sentence has got wrong. `oqueue-broker` is exempt from all three
+  patterns; `crates/oqueue-store` is exempt from `STORE_RE` **only** and is
+  still scanned for sockets and for the real clock. So the crate count depends
+  on which pattern is being asked about, and no single number is right for the
+  gate as a whole — read the `BROKER_DIR`/`STORE_DIR` constants near the top of
+  `scripts/check-sans-io.sh` **and** the branch that uses them, which are not
+  adjacent. `M0.29` first wrote nine, then ten, then nine again, each time
+  from a different wrong derivation. What excluding `bin/` leaves ungated is business
   logic migrating *into* the composition root, which is a different claim and is
   review's.
 - `check-layering.sh` sees **12**: every crate plus `bin/oqueue`, which it
@@ -858,6 +873,111 @@ undercounted.
 sentence saying scripts are missing in some fifth wording passes. That is a
 bound a regex cannot remove, and the docstring now says so instead of implying
 timing was the only limit.
+
+**M0.29** harvests the documentation minors M0 recorded. ⚠️ **It does not claim
+to have closed the bound**, and the first four versions of this note did — each
+time review found more inside it, and each correction of the claim was itself
+false. The honest statement is: the items enumerated below are fixed, several
+more were found and fixed during review, and **the `Recorded, not fixed`
+sections of M0's commit bodies are not certified empty**.
+
+⚠️ **That is the finding `bcf5d6f697f2` restated as evidence.** Harvesting by
+hand does not terminate reliably — five rounds on this row found in-bound items
+each time — which is exactly the argument for a *procedure* that collects them
+at a boundary, and exactly why choosing one was deferred to M2 rather than
+improvised here. Whoever opens M1 should read M0's commit bodies as an
+unexhausted store, not as a closed one.
+
+Eleven claims, each fixed or given a reason it stays:
+
+- `review.md`'s "four lines below" was fourteen, and had been replicated into
+  `roadmap.md` and `M2.md` — ⚠️ the same spread-a-known-defect shape `M0.25`
+  named for the `[ADR-000n]:` definitions, in the commit that named it.
+  `review.md` now says "below" and its two copies "just below" — no wording a
+  later insertion falsifies.
+- "31 minors" against "roughly thirty" in two other files: a number nothing
+  derives and nothing acts on, replaced by "upwards of thirty" in all three.
+- A doubled word in `roadmap.md`'s new row.
+- ⚠️ Rule 15's interim instruction is now in both skills that load at review
+  time. `M0.19`'s acceptance required those three to agree, and the sentence
+  was inert exactly where it applied — it is the workaround for the deferred
+  decision, so its absence *was* that finding recurring.
+- `AGENTS.md` explained a missing script by an M-1 row `M0.16` closed. The
+  operational instruction below it was right; the cause was stale.
+- `.agents/skills/README.md` said seven standards where there are fourteen.
+- `backlog.md` quoted `THRESHOLD_RE` in the present tense with a value two
+  rows had since widened; it is now dated, and points at the script.
+- `build.md` rule 7's "gates all four" is now marked as a property of today's
+  manifest rather than of the gate — `overflow-checks = false` in
+  `[profile.dist]` still ships a wrapping binary with the gate green.
+- `testing.md` still called the full run sharded. ⚠️ Kept as the **target**,
+  with a note that `M0.17` implemented the first half exactly and the second
+  approximately — deleting the word would erase the gap.
+- The three seam rustdocs rendered a literal `[ADR-000n]`; verified with
+  `cargo doc` that none remains.
+- `bin/oqueue`'s manifest named `MALLOC_CONF` — the unprefixed spelling read by
+  nothing — in the feature comment whose subject is that
+  `tikv-jemallocator/profiling` is the half that makes `heap-profiling`
+  actually profile.
+
+Review found items **inside the bound** that had been given neither a fix nor a
+reason — a harvest declaring itself closed over ground it
+had not covered. ⚠️ It arrived again in each of the next two rounds — five
+items, then five more — which is why the note above no longer claims closure.
+Closed here: `mutants.sh`'s missing `--timeout` against `testing.md` rule 18, doc 18's
+section number in `oqueue-checksum`'s two documents, and two miscounts in the
+notes themselves. ⚠️ **The timeout is a recorded decision, not an
+implementation**: `cargo-mutants` derives its cap from a baseline run under the
+same parallelism, which is what rule 18 asks for, and a literal would be a
+threshold nobody has measured — so the rule now names the script and the script
+argues the default.
+
+Also closed, each recorded in an M0 commit body and inside the bound: `M8.md`'s
+deliverable 2, whose surviving text put the `KeyProvider` fake in
+`oqueue-testkit` — ⚠️ **nothing checks a milestone plan's file locations**, so
+an M8 executor building from it would have done what ADR-0006 and
+`contracts.md` rule 9 reject; `oqueue-broker`'s README invariant row, which said
+the real `Clock` lives there against its own note two lines down, in the one
+crate `check-sans-io.sh` exempts from the clock pattern; and the three leaf
+crates' `lib.rs`, which folded the differential-property-test obligation into
+the `check-unsafe.sh` sentence and so made a review-held rule read as gated.
+
+Then, in the round after that: `.pre-commit-config.yaml`'s orphaned comment
+fragment and its two ordering claims (one said three hooks were "scrolled
+past"; both argued from output length while reading as speed), `clock.rs`'s
+"every `expect` is on a generated value" where four of five are literals,
+`backlog.md`'s claim that ageing excludes an abandoned run's rows when the sum
+runs before the prune, and ADR-0002's FR-50 citation where FR-31 is the
+requirement plus its "it compiles" measured on the desugared form and not on
+the shape that does not compile at all.
+
+⚠️ **What is left open, with a reason**: `0ef46cb4a5a4` — that no backlog row
+exists for a `reviews/`-only terminating commit to name — stands, because
+`M0.22`'s body argues the answer (reuse an existing row, per `M-1.37`) and
+writing that convention into `git.md` is a process change rather than a
+documentation correction.
+
+⚠️ **What is deliberately not fixed**: the `AGENTS.md` files whose "Easy to get
+wrong here" sections duplicate their README's notes, and the four copies of the
+`Waker::noop` busy-poll `block_on`. Both are M0.22's minors and both are M1's —
+M1's runtime deletes the second outright, and the first is a rewrite with no
+gate to hold it.
+
+⚠️ **This note deliberately states no count.** Three attempts were made — the
+finding's "every crate", then eight, then nine — and review measured each of
+them false; the third was produced by a script whose bullet pattern was too
+narrow to see half the matches. A number nobody can re-derive on demand is
+exactly what `M0.14`'s census exists to avoid, and prose is the wrong place for
+one.
+
+⚠️ **What is true and load-bearing for the M1 rewrite**: most of the twelve
+duplicate their README's notes wholesale, and **`oqueue-core` and `bin/oqueue`
+do not** — `bin/oqueue`'s carry the allocator choice, the aarch64 link gap and
+the never-executed heap-profiling build. ⚠️ Only the last of those three is
+unique to that file; the other two are also in its README. An executor scoping
+a rewrite from "every crate" would still delete a warning with no other home. The
+count is `diff <(...) <(...)` away for whoever does the work, and belongs in
+that commit rather than here.
 
 **M0.12** found that three standards had an `applies_to` glob that never
 matched. `contracts.md`, `behavior.md` and `async-concurrency.md` all listed

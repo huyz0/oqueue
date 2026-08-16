@@ -129,11 +129,13 @@ milestone loop is called out.
     round's surface is the prose the fix just added.
 
     ⚠️ **This rule and rule 16 are in tension, and M0's boundary review said so
-    rather than resolving it** (finding `bcf5d6f697f2`). Rule 16 four lines
-    below calls a finding that lives where nothing reads it "one nothing will
+    rather than resolving it** (finding `bcf5d6f697f2`). Rule 16 below calls a
+    finding that lives where nothing reads it "one nothing will
     act on"; a commit body is such a place — `next-task` reads the backlog and
-    so does everyone else. M0's second half recorded roughly thirty minors this
-    way and none became a row. ⚠️ **Recorded as an open decision, not
+    so does everyone else. M0's second half recorded upwards of thirty minors this
+    way, and none became a row until `M0.27`-`M0.29` harvested them by hand —
+    which fixed the backlog and decided nothing about who does it next time.
+    ⚠️ **Recorded as an open decision, not
     silently re-specified**, because the fix is a *procedure* — some step that
     harvests commit bodies at a milestone boundary — and choosing one is a
     decision for whoever owns the loop, not a repair a review may make on its

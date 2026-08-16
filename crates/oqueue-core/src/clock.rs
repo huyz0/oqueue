@@ -55,7 +55,7 @@ impl core::fmt::Display for Timestamp {
 ///
 /// # What an implementor must guarantee
 ///
-/// See [ADR-0004]. In short: `now` is **cheap**, **infallible**, and
+/// See ADR-0004. In short: `now` is **cheap**, **infallible**, and
 /// **non-decreasing** — ⚠️ **a property of the clock, not of a thread**: if one
 /// call returns `t`, any later call *on any thread* returns a value `>= t`.
 /// This said "two calls in program order", which is the weaker per-thread

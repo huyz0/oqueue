@@ -97,7 +97,7 @@ impl WrappedKey {
 ///
 /// # What an implementor must guarantee
 ///
-/// See [ADR-0006]: unwrap(wrap(k)) is k under the same [`KeyId`]; a `WrappedKey`
+/// See ADR-0006: unwrap(wrap(k)) is k under the same [`KeyId`]; a `WrappedKey`
 /// produced under one key id does not unwrap under another; and no error, log
 /// or panic message it produces contains key material.
 ///

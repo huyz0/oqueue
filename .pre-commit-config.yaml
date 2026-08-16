@@ -105,13 +105,15 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
-      # The first of the two pre-commit gates that shell out to cargo; `check-coverage` follows it
-      # cargo. ⚠️ **Not for speed** — `fail_fast` is set nowhere, so pre-commit
+      # The first pre-commit gate that shells out to cargo; `check-coverage`
+      # and `check-mutants` follow it. ⚠️ **Not for speed** — `fail_fast` is set nowhere, so pre-commit
       # runs every hook whatever the order, and no time is saved by putting the
       # slow one last. An earlier version of this comment claimed otherwise and
       # review disproved it with a two-hook config. The order is for the *output*:
       # a run that fails several gates is read top-down, and the cargo output is
-      # by far the longest, so anything below it would be scrolled past.
+      # by far the longest. ⚠️ Three hooks follow it, so "anything below it is
+      # scrolled past" is not literally true — the ordering puts the *longest*
+      # output late, not last.
       # Run with no argument, so a commit touching two crates is not checked
       # against whichever one somebody named.
       - id: check-crate
@@ -124,8 +126,9 @@ repos:
 
       # ⚠️ **Ordering here buys nothing** — `fail_fast` is unset, so this runs
       # even after `check-crate` fails and pays the instrumented rebuild anyway.
-      # It is last because that is where a reader looks for the slowest gate,
-      # which is the same reason the comment above gives. `M0.15`.
+      # It is late because a reader scans a failing run top-down and this gate's
+      # output is long — the same *output-length* reason the comment above
+      # gives, which is not a speed argument either. `M0.15`.
       - id: check-coverage
         name: "testing.md rule 19: per-crate line coverage floor"
         entry: scripts/check-coverage.sh

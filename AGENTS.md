@@ -61,10 +61,11 @@ required.
 <!-- index:standards:end -->
 
 ⚠️ **A rule whose script is missing is a preference**, and some of the scripts
-these standards name are still missing. M-1 is complete — but it completed with
-one of its own gate rows still open — blocked, from its first day, on a
-constant that cannot be chosen without a workspace — and the standards name
-scripts M-1 was never scoped to write at all.
+these standards name are still missing. Not because a milestone left a row open
+— ⚠️ that was true when this paragraph was written and `M0.16` closed the row —
+but because the standards name scripts no milestone was ever scoped to write.
+Each of those needs something to check that does not exist yet, which is why
+they are deferrals with receiving milestones rather than oversights.
 
 ⚠️ **Do not look for the list here.** A hardcoded list of what is outstanding
 went stale four separate times elsewhere in this repository before the fix

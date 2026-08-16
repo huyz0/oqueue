@@ -116,5 +116,13 @@ re-runs this whole procedure, which is the loop the rule exists to stop. Fixing
 it is permitted and usually wrong: the new round's surface is the prose the fix
 just added. `review.md` rule 15.
 
+⚠️ **If the minor is worth scheduling, write the backlog row in the *next*
+commit.** That costs nothing here and is what rule 16 asks for — a finding that
+lives only in a commit body is one nothing reads. ⚠️ This is an interim rule:
+whether some step should harvest commit bodies at a milestone boundary is an
+open decision, recorded as `bcf5d6f697f2` and deferred into M2 by
+`roadmap.md`'s table, because choosing a procedure is not a repair a review may
+make on its own authority.
+
 ⚠️ A growing argued-list is itself a signal: somebody is being systematically
 overruled, and one side is systematically wrong.

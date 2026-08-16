@@ -29,7 +29,7 @@ default = []
 ## a larger page than the build host, or it aborts at startup.
 ## ⚠️ **`tikv-jemallocator/profiling` is the load-bearing half.** Without it
 ## the allocator is swapped but jemalloc is configured with profiling compiled
-## out — `MALLOC_CONF=prof:true` is rejected as an invalid conf pair and no
+## out — `_RJEM_MALLOC_CONF=prof:true` is rejected as an invalid conf pair and no
 ## dump is ever written. A feature named `heap-profiling` that does not profile
 ## is the defect this line exists to prevent; review found it.
 heap-profiling = ["dep:tikv-jemallocator", "tikv-jemallocator/profiling"]

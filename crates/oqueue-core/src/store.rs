@@ -21,7 +21,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 ///
 /// # What an implementor must guarantee
 ///
-/// See [ADR-0005]. In short: `put` is durable when its future resolves `Ok`, a
+/// See ADR-0005. In short: `put` is durable when its future resolves `Ok`, a
 /// `get` of a key that was put returns exactly those bytes, and an object is
 /// never partially visible.
 ///

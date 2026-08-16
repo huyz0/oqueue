@@ -14,7 +14,8 @@ change once three traits and their fakes exist.
 **Which runtime**, and **what shape an async method on a core trait takes**. The
 second decides whether the broker's I/O shell can hold an `Arc<dyn ObjectStore>`
 at all, and the composition root exists precisely to choose a backend at startup
-(FR-50).
+(**FR-31** — one seam over S3, GCS and an in-memory implementation; FR-50 is
+the single-binary/role requirement and was cited here in its place).
 
 The constraint over both is **NFR-51**: `oqueue-core` names no concrete I/O
 type. A trait that mentions a runtime in its signature is not a seam.
@@ -75,7 +76,10 @@ composition root cannot use.
 **`async fn` in trait *plus* a second, bridged `dyn`-compatible trait.**
 Rejected, and this was the first draft. It compiles — measured, both the blanket
 `impl<T: Store> DynStore for T` and the `impl Store for Arc<dyn DynStore>` that
-makes a generic consumer usable from the composition root. Three reasons it
+makes a generic consumer usable from the composition root. ⚠️ **Measured on the
+desugared form**, with the boxed-future signature written out, not on native
+`async fn` in the bridged trait: that shape is not `dyn`-compatible and does not
+compile at all (`E0038`), which `M0.4` found by trying it. Three reasons it
 loses. Its only advantage is avoiding one allocation per call, and the argument
 that the allocation matters does not survive contact with the requirement: it
 would have cited NFR-2's 10 ms cached read, but NFR-2 is verified by *zero

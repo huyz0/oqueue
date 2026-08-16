@@ -53,7 +53,11 @@ ignored.
    `dev` and prints `0` under `release`. The root's other three profiles reach
    it by inheritance — `dist` and `release-checked` from `release` directly,
    `bench` from `dist`, which rule 10 pins deliberately — so gating `release`
-   gates all four. **`[profile.dev]`'s explicit line is ungated** and deleting
+   gates all four **as the root manifest stands today**.
+   ⚠️ That is a property of the file, not of the gate: `overflow-checks = false`
+   written into `[profile.dist]`, the tagged-artifact profile, leaves
+   `check-layering.sh` green and ships a wrapping binary. Nothing reads a
+   descendant's override. **`[profile.dev]`'s explicit line is ungated** and deleting
    it changes nothing today, because it restates the default.
 8. **`panic = "unwind"`** — a decoder panic must not kill a node serving other
    tenants.

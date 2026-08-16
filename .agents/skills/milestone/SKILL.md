@@ -35,7 +35,9 @@ until completion condition exits 0:
     deterministic gates→ scripts/check-crate.sh <crate>, coverage, layering
     review             → an agent that did not write it            ← never skip
     fix or argue       → blocking (and, on changes-requested, major) resolved;
-                         minors recorded, not fixed-and-re-reviewed
+                         minors recorded, not fixed-and-re-reviewed — and a
+                         minor worth scheduling becomes a backlog row in the
+                         *next* commit, never a staged one in this
     commit             → subject names the task ID
     tick the backlog   → with the commit reference
 ```

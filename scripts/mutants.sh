@@ -60,6 +60,23 @@ if ! cargo mutants --version >/dev/null 2>&1; then
   finish
 fi
 
+# ⚠️ **No `--timeout`, and that is a decision rather than an omission.**
+# `testing.md` rule 18 says a tight per-test cap reports a **kill for a mutant
+# nothing detected** — silent, and in the worst direction — and asks that the
+# cap be sized against the suite under the parallelism a mutation run actually
+# uses. `cargo-mutants`' default is derived that way already: it times the
+# unmutated baseline under the same parallelism and allows a multiple of it, so
+# it moves with the suite instead of being a constant that goes stale — ⚠️
+# measured on 27.1.0, `Auto-set test timeout to 20s`, which is the tool's floor
+# rather than a multiple, because this suite's baseline is under a second; the
+# multiple takes over as the suite grows, which is the direction rule 18 cares
+# about. ⚠️ A
+# literal here would be one more number nobody has measured — and one neither
+# gate would catch going stale: `check-drift.sh` only reports a threshold that
+# is *also* environment-settable, and `m0-complete.sh` pins the two constants
+# `requirements.md` names. When a
+# test appears whose own timeout is load-bearing, rule 18 is the reason to
+# revisit this; until then the default is the sized cap the rule asks for.
 args=(--colors=never --no-times)
 [[ -n "$CRATE" ]] && args+=(-p "$CRATE")
 

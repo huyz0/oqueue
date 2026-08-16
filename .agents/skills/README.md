@@ -6,7 +6,7 @@ are **thin adapters that delegate here** — they never contain logic of their o
 
 ## Progressive disclosure
 
-The problem: this repository holds ~110,000 words of research, seven standards,
+The problem: this repository holds ~110,000 words of research, fourteen standards,
 and a product spec. Loading that into every session is impossible and would be
 useless if it were possible. The answer is four layers, each loaded only when
 the one above says it is relevant.

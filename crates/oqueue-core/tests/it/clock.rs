@@ -2,8 +2,9 @@
 
 // ⚠️ The workspace denies `expect_used`; the root `Cargo.toml` says the
 // allowance belongs where a reader can see which tests took it. Every `expect`
-// below is on a value this test just built from a generator constrained to the
-// valid range, so a panic means the generator is wrong, not the code under test.
+// below is on a value this test just built — a literal, or a generator output
+// constrained to the valid range — so a panic means the test's own setup is
+// wrong, not the code under test.
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{Clock, Error, FakeClock, Timestamp};

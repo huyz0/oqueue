@@ -81,7 +81,12 @@ confidence.
     mutation says the line mattered. ⚠️ The most characteristic failure of
     generated code is a test that executes without asserting anything that could
     fail — which is *definitionally* a surviving mutant.
-16. **Diff-narrowed mutation runs on every commit; the full sharded run is
+16. ⚠️ **"Sharded" describes an intent, not `scripts/mutants.sh`** — `--full`
+    is one unsharded pass over the workspace, and the bare invocation is
+    diff-narrowed. `M0.17` implemented the first half of this rule exactly and
+    the second approximately: per-push rather than nightly, and unsharded. Read
+    the rule as the target and `check-mutants.sh`'s header as what runs.
+    **Diff-narrowed mutation runs on every commit; the full sharded run is
     nightly.** Cost becomes proportional to the change rather than to the
     codebase. → `scripts/mutants.sh`
 17. **A surviving mutant is killed or argued.** Argued survivors live in a
@@ -93,6 +98,10 @@ confidence.
     That is silent and in the worst direction. Size it against the suite under
     the parallelism the mutation run actually uses, not idle. ⚠️ This points the
     *opposite* way from rule 14's threshold; derive the two independently.
+    ⚠️ **`scripts/mutants.sh` passes no `--timeout` deliberately** — the
+    comment above its `args=(...)` line records why: `cargo-mutants` derives its own cap from a baseline run under
+    the same parallelism, which is what this rule asks for, and a literal would
+    be a threshold nobody has measured. `M0.29`.
 19. **Line coverage has a per-crate floor, against a constant no environment can
     move.** Coverage is necessary and nowhere near sufficient — rule 15 is what
     makes it mean something.

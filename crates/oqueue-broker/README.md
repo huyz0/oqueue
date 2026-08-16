@@ -24,7 +24,7 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 
 | Must stay true | Held by |
 |---|---|
-| Names no concrete backend, clock or socket type | ⚠️ **No gate, and specifically not `check-sans-io.sh`** — that script *exempts* this directory, because the I/O shell and the real `Clock` are exactly what live here. Review is the only thing holding it, and this is the crate where that matters most |
+| Names no concrete backend, clock or socket type | ⚠️ **No gate, and specifically not `check-sans-io.sh`** — that script *exempts* this directory, because the I/O shell is exactly what lives here. Review is the only thing holding it, and this is the crate where that matters most. ⚠️ The exemption is what makes the row necessary, not a licence to use it: the concrete `Clock` is `bin/oqueue`'s to choose, as the note below says, and this crate names none of the three seams' implementations |
 | Depends only on `oqueue-core` and its siblings as a composer | `scripts/check-layering.sh` |
 
 ## Notes for whoever touches this
