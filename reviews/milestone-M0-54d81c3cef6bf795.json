@@ -1,0 +1,65 @@
+{
+  "commits": [
+    "1932f72b95c990fefbfd0413465a9b49e7bb89f0",
+    "571eea098b23c2271ae6aeeaf4baebf29c2999f0",
+    "6bc8bae6fd8eb63eaeed5825fc7ccafbed327e84",
+    "a3f0567c22fe424f950ff42c358d26e56f4c2c5d",
+    "81b2d99948956264526e8936c66d91434afdeaaa",
+    "b631cd160f1d7b878f44d86bd4b11d342cccc912",
+    "19ffd39a249c8d3a6dc8f5deed2abb4aef482bbf"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/backlog.md:88-92 against :1047-1050. Verified: no reviews/milestone-M0-*.json mentions the broker socket row or the ADR-0005 bullet, and none of the three artifacts' 22 findings is either document. The row is legitimate under review.md rule 15's interim instruction - a minor worth scheduling becomes a row in the next commit, the rule M0 has been applying - rather than under rule 16. One clause.",
+      "id": "5d966beb9719",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "The new cap argument says M0.31 is here because the closing boundary review raised its two documents and rule 16 needed a row; the same file says both came from per-commit review and no artifact contains them.",
+      "task_id": ""
+    },
+    {
+      "evidence": "docs/internal/standards/testing.md:110-128 against scripts/gates/m0-complete.sh's M0_GATES (four gates). All 18 scripts/check-*.sh do have cases in tests/gates/negative.sh today, so the rule is true at HEAD and held by nothing general. M0.30 generalised the suite's invoker via CI and left the coverage assertion hand-copied - the 'generalised never' shape its own note names.",
+      "id": "c3fae78b36fa",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "testing.md rule 20a states a universal - every gate has a negative case - that only a per-milestone, hand-written M0_GATES list enforces.",
+      "task_id": ""
+    },
+    {
+      "evidence": ".github/workflows/gates.yml:180-214 and :238-260; origin/main is 66 commits behind main. The step's own two defects (unreachable `if [ -z \"$n\" ]` guard, no `if: always()`) are now routed into M1.md:167-173; the never-executed state with compiling hooks in the walk is not recorded anywhere.",
+      "id": "ccd4a2cb70fa",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "The CI step that now carries rule 20a has never executed, and the per-commit walk it sits beside runs the full pre-commit suite once per commit after M0 added three cargo-invoking hooks to that suite.",
+      "task_id": ""
+    },
+    {
+      "evidence": "docs/internal/product/backlog.md:13, docs/internal/standards/sdd.md:160, .agents/skills/milestone/SKILL.md:42. No row carries a sha; backlog.md:2334 reasons from line 13 when deriving a gate's behaviour. Nothing consumes it and git.md:52 supplies the working direction, so the honest fix is amending the three sentences rather than backfilling.",
+      "id": "e2efe869f4ad",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "The backlog's commit-reference convention is asserted in three places and followed by zero of 87 task rows.",
+      "task_id": ""
+    },
+    {
+      "evidence": "crates/oqueue-buf/src/lib.rs:9-21, crates/oqueue-codec/src/lib.rs:8-20, crates/oqueue-checksum/src/lib.rs:8-20. Same class as finding efa54e830a03 (AGENTS.md sections duplicating READMEs), deliberately routed to M1.",
+      "id": "12ad171a9cee",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "The twelve-line `# unsafe` rustdoc block is verbatim in three crates after M0.29 edited all three identically.",
+      "task_id": ""
+    },
+    {
+      "evidence": "scripts/check-drift.sh:65-72 and :89-98 - both state 'no suppression mechanism, the only exits are rename or widen, and widening is what rule 2 forbids', one using rate_limit_header and one using err_msg. The second was added by 1932f72 without collapsing the first.",
+      "id": "28c1f1db31a1",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "check-drift.sh explains its missing suppression mechanism twice, in two near-duplicate comment blocks with different examples.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M0",
+  "recorded_at": "2026-08-16T08:52:19Z",
+  "reviewer": "claude-opus-5 (fresh milestone-review agent, did not drive M0)",
+  "verdict": "pass"
+}
