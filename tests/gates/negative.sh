@@ -2050,15 +2050,30 @@ run_case "check-unsafe.sh (non-UTF-8 file doesn't suppress a real violation)" se
 run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewed
 run_case "check-reviewed.sh (regex task_id)" setup_reviewed_regex_task_id invoke_reviewed_regex_task_id
 run_case "check-milestone-review.sh"    setup_milestone_review    invoke_milestone_review
-run_case "build-index.sh --check"       setup_build_index         invoke_build_index
-run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace
+run_case "build-index.sh --check"       setup_build_index         invoke_build_index \
+  "index is stale"
+run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace \
+  "cites FR-999"
 run_case "check-file-size.sh"           setup_file_size           invoke_file_size
 run_case "check-readmes.sh"             setup_readmes             invoke_readmes
 run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readmes_bin \
   "mimalloc"
-run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench
-run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required
-run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover
+# ⚠️ **The nine cases immediately below pin their message**, because each of
+# their gates emits more than one *kind* of failure on a single fixture —
+# `testing.md` rule 20a. Cases further down carry no pin and do not need one:
+# their fixtures produce one property's failure, repeated or alone. That is the
+# real invariant — one property per *fixture output*, not per gate. `check-hot-path-bench.sh`
+# proved why: its first fixture emitted **eight** failures, seven of them from
+# `NOT_YET_BUILT` staleness rather than the unknown marker it plants, so
+# deleting the unknown-marker branch outright left the case green, the suite
+# green, and `m0-complete.sh` green. Measured by review; the pins here are read
+# off each gate's actual output rather than guessed.
+run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench \
+  "bench_micro.rs:1:// hot-path: RecordBatch encode/decode"
+run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required \
+  "has no benchmark and is not in NOT_YET_BUILT"
+run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover \
+  "NOT_YET_BUILT still lists"
 # ⚠️ The two **pre-existing** portability cases carry an `expect` since `M0.24`
 # gave the gate a fourth property: their fixtures name no script, so they trip
 # check 3's inspected-nothing guard as a *second* problem, and deleting check 1
@@ -2127,10 +2142,14 @@ run_case "m0-complete.sh (the no-PyYAML fallback miscounts)" setup_m0_complete_f
   "hooks, .pre-commit-config.yaml has"
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
-run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt
-run_case "check-crate.sh (stale lockfile)" setup_crate_stale_lock invoke_crate_stale_lock
-run_case "check-crate.sh (clippy warning)" setup_crate_clippy     invoke_crate_clippy
-run_case "check-crate.sh (failing test)" setup_crate_test         invoke_crate_test
+run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt \
+  "rustfmt: files are not formatted"
+run_case "check-crate.sh (stale lockfile)" setup_crate_stale_lock invoke_crate_stale_lock \
+  "Cargo.lock is stale or missing"
+run_case "check-crate.sh (clippy warning)" setup_crate_clippy     invoke_crate_clippy \
+  "clippy (workspace): warnings denied"
+run_case "check-crate.sh (failing test)" setup_crate_test         invoke_crate_test \
+  "tests (workspace): failing"
 setup_budget_over() {
   local dir; dir="$(new_scratch budget_over)"
   copy_gate "$dir" check-budget.sh

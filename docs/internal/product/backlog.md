@@ -117,6 +117,8 @@ see — and a count is not that evidence if it is only asserted.
 | M0.27 | The minors M0 recorded against `check-drift.sh` and `m0-complete.sh` | ⚠️ **Harvested from commit bodies**, which is the collection step `review.md` rule 15 names no owner for — finding `bcf5d6f697f2` defers *the procedure* to M2, and doing it once by hand does not decide it. Fixes: `_ms` matches `_msg`, and the script has no suppression mechanism, so a legitimate `err_msg = env::var(...)` is refused with a remedy that misdiagnoses it; `m0-complete.sh`'s `THRESHOLD_RE` extraction has no `\|\| true` under `pipefail`, making its own fail branch unreachable and skipping sections 6-8; the hook-count extraction is line-oriented, so reflowing a 240-character line turns the gate red; the YAML fallback misses a block-sequence `stages:` and `YAMLError` escapes `except ImportError`; a `stages: [manual]` hook counts as invoked. Each gets a `tests/gates/negative.sh` case or a stated reason it cannot. Serves NFR-55, NFR-56 | done |
 | M0.28 | `check-portability.sh` check 3's four sub-properties, each watched to fail | ⚠️ Three of the four delete cleanly with the whole negative suite green — the population split, the positive direction, and the inspected-nothing guard — which is the property `m0-complete.sh` itself calls untested. `M0.24`'s body named `M0.26` as their home and `M0.26` did not do it. Also: the claim patterns are four literal phrasings and the docstring implies the only limit is timing; `skip_case` records per *gate* where the row asked for a count, and its argument is an unvalidated bare filename nothing checks against `M0_GATES`; and two comment paragraphs are orphaned from what they document. Serves no FR/NFR — it is non-negotiable 4's own coverage | done |
 | M0.29 | Every documentation minor M0 recorded and did not fix | ⚠️ **Bounded by what is written down**, not by a fresh audit: the `Recorded, not fixed` sections of M0's commit bodies plus the two boundary-review artifacts. `review.md`'s "four lines below" is fourteen and was replicated into two more documents; `roadmap.md` says 31 minors where two other files say roughly thirty, and carries a doubled word; rule 15's interim sentence is in neither skill that loads at review time, which `M0.19`'s acceptance required; `AGENTS.md` explains a missing script by an M-1 row `M0.16` closed; `.agents/skills/README.md` says seven standards where there are fourteen; `backlog.md` quotes `THRESHOLD_RE`'s pre-`M0.23` value; `build.md` rule 7 says gating `release` gates all four profiles, which is a property of today's manifest and not of the gate; three rustdoc bodies still render a literal `[ADR-000n]`; `testing.md` still calls the full run sharded; `bin/oqueue`'s manifest still names `MALLOC_CONF`. ⚠️ Each is either fixed or given a stated reason it stays. Serves no FR/NFR | done |
+| M0.30 | The milestone-boundary gate tier survives the milestone that wrote it | ⚠️ `tests/gates/negative.sh` and `check-milestone-review.sh` are invoked by **nothing** in `.pre-commit-config.yaml` or `gates.yml` — their only callers are `m-1-complete.sh` and `m0-complete.sh`, which are themselves invoked by nothing and which the `milestone` skill runs only while their own milestone is current. So the day M0's verdict lands, the project's proof that its gates can fail has zero invokers. ⚠️ **And the rule underneath it — "a gate nobody has watched fail is a gate nobody has tested" — is in no standard**: `grep -rin "watched to fail" docs/internal/standards/` returns nothing, and it lives only in backlog acceptance rows and one script header. Acceptance: **CI invokes `tests/gates/negative.sh` on every push**, and `testing.md` states the rule and names the suite. ⚠️ **`check-milestone-review.sh` is deliberately excluded, and this clause was amended to say so** rather than argued past in the notes: it is a *completion* gate that is red for most of a milestone's life by design, so a per-push step would be red on a tree where every other gate passes — review measured it at 4 of 31 the moment it was wired. `reviews/README.md`'s claim that CI *can* check milestone coverage stays a capability claim and is not made into a wired step here; doing that needs a gate that knows what a **closed** milestone is, which nothing does. Serves NFR-50 | done |
+| M0.31 | Two documents asserting a defect that is not there, and an invariant that is | ⚠️ `oqueue-broker/README.md`'s Invariants row says the crate "names no concrete backend, clock or **socket** type" — nine lines below its own "the sockets have to be somewhere. This crate is that somewhere", and beside the `check-sans-io.sh` exemption that exists to permit them. `architecture.md` names three seams and none is a socket, so the row cannot be read as scoped to seam implementations; the first commit that writes the connection loop falsifies it, and the row's own cell says review is the only holder. ⚠️ And `M1.md` routes "ADR-0005's FR-50 citation where FR-31 is the requirement" — but ADR-0005 binds `(FR-50)` to "be chosen at startup by the composition root", which is FR-50's actual subject, and already argues at length why FR-31 is deliberately not claimed. An M1 executor following that bullet edits a correct ADR to make it wrong. Serves no FR/NFR | todo |
 | M0.19 | Two rules in `review.md` that bound the loop: a claim about tool behaviour is measured before it is written, and a `minor` on a `pass` is recorded rather than re-reviewed | `review.md` gains both; `which-standards.sh` selects `review.md` for a shell script and a research document, which is where two of the three worked examples lived; the `review` and `milestone` skills that duplicate the resolution rules agree with rule 15, including that nothing is staged for a minor. ⚠️ Comment-density, criterion-length and ADR-length rules were cut from this task — no gate, and the criterion-length one made the 20-task cap binding in the commit that filled slot 20. ⚠️ Names no FR/NFR; `M0.0`'s criterion that every other row does was true when `M0.0` closed | done |
 
 ⚠️ **M0.15 through M0.18 are not blocked by NFR-55 and NFR-56 being
@@ -978,6 +980,43 @@ unique to that file; the other two are also in its README. An executor scoping
 a rewrite from "every crate" would still delete a warning with no other home. The
 count is `diff <(...) <(...)` away for whoever does the work, and belongs in
 that commit rather than here.
+
+**M0.30** closes a gap that only a boundary review could see: every gate in
+`scripts/` was built against the rule *"a gate nobody has watched fail is a
+gate nobody has tested"*, and that rule was **in no standard** — `grep -rin "watched to fail"
+docs/internal/standards/` returned nothing. It lived in backlog acceptance rows
+and one script header. It is `testing.md` rule 20a now.
+
+⚠️ **And the suite enforcing it was about to stop running.**
+`tests/gates/negative.sh` and `check-milestone-review.sh` were invoked only by
+`m-1-complete.sh` and `m0-complete.sh` — scripts nothing invokes, which the
+`milestone` skill runs only while their own milestone is current. `M0`'s
+completion gate says so in its own header and then fixes it for one milestone;
+`M-1`'s did the same. The same repair, applied twice by hand, generalised
+never. CI now runs the negative suite per push. ⚠️ **Only that one** — see the
+paragraph below on why `check-milestone-review.sh` stays out, and note that
+`reviews/README.md`'s claim about CI is therefore still a claim about
+capability rather than about a wired step.
+
+⚠️ **Not a pre-commit hook**, and that is the constraint that shaped it: the
+suite builds several cargo fixtures and NFR-56 gives the whole hook suite 10 s.
+Per-push is where it fits, which means a commit can still be made locally with
+a gate nobody has watched fail — the milestone completion gate remains the
+backstop for that.
+
+⚠️ **And `check-milestone-review.sh` is *not* in CI**, which the first version
+of this row got wrong. It is a **completion** gate — `review.md` rule 11 says
+it refuses a milestone's *completion*, and its own header permits commits to
+accumulate between reviews — so a per-push step is red for most of every
+milestone's life, on a tree where every other gate passes. Review measured it:
+red at 4 of 31 the moment it was wired. A gate that is red by design most of
+the time makes a real failure indistinguishable from work in progress, which is
+a finding `gates.yml`'s own header already carries. ⚠️ `reviews/README.md`'s claim
+that "a second agent, a fresh clone, and **CI**" can all check milestone
+coverage is a claim about *capability* — the verdicts are tracked, so CI could
+— and it stays that, rather than being made into a wired step that would cry
+wolf. Making it true needs a gate that knows what a *closed*
+milestone is, which nothing does today.
 
 **M0.12** found that three standards had an `applies_to` glob that never
 matched. `contracts.md`, `behavior.md` and `async-concurrency.md` all listed

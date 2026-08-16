@@ -225,3 +225,48 @@ jobs:
       # at job level is the fix and is a workflow change beyond this row.
       - name: mutation testing (full)
         run: scripts/check-mutants.sh --full
+
+      # ⚠️ **The negative suite, which nothing invoked until `M0.30`.** Its only
+      # callers were `m-1-complete.sh` and `m0-complete.sh` — themselves invoked
+      # by nothing, and run only while their own milestone is the current one.
+      # So the proof that this project's gates can *fail* stopped running the
+      # day a milestone closed, which is `AGENTS.md`'s "a gate nothing invokes
+      # is a preference" applied to the suite that tests the gates.
+      #
+      # ⚠️ Not a pre-commit hook: it builds several cargo fixtures and NFR-56
+      # gives the whole hook suite 10 s. Per-push is where it fits.
+      - name: every gate fails on a broken artifact
+        # ⚠️ **And a case that did not run is not a case that passed.** The
+        # suite exits 0 with a case skipped for a missing tool, which is right
+        # for the suite and wrong for this step: dropping an `install` above
+        # would silently un-prove a gate while CI stayed green. `M0.26` built
+        # `SKIPPED_COUNT` for exactly that, and until `M0.30` nothing read it.
+        run: |
+          # ⚠️ `set -o pipefail`, and it is the whole step. GitHub's default
+          # `run` shell is `bash -e {0}` with **no** pipefail, so
+          # `negative.sh | tee` takes tee's status and the step could not fail
+          # when the suite did — measured by review with a gate's branch
+          # deleted: suite exit 1, step exit 0. The sibling step above sets it
+          # for the same reason.
+          set -euo pipefail
+          tests/gates/negative.sh | tee /tmp/negative.out
+          n="$(grep '^SKIPPED_COUNT ' /tmp/negative.out | tail -1 | sed 's/^SKIPPED_COUNT //')"
+          if [ -z "$n" ]; then
+            echo "::error::the suite printed no SKIPPED_COUNT line"; exit 1
+          fi
+          if [ "$n" != "0" ]; then
+            echo "::error::$n case(s) skipped in CI — a gate went unproven"
+            grep '^SKIPPED_CASES ' /tmp/negative.out; exit 1
+          fi
+
+      # ⚠️ **`check-milestone-review.sh` is deliberately NOT a step here**, and
+      # the first version of `M0.30` wired it in before review measured what
+      # that does. It is a *completion* gate: `review.md` rule 11 says it
+      # "refuses a milestone's completion", and its own header says commits may
+      # accumulate between reviews. So it is red for most of every milestone's
+      # life by design, and a per-push step would be red on a tree where every
+      # other gate passes — making a real failure indistinguishable from work in
+      # progress, which is the shape this workflow's own header already records
+      # a finding against. `reviews/README.md`'s claim that CI can check
+      # milestone coverage stays untrue, and `M0.30`'s notes say so rather than
+      # this step pretending otherwise.

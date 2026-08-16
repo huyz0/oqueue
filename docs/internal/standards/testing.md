@@ -106,6 +106,27 @@ confidence.
     move.** Coverage is necessary and nowhere near sufficient — rule 15 is what
     makes it mean something.
 20. **Property tests over example tests** wherever an invariant can be stated.
+
+20a. ⚠️ **A gate nobody has watched fail is a gate nobody has tested**, so every
+    gate has a case in `tests/gates/negative.sh` that plants the defect it
+    exists to catch and observes it fail. ⚠️ **Where a fixture's output can carry
+    more than one kind of failure, the case must pin the message of the defect
+    it plants**, not merely a non-zero exit — otherwise the fixture passes on an
+    unrelated failure while the property it exists for is deleted outright.
+    `M0.21`, `M0.24` and `M0.30` each found that regression the day a gate grew
+    a property. ⚠️ **The test is the fixture's output, not the gate's branch
+    count**: a gate with nine `fail` branches whose fixture trips exactly one of
+    them needs no pin, which is why most cases carry none. ⚠️ **The suite's pass condition is inverted**:
+    a case passes when the gate fails. A fix that makes a gate *stop* failing on
+    a good artifact therefore cannot be expressed here and needs a stated
+    reason instead; a fix that turns a silent abort into a reported failure
+    can, and "it cannot be tested" is worth one attempt at disproof before it is
+    written down. → `tests/gates/negative.sh`, run per-push by
+    `.github/workflows/gates.yml` and by each milestone's completion gate.
+    ⚠️ **This rule was unwritten until `M0.30`** — it lived in backlog
+    acceptance rows and one script header while every gate in `scripts/` was
+    built against it.
+
 21. **Every `unsafe` block has a differential property test against a naive safe
     reference, kept forever** as the oracle. → `security.md` rule 19
 

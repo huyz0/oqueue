@@ -34,9 +34,10 @@
 # suite 10 s and this alone is minutes. `m-1-complete.sh` is not a hook either,
 # for the same reason.
 #
-# ⚠️ **It runs `tests/gates/negative.sh` itself, because nothing else does.**
-# `m-1-complete.sh` runs it as part of the *previous* milestone's condition,
-# and neither the hooks nor CI do. Without this line, M0's four cargo fixtures —
+# ⚠️ **It runs `tests/gates/negative.sh` itself.** Until `M0.30` nothing else
+# did — `m-1-complete.sh` ran it as part of the *previous* milestone's
+# condition, and neither the hooks nor CI did; CI now does, per push. This call
+# stays because a commit is made locally, where CI has not run yet. Without this line, M0's four cargo fixtures —
 # each of which was vacuously green at some point while being written — would be
 # exercised only by a finished milestone's gate.
 #
