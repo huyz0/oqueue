@@ -11,10 +11,10 @@
 //!
 //! The four core identifiers ([`TopicId`], [`PartitionId`], [`Offset`],
 //! [`ObjectKey`]), [`ObjectStore`]'s own vocabulary ([`ByteRange`],
-//! [`ObjectMeta`], [`PreconditionToken`]), the [`Error`] enum they can
-//! produce, and [`Redacted`] — the wrapper that makes a secret unprintable so
-//! FR-44 holds by construction rather than by everyone remembering. All three
-//! trait seams — [`Clock`],
+//! [`ObjectMeta`], [`PreconditionToken`], [`Precondition`]), the [`Error`]
+//! enum they can produce, and [`Redacted`] — the wrapper that makes a secret
+//! unprintable so FR-44 holds by construction rather than by everyone
+//! remembering. All three trait seams — [`Clock`],
 //! [`ObjectStore`] and [`KeyProvider`] — are here, each with its fake beside
 //! it. ⚠️ Shaped as ADR-0002 decided, which is a rule about the **async**
 //! seams: [`ObjectStore`] and [`KeyProvider`] are one `dyn`-compatible trait
@@ -38,6 +38,7 @@ mod object_key;
 mod object_meta;
 mod offset;
 mod partition;
+mod precondition;
 mod redacted;
 mod store;
 mod topic;
@@ -50,6 +51,7 @@ pub use object_key::ObjectKey;
 pub use object_meta::{ObjectMeta, PreconditionToken};
 pub use offset::Offset;
 pub use partition::PartitionId;
+pub use precondition::Precondition;
 pub use redacted::Redacted;
 pub use store::{BoxFuture, FakeObjectStore, ObjectStore};
 pub use topic::TopicId;
