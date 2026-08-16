@@ -1036,6 +1036,45 @@ invoke_portability_unterminated_fence() {
   bash "$1/scripts/check-portability.sh"
 }
 
+# --- check-portability.sh: an index file claiming a present script is missing
+#
+# `M0.24`. ⚠️ `M0.1` was a whole task written to correct exactly this in these
+# two files, and both were false again by the end of `M0` — while `M0.2` and
+# `M0.17` were writing the scripts the README went on calling unwritten. A
+# prose claim about what is on disk is one a script can hold; the reason it
+# needs to is that nobody re-reads an index file they have read once.
+setup_portability_stale_claim() {
+  local dir; dir="$(new_scratch portability-stale)"
+  copy_gate "$dir" check-portability.sh
+  mkdir -p "$dir/.agents/skills/tdd" "$dir/scripts" "$dir/docs/internal/standards"
+  cat > "$dir/.agents/skills/tdd/SKILL.md" <<'EOF'
+---
+name: tdd
+description: Use when implementing a task test-first.
+---
+
+# TDD
+
+Run `scripts/check-crate.sh` when the test is green.
+EOF
+  printf '#!/usr/bin/env bash
+true
+' > "$dir/scripts/check-crate.sh"
+  chmod +x "$dir/scripts/check-crate.sh"
+  cat > "$dir/.agents/skills/README.md" <<'EOF'
+# Skills
+
+A few scripts these skills invoke are still unwritten, so a skill that says
+"run the gate" describes an intended step rather than an available one.
+EOF
+  echo "# oqueue" > "$dir/AGENTS.md"
+  (cd "$dir" && git add -A && git commit -q -m "M0.24: an index file calling a present script missing")
+  printf '%s\n' "$dir"
+}
+invoke_portability_stale_claim() {
+  bash "$1/scripts/check-portability.sh"
+}
+
 # --- m-1-complete.sh: AGENTS.md missing its ## Non-negotiables section ------
 #
 # `M-1.46`. `copy_gate`'s `<script-name>` argument doubles as the path under
@@ -1508,8 +1547,17 @@ run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readm
 run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench
 run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required
 run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover
-run_case "check-portability.sh"         setup_portability         invoke_portability
-run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence
+# ⚠️ Both portability cases carry an `expect` since `M0.24` gave the gate a
+# fourth property: their fixtures name no script, so they trip check 3's
+# inspected-nothing guard as a *second* problem, and deleting check 1 outright
+# left the suite green. Same regression `M0.21` found for `check-layering.sh`,
+# and the header's own remedy for it.
+run_case "check-portability.sh"         setup_portability         invoke_portability \
+  "vendor syntax (Claude Code's @import)"
+run_case "check-portability.sh (index claims a present script is missing)" setup_portability_stale_claim invoke_portability_stale_claim \
+  "says a script is missing, and all 1 it refers to exist"
+run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence \
+  "fence"
 # ⚠️ The `expect` is `"fails for"`, not the full command line. The gate narrows
 # to `--workspace --exclude oqueue` for a non-host target with no cross `cc`, so
 # the exact wording depends on the host triple — on macOS, which

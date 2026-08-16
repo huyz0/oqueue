@@ -4,9 +4,13 @@
 #
 #   scripts/check-portability.sh
 #
-# Three checks, all sourced from `.agents/skills/README.md` rather than
-# invented here — that file is the standard this gate enforces, the same
-# relationship every other `check-*.sh` has to a numbered rule elsewhere:
+# Four checks. The first two and the last are sourced from
+# `.agents/skills/README.md` rather than invented here — that file is the
+# standard this gate enforces, the same relationship every other `check-*.sh`
+# has to a numbered rule elsewhere. ⚠️ **Check 3 is different**: it traces to
+# no rule in that file, because it holds a claim that file *makes*. `M0.1` was
+# a task written to correct exactly that claim and `M0` falsified it again, so
+# the sentence needed an owner rather than a rule.
 #
 #   1. **No vendor-specific syntax in `AGENTS.md` or any `SKILL.md`.**
 #      Concretely: no line whose first non-whitespace character is `@`, the
@@ -20,7 +24,17 @@
 #      a skill whose declared name is not the name a tool resolves it by
 #      is exactly the silent-collision risk `M-1.36`'s retrospective
 #      flagged when renaming `goal` to `milestone`.
-#   3. **Every `.claude/commands/*.md` is a pointer, not a procedure.**
+#   3. ⚠️ **Neither index file claims a script is missing that is present.**
+#      `M0.1` was a whole task written to correct exactly that in
+#      `AGENTS.md` and `.agents/skills/README.md`, and by the end of `M0`
+#      both were false again — `M0.2` wrote `check-crate.sh` and `M0.17`
+#      wrote `mutants.sh` while the README went on saying "a few scripts
+#      these skills invoke ... are still unwritten". A prose claim about
+#      what exists on disk is exactly the claim a script should hold, and
+#      nobody re-reads an index file they have already read once. So: if
+#      every `scripts/*.sh` that any `SKILL.md` names does exist, neither
+#      file may carry a sentence saying some are missing. `M0.24`.
+#   4. **Every `.claude/commands/*.md` is a pointer, not a procedure.**
 #      Checked three ways: a non-empty `description` in frontmatter, a line
 #      naming `.agents/skills/<name>/SKILL.md` for a skill that actually
 #      exists (a pointer at nothing is not a pointer), and the absence of
@@ -50,6 +64,93 @@ def build():
     root = pathlib.Path.cwd()
     problems = []
     checked = 0
+
+    def check_missing_script_claims(skill_files):
+        """Check 3 -- see the header.
+
+        ⚠️ **The assertion is a conditional, not a word ban.** "Some scripts
+        are missing" is a fine sentence to write on a day it is true; what
+        cannot stand is writing it on a day every script it refers to is
+        present. So the trigger is the *disagreement* between the sentence
+        and the disk, which is the only form of this a script can judge and
+        the exact form that went stale twice.
+
+        ⚠️ **And each claim is judged against the population it is about**,
+        which the first version got wrong and the gate caught on its first
+        run. `.agents/skills/README.md` says "scripts these *skills* invoke";
+        `AGENTS.md` says "the *standards* name" — different sets, and the
+        second sentence is **true** today, because `fuzz.sh` and
+        `check-secrets.sh` are named by `security.md` and written by nobody.
+        One population for both would have forced a true sentence to be
+        deleted, which is the opposite of this check's purpose. ⚠️ Getting the
+        population *members* wrong has the same effect — see
+        `scripts_named_in`."""
+
+        def scripts_named_in(paths):
+            """⚠️ **A bare `` `check-secrets.sh` `` counts too**, not only a
+            `scripts/`-prefixed path. `security.md` rule 6 writes it bare, so a
+            path-only pattern left it out of `AGENTS.md`'s population — and the
+            moment `M2` writes `fuzz.sh`, that population would have been
+            entirely present and this check would have demanded the deletion of
+            a sentence still true, because `check-secrets.sh` is `M8`'s. Review
+            demonstrated it by creating `scripts/fuzz.sh` and watching the gate
+            block every commit. A check whose failure mode is "delete the true
+            sentence" is worse than no check."""
+            found = set()
+            for f in paths:
+                if not f.exists():
+                    continue
+                text = f.read_text(encoding="utf-8")
+                for m in re.finditer(r"(?:scripts/|`)([A-Za-z0-9_.\-]+\.sh)", text):
+                    found.add(m.group(1))
+            return found
+
+        standards = sorted((root / "docs" / "internal" / "standards").glob("*.md"))
+        skill_named = scripts_named_in(skill_files)
+        populations = {
+            ".agents/skills/README.md": skill_named,
+            "AGENTS.md": scripts_named_in(standards),
+        }
+
+        # ⚠️ **The positive, not only the conditional.** The README's claim is
+        # "every script these skills invoke now exists", and until this was
+        # here that sentence was unchecked in the direction that matters:
+        # moving a skill-named script aside left the claim false and the gate
+        # green. A *standard* may name a script nobody has written — that is
+        # what `roadmap.md`'s deferral table is for — but a **skill** naming
+        # one cannot run, so its absence is a defect rather than a schedule.
+        # Found by review, which observed the gate passing on exactly that.
+        for n in sorted(skill_named):
+            if not (root / "scripts" / n).exists():
+                problems.append(
+                    f"a SKILL.md invokes scripts/{n}, which does not exist -- "
+                    f"a skill naming a script nobody wrote cannot run"
+                )
+        claims = (
+            r"still unwritten",
+            r"are still missing",
+            r"were never written",
+            r"a few scripts .{0,30}invoke",
+        )
+        total = set()
+        for rel, named in populations.items():
+            total |= named
+            if any(not (root / "scripts" / n).exists() for n in named):
+                continue          # the sentence has something real to refer to
+            path = root / rel
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            for pat in claims:
+                m = re.search(pat, text, re.I)
+                if m:
+                    line = text[: m.start()].count("\n") + 1
+                    problems.append(
+                        f"{rel}:{line}: says a script is missing, and all "
+                        f"{len(named)} it refers to exist -- M0.1's defect, again"
+                    )
+                    break     # one report per file; several patterns hit one sentence
+        return len(total)
 
     def strip_fenced_lines(text, rel=None):
         """(line_no, line) for every line outside a fenced code block, so an
@@ -152,9 +253,20 @@ def build():
         if not desc:
             problems.append(f"{rel}: frontmatter has no 'description'")
 
+    # --- check 3: no index file calls a present script missing -------------
+    #
+    # ⚠️ Reads `AGENTS.md` as well as `.agents/skills/README.md`, and judges
+    # each against its own population — see the docstring.
+    n_named = check_missing_script_claims(skill_files)
+    if n_named == 0:
+        problems.append(
+            "no script is named by any SKILL.md or standard -- check 3 inspected nothing"
+        )
+    checked += 1
+
     known_skills = {f.parent.name for f in skill_files}
 
-    # --- check 3: every .claude/commands/*.md is a pointer -----------------
+    # --- check 4: every .claude/commands/*.md is a pointer -----------------
     command_files = sorted((root / ".claude" / "commands").glob("*.md"))
     for cmd_file in command_files:
         checked += 1
@@ -211,6 +323,7 @@ if [[ -n "$problems" ]]; then
   note "no vendor syntax in AGENTS.md or any SKILL.md"
   note "every SKILL.md has a name and description, name matching its directory"
   note "every .claude/commands/*.md points at a real skill and reads as a pointer, not a procedure"
+  note "neither AGENTS.md nor .agents/skills/README.md claims a script is missing that is present"
 elif (( rc != 0 )); then
   # ⚠️ Fails closed on anything the checker itself did not choose to report --
   # the same reason check-readmes.sh and check-unsafe.sh treat an unexpected

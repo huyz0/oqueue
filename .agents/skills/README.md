@@ -58,17 +58,29 @@ rather than reading it.
 
 ## ⚠️ When a skill names a script that is not there
 
-M-1 is complete and every gate it built exists, but a few scripts these skills
-invoke were never in M-1's scope and are still unwritten. A skill that says
-"run the gate" then describes an intended step rather than an available one,
-and **the honest response is to say the gate did not run** — not to proceed as
-though it passed. That is the same discipline as `AGENTS.md`'s rule 3, and it
-is the one thing no script can check.
+**Every script these skills invoke now exists** — `M0` wrote the last of them.
+⚠️ **That sentence is checked in both directions** by `check-portability.sh`: a
+skill naming a script that is absent fails, and so does this section saying
+some are missing on a day they are all present. It needs both because it is the
+sentence that keeps going stale: this section said the opposite through the
+whole of `M0` while `M0.2` and `M0.17` were writing the scripts it called
+missing, and `M0.1` was itself the task written to correct exactly this file.
+A claim about what exists is one a script can verify, and one nobody re-reads.
 
-⚠️ **This section deliberately names no scripts.** A list here would be a
-second copy of a fact that moves, and the version in
-[`backlog.md`](../../docs/internal/product/backlog.md) is the one every gate
-reads and every task updates. Check `scripts/` for the file before assuming it
-is there. ⚠️ A missing script does not guarantee a backlog row either — some
-are named by a standard and scheduled nowhere — so "no row" means unscheduled,
-not "already done".
+The rule it protects still stands and is what matters if the situation returns:
+a skill that says "run the gate" when the gate is absent describes an intended
+step rather than an available one, and **the honest response is to say the gate
+did not run** — not to proceed as though it passed. Same discipline as
+`AGENTS.md`'s rule 3, and no script can check *that* one.
+
+⚠️ **This section deliberately names no scripts.** A list here would be a second
+copy of a fact that moves. Check `scripts/` for the file before assuming it is
+there. If it is missing, there are **two** places the answer lives and you need
+both: [`backlog.md`](../../docs/internal/product/backlog.md), which is true on
+the day you read it because each task updates it, and
+[`roadmap.md`](../../docs/internal/product/roadmap.md)'s **"Deferred into a
+later milestone"** table, which is where an obligation with no row yet is
+recorded. ⚠️ Naming only the first is how this file told a reader that a
+deferred script was unscheduled: a script a *standard* names may legitimately
+be waiting for the milestone that gives it something to check, and that
+deferral has no backlog row by design.

@@ -98,7 +98,7 @@ see — and a count is not that evidence if it is only asserted.
 | M0.21 | The three manifest assertions in `check-layering.sh`, split out of `M0.8` | The gate rejects a crate manifest without `lints.workspace = true`, a **member** manifest carrying a `[profile]` section, and a root manifest whose `[profile.release]` lacks `overflow-checks = true` — ⚠️ the last is named by `security.md` rule 4 ("→ gate on the profile setting") and exists nowhere; each gets a `tests/gates/negative.sh` case; ⚠️ `check-layering.sh`'s header, its `name:` in `.pre-commit-config.yaml`, and its row in the standards tables are updated to say it checks manifests rather than layering alone, or `security.md` rule 4's gate ends up under a name nobody would grep for. ⚠️ **This row also widens `check-readmes.sh` to cover `bin/oqueue`**, whose `README.md` and `AGENTS.md` exist since `M0.12` and are checked by nothing — so `code-structure.md` rule 15's README-matches-manifest property is ungated for the one crate whose dependencies changed in `M0.13` and change again at `M1`. `M0.14` recorded it; recording it a third time would be the failure `M-1.47` names. ⚠️ Names no FR/NFR — it is gate work split out of `M0.8`, and `M0.0`'s criterion that every other row names one was true when `M0.0` closed | done |
 | M0.22 | Act on M0's boundary review: record the verdict, write the rows it names, and schedule what has no row into the milestone that receives it | `reviews/` holds the verdict, staged; every major finding either names a row that now carries it (`M0.23`-`M0.26`) or is argued in `baselines/review.txt` against an obligation written into the receiving milestone's plan — ⚠️ an argued finding whose home is only a review artifact is the failure `M-1.47` names, so each argument cites a plan sentence that exists; `check-milestone-review.sh` passes. ⚠️ Serves no FR/NFR — `sdd.md`'s outer-loop step, like `M0.0`'s and `M0.20`'s | done |
 | M0.23 | `check-drift.sh`'s name matcher sees every threshold M0 added | ⚠️ Non-negotiable 2 is unenforced for **both** of `check-budget.sh`'s constants: `THRESHOLD_RE` matches `COVERAGE_FLOOR` and neither `BUDGET_MS` nor `COMPILING_GATE_MS` — one commit after `M0.15` renamed its constant for exactly this reason and recorded that the name is load-bearing. The matcher covers both, or the constants are renamed, or both; ⚠️ **whichever is chosen, a gate must exist that fails when a threshold M0 added is invisible to `check-drift.sh`**, because "rename it" is a convention and the finding is that the convention was not followed on the next commit. `COMPILING_GATE_MS` decides whether NFR-56's budget applies at all and is asserted by nothing, anywhere — `m0-complete.sh` covers `BUDGET_MS` only. A `tests/gates/negative.sh` case for whatever is added. Serves NFR-55, NFR-56 | done |
-| M0.24 | The two agent-facing index files are true at HEAD, and say where a missing script is scheduled | ⚠️ `M0.1` was written to correct exactly these two files and `M0` falsified them again: every `scripts/*.sh` any `SKILL.md` names now exists, while `.agents/skills/README.md` still says some are unwritten and tells an agent to report that a gate did not run. And both files say a missing script with no backlog row is *unscheduled* — wrong for both scripts that are actually missing, `fuzz.sh` and `check-secrets.sh`, which have no row and are scheduled in `roadmap.md`'s deferral table that neither file mentions. Acceptance: neither file claims a script is missing that is present; both name the deferral table as the second place to look; ⚠️ **and a gate checks the first half**, since `M0.1`'s acceptance said the same words and nothing has enforced them since. Serves no FR/NFR — it is `AGENTS.md`'s own accuracy | todo |
+| M0.24 | The two agent-facing index files are true at HEAD, and say where a missing script is scheduled | ⚠️ `M0.1` was written to correct exactly these two files and `M0` falsified them again: every `scripts/*.sh` any `SKILL.md` names now exists, while `.agents/skills/README.md` still says some are unwritten and tells an agent to report that a gate did not run. And both files say a missing script with no backlog row is *unscheduled* — wrong for both scripts that are actually missing, `fuzz.sh` and `check-secrets.sh`, which have no row and are scheduled in `roadmap.md`'s deferral table that neither file mentions. Acceptance: neither file claims a script is missing that is present; both name the deferral table as the second place to look; ⚠️ **and a gate checks the first half**, since `M0.1`'s acceptance said the same words and nothing has enforced them since. Serves no FR/NFR — it is `AGENTS.md`'s own accuracy | done |
 | M0.25 | The claims M0 falsified and did not fix | Ten sentences are false at HEAD, in a milestone whose own convention is that the commit falsifying a sentence is the commit that fixes it: `Cargo.toml`'s `#[inline]` band stated as a floor against ADR-0003's table; `build.md` rule 5 carrying half of ADR-0003's correction; `clock.rs`'s "in program order" against ADR-0004 guarantee 5, which an M1 implementor would satisfy while violating the ADR; `performance.md`'s "full sharded run" against what `mutants.sh` does; the broken `[ADR-000n]:` reference-link definition **replicated into two more files after being recorded as a defect**; `oqueue-core/README.md`'s "No gate today" for a property `m0-complete.sh` asserts; `lib.rs` and `error.rs` narrating the seams as forthcoming; doc 19 contradicting itself and `architecture.md` on what `oqueue-testkit` holds; `.gitignore` naming target directories no script uses; and the hook count 15 in `requirements.md` and `roadmap.md` against 16 in `check-budget.sh` and `.pre-commit-config.yaml`. ⚠️ The hook count has a gate available and the rest do not — say which is which rather than fixing ten sentences and implying they stay fixed. Serves no FR/NFR | todo |
 | M0.26 | `m0-complete.sh` cannot report a skipped negative case as watched | ⚠️ The gate prints "every gate fails on a broken artifact" while the `check-coverage.sh` and `check-mutants.sh` cases sit behind `_have_llvm_cov`/`_have_mutants` and skip when the tool is absent — so on a machine without them, half of M0's four new gates are declared complete having never been watched to fail. That is the skip-is-a-pass shape **the same script refuses for `cargo`**, with the note "a skip here would report M0 complete having checked nothing". Acceptance: `tests/gates/negative.sh` reports how many cases skipped, `m0-complete.sh` fails when a gate it names in `M0_GATES` has a case that did not run, and a negative case proves it. Serves NFR-56's neighbours only indirectly — it is non-negotiable 4's `M0` instance | todo |
 | M0.19 | Two rules in `review.md` that bound the loop: a claim about tool behaviour is measured before it is written, and a `minor` on a `pass` is recorded rather than re-reviewed | `review.md` gains both; `which-standards.sh` selects `review.md` for a shell script and a research document, which is where two of the three worked examples lived; the `review` and `milestone` skills that duplicate the resolution rules agree with rule 15, including that nothing is staged for a minor. ⚠️ Comment-density, criterion-length and ADR-length rules were cut from this task — no gate, and the criterion-length one made the 20-task cap binding in the commit that filled slot 20. ⚠️ Names no FR/NFR; `M0.0`'s criterion that every other row does was true when `M0.0` closed | done |
@@ -636,6 +636,45 @@ somebody must add to. A constant that is in neither the regex nor that list is
 still invisible, and nothing catches it — the gate closes the loop for
 constants a requirement names, not for every constant. That is why `M0.16`'s
 two got through, and it is the honest bound on this row.
+
+**M0.24** put the claim under a gate, because `M0.1` had already fixed these
+two files by hand and they were false again eighteen commits later — while the
+tasks writing the very scripts the README called unwritten were landing.
+
+⚠️ **The gate's first run caught the gate.** A single population for both files
+reported `AGENTS.md` as false too, and that sentence is **true**: it is about
+scripts the *standards* name, and `fuzz.sh` and `check-secrets.sh` are named by
+`security.md` and written by nobody. One population would have forced a true
+sentence to be deleted, which is the opposite of the point. Each claim is now
+judged against the set it refers to — the README's against scripts skills
+invoke, `AGENTS.md`'s against scripts standards name.
+
+⚠️ **The assertion is a conditional, not a word ban.** "Some scripts are
+missing" is a fine sentence on a day it is true. What cannot stand is writing
+it on a day every script it refers to is present, and that disagreement is the
+only form of this a script can judge.
+
+Review then found three more, all in this row's own work. The population was
+built from `scripts/<name>.sh` paths only, and `security.md` writes
+`check-secrets.sh` bare — so the moment `M2` writes `fuzz.sh`, `AGENTS.md`'s
+population would have been entirely present and the gate would have demanded
+the deletion of a sentence still true. ⚠️ **A check whose failure mode is
+"delete the true sentence" is worse than no check**; both futures are now
+simulated, with `fuzz.sh` alone leaving it green and both scripts making it
+fire. The README also claimed the sentence was "checked" when only the
+conditional was — moving a skill-named script aside left the claim false and
+the gate green, so the positive is asserted too: a *standard* may name a script
+nobody wrote, but a **skill** naming one cannot run. And both files had grown a
+hardcoded list of the two deferred scripts, nine lines below `AGENTS.md`'s own
+warning that a hardcoded list of what is outstanding went stale four times
+before the fix turned out to be deleting it.
+
+⚠️ **And the gate's fourth property made two existing negative cases vacuous** —
+their fixtures name no script, so they tripped the new inspected-nothing guard
+as a second problem, and deleting the vendor-syntax check outright left the
+suite green. Both now carry an `expect`. That is the same regression `M0.21`
+found and the same remedy; a gate growing a property is the moment its cases
+need pinning, and noticing it needed a reviewer both times.
 
 **M0.12** found that three standards had an `applies_to` glob that never
 matched. `contracts.md`, `behavior.md` and `async-concurrency.md` all listed

@@ -72,8 +72,13 @@ turned out to be deleting it;
 `docs/internal/product/backlog.md` is where the answer is true on the day you
 read it, because each task updates it as it closes. So: **check whether
 `scripts/` has the file** before treating a rule as enforced, and if it is
-missing, look for its backlog row — ⚠️ finding no row means *unscheduled*,
-never "already done".
+missing, look in **two** places — its backlog row, and
+[`roadmap.md`](docs/internal/product/roadmap.md)'s **"Deferred into a later
+milestone"** table. ⚠️ **"No backlog row" does not mean unscheduled**, which
+this sentence used to say: an obligation with no owning milestone yet is
+recorded in that table and in the receiving milestone's plan, and has no row by
+design. A script in neither place is genuinely unscheduled — never "already
+done".
 
 ## Skills
 
