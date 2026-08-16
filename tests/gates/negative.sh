@@ -89,6 +89,28 @@ copy_gate() {
 TOTAL=0
 FAILED_CASES=0
 
+# ⚠️ **The cases that did not run, named by the gate they cover.** `M0.26`.
+# Two cases are registered only where their tool is installed, which is right —
+# a missing tool is a skip, never a failure — but until now the *fact* left no
+# trace a caller could read. `m0-complete.sh` printed "every gate fails on a
+# broken artifact" from this suite's exit code, so on a machine without
+# `cargo-llvm-cov` and `cargo-mutants` it declared half of M0's new gates
+# complete having never watched either fail. That is the skip-is-a-pass shape
+# the same script refuses for `cargo`, with a note saying why.
+SKIPPED_GATES=()
+
+# skip_case <gate.sh> <reason> [remedy]: report a case that could not run, and
+# record which gate is thereby unproven. ⚠️ The gate name is the machine-
+# readable part: a caller asking "was check-mutants.sh watched to fail?" needs
+# a name, not prose.
+skip_case() {
+  local gate="$1" reason="$2" remedy="${3:-}"
+  SKIPPED_GATES+=("$gate")
+  skip "$gate -- $reason"
+  [[ -z "$remedy" ]] || note "$remedy"
+  note "⚠️ this case did not run; $gate is unproven on this machine"
+}
+
 # run_case <gate-label> <setup-fn> <invoke-fn> [expected-substring]: calls
 # setup-fn plainly (a failure there aborts this whole suite, under the
 # script-wide `set -e` -- see the header), then calls invoke-fn with the
@@ -1348,6 +1370,46 @@ EOF
 invoke_coverage_below_floor() {
   bash "$1/scripts/check-coverage.sh"
 }
+# --- m0-complete.sh: an M0 gate whose negative case did not run -------------
+#
+# `M0.26`. ⚠️ **A case that did not run is not a case that passed.** The suite
+# exits 0 with a case skipped for a missing tool — correct for the suite, and
+# wrong for "every gate fails on a broken artifact". The fixture plants a
+# stand-in suite that exits 0 and names one of the four M0 gates as skipped,
+# which is exactly what the real suite prints on a machine without
+# `cargo-mutants`.
+setup_m0_complete_skipped_case() {
+  local dir; dir="$(new_scratch m0-complete-skipped)"
+  _m0_scaffold "$dir" m0-complete-skipped
+  mkdir -p "$dir/scripts/gates" "$dir/tests/gates"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/tests/gates/negative.sh" <<'EOF'
+#!/usr/bin/env bash
+# A suite that passes while one M0 gate went unproven -- the shape M0.26 is for.
+echo "  ok  everything that ran, ran"
+echo "SKIPPED_CASES check-mutants.sh"
+exit 0
+EOF
+  chmod +x "$dir/tests/gates/negative.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-core/src/lib.rs"
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.26: a gate declared complete unwatched")
+  printf '%s\n' "$dir"
+}
+
 # --- m0-complete.sh: a stated hook count the config contradicts -------------
 #
 # `M0.25`. ⚠️ NFR-56 is "2.27 s across N hooks", so N is part of the claim, and
@@ -1618,6 +1680,8 @@ run_case "m0-complete.sh (threshold invisible to check-drift.sh)" setup_m0_compl
   "is invisible to check-drift.sh"
 run_case "m0-complete.sh (hook count disagrees with the config)" setup_m0_complete_hook_count invoke_m0_complete \
   "hooks, .pre-commit-config.yaml has"
+run_case "m0-complete.sh (a negative case that never ran)" setup_m0_complete_skipped_case invoke_m0_complete \
+  "never watched to fail on this machine"
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
 run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt
@@ -1654,9 +1718,8 @@ invoke_budget_over() {
 if _have_llvm_cov; then
   run_case "check-coverage.sh (crate below the floor)" setup_coverage_below_floor invoke_coverage_below_floor
 else
-  skip "check-coverage.sh (crate below the floor) -- cargo-llvm-cov not installed"
-  note "install: cargo install cargo-llvm-cov"
-  note "⚠️ this case did not run; the gate it covers is unproven on this machine"
+  skip_case check-coverage.sh "cargo-llvm-cov not installed" \
+    "install: cargo install cargo-llvm-cov"
 fi
 setup_mutants_weakened() {
   local dir; dir="$(_crate_scratch mutants_weakened)"
@@ -1722,11 +1785,16 @@ if _have_mutants; then
   run_case "check-mutants.sh (test constrains nothing)" setup_mutants_weakened invoke_mutants_weakened
   run_case "check-mutants.sh (narrowed, test constrains nothing)" setup_mutants_narrowed invoke_mutants_narrowed
 else
-  skip "check-mutants.sh (test constrains nothing) -- cargo-mutants not installed"
-  note "install: cargo install cargo-mutants"
-  note "⚠️ this case did not run; the gate it covers is unproven on this machine"
+  skip_case check-mutants.sh "cargo-mutants not installed" \
+    "install: cargo install cargo-mutants"
 fi
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
+
+# ⚠️ **Machine-readable, on its own line, and printed even when none skipped.**
+# A caller that greps for this must be able to tell "nothing skipped" from
+# "this suite is too old to say", and an absent line cannot carry that
+# difference. `m0-complete.sh` reads it. `M0.26`.
+printf 'SKIPPED_CASES %s\n' "${SKIPPED_GATES[*]:-}"
 
 finish

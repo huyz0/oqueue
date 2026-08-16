@@ -419,9 +419,22 @@ except ImportError:
             n += 1
 print(n)
 PYEOF
-)" || { fail "could not read .pre-commit-config.yaml"; finish; }
-hook_count_ok=1
-for doc in docs/internal/product/requirements.md docs/internal/product/roadmap.md; do
+)" || hooks=""
+# ⚠️ **`fail` and carry on, never `finish`.** This gate holds eight independent
+# assertions and one unreadable file is not a reason to stop asking the other
+# seven — a missing config used to abort here, so sections 6 through 8 (every
+# M0 gate invoked and watched to fail, the negative suite, the boundary review)
+# never ran and the run ended looking like a config problem. Review named the
+# shape on `M0.25`; `M0.26`'s own fixture then walked straight into it.
+if [[ -z "$hooks" ]]; then
+  fail "could not read a hook count from .pre-commit-config.yaml"
+  note "NFR-56 is measured across a suite, so its size is part of the claim"
+  hook_count_checked=0
+else
+  hook_count_checked=1
+fi
+hook_count_ok=$hook_count_checked
+for doc in $( ((hook_count_checked)) && echo docs/internal/product/requirements.md docs/internal/product/roadmap.md ); do
   stated="$(grep -E 'NFR-56|budget gate itself joined' "$doc" |
     grep -oE '\*\*[0-9]+ today\*\*' | grep -oE '[0-9]+' | head -1 || true)"
   if [[ -z "$stated" ]]; then
@@ -489,6 +502,37 @@ done
 rc=0
 run_gate tests/gates/negative.sh || rc=$?
 report_gate "tests/gates/negative.sh: every gate fails on a broken artifact" "$rc" || true
+
+# ⚠️ **A case that did not run is not a case that passed**, and the line above
+# could not tell the difference: the suite exits 0 with a case skipped for a
+# missing tool, which is correct for the suite and wrong for this claim. On a
+# machine without `cargo-llvm-cov` and `cargo-mutants` this gate declared half
+# of M0's four new gates complete having watched neither fail. That is the
+# skip-is-a-pass shape this same script refuses for `cargo`, with a note saying
+# a skip there "would report M0 complete having checked nothing". `M0.26`.
+#
+# ⚠️ An **absent** line is a failure too, not a pass: it means the suite is
+# older than this contract and cannot answer, which is exactly the state that
+# looked like success before.
+if ! grep -q '^SKIPPED_CASES' <<< "$GATE_OUT"; then
+  fail "tests/gates/negative.sh reported no SKIPPED_CASES line — it cannot say what did not run"
+  note "the suite must print 'SKIPPED_CASES <gate.sh> ...', empty when none skipped"
+else
+  skipped="$(grep '^SKIPPED_CASES' <<< "$GATE_OUT" | head -1 | sed 's/^SKIPPED_CASES *//')"
+  unproven=""
+  for gate in "${M0_GATES[@]}"; do
+    for sk in $skipped; do
+      [[ "$sk" == "$gate" ]] && unproven+="$gate "
+    done
+  done
+  if [[ -n "$unproven" ]]; then
+    fail "these M0 gates were never watched to fail on this machine: ${unproven% }"
+    note "their negative cases were skipped for a missing tool — install it and re-run"
+    note "⚠️ a skipped case is not a passing one, and M0 is not complete from here"
+  else
+    ok "every M0 gate's negative case actually ran"
+  fi
+fi
 
 # ── 8. The outer loop: every M0 commit read as a whole ──────────────────────
 rc=0
