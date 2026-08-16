@@ -10,6 +10,7 @@ mod key;
 mod key_layout;
 mod multipart;
 mod precondition;
+mod rate_governor;
 mod redaction;
 mod retry;
 mod store;
