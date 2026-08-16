@@ -349,7 +349,16 @@ for key in "${!NFR_CONSTANTS[@]}"; do
   # load-bearing, and `M0.16` wrote two more the matcher could not see on the
   # very next commit. Asserting the two scripts agree is what makes the
   # convention a check instead of a thing to remember. `M0.23`.
-  drift_re="$(grep -E "^THRESHOLD_RE=" scripts/check-drift.sh | head -1 | sed "s/^THRESHOLD_RE='//; s/'$//")"
+  # ⚠️ `|| true`, and no `head` in the pipeline. Without the first, a
+  # non-matching grep aborts the whole gate under `lib.sh`'s `pipefail` and the
+  # `-z` branch below is unreachable — the early-abort shape section 5b's own
+  # comment rejects, introduced one section earlier by the commit that wrote
+  # this. Without the second, two matching lines SIGPIPE the grep, which is
+  # `portability.md` rules 21-22, cited forty lines further down this file.
+  # ⚠️ Quotes optional on both sides, so `THRESHOLD_RE="..."` extracts too
+  # rather than yielding a regex of one stray character.
+  drift_re="$(grep -E "^[[:space:]]*(readonly[[:space:]]+)?THRESHOLD_RE=" scripts/check-drift.sh |
+    sed -E "1!d; s/^[^=]*=//; s/^['\"]//; s/['\"]$//" || true)"
   if [[ -z "$drift_re" ]]; then
     fail "could not read THRESHOLD_RE from scripts/check-drift.sh"
   elif printf '%s\n' "$name" | grep -qEi "$drift_re"; then
@@ -393,33 +402,99 @@ done
 # sections 6 through 8 — every M0 gate invoked and watched to fail, the
 # negative suite, the boundary review — never ran. A completion gate that stops
 # early because of an import is the shape this milestone is about.
-hooks="$(python3 - <<'PYEOF'
-import re, sys
+# ⚠️ One parse, two answers: how many hooks run at the `pre-commit` stage, and
+# which gate scripts they invoke. Section 6 needs the second, and asking twice
+# with two different parsers is how a gate ends up disagreeing with itself.
+parsed="$(python3 - <<'PYEOF'
+import re
 
 text = open(".pre-commit-config.yaml").read()
+hooks = []                      # (id, stages|None, entry)
+
+
+def runs_at_pre_commit(stages):
+    return stages is None or "pre-commit" in stages
+
+
 try:
     import yaml
-    cfg = yaml.safe_load(text)
-    n = sum(
-        1
-        for repo in cfg.get("repos", [])
-        for hook in repo.get("hooks", [])
-        if hook.get("stages") is None or "pre-commit" in hook["stages"]
-    )
+
+    try:
+        cfg = yaml.safe_load(text) or {}
+    except yaml.YAMLError as exc:
+        print("UNPARSEABLE", str(exc).replace("\n", " ")[:120])
+        raise SystemExit(0)
+    for repo in cfg.get("repos", []) or []:
+        for hook in repo.get("hooks", []) or []:
+            hooks.append((hook.get("id", ""), hook.get("stages"), hook.get("entry", "")))
 except ImportError:
-    # One hook per `- id:`, counted unless its block declares stages that
-    # exclude `pre-commit`. Indentation-agnostic: the block runs to the next
-    # `- id:` at any depth, which is what `^      - id: ` was blind to.
-    n = 0
+    # ⚠️ **`ImportError` only, and a `YAMLError` is a `fail` below.** Catching
+    # every exception was the first fix and it went one step too far: a config
+    # `pre-commit` itself cannot load then fell through to a regex that happily
+    # counted it, so the gate reported a hook count and "every gate is invoked"
+    # for a file nothing can read. Loud is right there; the fallback is for a
+    # missing *module*, not a broken document. Both directions found by review.
+    #
+    # One hook per `- id:`, its block running to the next `- id:` at any depth
+    # — indentation-agnostic, which an anchored six-space pattern was not.
     for block in re.split(r"\n(?=\s*- id: )", text):
-        if not re.match(r"\s*- id: ", block):
+        m = re.match(r"\s*- id: (\S+)", block)
+        if not m:
             continue
-        m = re.search(r"stages:\s*\[([^\]]*)\]", block)
-        if m is None or "pre-commit" in m.group(1):
-            n += 1
-print(n)
+        # ⚠️ Both YAML spellings of a sequence. The flow form `[a, b]` was all
+        # the first version read, so a block form —
+        #   stages:
+        #     - commit-msg
+        # — left `stages` unseen and a commit-msg hook counted as a pre-commit
+        # one, making the two parse paths disagree, which is the single thing
+        # the fallback exists to prevent. Found by review.
+        # ⚠️ Comments stripped and the key line-anchored. Unanchored, a comment
+        # reading `# never park this at stages: [manual]` was read as the
+        # hook's configuration and the two parse paths disagreed — on a machine
+        # without PyYAML, which is the one thing this branch exists to prevent.
+        # Found by review.
+        block = re.sub(r"#.*$", "", block, flags=re.M)
+        flow = re.search(r"^\s*stages:\s*\[([^\]]*)\]", block, re.M)
+        if flow:
+            stages = [x.strip().strip("'\"") for x in flow.group(1).split(",") if x.strip()]
+        elif re.search(r"^\s*stages:\s*$", block, re.M):
+            # ⚠️ **Stops at the next key.** An unbounded scan from `stages:` to
+            # end-of-block swallowed any later block sequence in the same hook:
+            # measured, `stages:` → `- commit-msg` followed by
+            # `additional_dependencies:` → `- pre-commit` made the fallback
+            # count a commit-msg hook as a pre-commit one and report its gate
+            # invoked — the same false green the `stages: [manual]` fix in this
+            # row removes. Found by review.
+            tail = block.split("stages:", 1)[1]
+            stages = []
+            for ln in tail.splitlines():
+                if re.match(r"^\s*-\s*\S+\s*$", ln):
+                    stages.append(ln.strip().lstrip("-").strip())
+                elif ln.strip() and not ln.lstrip().startswith("#"):
+                    break
+        else:
+            stages = None
+        entry = re.search(r"^\s*entry:\s*(.+)$", block, re.M)
+        hooks.append((m.group(1), stages, entry.group(1).strip() if entry else ""))
+
+print("COUNT", sum(1 for _, st, _ in hooks if runs_at_pre_commit(st)))
+for _, st, entry in hooks:
+    if runs_at_pre_commit(st) and entry:
+        print("ENTRY", entry)
 PYEOF
-)" || hooks=""
+)" || parsed=""
+if grep -q '^UNPARSEABLE ' <<< "$parsed"; then
+  fail "PyYAML cannot parse .pre-commit-config.yaml — pre-commit cannot either"
+  note "$(grep '^UNPARSEABLE ' <<< "$parsed" | sed 's/^UNPARSEABLE //')"
+  parsed=""
+fi
+hooks="$(grep '^COUNT ' <<< "$parsed" | head -1 | sed 's/^COUNT //' || true)"
+# ⚠️ `entry:` lines of **`pre-commit`-stage hooks only**. A hook parked at
+# `stages: [manual]` keeps its `entry:` line and runs on no commit, so a plain
+# grep for the script name called it invoked — the mention-versus-invocation
+# error this loop already names for comments and `name:` keys, one level
+# deeper. Found by review.
+PRECOMMIT_ENTRIES="$(grep '^ENTRY ' <<< "$parsed" | sed 's/^ENTRY //' || true)"
 # ⚠️ **`fail` and carry on, never `finish`.** This gate holds eight independent
 # assertions and one unreadable file is not a reason to stop asking the other
 # seven — a missing config used to abort here, so sections 6 through 8 (every
@@ -435,8 +510,32 @@ else
 fi
 hook_count_ok=$hook_count_checked
 for doc in $( ((hook_count_checked)) && echo docs/internal/product/requirements.md docs/internal/product/roadmap.md ); do
-  stated="$(grep -E 'NFR-56|budget gate itself joined' "$doc" |
-    grep -oE '\*\*[0-9]+ today\*\*' | grep -oE '[0-9]+' | head -1 || true)"
+  # ⚠️ **The paragraph, not the line.** `**N today**` only has to be in the
+  # same block of prose as the trigger, not on the same physical line: a
+  # 240-character sentence reflowed to 78 columns is a formatting edit no hook
+  # objects to, and it used to turn this gate red with a message contradicting
+  # the document it was reading. A blank line ends the block, so a `today`
+  # written in some other paragraph is still not mistaken for this claim.
+  stated="$(python3 - "$doc" <<'PYEOF'
+import re, sys
+
+text = open(sys.argv[1]).read()
+# ⚠️ A markdown **table row** is its own unit, because a table is one
+# paragraph and an unrelated `**N today**` in a neighbouring row would
+# otherwise be read as NFR-56's. Measured by review with an invented NFR-99
+# row: the gate failed naming a claim NFR-56 does not make.
+blocks = []
+for para in re.split(r"\n\s*\n", text):
+    blocks.extend(para.splitlines() if para.lstrip().startswith("|") else [para])
+for block in blocks:
+    if not re.search(r"NFR-56|budget gate itself joined", block):
+        continue
+    m = re.search(r"\*\*(\d+) today\*\*", block)
+    if m:
+        print(m.group(1))
+        break
+PYEOF
+  )" || stated=""
   if [[ -z "$stated" ]]; then
     fail "$doc states no current hook count for NFR-56"
     note "the sentence reads '... **N today**'; this gate counts the config and compares"
@@ -459,7 +558,7 @@ for gate in "${M0_GATES[@]}"; do
   # one of them invoked, and deleting its hook block would have left the gate
   # running nowhere while this said otherwise. Found by review — which had
   # already stated the rule for the negative-suite half of this same loop.
-  grep -E "^[^#]*entry:.*${gate//./\.}" .pre-commit-config.yaml >/dev/null 2>&1 && invoked=1
+  grep -qE "${gate//./\.}" <<< "$PRECOMMIT_ENTRIES" && invoked=1
   # ⚠️ In a workflow a gate is invoked by a `run:` step, so a `name:` key that
   # merely labels a step does not count — comments are stripped first, and then
   # `name:` lines are dropped. Without the second half, a step reading

@@ -244,6 +244,36 @@ setup_drift() {
   (cd "$dir" && git add -A && git commit -q -m "M-1.1: a settable budget")
   printf '%s\n' "$dir"
 }
+# --- check-drift.sh: a threshold whose unit is spelled `msec` ---------------
+#
+# `M0.27`. ⚠️ **The narrowing that fixed `_msg` dropped `_msec`**, which is a
+# unit spelling too, so a threshold an environment moves passed non-negotiable
+# 2. `m0-complete.sh` section 5 does not backstop it — `NFR_CONSTANTS` names
+# `BUDGET_MS` and `COMPILING_GATE_MS` and no `*_MSEC`. The row first argued this
+# half could not have a case, on the grounds that removing a false positive is
+# inexpressible in an inverted suite; **re-widening is the other half of the
+# same fix and makes the gate start catching something**, which is exactly what
+# this suite tests. Found by review, twice, which is why the rule above now
+# says an untestable claim is worth one attempt at disproof.
+setup_drift_msec() {
+  local dir; dir="$(new_scratch drift-msec)"
+  copy_gate "$dir" check-drift.sh
+  mkdir -p "$dir/scripts"
+  # Split for the reason `setup_drift` records at length: a literal here would
+  # trip the real gate on this very file.
+  local dollar='$'
+  local poll_expr="${dollar}{OQUEUE_POLL_MSEC:-500}"
+  {
+    echo '#!/usr/bin/env bash'
+    printf 'POLL_MSEC="%s"\n' "$poll_expr"
+  } > "$dir/scripts/poll.sh"
+  (cd "$dir" && git add -A && git commit -q -m "M0.27: a settable poll interval in msec")
+  printf '%s\n' "$dir"
+}
+invoke_drift_msec() {
+  bash "$1/scripts/check-drift.sh"
+}
+
 invoke_drift() {
   bash "$1/scripts/check-drift.sh"
 }
@@ -1370,6 +1400,208 @@ EOF
 invoke_coverage_below_floor() {
   bash "$1/scripts/check-coverage.sh"
 }
+# --- m0-complete.sh: check-drift.sh with no THRESHOLD_RE at all -------------
+#
+# `M0.27`, and ⚠️ **this case exists because the row first argued it could not
+# be written.** The argument was that removing a false positive makes a gate
+# *stop* failing, which an inverted suite cannot express. True for two of the
+# six fixes and false for this one: before the fix the gate **aborted inside
+# section 5** and printed nothing further; after it, it reports the unreadable
+# constant and carries on into sections 6 and 7. So the pinned string is
+# present only after the fix — exactly what `run_case`'s fourth argument tests.
+# Found by review, which wrote the case to show the argument was wrong.
+setup_m0_complete_no_threshold_re() {
+  local dir; dir="$(new_scratch m0-complete-no-tre)"
+  _m0_scaffold "$dir" m0-complete-no-tre
+  mkdir -p "$dir/scripts/gates"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-core/src/lib.rs"
+  # Present, so section 5 reaches the extraction; the constant it looks for is
+  # the thing that is missing.
+  printf '#!/usr/bin/env bash
+COVERAGE_FLOOR=85
+' > "$dir/scripts/check-coverage.sh"
+  printf '#!/usr/bin/env bash
+# a drift gate that names no threshold pattern
+' > "$dir/scripts/check-drift.sh"
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.27: a drift gate with no THRESHOLD_RE")
+  printf '%s\n' "$dir"
+}
+
+# --- m0-complete.sh: a .pre-commit-config.yaml PyYAML cannot load ------------
+#
+# `M0.27`. ⚠️ The fallback is for a missing **module**, not a broken document.
+# Catching every exception sent an unloadable config to a regex that happily
+# counted it, so the gate reported a hook count and "every gate is invoked" for
+# a file `pre-commit` itself cannot read.
+setup_m0_complete_unparseable_config() {
+  local dir; dir="$(new_scratch m0-complete-badyaml)"
+  _m0_scaffold "$dir" m0-complete-badyaml
+  mkdir -p "$dir/scripts/gates"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-core/src/lib.rs"
+  cat > "$dir/.pre-commit-config.yaml" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: broken
+        name: "an unterminated quoted scalar
+        entry: /bin/true
+EOF
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.27: a config pre-commit cannot load")
+  printf '%s\n' "$dir"
+}
+
+# --- m0-complete.sh: the fallback parse, with PyYAML shadowed ---------------
+#
+# `M0.27`. The config declares two hooks, one of them `commit-msg` in **block**
+# form, so the pre-commit count is 1; the documents claim 2. Under the fallback
+# that is a failure — and before the block-sequence handling landed it was a
+# silent pass, because `stages:` was invisible and both hooks counted.
+setup_m0_complete_fallback() {
+  local dir; dir="$(new_scratch m0-complete-fallback)"
+  _m0_scaffold "$dir" m0-complete-fallback
+  mkdir -p "$dir/scripts/gates" "$dir/docs/internal/product" "$dir/noyaml"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  printf 'raise ImportError("shadowed by the negative suite")\n' > "$dir/noyaml/yaml.py"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-core/src/lib.rs"
+  cat > "$dir/.pre-commit-config.yaml" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: one
+        entry: /bin/true
+        stages: [pre-commit]
+      - id: two
+        entry: /bin/true
+        stages:
+          - commit-msg
+EOF
+  cat > "$dir/docs/internal/product/requirements.md" <<'EOF'
+| NFR-56 | Pre-commit suite completes within **10 s**. | measured across 9 hooks — and **2 today** |
+EOF
+  cat > "$dir/docs/internal/product/roadmap.md" <<'EOF'
+NFR-56 was measured across 9 hooks — 10 once the budget gate itself joined
+them, and **2 today**.
+EOF
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.27: a commit-msg hook the fallback must not count")
+  printf '%s\n' "$dir"
+}
+invoke_m0_complete_no_pyyaml() {
+  PYTHONPATH="$1/noyaml" bash "$1/scripts/gates/m0-complete.sh"
+}
+
+# --- m0-complete.sh: a gate parked at stages: [manual] ----------------------
+#
+# `M0.27`. ⚠️ A hook at `stages: [manual]` keeps its `entry:` line and runs on
+# no commit, so a grep for the script name called it invoked — the
+# mention-versus-invocation error this loop already named for comments and
+# `name:` keys, one level deeper.
+#
+# ⚠️ **One of `M0.27`'s six fixes cannot have a case. The row first claimed
+# four could not; review disproved that three times.** Two cases turned a
+# silent abort into a reported failure, one shadows PyYAML so the fallback is
+# executed at all, and one pins the `_msec` re-widening — because narrowing a
+# regex to remove a false positive has a second half that *adds* a catch, and
+# that half is directly expressible. What remains inexpressible is exactly one
+# thing: `_msg` no longer tripping the gate, and a reflowed line no longer
+# failing the hook count, both of which make a gate **stop** failing on a good
+# artifact. The pass condition here is
+# inverted, so a fix that makes a gate *stop* failing on a good artifact — `_msg`
+# no longer tripping `check-drift.sh`, a reflowed line no longer failing the
+# hook count — is genuinely inexpressible. But a fix that turns a silent abort
+# into a **reported** failure is expressible, because the report is a string
+# absent before and present after; the two cases above are that. "It cannot be
+# tested" is worth one attempt at disproof before it is written down.
+setup_m0_complete_manual_stage() {
+  local dir; dir="$(new_scratch m0-complete-manual)"
+  _m0_scaffold "$dir" m0-complete-manual
+  mkdir -p "$dir/scripts/gates" "$dir/docs/internal/product"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-core/src/lib.rs"
+  # check-crate.sh runs on every commit; check-coverage.sh is parked.
+  cat > "$dir/.pre-commit-config.yaml" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: check-crate
+        name: crate
+        entry: scripts/check-crate.sh
+        language: system
+        stages: [pre-commit]
+      - id: check-coverage
+        name: coverage, temporarily parked
+        entry: scripts/check-coverage.sh
+        language: system
+        stages: [manual]
+EOF
+  cat > "$dir/docs/internal/product/requirements.md" <<'EOF'
+| NFR-56 | Pre-commit suite completes within **10 s**. | measured across 9 hooks — and **1 today** |
+EOF
+  cat > "$dir/docs/internal/product/roadmap.md" <<'EOF'
+NFR-56 was measured across 9 hooks — 10 once the budget gate itself joined
+them, and **1 today**.
+EOF
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.27: a gate parked where no commit runs it")
+  printf '%s\n' "$dir"
+}
+
 # --- m0-complete.sh: an M0 gate whose negative case did not run -------------
 #
 # `M0.26`. ⚠️ **A case that did not run is not a case that passed.** The suite
@@ -1446,6 +1678,10 @@ EOF
   cat > "$dir/docs/internal/product/requirements.md" <<'EOF'
 | NFR-56 | Pre-commit suite completes within **10 s**. | measured across 9 hooks — and **7 today** |
 EOF
+  # ⚠️ The count wrapped onto a second line on purpose: it is correct for this
+  # 2-hook config, so this arm must *pass* while the requirements arm fails.
+  # Line-scoped extraction reported it as stating no count at all, and the case
+  # was green off the other arm only — a control nobody was watching.
   cat > "$dir/docs/internal/product/roadmap.md" <<'EOF'
 NFR-56 was measured across 9 hooks — 10 once the budget gate itself joined
 them, and **2 today**.
@@ -1627,6 +1863,8 @@ run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_
 run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_row invoke_commit_msg_unstaged_row
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
+run_case "check-drift.sh (a _msec threshold)" setup_drift_msec       invoke_drift_msec \
+  "threshold made settable"
 run_case "check-layering.sh"            setup_layering            invoke_layering \
   "depends on oqueue-codec, not oqueue-core"
 run_case "check-layering.sh (non-UTF-8 crash)" setup_layering_non_utf8 invoke_layering_non_utf8 \
@@ -1682,6 +1920,35 @@ run_case "m0-complete.sh (hook count disagrees with the config)" setup_m0_comple
   "hooks, .pre-commit-config.yaml has"
 run_case "m0-complete.sh (a negative case that never ran)" setup_m0_complete_skipped_case invoke_m0_complete \
   "never watched to fail on this machine"
+run_case "m0-complete.sh (a gate parked at stages: [manual])" setup_m0_complete_manual_stage invoke_m0_complete \
+  "check-coverage.sh is invoked by neither"
+run_case "m0-complete.sh (check-drift.sh names no THRESHOLD_RE)" setup_m0_complete_no_threshold_re invoke_m0_complete \
+  "could not read THRESHOLD_RE from scripts/check-drift.sh"
+# ⚠️ **This case needs PyYAML, and registering it unconditionally made the
+# suite fail on a machine without it** — the gate's *own* `except ImportError`
+# branch exists for exactly that machine, and the fixture then reaches the
+# regex fallback, prints no `UNPARSEABLE`, and the suite reports the gate
+# stopped catching a defect when the truth is a missing module. Misdiagnosing
+# remedy, one file over from the row removing them. `skip_case` names
+# `m0-complete.sh`, which is not in `M0_GATES`, so this does not cascade into
+# section 6's "never watched to fail" check.
+_have_pyyaml() { python3 -c 'import yaml' >/dev/null 2>&1; }
+if _have_pyyaml; then
+  run_case "m0-complete.sh (a config PyYAML cannot load)" setup_m0_complete_unparseable_config invoke_m0_complete \
+    "PyYAML cannot parse .pre-commit-config.yaml"
+else
+  skip_case m0-complete.sh "PyYAML not installed, so the loud-parse-failure path cannot be reached" \
+    "install: python3 -m pip install pyyaml"
+fi
+
+# ⚠️ **And the fallback itself, by shadowing PyYAML in the invocation.** Nothing
+# else in this suite ever takes the `except ImportError` branch, so the whole
+# fallback — including the block-sequence `stages:` handling `M0.27` added —
+# was unexecuted by any case: deleting it left the suite and `m0-complete.sh`
+# green while a PyYAML-less machine miscounted a `commit-msg` hook as a
+# pre-commit one. Found by review, which measured exactly that.
+run_case "m0-complete.sh (the no-PyYAML fallback miscounts)" setup_m0_complete_fallback invoke_m0_complete_no_pyyaml \
+  "hooks, .pre-commit-config.yaml has"
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
 run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt

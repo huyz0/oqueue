@@ -56,10 +56,20 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
 
-# Case-insensitive, substring match — no word boundary, for the portability
-# reason above. False positives (a variable merely containing "floor") are
-# possible and cheap to dismiss on sight; a missed positive because `\b`
-# silently didn't mean the same thing on two platforms is not.
+# Case-insensitive. ⚠️ **Mostly substring, and the unit suffixes are anchored** —
+# never with `\b`, whose meaning differs across platforms, but with an explicit
+# `([^a-z0-9]|$)`, which does not. `threshold`, `_limit`, `_ceiling` and `_floor`
+# stay unanchored because a false positive there is a word somebody chose; `_ms`
+# unanchored matched `_msg`, which is a word everybody chooses.
+#
+# ⚠️ **And a false positive is *not* cheap to dismiss**, which this comment used
+# to claim. There is no suppression mechanism in this script — no baseline, no
+# per-line escape — so the only exits are renaming a legitimate variable or
+# widening the regex, and widening it is editing a non-negotiable-2 gate to make
+# a check pass. `_limit` is the live one: `rate_limit_header = env::var(...)` is
+# refused and the remedy offered ("hard-code the value") is wrong for it. Adding
+# a baseline is the honest fix and belongs to whoever hits it; ⚠️ until then the
+# cost of a false positive here is a rename, and the comment says so.
 #
 # ⚠️ **A name-based matcher only sees what somebody named conventionally**, and
 # `M0` demonstrated the failure twice in three commits. `M0.15` found
@@ -73,7 +83,20 @@ cd "$REPO_ROOT"
 # word: it asserts that every constant a requirement names is matched by this
 # regex, so a new one that is invisible here fails a gate rather than passing
 # quietly. `M0.23`.
-THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor|_ms|_seconds'
+# ⚠️ `_ms` and `_seconds` are **suffix-anchored**; the rest stay substrings.
+# Unanchored, `_ms` matches `_msg`, `_message` and `_msvc` — measured, a plain
+# `let err_msg = std::env::var("OQUEUE_BANNER")...` was refused with a remedy
+# telling the developer to hard-code a banner string. ⚠️ **And this script has
+# no suppression mechanism**, so the header's "cheap to dismiss on sight" is
+# not actually available: the only exits from a false positive are renaming a
+# legitimate variable or widening this regex, and the second is editing a
+# non-negotiable-2 gate to make a check pass. A duration constant ends in its
+# unit; a message variable does not — ⚠️ **except that `msec` is also a unit
+# spelling**, which the first anchoring dropped: `POLL_MSEC="${OQUEUE_POLL_MSEC:-500}"`
+# matched before and matched neither branch after, so narrowing to fix a false
+# positive opened a false negative on the same gate. Measured by review. The
+# optional `ec`/`ecs` and the digit-tolerant tail keep both.
+THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor|_ms(ecs?)?[0-9]*([^a-z0-9]|$)|_secs?(onds?)?[0-9]*([^a-z0-9]|$)'
 
 # Rust environment reads, plus the shell idiom for reading one with a
 # fallback default. `\$\{[A-Za-z_][A-Za-z0-9_]*:[-=]` matches `${FOO:-...}`
@@ -123,6 +146,16 @@ else
   note "a threshold is a constant no environment can move — non-negotiable 2"
   note "hard-code the value; if it should differ by environment, that is a"
   note "config value, not a threshold, and belongs to a different standard"
+  # ⚠️ **The second remedy, for the case the first one misdiagnoses.** The
+  # matcher is by name, so a variable that merely *contains* one of the words
+  # above is refused too — `rate_limit_header` is the live one — and telling
+  # its author to hard-code an HTTP header name is nonsense. There is no
+  # suppression mechanism here, so rename is the exit, and widening the regex
+  # to pass is the thing non-negotiable 2 forbids. Found by review, which
+  # noted the remedy had been corrected in a comment and not in the output.
+  note "⚠️ if the name merely contains one of those words and is not a"
+  note "threshold at all, rename it — this gate matches by name and has no"
+  note "suppression list, and widening its regex to pass is what rule 2 forbids"
 fi
 
 finish
