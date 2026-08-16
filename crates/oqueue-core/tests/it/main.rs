@@ -9,6 +9,7 @@ mod invariants;
 mod key;
 mod key_layout;
 mod multipart;
+mod op_counts;
 mod precondition;
 mod rate_governor;
 mod redaction;
