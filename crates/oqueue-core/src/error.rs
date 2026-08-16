@@ -185,6 +185,18 @@ pub enum Error {
         /// The object's actual size.
         object_size: u64,
     },
+
+    /// A conditional `put` lost the race its [`crate::Precondition`] named.
+    ///
+    /// ⚠️ **Never retried automatically at the point it is detected**
+    /// (`error-handling.md` rule 9) — retrying a lost compare-and-swap
+    /// silently converts it into last-writer-wins, which is exactly the
+    /// invariant a caller reached for a `Precondition` to get.
+    #[error("precondition failed for {key}")]
+    PreconditionFailed {
+        /// The key the conditional write targeted.
+        key: crate::ObjectKey,
+    },
 }
 
 /// The crate's result alias.

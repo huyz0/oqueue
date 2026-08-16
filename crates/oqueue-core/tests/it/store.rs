@@ -10,7 +10,7 @@
 // constructed from literals it controls, so a panic means the test is wrong.
 #![allow(clippy::expect_used)]
 
-use oqueue_core::{ByteRange, Error, FakeObjectStore, ObjectKey, ObjectStore};
+use oqueue_core::{ByteRange, Error, FakeObjectStore, ObjectKey, ObjectStore, Precondition};
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
@@ -43,7 +43,7 @@ fn an_object_that_was_put_comes_back_byte_for_byte() {
     let k = key("topics/orders/0/00000000000000000000.seg");
     let payload = vec![0x00, 0xff, 0x42, 0x00, 0x7f];
 
-    let meta = block_on(store.put(&k, payload.clone())).expect("put succeeds");
+    let meta = block_on(store.put(&k, payload.clone(), None)).expect("put succeeds");
     let fetched = block_on(store.get(&k, ByteRange::Full)).expect("get succeeds");
 
     assert_eq!(fetched, payload);
@@ -71,7 +71,7 @@ fn an_empty_object_is_stored_and_is_not_the_same_as_a_missing_one() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/empty.seg");
 
-    block_on(store.put(&k, Vec::new())).expect("put succeeds");
+    block_on(store.put(&k, Vec::new(), None)).expect("put succeeds");
 
     assert_eq!(block_on(store.get(&k, ByteRange::Full)), Ok(Vec::new()));
     assert_eq!(store.len(), 1);
@@ -83,8 +83,8 @@ fn putting_the_same_key_twice_keeps_the_second_value() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/00000000000000000000.seg");
 
-    block_on(store.put(&k, vec![1, 2, 3])).expect("first put");
-    block_on(store.put(&k, vec![4, 5])).expect("second put");
+    block_on(store.put(&k, vec![1, 2, 3], None)).expect("first put");
+    block_on(store.put(&k, vec![4, 5], None)).expect("second put");
 
     assert_eq!(block_on(store.get(&k, ByteRange::Full)), Ok(vec![4, 5]));
     assert_eq!(store.len(), 1, "an overwrite is not a second object");
@@ -97,8 +97,8 @@ fn distinct_keys_hold_distinct_objects() {
     let a = key("topics/orders/0/a.seg");
     let b = key("topics/orders/0/b.seg");
 
-    block_on(store.put(&a, vec![1])).expect("put a");
-    block_on(store.put(&b, vec![2])).expect("put b");
+    block_on(store.put(&a, vec![1], None)).expect("put a");
+    block_on(store.put(&b, vec![2], None)).expect("put b");
 
     assert_eq!(block_on(store.get(&a, ByteRange::Full)), Ok(vec![1]));
     assert_eq!(block_on(store.get(&b, ByteRange::Full)), Ok(vec![2]));
@@ -110,7 +110,7 @@ fn distinct_keys_hold_distinct_objects() {
 fn a_bounded_range_reads_exactly_the_requested_slice() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/range.seg");
-    block_on(store.put(&k, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9])).expect("put succeeds");
+    block_on(store.put(&k, vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9], None)).expect("put succeeds");
 
     let range = ByteRange::bounded(2, 3).expect("a valid range");
     assert_eq!(block_on(store.get(&k, range)), Ok(vec![2, 3, 4]));
@@ -121,7 +121,7 @@ fn a_bounded_range_reads_exactly_the_requested_slice() {
 fn a_bounded_range_ending_exactly_at_the_object_size_succeeds() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/edge.seg");
-    block_on(store.put(&k, vec![0, 1, 2, 3])).expect("put succeeds");
+    block_on(store.put(&k, vec![0, 1, 2, 3], None)).expect("put succeeds");
 
     let range = ByteRange::bounded(1, 3).expect("a valid range");
     assert_eq!(block_on(store.get(&k, range)), Ok(vec![1, 2, 3]));
@@ -133,7 +133,7 @@ fn a_bounded_range_ending_exactly_at_the_object_size_succeeds() {
 fn a_bounded_range_past_the_object_size_is_out_of_bounds_not_missing() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/short.seg");
-    block_on(store.put(&k, vec![0, 1, 2])).expect("put succeeds");
+    block_on(store.put(&k, vec![0, 1, 2], None)).expect("put succeeds");
 
     let range = ByteRange::bounded(1, 5).expect("a valid range");
     assert_eq!(
@@ -153,7 +153,7 @@ fn a_bounded_range_past_the_object_size_is_out_of_bounds_not_missing() {
 fn a_range_whose_end_would_overflow_is_out_of_bounds() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/overflow.seg");
-    block_on(store.put(&k, vec![0, 1, 2])).expect("put succeeds");
+    block_on(store.put(&k, vec![0, 1, 2], None)).expect("put succeeds");
 
     let range = ByteRange::bounded(u64::MAX, 5).expect("a valid range");
     assert_eq!(
@@ -180,12 +180,151 @@ fn each_put_returns_a_distinct_precondition_token() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/token.seg");
 
-    let first = block_on(store.put(&k, vec![1, 2, 3])).expect("first put");
-    let second = block_on(store.put(&k, vec![1, 2, 3])).expect("second put, same bytes");
+    let first = block_on(store.put(&k, vec![1, 2, 3], None)).expect("first put");
+    let second = block_on(store.put(&k, vec![1, 2, 3], None)).expect("second put, same bytes");
 
     assert_ne!(
         first.precondition_token, second.precondition_token,
         "identical bytes must not produce identical tokens — a token is not a content hash"
+    );
+}
+
+/// `IfAbsent` succeeds when nothing is stored under the key yet.
+#[test]
+fn if_absent_succeeds_on_a_key_with_nothing_stored() {
+    let store = FakeObjectStore::new();
+    let k = key("topics/orders/0/absent.seg");
+
+    let meta = block_on(store.put(&k, vec![1], Some(Precondition::IfAbsent)))
+        .expect("if-absent succeeds against an absent key");
+    assert_eq!(block_on(store.get(&k, ByteRange::Full)), Ok(vec![1]));
+    assert_eq!(meta.size, 1);
+}
+
+/// `IfAbsent` fails, and leaves the existing object untouched, when the key
+/// already holds a payload.
+#[test]
+fn if_absent_fails_and_does_not_overwrite_an_existing_object() {
+    let store = FakeObjectStore::new();
+    let k = key("topics/orders/0/present.seg");
+    block_on(store.put(&k, vec![1], None)).expect("first, unconditional put");
+
+    let result = block_on(store.put(&k, vec![2], Some(Precondition::IfAbsent)));
+
+    assert_eq!(result, Err(Error::PreconditionFailed { key: k.clone() }));
+    assert_eq!(
+        block_on(store.get(&k, ByteRange::Full)),
+        Ok(vec![1]),
+        "a losing conditional put must not touch the existing object"
+    );
+}
+
+/// `IfAbsent` succeeds again on a key that was deleted — deletion is what
+/// "absent" means, matching S3's and GCS's own precondition semantics.
+#[test]
+fn if_absent_succeeds_on_a_deleted_key() {
+    let store = FakeObjectStore::new();
+    let k = key("topics/orders/0/recreate.seg");
+    block_on(store.put(&k, vec![1], None)).expect("first put");
+    block_on(store.delete(std::slice::from_ref(&k))).expect("delete succeeds");
+
+    block_on(store.put(&k, vec![2], Some(Precondition::IfAbsent)))
+        .expect("if-absent succeeds on a deleted key");
+    assert_eq!(block_on(store.get(&k, ByteRange::Full)), Ok(vec![2]));
+}
+
+/// `IfMatches` succeeds when the presented token matches the key's current
+/// state, and the written object reflects the new bytes.
+#[test]
+fn if_matches_succeeds_when_the_token_matches_the_current_state() {
+    let store = FakeObjectStore::new();
+    let k = key("topics/orders/0/cas.seg");
+    let first = block_on(store.put(&k, vec![1], None)).expect("first put");
+
+    block_on(store.put(
+        &k,
+        vec![2],
+        Some(Precondition::IfMatches(first.precondition_token)),
+    ))
+    .expect("if-matches succeeds against the token it was just given");
+
+    assert_eq!(block_on(store.get(&k, ByteRange::Full)), Ok(vec![2]));
+}
+
+/// `IfMatches` fails against a token from before an intervening overwrite —
+/// exactly the lost-race case a conditional write exists to catch.
+#[test]
+fn if_matches_fails_against_a_stale_token() {
+    let store = FakeObjectStore::new();
+    let k = key("topics/orders/0/stale.seg");
+    let stale = block_on(store.put(&k, vec![1], None)).expect("first put");
+    block_on(store.put(&k, vec![2], None)).expect("an intervening unconditional overwrite");
+
+    let result = block_on(store.put(
+        &k,
+        vec![3],
+        Some(Precondition::IfMatches(stale.precondition_token)),
+    ));
+
+    assert_eq!(result, Err(Error::PreconditionFailed { key: k.clone() }));
+    assert_eq!(
+        block_on(store.get(&k, ByteRange::Full)),
+        Ok(vec![2]),
+        "a losing conditional put must not touch the object the overwrite left"
+    );
+}
+
+/// `IfMatches` fails against a key that does not exist at all — there is no
+/// current state for any token to match.
+#[test]
+fn if_matches_fails_against_a_key_that_was_never_put() {
+    let store = FakeObjectStore::new();
+    let k = key("topics/orders/0/never.seg");
+    let unrelated_token = block_on(store.put(&key("topics/orders/0/other.seg"), vec![9], None))
+        .expect("an unrelated put")
+        .precondition_token;
+
+    let result = block_on(store.put(&k, vec![1], Some(Precondition::IfMatches(unrelated_token))));
+
+    assert_eq!(result, Err(Error::PreconditionFailed { key: k }));
+}
+
+/// Two unconditioned `put`s racing from separate threads: the `Mutex`
+/// serializes them, so exactly one payload survives — never a mix of the
+/// two, and never both. Which one wins is not asserted, since real
+/// concurrent scheduling does not promise an order; that there is a single,
+/// whole winner is what "last-writer-wins" requires.
+#[test]
+fn racing_unconditioned_puts_leave_exactly_one_whole_winner() {
+    use std::sync::Arc;
+
+    let store = Arc::new(FakeObjectStore::new());
+    let k = key("topics/orders/0/race.seg");
+
+    let store_a = Arc::clone(&store);
+    let key_a = k.clone();
+    let handle_a = std::thread::spawn(move || {
+        block_on(store_a.put(&key_a, vec![0xAA; 4], None)).expect("writer a's put");
+    });
+
+    let store_b = Arc::clone(&store);
+    let key_b = k.clone();
+    let handle_b = std::thread::spawn(move || {
+        block_on(store_b.put(&key_b, vec![0xBB; 4], None)).expect("writer b's put");
+    });
+
+    handle_a.join().expect("writer a does not panic");
+    handle_b.join().expect("writer b does not panic");
+
+    let winner = block_on(store.get(&k, ByteRange::Full)).expect("a winner is stored");
+    assert!(
+        winner == vec![0xAA; 4] || winner == vec![0xBB; 4],
+        "the stored payload must be exactly one writer's whole payload, got {winner:?}"
+    );
+    assert_eq!(
+        store.len(),
+        1,
+        "a race must not leave two objects under one key"
     );
 }
 
@@ -194,7 +333,7 @@ fn each_put_returns_a_distinct_precondition_token() {
 fn deleting_a_key_removes_the_object() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/deleted.seg");
-    block_on(store.put(&k, vec![1])).expect("put succeeds");
+    block_on(store.put(&k, vec![1], None)).expect("put succeeds");
 
     block_on(store.delete(std::slice::from_ref(&k))).expect("delete succeeds");
 
@@ -212,9 +351,9 @@ fn deleting_several_keys_leaves_the_rest_untouched() {
     let a = key("topics/orders/0/a.seg");
     let b = key("topics/orders/0/b.seg");
     let c = key("topics/orders/0/c.seg");
-    block_on(store.put(&a, vec![1])).expect("put a");
-    block_on(store.put(&b, vec![2])).expect("put b");
-    block_on(store.put(&c, vec![3])).expect("put c");
+    block_on(store.put(&a, vec![1], None)).expect("put a");
+    block_on(store.put(&b, vec![2], None)).expect("put b");
+    block_on(store.put(&c, vec![3], None)).expect("put c");
 
     block_on(store.delete(&[a.clone(), c.clone()])).expect("delete succeeds");
 
@@ -233,9 +372,9 @@ fn a_deleted_key_recreated_by_put_never_reuses_its_old_precondition_token() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/recreated.seg");
 
-    let before_delete = block_on(store.put(&k, vec![1])).expect("first put");
+    let before_delete = block_on(store.put(&k, vec![1], None)).expect("first put");
     block_on(store.delete(std::slice::from_ref(&k))).expect("delete succeeds");
-    let after_recreate = block_on(store.put(&k, vec![1])).expect("put recreates the key");
+    let after_recreate = block_on(store.put(&k, vec![1], None)).expect("put recreates the key");
 
     assert_ne!(
         before_delete.precondition_token, after_recreate.precondition_token,
@@ -267,7 +406,7 @@ fn the_seam_is_dyn_compatible() {
     let store: std::sync::Arc<dyn ObjectStore> = std::sync::Arc::new(FakeObjectStore::new());
     let k = key("topics/orders/0/dyn.seg");
 
-    block_on(store.put(&k, vec![7])).expect("put through a trait object");
+    block_on(store.put(&k, vec![7], None)).expect("put through a trait object");
     assert_eq!(block_on(store.get(&k, ByteRange::Full)), Ok(vec![7]));
 }
 
@@ -278,7 +417,7 @@ fn the_returned_futures_are_send() {
     let store = FakeObjectStore::new();
     let k = key("topics/orders/0/send.seg");
     assert_send(store.get(&k, ByteRange::Full));
-    assert_send(store.put(&k, vec![1]));
+    assert_send(store.put(&k, vec![1], None));
     assert_send(store.delete(std::slice::from_ref(&k)));
 }
 
@@ -290,8 +429,12 @@ fn the_returned_futures_are_send() {
 #[test]
 fn the_fake_never_prints_the_payloads_it_holds() {
     let store = FakeObjectStore::new();
-    block_on(store.put(&key("topics/acme/0/x.seg"), vec![0xde, 0xad, 0xbe, 0xef]))
-        .expect("put succeeds");
+    block_on(store.put(
+        &key("topics/acme/0/x.seg"),
+        vec![0xde, 0xad, 0xbe, 0xef],
+        None,
+    ))
+    .expect("put succeeds");
 
     assert_eq!(format!("{store:?}"), "FakeObjectStore { objects: 1 }");
     assert_eq!(
@@ -305,6 +448,6 @@ fn the_fake_never_prints_the_payloads_it_holds() {
 fn is_empty_tracks_whether_anything_is_stored() {
     let store = FakeObjectStore::new();
     assert!(store.is_empty());
-    block_on(store.put(&key("topics/acme/0/x.seg"), vec![1])).expect("put succeeds");
+    block_on(store.put(&key("topics/acme/0/x.seg"), vec![1], None)).expect("put succeeds");
     assert!(!store.is_empty());
 }

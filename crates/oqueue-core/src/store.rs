@@ -1,6 +1,6 @@
 //! The object-storage seam, and the trivial fake that makes it testable.
 
-use crate::{ByteRange, Error, ObjectKey, ObjectMeta, PreconditionToken, Result};
+use crate::{ByteRange, Error, ObjectKey, ObjectMeta, Precondition, PreconditionToken, Result};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -51,16 +51,27 @@ pub trait ObjectStore: Send + Sync + core::fmt::Debug {
     /// object's actual size.
     fn get<'a>(&'a self, key: &'a ObjectKey, range: ByteRange) -> BoxFuture<'a, Result<Vec<u8>>>;
 
-    /// Stores an object whole, overwriting any previous value.
+    /// Stores an object whole.
+    ///
+    /// With `precondition: None`, overwrites any previous value
+    /// unconditionally — racing unconditioned writers are last-writer-wins.
+    /// With `Some(precondition)`, the write only happens if `precondition`
+    /// holds against the key's current state.
     ///
     /// Returns the [`ObjectMeta`] of what was written, for a later
     /// conditional write to present.
     ///
     /// # Errors
     ///
-    /// Implementation-defined; the fake here cannot fail.
-    fn put<'a>(&'a self, key: &'a ObjectKey, payload: Vec<u8>)
-    -> BoxFuture<'a, Result<ObjectMeta>>;
+    /// [`Error::PreconditionFailed`] if `precondition` is `Some` and does not
+    /// hold. Otherwise implementation-defined; the fake here cannot fail
+    /// unconditionally.
+    fn put<'a>(
+        &'a self,
+        key: &'a ObjectKey,
+        payload: Vec<u8>,
+        precondition: Option<Precondition>,
+    ) -> BoxFuture<'a, Result<ObjectMeta>>;
 
     /// Deletes zero or more objects.
     ///
@@ -110,12 +121,14 @@ struct KeySlot {
 ///
 /// # Fidelity
 ///
-/// Deliberately trivial. It stores bytes, slices them on a ranged `get`, and
-/// tracks a per-key generation for [`ObjectMeta::precondition_token`] — and
-/// models no latency, no failure and no conditional write yet. ⚠️ Which means
-/// a test passing against it has shown nothing about how the code behaves
-/// when a PUT fails after the object landed, or when two writers race. `M1.8`
-/// is where that is bought.
+/// Deliberately trivial. It stores bytes, slices them on a ranged `get`,
+/// tracks a per-key generation for [`ObjectMeta::precondition_token`], and
+/// checks a [`Precondition`] atomically against that generation on `put` —
+/// but models no latency and no failure. ⚠️ Which means a test passing
+/// against it has shown nothing about how the code behaves when a `put`
+/// fails after the object landed, or how a conditional write behaves under
+/// real concurrency rather than a single `Mutex`'s serialization. `M1.8` is
+/// where that is bought.
 #[derive(Default)]
 pub struct FakeObjectStore {
     slots: Mutex<HashMap<ObjectKey, KeySlot>>,
@@ -163,6 +176,16 @@ impl core::fmt::Debug for FakeObjectStore {
             .field("objects", &self.len())
             .finish()
     }
+}
+
+/// The [`PreconditionToken`] a given generation renders as.
+///
+/// ⚠️ **Centralized so a conditional `put`'s check and a `put`'s returned
+/// `ObjectMeta` can never disagree about what a generation's token looks
+/// like.** Two separate `format!("gen-{n}")` call sites is exactly the kind
+/// of duplication that drifts silently the first time one of them changes.
+fn token_for_generation(generation: u64) -> PreconditionToken {
+    PreconditionToken::new(format!("gen-{generation}"))
 }
 
 /// Slices `payload` according to `range`, or classifies why it cannot.
@@ -216,11 +239,27 @@ impl ObjectStore for FakeObjectStore {
         &'a self,
         key: &'a ObjectKey,
         payload: Vec<u8>,
+        precondition: Option<Precondition>,
     ) -> BoxFuture<'a, Result<ObjectMeta>> {
         Box::pin(async move {
             let size = payload.len();
             let generation = {
                 let mut slots = self.lock();
+                // ⚠️ Checked and written under the one lock acquisition —
+                // never a separate check followed by a separate write, which
+                // is exactly the gap a second racing `put` could land in.
+                let holds = match &precondition {
+                    None => true,
+                    Some(Precondition::IfAbsent) => {
+                        slots.get(key).is_none_or(|s| s.payload.is_none())
+                    }
+                    Some(Precondition::IfMatches(token)) => slots.get(key).is_some_and(|s| {
+                        s.payload.is_some() && token_for_generation(s.generation) == *token
+                    }),
+                };
+                if !holds {
+                    return Err(Error::PreconditionFailed { key: key.clone() });
+                }
                 // ⚠️ The generation survives an overwrite *and* a delete, and
                 // starts from the previous one rather than from zero — see
                 // `KeySlot`'s doc comment for why a fake that reset it on
@@ -241,7 +280,7 @@ impl ObjectStore for FakeObjectStore {
                 // anything a real deployment could reach; see `slice_range`'s
                 // matching comment for the same reasoning stated in full.
                 size: u64::try_from(size).unwrap_or(u64::MAX),
-                precondition_token: PreconditionToken::new(format!("gen-{generation}")),
+                precondition_token: token_for_generation(generation),
             })
         })
     }
