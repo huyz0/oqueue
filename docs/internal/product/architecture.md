@@ -81,6 +81,10 @@ The two that carry the most weight:
 - **`ObjectStore`** — nothing else talks to S3 or GCS. This extends the
   sans-I/O rule beyond its usual form and is what allows latency, 503s,
   conditional-write races, and partial failures to be injected deterministically.
+  ⚠️ **Carries no `list()`** — ADR-0009 puts listing behind a separate,
+  not-yet-built `MaintenanceStore` seam so "never LIST on the read path"
+  (NFR-30) is a property nothing holding only an `ObjectStore` can violate,
+  rather than a runtime gate someone has to remember to keep passing.
 - **`KeyProvider`** — wrap and unwrap only. Deliberately *not* "generate a data
   key": GCP Cloud KMS has no `GenerateDataKey` equivalent, so the seam is the
   intersection of what AWS and GCP both offer, and DEKs are generated locally.
