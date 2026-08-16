@@ -361,6 +361,81 @@ for key in "${!NFR_CONSTANTS[@]}"; do
   fi
 done
 
+# ── 5b. The hook count NFR-56 is stated against ────────────────────────────
+#
+# ⚠️ **Three documents held three different numbers**, which `M0.25` found:
+# `requirements.md` and `roadmap.md` said 15 and a comment in `check-budget.sh`
+# said 16, against a config with more than either. NFR-56's measurement is
+# "2.27 s across N hooks", so N is part of the claim — a budget measured across
+# a suite that has since grown is a floor nobody restated. Alone among the ten
+# claims that row corrected, this one is a number a script can count, so it is
+# the one that gets a gate rather than a repair.
+# ⚠️ **Both documents, because both held the stale 15.** Gating one and
+# correcting the other by hand would leave exactly the state this row exists to
+# end. Matched on the `NFR-56`/budget sentence rather than the whole file, so a
+# `today` written elsewhere in either document is not mistaken for this claim.
+# ⚠️ **Hooks that run at the `pre-commit` stage, not every `- id:` line.**
+# NFR-56's series — "14 hooks, 15 once this gate joined them" — counts the
+# suite `check-budget.sh` actually sums, and `check-commit-msg` and
+# `check-tests-kept` are `stages: [commit-msg]`: a separate git-hook
+# invocation whose timing rows can never enter that process group's total. A
+# raw `- id:` count is 18 against a suite of 16, and it would have forced an
+# edit to a *measurement* row every time somebody added a `commit-msg` hook
+# that costs the pre-commit suite nothing. Found by review, which also found
+# the first version's `^      - id: ` to be exactly-six-spaces and therefore
+# blind to a second repo block written in pre-commit's own 4-space style —
+# silent green from the gate written to stop a number going stale.
+# ⚠️ **PyYAML if it is there, a line parse if it is not.** `yaml` would be the
+# only third-party import in `scripts/`, and "pre-commit depends on it" does
+# not survive a pipx or brew install, where PyYAML lives in pre-commit's venv
+# and not in system `python3`. Measured by review with the module shadowed: the
+# gate aborted at 13 checks with a message reading like a malformed config, and
+# sections 6 through 8 — every M0 gate invoked and watched to fail, the
+# negative suite, the boundary review — never ran. A completion gate that stops
+# early because of an import is the shape this milestone is about.
+hooks="$(python3 - <<'PYEOF'
+import re, sys
+
+text = open(".pre-commit-config.yaml").read()
+try:
+    import yaml
+    cfg = yaml.safe_load(text)
+    n = sum(
+        1
+        for repo in cfg.get("repos", [])
+        for hook in repo.get("hooks", [])
+        if hook.get("stages") is None or "pre-commit" in hook["stages"]
+    )
+except ImportError:
+    # One hook per `- id:`, counted unless its block declares stages that
+    # exclude `pre-commit`. Indentation-agnostic: the block runs to the next
+    # `- id:` at any depth, which is what `^      - id: ` was blind to.
+    n = 0
+    for block in re.split(r"\n(?=\s*- id: )", text):
+        if not re.match(r"\s*- id: ", block):
+            continue
+        m = re.search(r"stages:\s*\[([^\]]*)\]", block)
+        if m is None or "pre-commit" in m.group(1):
+            n += 1
+print(n)
+PYEOF
+)" || { fail "could not read .pre-commit-config.yaml"; finish; }
+hook_count_ok=1
+for doc in docs/internal/product/requirements.md docs/internal/product/roadmap.md; do
+  stated="$(grep -E 'NFR-56|budget gate itself joined' "$doc" |
+    grep -oE '\*\*[0-9]+ today\*\*' | grep -oE '[0-9]+' | head -1 || true)"
+  if [[ -z "$stated" ]]; then
+    fail "$doc states no current hook count for NFR-56"
+    note "the sentence reads '... **N today**'; this gate counts the config and compares"
+    hook_count_ok=0
+  elif [[ "$hooks" != "$stated" ]]; then
+    fail "$doc says $stated hooks, .pre-commit-config.yaml has $hooks"
+    note "NFR-56 is measured across a suite; the size of that suite is part of the claim"
+    hook_count_ok=0
+  fi
+done
+(( hook_count_ok == 1 )) && ok "both documents state the config's hook count ($hooks)"
+
 # ── 6. Every gate M0 added is invoked, and has been watched to fail ─────────
 for gate in "${M0_GATES[@]}"; do
   invoked=0

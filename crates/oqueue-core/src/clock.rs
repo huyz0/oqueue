@@ -56,12 +56,17 @@ impl core::fmt::Display for Timestamp {
 /// # What an implementor must guarantee
 ///
 /// See [ADR-0004]. In short: `now` is **cheap**, **infallible**, and
-/// **non-decreasing** — two calls in program order never return a smaller
-/// second value. It is *not* required to be strictly increasing; two calls may
+/// **non-decreasing** — ⚠️ **a property of the clock, not of a thread**: if one
+/// call returns `t`, any later call *on any thread* returns a value `>= t`.
+/// This said "two calls in program order", which is the weaker per-thread
+/// property, and an implementor satisfying the doc comment would have violated
+/// ADR-0004 guarantee 5 — the guarantee that costs something to implement, and
+/// the one review already caught `FakeClock` breaking with a load-check-store
+/// `advance`. It is *not* required to be strictly increasing; two calls may
 /// return the same instant, and a caller that needs distinct values must not
 /// get them from here.
 ///
-/// [ADR-0004]: `docs/internal/product/decisions/0004-clock-seam.md` in this
+/// ADR-0004 is `docs/internal/product/decisions/0004-clock-seam.md` in this
 /// repository.
 pub trait Clock: Send + Sync + core::fmt::Debug {
     /// The current wall-clock time.

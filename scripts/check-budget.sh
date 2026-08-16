@@ -79,8 +79,12 @@ cd "$REPO_ROOT"
 #
 # Measured on 2026-08-16 at commit `2bcf6f6` with `pre-commit run --all-files`
 # on a warm cache: **2.27 s wall clock across 14 hooks** — ⚠️ 14 because the
-# measurement predates this gate being wired; the suite it now governs has 16,
-# and the trend rows this gate writes say so, of which `check-coverage.sh`
+# measurement predates this gate being wired, and the suite it now governs is
+# larger. ⚠️ **The current size is deliberately not written here**: `M0.25`
+# found three documents holding three different values, and the trend rows this
+# gate writes carry the live number. `requirements.md`'s NFR-56 row and
+# `roadmap.md` state it, and `m0-complete.sh` asserts both against the config.
+# Of the measured 2.27 s, `check-coverage.sh`
 # was ~1.0 s and `check-crate.sh` ~0.47 s. ⚠️ Both are in the suite this number
 # covers, which `M0.16`'s acceptance requires: a budget measured without them is
 # a budget for a suite that no longer exists.
@@ -102,7 +106,10 @@ COMPILING_GATE_MS=5000
 
 # ⚠️ This gate counts its own elapsed time explicitly below, so it must not also
 # leave a row for the next run in the same process group to pick up. Measured:
-# without this, a third run in one shell reported 16 gates for a 15-hook suite.
+# without this, a third run in one shell reported more gates than the suite has
+# hooks. ⚠️ No count is written here on purpose — `M0.25` found three documents
+# holding three different ones, and a fourth copy in a comment is how that
+# happened. `m0-complete.sh` asserts the number against the config.
 _record_timing() { :; }
 
 # ⚠️ **`OQUEUE_SUPPRESS_TIMING` must not reach this gate.** It exists so a gate

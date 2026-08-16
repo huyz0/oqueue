@@ -141,7 +141,7 @@ either slow the loop to a crawl or produce alerts nobody trusts. They must be
 | Cache misses and branch misprediction | **Cachegrind** | `scripts/profile.sh cache <bench>` |
 | Allocation count and size distribution | allocator stats | `scripts/profile.sh alloc <bench>` |
 | Which mutants survive here | cargo-mutants, scoped | `scripts/mutants.sh <crate>` |
-| Full mutation run, sharded | cargo-mutants | `scripts/mutants.sh` |
+| Full mutation run, unsharded | cargo-mutants | `scripts/mutants.sh --full` |
 
 21. **Memory is a first-class concern, not an afterthought.** A broker holding
     buffers for many partitions fails on allocation behaviour long before it

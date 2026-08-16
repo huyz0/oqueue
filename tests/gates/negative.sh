@@ -1348,6 +1348,51 @@ EOF
 invoke_coverage_below_floor() {
   bash "$1/scripts/check-coverage.sh"
 }
+# --- m0-complete.sh: a stated hook count the config contradicts -------------
+#
+# `M0.25`. ⚠️ NFR-56 is "2.27 s across N hooks", so N is part of the claim, and
+# three documents held three different values. Alone among the ten stale claims
+# that row corrected, this one is a number a script can count — which is why it
+# is the one that got a gate rather than a repair. ⚠️ **And the gate caught its
+# author on the first run**, who wrote 17 against a config of 18.
+setup_m0_complete_hook_count() {
+  local dir; dir="$(new_scratch m0-complete-hooks)"
+  _m0_scaffold "$dir" m0-complete-hooks
+  mkdir -p "$dir/scripts/gates" "$dir/docs/internal/product"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-core/src/lib.rs"
+  cat > "$dir/.pre-commit-config.yaml" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: one
+      - id: two
+EOF
+  cat > "$dir/docs/internal/product/requirements.md" <<'EOF'
+| NFR-56 | Pre-commit suite completes within **10 s**. | measured across 9 hooks — and **7 today** |
+EOF
+  cat > "$dir/docs/internal/product/roadmap.md" <<'EOF'
+NFR-56 was measured across 9 hooks — 10 once the budget gate itself joined
+them, and **2 today**.
+EOF
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.25: a hook count no config supports")
+  printf '%s\n' "$dir"
+}
+
 # --- m0-complete.sh: a threshold check-drift.sh cannot see ------------------
 #
 # `M0.23`. ⚠️ **The assertion exists because the convention failed twice.**
@@ -1571,6 +1616,8 @@ run_case "m0-complete.sh (pub trait with no fake beside it)" setup_m0_complete_t
   "pub trait Clock has no FakeClock in oqueue-core"
 run_case "m0-complete.sh (threshold invisible to check-drift.sh)" setup_m0_complete_invisible_threshold invoke_m0_complete \
   "is invisible to check-drift.sh"
+run_case "m0-complete.sh (hook count disagrees with the config)" setup_m0_complete_hook_count invoke_m0_complete \
+  "hooks, .pre-commit-config.yaml has"
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
 run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt

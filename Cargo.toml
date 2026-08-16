@@ -162,7 +162,10 @@ opt-level = 3
 # encodes MIR automatically below ~100 MIR cost units, so small functions do
 # inline unannotated. ⚠️ And LTO does not subsume `#[inline]`: it makes the
 # callee's IR available, while the annotation separately raises LLVM's inline
-# cost threshold, and from ~28 statements up the annotation is what decides.
+# cost threshold, and in a measured band of ~28-32 statements the annotation is
+# what decides. Above it neither form inlines: ADR-0003's table has >=36
+# statements not inlined with or without `#[inline]`, so "from ~28 up" claimed a
+# floor where there is a window.
 # In a monolith LTO is worth a few percent; here it decides
 # whether the codec inlines at all. ⚠️ And `lto = false` with
 # `codegen-units = 1` performs **no LTO whatsoever** — strictly worse than the

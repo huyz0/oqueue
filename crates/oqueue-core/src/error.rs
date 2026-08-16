@@ -2,9 +2,14 @@
 //!
 //! `error-handling.md` rule 3 puts one error enum per crate and builds it with
 //! `thiserror`; rule 5 says it classifies rather than wraps. ⚠️ This is the
-//! *start* of that taxonomy, not the whole of it: `M0.5` brought the variants
-//! its four identifiers produce and `M0.6` the redaction FR-44 needs, and the
-//! seams of `M0.9`-`M0.11` will bring more.
+//! *start* of that taxonomy, not the whole of it: the identifiers, redaction
+//! and the three seams are all here, and `M1` brings a storage backend's
+//! classes — `NotFound`, `PreconditionFailed`, `SlowDown`, `Throttled`,
+//! `Transient`, `Permanent`.
+//! ⚠️ **Whose enum those land in is an open decision**, not this one by
+//! default: M0's boundary review found both seams returning `crate::Error`
+//! against `contracts.md` rule 17, and `M1.md` blocks its taxonomy task on an
+//! ADR.
 
 /// Everything `oqueue-core` can fail at.
 ///

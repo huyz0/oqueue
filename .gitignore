@@ -3,9 +3,14 @@
 /target/
 **/*.rs.bk
 
-# Per-crate and per-tool artifact trees. Coverage runs under a separate
-# CARGO_TARGET_DIR so instrumented and normal builds do not evict each other,
-# and cargo-mutants copies the workspace per worker; both land here.
+# Per-crate and per-tool artifact trees. ⚠️ **Neither of the two paths below is
+# written by anything**, and they are kept as a guard rather than described as
+# a fact: `cargo-llvm-cov` builds into `target/llvm-cov-target` on its own, and
+# `check-coverage.sh` deliberately sets no `CARGO_TARGET_DIR` because doing so
+# overrode the one the negative suite's fixtures configure. `mutants.sh` uses
+# `target/mutants` and `target/mutants-tmp` — all three already covered by
+# `/target/`. The two entries below are siblings of `target/` and so are not;
+# they only matter if someone points a tool at the repository root instead.
 /target-cov/
 /target-mutants/
 # cargo-mutants writes its report tree here, and rotates the previous one.

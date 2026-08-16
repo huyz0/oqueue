@@ -238,7 +238,7 @@ because the requirement they check has no number.
 ⚠️ **M0 was the fourth and no longer is.** Both of its gate constants are
 measured: NFR-55's per-crate coverage floor at 85% (`M0.15`, lowest crate
 carrying logic 91.63%) and NFR-56's pre-commit budget at 10 s (`M0.16`, suite
-measured at 2.27 s across 14 hooks — 15 once the budget gate itself joined them). ⚠️ Both are **floors** — the workspace they
+measured at 2.27 s across 14 hooks — 15 once the budget gate itself joined them, and **16 today** at the `pre-commit` stage — `m0-complete.sh` asserts this sentence's number too, at the boundary). ⚠️ Both are **floors** — the workspace they
 were measured on compiles no async runtime and no cloud SDK, which `M1` changes
 — and neither is resolved by raising the literal when it is first breached.
 

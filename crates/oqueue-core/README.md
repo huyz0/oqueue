@@ -65,7 +65,7 @@ by `check-core-contract.sh`.
 | No workspace dependency, and nothing depends on it in the wrong direction | `scripts/check-layering.sh` |
 | No I/O, no real clock, no object storage | `scripts/check-sans-io.sh` |
 | A method-set change carries every implementor and an ADR in one commit | `scripts/check-core-contract.sh` |
-| Every `pub trait` has a fake beside it, here | ⚠️ **No gate today.** `check-core-contract.sh` checks implementors and the ADR and knows nothing about fakes — `contracts.md` rule 14 says it cannot, and rule 11 says a misplaced fake is "a layering violation ... flag it in review". `m0-complete.sh` (`M0.18`) will assert the property across the milestone; until then it is review's job |
+| Every `pub trait` has a fake beside it, here | `scripts/gates/m0-complete.sh` (`M0.18`), at the milestone boundary — **not** per commit. `check-core-contract.sh` checks implementors and the ADR and knows nothing about fakes: `contracts.md` rule 14 says it cannot, and rule 11 says a misplaced fake is "a layering violation ... flag it in review". ⚠️ So between boundaries this is still review's job, and the gate's scanner is a line pattern — a fake behind `#[cfg(test)]` or inside a `/** */` block satisfies it, recorded in `M0.18`'s notes |
 | No file over 500 lines | `scripts/check-file-size.sh` |
 
 ⚠️ **Watch this crate's size.** A comparable service holds around a dozen traits

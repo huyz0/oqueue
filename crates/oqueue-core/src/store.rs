@@ -33,7 +33,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// ⚠️ [`FakeObjectStore`] cannot catch a violation of either, because it is
 /// strongly consistent and infallible by construction.
 ///
-/// [ADR-0005]: `docs/internal/product/decisions/0005-object-store-seam.md` in
+/// ADR-0005 is `docs/internal/product/decisions/0005-object-store-seam.md` in
 /// this repository.
 pub trait ObjectStore: Send + Sync + core::fmt::Debug {
     /// Fetches an object whole.

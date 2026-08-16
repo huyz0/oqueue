@@ -36,6 +36,12 @@ ignored.
    ~100 MIR cost units**; below that rustc encodes the MIR and inlines it
    unannotated (ADR-0003, measured on 1.97.1). In a
    multi-crate workspace this decides whether the codec inlines at all.
+   ⚠️ **And LTO does not subsume `#[inline]`** — the other half of ADR-0003's
+   correction, which this rule carried without until `M0.25`. The annotation
+   also sets LLVM's `inlinehint`, raising the cost threshold from 225 to 325,
+   and flips the instantiation mode; measured, a body of 28-32 statements
+   inlines with the annotation and not without it **under thin LTO**. Turning
+   LTO on is not a substitute for annotating a hot function.
 6. ⚠️ **`lto = false` with `codegen-units = 1` performs no LTO whatsoever** —
    strictly worse than the stock profile. Setting cgu=1 without setting `lto` is
    a mistake that looks like tuning.

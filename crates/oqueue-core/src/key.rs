@@ -101,7 +101,7 @@ impl WrappedKey {
 /// produced under one key id does not unwrap under another; and no error, log
 /// or panic message it produces contains key material.
 ///
-/// [ADR-0006]: `docs/internal/product/decisions/0006-key-provider-seam.md` in
+/// ADR-0006 is `docs/internal/product/decisions/0006-key-provider-seam.md` in
 /// this repository.
 pub trait KeyProvider: Send + Sync + core::fmt::Debug {
     /// Encrypts a data encryption key under the key-encryption key named by

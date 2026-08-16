@@ -100,7 +100,7 @@ Depth is **2** for every library but the composer. A sixteen-package workspace b
 | `oqueue-coordinator` | Metadata, sequencing, recovery | forbid |
 | `oqueue-compact` | Compaction planning | forbid |
 | `oqueue-broker` | **Composer** — the I/O shell | forbid |
-| `oqueue-testkit` | Fakes, generators, harness (**dev-only**) | forbid |
+| `oqueue-testkit` | Generators and harness, **no fake** (**dev-only**) | forbid |
 | `bin/oqueue` | Composition root | forbid |
 
 Depth 2 for everything but `oqueue-broker`. The unsafe column is [18](18-rust-performance-methodology.md) §5.7's three-crate budget, and it lines up with the split for free — the crates that need `unsafe` are exactly the leaf primitives.

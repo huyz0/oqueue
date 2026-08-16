@@ -12,10 +12,13 @@
 //! The four core identifiers ([`TopicId`], [`PartitionId`], [`Offset`],
 //! [`ObjectKey`]), the [`Error`] enum they can produce, and [`Redacted`] — the
 //! wrapper that makes a secret unprintable so FR-44 holds by construction
-//! rather than by everyone remembering. The trait seams (`Clock`,
-//! `ObjectStore`, `KeyProvider`) arrive in `M0.9` through `M0.11`, shaped as
-//! ADR-0002 decided — [`Clock`] and its [`FakeClock`] are the first, from
-//! `M0.9`.
+//! rather than by everyone remembering. All three trait seams — [`Clock`],
+//! [`ObjectStore`] and [`KeyProvider`] — are here, each with its fake beside
+//! it. ⚠️ Shaped as ADR-0002 decided, which is a rule about the **async**
+//! seams: [`ObjectStore`] and [`KeyProvider`] are one `dyn`-compatible trait
+//! each, returning a hand-written boxed future. [`Clock`] is **not async and
+//! needs no boxing at all** — ADR-0002 says so in as many words, and ADR-0004
+//! rejects a per-call allocation on it by name.
 //!
 //! # The property every identifier here shares
 //!
