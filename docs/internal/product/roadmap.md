@@ -198,6 +198,8 @@ from a decision nobody made. Each must appear in the receiving milestone's plan.
 | The madsim / `object_store` feasibility spike | M1 | Deferred from M-1 because it needs a repo and gates to land properly. Its answer shapes **`standards/testing.md`** — and, per doc 10's resolved log, *not* `architecture.md` or the crate split: madsim swaps the runtime via `cfg` rather than changing crate structure. ⚠️ Doc 10 #32's open-list entry still says it touches "every crate that does async", which the resolved log supersedes — the same un-struck-entry inconsistency as #8. Take the resolved log |
 | Verification against **real S3** | M1 | The conformance suite runs against the fake and MinIO now. ⚠️ **Conditional-write behaviour stays marked unverified until it runs against real S3** — doc 10 #33. If the fake and MinIO are both more permissive than S3, the result is an architectural error, not a test gap |
 | The region header's `alg` field | M3 (from M8) | A few bytes now against a migration later; doc 10 #40. ⚠️ **Moved here from a first reading of "M1" — `M1.7` found `M1`'s object-store seam has no object format to carry the field**; `oqueue-store` stores opaque bytes (`architecture.md`'s Encryption section). `M3`'s multi-topic flush batching (FR-32) is the first milestone that assembles a bundled object, so it is the first commit with a region header to put the field in |
+| A streaming multipart writer, sealed with a `Precondition` | M3 (from M1) | `M1.16` found two things: `object_store` 0.14.1 exposes no public way to condition a `CompleteMultipartUpload` (ADR-0013, tracked upstream as `apache/arrow-rs-object-store#289`), and `ObjectStore::put`'s signature — a complete in-memory `Vec<u8>` — cannot express "unknown final size" at all regardless of that gap. `M1.16` ships unconditional multipart for large payloads only. The actual streaming-writer-with-atomic-seal capability doc 04 §5 motivates multipart with needs a new seam capability, decided where a real caller exists — `M3`'s multi-topic flush batching (FR-32), the same milestone receiving the region-header field above and for the identical reason |
+| Multipart's true per-request cost in `Operation`/`CountingObjectStore` | M14 (from M1) | `M1.14`'s own comment assumed `M1.16` would just add an `Operation` variant for `UploadPart`; found wrong writing `M1.16` — `CountingObjectStore` decorates the `ObjectStore` **trait**, so a multipart `put` is one counted call from that vantage point regardless of how many real HTTP requests the backend issued underneath it. Counting the true cost needs either a backend reporting it back through the trait (a contract change) or accounting living inside each backend — bigger than "add a variant," and belongs with `M14`'s API-cost model (NFR-31), the milestone that already turns this into a bound — `M14.md` task 5 |
 | `security.md` rule 5's `scripts/fuzz.sh` | M2 | Named by a standard, written by nobody, and scheduled nowhere until M0's checkpoint review found it. ⚠️ **The rule reads as enforced and is not.** It belongs with a decoder rather than with M0: `testing.md` rule 24 puts a fuzz target on every decoder, and the first decoder is M2's |
 | `security.md` rules 6-7's `scripts/check-secrets.sh` | M8 | Same shape, same review. It needs secrets to check, and the first key material is M8's. ⚠️ Until it exists, rule 7 is held by review alone — and `M0.6` already had to shape a carve-out around its absence |
 | **How a `minor` review finding gets scheduled** | M2 | ⚠️ `review.md` rule 15 sends a minor to the commit body and rule 16 just below it calls a finding living where nothing reads it one nobody will act on. M0's second half recorded upwards of thirty that way and none became a row until `M0.27`-`M0.29` harvested them by hand. The fix is a **procedure** — some step that harvests commit bodies at a milestone boundary — and choosing one is a decision for whoever owns the loop, not a repair a review may make; M0's boundary review recorded it as `bcf5d6f697f2` rather than re-specifying. ⚠️ **M2 because that is the first milestone whose minors will be about protocol code rather than about prose**, and because the interim rule that rule 15 now states — write the row in the *next* commit — is a workaround that removes the pressure to decide, so a date matters |
@@ -320,12 +322,17 @@ implements the wrong polynomial with no compile error.
 Offsets that are monotonic and gap-free under concurrent producers, the
 offset→object index, the metadata cache, and the high watermark. The
 serialization point is the log append, not the flush, which is what lets many
-writers PUT concurrently without coordinating. ⚠️ **Carries one deferral**:
+writers PUT concurrently without coordinating. ⚠️ **Carries two deferrals**:
 the region header's `alg` field, moved here from an original "M1" reading of
 doc 10 #40 — `M1.7` found `M1`'s object-store seam has no object format to
 carry it, and M3's multi-topic flush batching (FR-32) is the first milestone
 that assembles a bundled object, so its first commit is where the field must
-land.
+land — and a streaming multipart writer sealed with a `Precondition`, moved
+here from `M1.16` (ADR-0013): `object_store` exposes no public way to condition
+`CompleteMultipartUpload`, and `ObjectStore::put`'s in-memory-`Vec<u8>` shape
+cannot express a streaming writer regardless, so the actual seam capability
+this needs is designed here, against whatever `object_store` looks like by
+then, rather than assumed solved in `M1`.
 
 ## M10 — Deterministic simulation and fault injection
 

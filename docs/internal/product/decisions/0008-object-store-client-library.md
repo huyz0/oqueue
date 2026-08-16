@@ -57,7 +57,14 @@ jitter) gives `M1.12` a policy to configure rather than a loop to write, and
 built-in `put_multipart_opts` returning an explicit `MultipartUpload` handle
 (`put_part()`, `complete()`, `abort()` — S3 and GCS do **not** auto-GC orphaned
 parts) covers `M1.9`'s abstraction without `oqueue-store` reimplementing
-multipart bookkeeping per cloud.
+multipart bookkeeping per cloud. ⚠️ **Correction, found implementing `M1.16`
+(ADR-0013): this decision's own earlier claim — "only the *finishing* call
+(`PutObject`/`CompleteMultipartUpload`) can carry a conditional header...
+which is why `M1.16` conditions the multipart completion rather than each
+part" — is wrong for `object_store`'s *public* API.** The crate supports a
+conditional `CompleteMultipartUpload` internally but exposes it on neither
+public multipart trait — see ADR-0013 for the full finding and what `M1.16`
+actually ships instead.
 
 `oqueue-store`'s existing manifest constraint (`check-layering.sh`: only
 `oqueue-core` as a workspace dependency) is unaffected — `object_store` is an

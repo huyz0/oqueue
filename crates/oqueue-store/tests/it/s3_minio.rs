@@ -29,6 +29,7 @@
 #![allow(clippy::expect_used)]
 
 use crate::conformance::{Capabilities, record::record_backend_run, run_conformance_suite};
+use oqueue_core::{ByteRange, Error, MultipartLimits, ObjectKey, ObjectStore, Precondition};
 use oqueue_store::S3Store;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -52,4 +53,64 @@ async fn s3_backend_passes_the_full_conformance_suite_against_minio() {
     );
 
     record_backend_run("s3");
+}
+
+/// `M1.16` — real multipart, against a real endpoint, not just the pure
+/// chunk-planning `s3.rs`'s own unit tests already cover.
+///
+/// ⚠️ **`with_multipart_limits` lowers the trigger threshold to 5 MiB**
+/// (still S3's real *minimum* part size, so every part this test actually
+/// sends is protocol-valid) **rather than leaving it at
+/// `S3_MULTIPART_LIMITS`'s real 5 GiB** — this test would otherwise need a
+/// multi-gigabyte payload to ever reach the multipart path at all. See
+/// `S3Store::with_multipart_limits`'s own doc comment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "T2: needs Docker MinIO and AWS_* env set by CI before the process starts"]
+async fn s3_backend_uploads_a_large_payload_as_multipart_and_reads_it_back() {
+    let limits = MultipartLimits {
+        min_part_size: 5 * 1024 * 1024,
+        max_part_size: 5 * 1024 * 1024,
+        max_parts: 10,
+        max_object_size: 100 * 1024 * 1024,
+    };
+    let store = S3Store::from_env()
+        .expect(
+            "AWS_* environment variables must describe a reachable MinIO endpoint \
+             when this test is run with --ignored",
+        )
+        .with_multipart_limits(limits);
+
+    let key = ObjectKey::new("s3-minio/multipart.seg").expect("a non-empty key");
+    // 11 MiB: two full 5 MiB parts plus a 1 MiB remainder -- proves the
+    // upload actually split into parts, not merely that one large payload
+    // happens to round-trip.
+    let mut payload = vec![0u8; 11 * 1024 * 1024];
+    for (i, byte) in payload.iter_mut().enumerate() {
+        *byte = u8::try_from(i % 256).unwrap_or(0);
+    }
+
+    let meta = store
+        .put(&key, payload.clone(), None)
+        .await
+        .expect("a multipart put against real MinIO succeeds");
+    assert_eq!(meta.size, u64::try_from(payload.len()).unwrap_or(u64::MAX));
+
+    let read_back = store
+        .get(&key, ByteRange::Full)
+        .await
+        .expect("reading a multipart-uploaded object back succeeds");
+    assert_eq!(
+        read_back, payload,
+        "every byte of a multipart upload must round-trip, not just its length"
+    );
+
+    // ADR-0013: this backend cannot condition a multipart completion, and
+    // must say so loudly rather than silently drop the precondition.
+    let result = store.put(&key, payload, Some(Precondition::IfAbsent)).await;
+    assert_eq!(result, Err(Error::Permanent));
+
+    store
+        .delete(std::slice::from_ref(&key))
+        .await
+        .expect("cleaning up the multipart-uploaded object succeeds");
 }

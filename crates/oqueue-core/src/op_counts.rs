@@ -8,11 +8,23 @@ use core::sync::atomic::{AtomicU64, Ordering};
 ///
 /// ⚠️ **Exactly the trait's three methods, no more.** `list()` is
 /// permanently absent — ADR-0009 keeps it off `ObjectStore` entirely, so
-/// there is no call to count. A multipart-specific variant is deferred to
-/// `M1.16`, the first commit that actually issues an `UploadPart`-shaped
-/// call anywhere; adding one now would be counting a call nothing makes yet
-/// (`error-handling.md` rule 6's reasoning, applied to a counter instead of
-/// an error variant).
+/// there is no call to count.
+///
+/// ⚠️ **No multipart-specific variant, even though `M1.16` now issues
+/// `UploadPart`-shaped calls.** This comment used to defer one to exactly
+/// that commit, on the assumption that adding a variant would be enough —
+/// found wrong writing `M1.16`: [`CountingObjectStore`] is a decorator around
+/// the *trait*, composing with any implementor (the fake, S3, later GCS)
+/// alike, and from that vantage point a multipart `put` is still one
+/// [`ObjectStore::put`] call — the same shape whether the backend sent one
+/// `PutObject` or a `CreateMultipartUpload` plus N `UploadPart`s plus a
+/// `CompleteMultipartUpload`. Counting the true per-request cost needs
+/// either a backend reporting it back through the trait (a contract change —
+/// `contracts.md` rule 12, non-negotiable 6) or accounting living inside
+/// each backend instead of as a generic decorator; either is a bigger design
+/// question than "add a variant" and belongs to `M14`'s API-cost model
+/// (NFR-31), the milestone that already owns turning this into a bound —
+/// `roadmap.md`'s deferred-into-a-later-milestone table, `M14.md` task 5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Operation {
     /// [`ObjectStore::get`].
