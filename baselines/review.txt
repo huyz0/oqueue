@@ -46,3 +46,19 @@
 # ── M0 checkpoint review, 2026-08-15 ────────────────────────────────────────
 b501a554054b  M0 sat at sdd.md's 20-task cap, so the review had no legal output. Resolved by amending the cap rather than by splitting M0 or ignoring the finding: the cap's own rationale is "two milestones wearing one name", and M0 is named "Workspace, contracts, and quality gates" — its gate tail is the third thing it is named for. sdd.md now says the number is a heuristic and that exceeding it costs a recorded argument; this is that argument. M0.20 and M0.21 are the rows it permits.
 f44f87664480  security.md's fuzz.sh (rule 5) and check-secrets.sh (rules 6-7) are named by a standard and scheduled nowhere. Not a backlog row, because neither belongs to M0: a decoder fuzz target needs a decoder (testing.md rule 24 puts it with M2) and a secrets gate needs secrets (M8). Recorded instead in roadmap.md's "Deferred into a later milestone" table, which exists for exactly this and which the finding correctly notes was the thing nobody updated.
+
+# ── M0's boundary review ────────────────────────────────────────────────────
+#
+# ⚠️ Five majors argued rather than made M0 rows, because each belongs to a
+# milestone that has not started and M0 is already over `sdd.md`'s task cap
+# with a recorded argument. ⚠️ **An argument that only lives here is the
+# failure `M-1.47` names**, so every line below names where the obligation
+# actually lives — four in `M1.md`, and the fifth in `roadmap.md`'s deferral
+# table, which is the mechanism this project already uses for an obligation
+# with no owning milestone yet. This file records that the review saw it land
+# there; it is not itself the record.
+8a292bf49bcd  NFR-56's exemption becomes unfailable as compile cost grows, and M1 is the milestone that adds the compile cost — M1.md's "Inherited from M0's boundary review" carries it
+59eed6d3205d  security.md's applies_to routes it to none of the code holding secrets; M1 writes the first code carrying credentials, and M1.md's "Inherited" section carries it
+a4d96f6ba946  whose enum holds a seam's errors is an ADR, not a task — M1.md's "Decisions required first" now lists it and blocks task 3 on it
+bcf5d6f697f2  spec-wrong, and per the milestone-review skill that is a decision rather than a task: review.md rule 15 records the tension with rule 16 openly and roadmap.md's deferral table carries the decision into M2, since the fix is a procedure whose owner is not this review
+791bd61fbe20  three copies of one TOML parser, reachable by the first [[bench]] and by a [target.*.dependencies] table; M1 adds the first real dependency tree and M1.md's "Inherited" section carries it

@@ -126,7 +126,20 @@ milestone loop is called out.
     the hash and force the re-review this rule exists to prevent. If the minor
     is work worth scheduling, that is a decision and a later commit. Fixing it is
     permitted and usually wrong: the hash changes, review re-runs, and the new
-    round's surface is the prose the fix just added. ⚠️ **Rule 13's
+    round's surface is the prose the fix just added.
+
+    ⚠️ **This rule and rule 16 are in tension, and M0's boundary review said so
+    rather than resolving it** (finding `bcf5d6f697f2`). Rule 16 four lines
+    below calls a finding that lives where nothing reads it "one nothing will
+    act on"; a commit body is such a place — `next-task` reads the backlog and
+    so does everyone else. M0's second half recorded roughly thirty minors this
+    way and none became a row. ⚠️ **Recorded as an open decision, not
+    silently re-specified**, because the fix is a *procedure* — some step that
+    harvests commit bodies at a milestone boundary — and choosing one is a
+    decision for whoever owns the loop, not a repair a review may make on its
+    own authority. Until that decision exists, a minor worth scheduling should
+    be written as a backlog row in the **next** commit, which costs nothing and
+    is what rule 16 asks for. ⚠️ **Rule 13's
     "fixed means review re-runs" governs blocking findings only**; reading it
     onto minors is what turns one review into five; M0.3's commit body records
     that count.

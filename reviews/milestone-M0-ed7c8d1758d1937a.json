@@ -1,0 +1,128 @@
+{
+  "commits": [
+    "7ea38898d1de2ce25c4d67ff7e0fc0315824fe95",
+    "dbe140d6f3d138ae505c8e7fdc21b058e4e2bb09",
+    "fabd3fedffc561e75fbcef14e0fab5aff9981d7f",
+    "8cc5e3b0de477e1869be08cbc674d3ba428acea5",
+    "669e563d942c971ec4c66a3d04b584127b7da399",
+    "b27ee8c96a53c306ddfad6b517d321da448d24ad",
+    "b84092b9deacaffa67b7b0c6925258444033aa74",
+    "05b3b081767d58904f7d11e463160c905f1319b3",
+    "f79f422ee9b8a85b8260484b6a50288a400c1fbd",
+    "2bcf6f66c3440274cae64dcd9af7f174d54ffbbe",
+    "5e4819c6eaffcb3960cf29d515f5d01a28024adb",
+    "dab1ce05c706075bcce081f68c03d03bcbd2d09c",
+    "b7d905b360ec3ece5c2f0a5b8c2439cf72143bb0",
+    "28413769ddabbe8b181b27c5a3746187b3364565"
+  ],
+  "findings": [
+    {
+      "evidence": "scripts/check-drift.sh:63 THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor' against scripts/check-budget.sh:93 (BUDGET_MS=10000) and :101 (COMPILING_GATE_MS=5000); measured: grep -nEi with that regex matches COVERAGE_FLOOR and neither of the other two. Compare backlog.md's M0.15 note 'The constant is called COVERAGE_FLOOR, and the name is load-bearing'. scripts/gates/m0-complete.sh:101-104 covers BUDGET_MS at the boundary only and COMPILING_GATE_MS nowhere.",
+      "id": "a09fd05276cb",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-drift.sh's name matcher does not see NFR-56's BUDGET_MS or the COMPILING_GATE_MS that decides whether the budget applies, so non-negotiable 2 is unenforced for both one commit after M0.15 renamed COVERAGE_FLOOR for exactly this reason.",
+      "task_id": "M0.23"
+    },
+    {
+      "evidence": "scripts/check-budget.sh:210-226 (compiling_n > 0 && warm_ms <= BUDGET_MS => skip, trend 'compiling:<gate>') against :58-62 ('slowest > COMPILING_GATE_MS alone would have made this gate unfailable from M0.17 onward'); scripts/check-mutants.sh:36-44 and backlog.md's M0.17 note record 4.8 s warm for a 13-mutant diff and cost proportional to the change. The stated mitigation, suite.tsv, is gitignored and per :68 read by nothing.",
+      "id": "8a292bf49bcd",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-budget.sh exempts any run containing a gate over 5 s, and check-mutants.sh is measured at 4.8 s and scales with diff size, so NFR-56 becomes unfailable exactly when the suite is slow \u2014 the property the header says it rejected the alternative rule for having.",
+      "task_id": ""
+    },
+    {
+      "evidence": "Measured: every scripts/*.sh named by any .agents/skills/*/SKILL.md exists (10 of 10), against .agents/skills/README.md:60-67 'a few scripts these skills invoke ... are still unwritten'. Only check-secrets.sh and fuzz.sh are missing repo-wide; neither has a backlog row and both are scheduled in roadmap.md's 'Deferred into a later milestone' table (M2, M8), which AGENTS.md:73-76 and .agents/skills/README.md:71-74 do not mention. Compare M0.1's acceptance in backlog.md: 'neither file claims a script is missing that is present'.",
+      "id": "c0f705e6c25d",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "The two agent-facing index files M0.1 was written to correct are false again at HEAD, falsified by M0.2 and M0.17, and their 'no backlog row means unscheduled' instruction is wrong for both of the two scripts that are actually missing.",
+      "task_id": "M0.24"
+    },
+    {
+      "evidence": "Measured: ./scripts/which-standards.sh crates/oqueue-core/src/redacted.rs, .../key.rs and Cargo.toml return no security.md. docs/internal/standards/security.md:6 applies_to. Commit 319ae68 (M0.6) created Redacted<T> for FR-44 and amended security.md rule 7 while touching only oqueue-core and that standard \u2014 routed to eight standards, none of them security.md. Same class as the '*/bin/oqueue/*' glob bug M0.12 fixed for three standards without auditing the rest.",
+      "id": "59eed6d3205d",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "security.md is routed to none of the files holding secret material or to the root manifest its own rule 4 gates, because its applies_to excludes oqueue-core and bin/oqueue \u2014 the crates M0 put every secret-handling type and the KeyProvider choice in.",
+      "task_id": ""
+    },
+    {
+      "evidence": "crates/oqueue-core/src/store.rs:44,51 and src/key.rs:114-130 return crate::Result; crates/oqueue-crypto/src/lib.rs defines no enum and returns Error::EncryptionDisabled, a variant core itself cannot produce. contracts.md rule 17 and error-handling.md rule 3 ('each crate defines its own error enum') and rules 7-8 (classification belongs to the producing seam, naming ObjectStore's NotFound/SlowDown/Throttled/Transient/Permanent). ADR-0002 does not discuss the error type; ADR-0006 consequence 5 records the gap for KeyProvider only; ADR-0005 records none. M1.md item 3 schedules the taxonomy without naming a crate.",
+      "id": "a4d96f6ba946",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "Both async seams return oqueue-core::Error and oqueue-crypto defines no error enum, so M0 has fixed by omission that every backend's failure taxonomy lands in core's enum \u2014 against contracts.md rule 17 and error-handling.md rules 3, 7 and 8, and with no ADR recording the choice.",
+      "task_id": ""
+    },
+    {
+      "evidence": "docs/internal/standards/review.md rule 15 ('Record it in the commit body ... Nothing else, and deliberately') against rule 16 ('a finding that lives only in a review artifact is one nothing will act on, since next-task and everyone else reads the backlog'). reviews/milestone-M0-e3e14bcb39e883fe.json finding 10030c61e3c0 and 7ea3889's commit body ('recorded their learnings in commit messages, which nothing reads'). No skill under .agents/skills/ has a step that harvests them.",
+      "id": "bcf5d6f697f2",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "review.md rule 15 sends every minor finding to the commit body and names no step that ever collects it, which rule 16 four lines below calls the reason a finding goes unacted on; the checkpoint review found this once, M0.20 repaired five instances by hand, and the second half of M0 recorded about thirty more with none scheduled.",
+      "task_id": ""
+    },
+    {
+      "evidence": "Cargo.toml:165 ('from ~28 statements up') vs ADR-0003's body-size table; build.md rule 5 missing ADR-0003's 'LTO does not subsume #[inline]' half; crates/oqueue-core/src/clock.rs:59-62 ('in program order') vs ADR-0004 guarantee 5 at :50; performance.md:144 ('Full mutation run, sharded | scripts/mutants.sh') vs scripts/mutants.sh:4-6; the broken '[ADR-000n]:' reference-link definitions in clock.rs:64, store.rs:36, key.rs:104 (recorded as an M0.9 minor, then replicated twice); crates/oqueue-core/README.md's Invariants row claiming the fake-per-trait property has 'No gate today' while scripts/gates/m0-complete.sh section 2 asserts it; crates/oqueue-core/src/lib.rs:15-18 and src/error.rs:5-7 narrating the seams as forthcoming; docs/researches/19-workspace-engineering.md:103 vs :136 and architecture.md's corrected testkit cell; .gitignore's /target-cov/ and /target-mutants/ comment vs check-coverage.sh:120-126 and mutants.sh:79-90; hook count 15 in requirements.md and roadmap.md vs 16 in check-budget.sh:83 and .pre-commit-config.yaml.",
+      "id": "8ffbcbf467f5",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "Ten documentation claims across binding standards, the root manifest, oqueue-core's rustdoc and README, the corpus and .gitignore are false at HEAD, in a milestone whose own stated convention is that the commit falsifying a sentence is the commit that fixes it.",
+      "task_id": "M0.25"
+    },
+    {
+      "evidence": "scripts/check-layering.sh:110 and :129 and scripts/check-readmes.sh:93 all use ^\\[([A-Za-z0-9_.\\-]+)\\]$ and skip unmatched headers, against the fixed scripts/check-layering.sh:151-185 sections(). Failure shapes: [[bench]] after [dependencies] makes runtime_deps return {name, harness} so check-readmes.sh refuses a valid manifest, and [[bench]] harness = false is what check-hot-path-bench.sh makes mandatory; a dependency declared only under [target.\"cfg(unix)\".dependencies] is invisible to check-layering.sh \u2014 a silent pass on NFR-52. check-readmes.sh:50-59 argues the duplication from 'no shared Python module exists yet'; backlog.md's M0.21 note defers the fix to this review.",
+      "id": "791bd61fbe20",
+      "kind": "abstraction",
+      "severity": "major",
+      "summary": "Three copies of one hand-rolled TOML section parser exist and only one was fixed, so the sticky-section bug security.md rule 4's gate was written to close still lives in package_name(), runtime_deps() and check-readmes.sh \u2014 reachable by the first [[bench]] M2 adds.",
+      "task_id": ""
+    },
+    {
+      "evidence": "scripts/gates/m0-complete.sh:382-386 asserts only that a run_case line exists, and :389-392 reports the suite's verdict verbatim; tests/gates/negative.sh registers those two cases behind _have_llvm_cov and _have_mutants and skips them otherwise. Compare :149-154, where a missing cargo is a fail with the note 'a skip here would report M0 complete having checked nothing'. Run here with both tools present: 26 checks, only the boundary-review assertion failing.",
+      "id": "aaf99e798fdc",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "m0-complete.sh reports 'every gate fails on a broken artifact' on a machine where the check-coverage.sh and check-mutants.sh cases skipped, so half of M0's new gates can be declared complete having never been watched to fail \u2014 the skip-is-a-pass shape the same gate fails on for cargo.",
+      "task_id": "M0.26"
+    },
+    {
+      "evidence": "bin/oqueue/src/main.rs:95, crates/oqueue-core/tests/it/store.rs:19-33, crates/oqueue-core/tests/it/key.rs:12, crates/oqueue-crypto/tests/it/no_op.rs:13; crates/oqueue-testkit/README.md 'duplicating those across ten crates would guarantee they drift'.",
+      "id": "430324b96334",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "Four copies of the Waker::noop() busy-poll block_on exist while oqueue-testkit is empty and its README says duplicating a harness would guarantee drift; store.rs's copy argues it is 'confined to this file rather than offered as a helper', which the next three commits contradicted. Non-actionable: M1 takes a runtime and deletes the question.",
+      "task_id": ""
+    },
+    {
+      "evidence": "crates/oqueue-buf/AGENTS.md vs crates/oqueue-buf/README.md's final section, and the same pattern in the other ten crates; code-structure.md rule 14 ('short and specific, not a copy') and rule 13 ('this is the section that earns the file'). Recorded as an M0.8 minor.",
+      "id": "efa54e830a03",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "Every crate's AGENTS.md 'Easy to get wrong here' section is verbatim its README's 'Notes' bullets, in a file whose opening line says it holds what is specific to changing the crate, with no gate comparing the two.",
+      "task_id": ""
+    },
+    {
+      "evidence": "scripts/mutants.sh:63 args=(--colors=never --no-times); testing.md rule 18 ('size it against the suite under the parallelism the mutation run actually uses, not idle').",
+      "id": "a4ddd5ee5734",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "mutants.sh passes no --timeout, and testing.md rule 18 \u2014 the one mutation rule about run configuration \u2014 is neither implemented nor recorded as a decision to rely on cargo-mutants' default.",
+      "task_id": ""
+    },
+    {
+      "evidence": "bin/oqueue/Cargo.toml:32 versus ADR-0007 and 05b3b08's commit body ('the variable is _RJEM_MALLOC_CONF: the unprefixed MALLOC_CONF is read by nothing and fails silently').",
+      "id": "4ebfd6204f3c",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "bin/oqueue's heap-profiling feature doc still names MALLOC_CONF, the variable ADR-0007 bolds as read by nothing, in the manifest entry whose purpose is preventing a feature that does not profile.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M0",
+  "recorded_at": "2026-08-15T23:58:39Z",
+  "reviewer": "claude-opus-5 (fresh milestone-review agent, did not drive M0)",
+  "verdict": "changes-requested"
+}
