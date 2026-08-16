@@ -186,6 +186,27 @@ pub enum Error {
         object_size: u64,
     },
 
+    /// The backend is asking the caller to slow down.
+    ///
+    /// Retry forever with backoff (`error-handling.md` rule 7) — this class
+    /// never becomes permanent on its own.
+    #[error("backend requested slow-down")]
+    SlowDown,
+
+    /// The backend rejected the request as over its rate limit.
+    ///
+    /// Retry forever with backoff, same as [`Error::SlowDown`].
+    #[error("backend throttled the request")]
+    Throttled,
+
+    /// A transient backend failure — a network blip, a `500`.
+    ///
+    /// Retry a bounded number of times, then give up (`error-handling.md`
+    /// rule 7) — unlike [`Error::SlowDown`]/[`Error::Throttled`], repeated
+    /// occurrence is a real failure rather than expected backpressure.
+    #[error("transient backend failure")]
+    Transient,
+
     /// A conditional `put` lost the race its [`crate::Precondition`] named.
     ///
     /// ⚠️ **Never retried automatically at the point it is detected**

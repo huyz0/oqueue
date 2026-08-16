@@ -33,6 +33,7 @@
 mod byte_range;
 mod clock;
 mod error;
+mod fault;
 mod key;
 mod object_key;
 mod object_meta;
@@ -46,6 +47,7 @@ mod topic;
 pub use byte_range::ByteRange;
 pub use clock::{Clock, FakeClock, Timestamp};
 pub use error::{Error, Result};
+pub use fault::{FaultConfig, StormKind};
 pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use object_key::ObjectKey;
 pub use object_meta::{ObjectMeta, PreconditionToken};

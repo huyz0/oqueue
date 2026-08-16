@@ -1,6 +1,10 @@
 //! The object-storage seam, and the trivial fake that makes it testable.
 
-use crate::{ByteRange, Error, ObjectKey, ObjectMeta, Precondition, PreconditionToken, Result};
+use crate::fault::DelayedThen;
+use crate::{
+    ByteRange, Error, FaultConfig, ObjectKey, ObjectMeta, Precondition, PreconditionToken, Result,
+    StormKind,
+};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -35,8 +39,12 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// have landed and only the acknowledgement been lost, so a failed `put` is
 /// not proof of absence. And **visibility is strong per key**: absent a later
 /// `put`, a `get` after a successful `put` never returns `ObjectNotFound`.
-/// ⚠️ [`FakeObjectStore`] cannot catch a violation of either, because it is
-/// strongly consistent and infallible by construction.
+/// ⚠️ [`FakeObjectStore`] cannot catch a violation of the *second* one — it is
+/// strongly consistent by construction, and nothing in `M1.8`'s fault
+/// injection changes that. It **can** now demonstrate the *first*: with
+/// [`FaultConfig::crash_after_put_before_ack`] installed, a `put` durably
+/// writes the object and still resolves `Err`, exactly the ambiguity this ADR
+/// documents — see that field's own doc comment.
 ///
 /// ADR-0005 is `docs/internal/product/decisions/0005-object-store-seam.md`,
 /// ADR-0009 is `docs/internal/product/decisions/0009-object-store-error-home-and-list-placement.md`,
@@ -64,8 +72,12 @@ pub trait ObjectStore: Send + Sync + core::fmt::Debug {
     /// # Errors
     ///
     /// [`Error::PreconditionFailed`] if `precondition` is `Some` and does not
-    /// hold. Otherwise implementation-defined; the fake here cannot fail
-    /// unconditionally.
+    /// hold. Otherwise implementation-defined — the fake here does not fail
+    /// unconditionally *by default*, but can be made to with a [`FaultConfig`]
+    /// installed (`M1.8`): [`Error::SlowDown`]/[`Throttled`][Error::Throttled]/
+    /// [`Transient`][Error::Transient] from a storm, or a durable write that
+    /// still resolves [`Error::Transient`] from
+    /// [`FaultConfig::crash_after_put_before_ack`].
     fn put<'a>(
         &'a self,
         key: &'a ObjectKey,
@@ -82,7 +94,9 @@ pub trait ObjectStore: Send + Sync + core::fmt::Debug {
     ///
     /// # Errors
     ///
-    /// Implementation-defined; the fake here cannot fail.
+    /// Implementation-defined; the fake here does not fail *by default* —
+    /// same storm-driven exception as [`ObjectStore::put`]'s, with a
+    /// [`FaultConfig`] installed (`M1.8`).
     fn delete<'a>(&'a self, keys: &'a [ObjectKey]) -> BoxFuture<'a, Result<()>>;
 }
 
@@ -124,21 +138,33 @@ struct KeySlot {
 /// Deliberately trivial. It stores bytes, slices them on a ranged `get`,
 /// tracks a per-key generation for [`ObjectMeta::precondition_token`], and
 /// checks a [`Precondition`] atomically against that generation on `put` —
-/// but models no latency and no failure. ⚠️ Which means a test passing
-/// against it has shown nothing about how the code behaves when a `put`
-/// fails after the object landed, or how a conditional write behaves under
-/// real concurrency rather than a single `Mutex`'s serialization. `M1.8` is
-/// where that is bought.
+/// and — with a [`FaultConfig`] installed — latency, error storms, and a
+/// `put` that lands its object but reports failure anyway. ⚠️ **Every fault
+/// defaults to off**: [`FakeObjectStore::new`] behaves exactly as it did
+/// before this existed. What it still cannot show is how a conditional write
+/// behaves against a backend whose atomicity is weaker than a single
+/// `Mutex`'s — that risk is `M1`'s conformance suite's, against real S3 and
+/// GCS, not this fake's to simulate.
 #[derive(Default)]
 pub struct FakeObjectStore {
     slots: Mutex<HashMap<ObjectKey, KeySlot>>,
+    faults: Mutex<FaultConfig>,
 }
 
 impl FakeObjectStore {
-    /// An empty store.
+    /// An empty store, no faults injected.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An empty store, with `faults` installed.
+    #[must_use]
+    pub fn with_faults(faults: FaultConfig) -> Self {
+        Self {
+            slots: Mutex::default(),
+            faults: Mutex::new(faults),
+        }
     }
 
     /// How many objects currently have a payload — a key whose slot survives
@@ -164,6 +190,48 @@ impl FakeObjectStore {
         self.slots
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// A separate lock from `slots` — fault bookkeeping is orthogonal to the
+    /// data it affects, and sharing one lock would make every fault-off call
+    /// (the common case) contend on state it never touches.
+    fn faults(&self) -> std::sync::MutexGuard<'_, FaultConfig> {
+        self.faults
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Waits out [`FaultConfig::latency_polls`], every call, unconditionally.
+    fn delay(&self) -> DelayedThen<(), impl FnOnce()> {
+        let polls = self.faults().latency_polls;
+        DelayedThen::new(polls, || ())
+    }
+
+    /// If a storm is active and has calls remaining, consumes one and
+    /// returns its error; otherwise leaves the config untouched.
+    fn take_storm_error(&self) -> Option<Error> {
+        let mut faults = self.faults();
+        let (kind, remaining) = faults.storm?;
+        let result = if remaining == 0 {
+            faults.storm = None;
+            None
+        } else {
+            faults.storm = Some((kind, remaining - 1));
+            Some(kind)
+        };
+        drop(faults);
+        result.map(StormKind::into_error)
+    }
+
+    /// If a `put` should crash-after-write, consumes one occurrence and
+    /// returns `true`; otherwise leaves the config untouched.
+    fn take_crash_after_put(&self) -> bool {
+        let mut faults = self.faults();
+        if faults.crash_after_put_before_ack == 0 {
+            return false;
+        }
+        faults.crash_after_put_before_ack -= 1;
+        true
     }
 }
 
@@ -226,6 +294,10 @@ fn slice_range(key: &ObjectKey, payload: &[u8], range: ByteRange) -> Result<Vec<
 impl ObjectStore for FakeObjectStore {
     fn get<'a>(&'a self, key: &'a ObjectKey, range: ByteRange) -> BoxFuture<'a, Result<Vec<u8>>> {
         Box::pin(async move {
+            self.delay().await;
+            if let Some(err) = self.take_storm_error() {
+                return Err(err);
+            }
             let payload = self
                 .lock()
                 .get(key)
@@ -242,6 +314,10 @@ impl ObjectStore for FakeObjectStore {
         precondition: Option<Precondition>,
     ) -> BoxFuture<'a, Result<ObjectMeta>> {
         Box::pin(async move {
+            self.delay().await;
+            if let Some(err) = self.take_storm_error() {
+                return Err(err);
+            }
             let size = payload.len();
             let generation = {
                 let mut slots = self.lock();
@@ -274,6 +350,16 @@ impl ObjectStore for FakeObjectStore {
                 );
                 generation
             };
+            // ⚠️ **Checked after the write, not instead of it.** The object
+            // is already durably in `slots` by this point — this fault
+            // simulates exactly ADR-0005's documented ambiguity, where a
+            // `put` that resolves `Err` does not mean the object is absent.
+            // A caller that treated this `Err` as proof of absence, then
+            // retried unconditionally, would have masked the very case this
+            // fault exists to exercise.
+            if self.take_crash_after_put() {
+                return Err(Error::Transient);
+            }
             Ok(ObjectMeta {
                 // `payload.len()` is bounded by what actually fit in memory
                 // to construct this future, so a lossy cast here never loses
@@ -287,6 +373,10 @@ impl ObjectStore for FakeObjectStore {
 
     fn delete<'a>(&'a self, keys: &'a [ObjectKey]) -> BoxFuture<'a, Result<()>> {
         Box::pin(async move {
+            self.delay().await;
+            if let Some(err) = self.take_storm_error() {
+                return Err(err);
+            }
             {
                 let mut slots = self.lock();
                 for key in keys {
