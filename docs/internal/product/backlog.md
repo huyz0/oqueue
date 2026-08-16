@@ -38,8 +38,14 @@ could be chosen. No broker behaviour: what M0 delivers is the shape everything
 else is written into, plus the first real exercise of gates M-1 wrote against an
 imagined codebase.
 
-⚠️ **M0 carries 30 rows, over `sdd.md`'s cap of 20, and here is the argument the
-standard requires.** The cap's own rationale is "two milestones wearing one
+⚠️ **M0 carries 33 rows, over `sdd.md`'s cap of 20, and here is the argument the
+standard requires.** ⚠️ **The count went stale once, at 30**, surviving two
+commits that added rows — and the first attempt at this very sentence wrote 32
+against a staged tree of 33, because the row adding the correction is itself a
+row. `roadmap.md` met the same problem and deleted its copy; this one keeps a
+number only because `sdd.md` asks the argument to say what it is arguing about.
+Treat it as a claim to re-derive rather than to trust:
+`grep -cE '^\| M0\.[0-9]+ \|' docs/internal/product/backlog.md`. The cap's own rationale is "two milestones wearing one
 name". M0 is named *Workspace, contracts, and quality gates*: `M0.0`-`M0.13`
 build the workspace and the contracts, `M0.14`-`M0.18` and `M0.21` build the
 quality gates, and the third of those is a thing the milestone is named for
@@ -69,8 +75,27 @@ starts being a way to keep a milestone open, because the *supply* of recorded
 minors is renewed by every commit that fixes one. **The bound is that these
 three rows are scoped to what was written down before they opened**, not to
 whatever the reviews of these three rows produce; anything they record goes to
-M1 or to the procedure decision `roadmap.md` defers into M2. A sixth bucket
-would be the growth `sdd.md` names, without qualification. ⚠️ The forcing
+M1 or to the procedure decision `roadmap.md` defers into M2.
+
+⚠️ **A sixth bucket arrived anyway, and here is why it is not the growth
+`sdd.md` names.** `M0.30`-`M0.32` come from M0's **closing** boundary review —
+the one that cannot happen until the last row is done, so its findings cannot
+be scheduled before the milestone is otherwise finished. `M0.30` is the largest
+and the closest to new capability: a CI step and a standard rule. It is here
+rather than in M1 because what it fixes is `M0`'s own gates ceasing to run *at
+the moment M0 closes* — a defect with a deadline of this commit. `M0.32` is sentences
+`M0.30` falsified, which is the third bucket's test applied to the third
+bucket. ⚠️ `M0.31` is **not** that — its two documents were false before M0's
+tail touched them — and it is here because the closing review raised them and
+`review.md` rule 16 needs a major finding to name a row. That is the narrow
+licence: a finding *this milestone's own review* made, not any pre-existing
+false sentence anyone notices.
+
+⚠️ **And that is the last one.** The rule this milestone has now demonstrated
+five times is that a closing review's findings regenerate the set they are
+bounded by. `M1` inherits what M0's closing review found and did not fix —
+`M1.md` carries it — and a **seventh** bucket would be the growth without
+qualification, with nothing left to distinguish it from simply not ending. ⚠️ The forcing
 issue: a milestone at exactly the cap has **no legal way to act on its own
 boundary review**, since `review.md` rule 16 needs a major finding to name a
 row. A decomposition rule that forbids the outer loop from working is the rule
@@ -119,6 +144,7 @@ see — and a count is not that evidence if it is only asserted.
 | M0.29 | Every documentation minor M0 recorded and did not fix | ⚠️ **Bounded by what is written down**, not by a fresh audit: the `Recorded, not fixed` sections of M0's commit bodies plus the two boundary-review artifacts. `review.md`'s "four lines below" is fourteen and was replicated into two more documents; `roadmap.md` says 31 minors where two other files say roughly thirty, and carries a doubled word; rule 15's interim sentence is in neither skill that loads at review time, which `M0.19`'s acceptance required; `AGENTS.md` explains a missing script by an M-1 row `M0.16` closed; `.agents/skills/README.md` says seven standards where there are fourteen; `backlog.md` quotes `THRESHOLD_RE`'s pre-`M0.23` value; `build.md` rule 7 says gating `release` gates all four profiles, which is a property of today's manifest and not of the gate; three rustdoc bodies still render a literal `[ADR-000n]`; `testing.md` still calls the full run sharded; `bin/oqueue`'s manifest still names `MALLOC_CONF`. ⚠️ Each is either fixed or given a stated reason it stays. Serves no FR/NFR | done |
 | M0.30 | The milestone-boundary gate tier survives the milestone that wrote it | ⚠️ `tests/gates/negative.sh` and `check-milestone-review.sh` are invoked by **nothing** in `.pre-commit-config.yaml` or `gates.yml` — their only callers are `m-1-complete.sh` and `m0-complete.sh`, which are themselves invoked by nothing and which the `milestone` skill runs only while their own milestone is current. So the day M0's verdict lands, the project's proof that its gates can fail has zero invokers. ⚠️ **And the rule underneath it — "a gate nobody has watched fail is a gate nobody has tested" — is in no standard**: `grep -rin "watched to fail" docs/internal/standards/` returns nothing, and it lives only in backlog acceptance rows and one script header. Acceptance: **CI invokes `tests/gates/negative.sh` on every push**, and `testing.md` states the rule and names the suite. ⚠️ **`check-milestone-review.sh` is deliberately excluded, and this clause was amended to say so** rather than argued past in the notes: it is a *completion* gate that is red for most of a milestone's life by design, so a per-push step would be red on a tree where every other gate passes — review measured it at 4 of 31 the moment it was wired. `reviews/README.md`'s claim that CI *can* check milestone coverage stays a capability claim and is not made into a wired step here; doing that needs a gate that knows what a **closed** milestone is, which nothing does. Serves NFR-50 | done |
 | M0.31 | Two documents asserting a defect that is not there, and an invariant that is | ⚠️ `oqueue-broker/README.md`'s Invariants row says the crate "names no concrete backend, clock or **socket** type" — in the same file, below its own "the sockets have to be somewhere. This crate is that somewhere", and beside the `check-sans-io.sh` exemption that exists to permit them. `architecture.md` names three seams and none is a socket, so the row cannot be read as scoped to seam implementations; the first commit that writes the connection loop falsifies it, and the row's own cell says review is the only holder. ⚠️ And `M1.md` routes "ADR-0005's FR-50 citation where FR-31 is the requirement" — but ADR-0005 disclaims FR-31 deliberately, in a paragraph of its own, so an M1 executor following that bullet edits a correct disclaimer into a contradiction. ⚠️ The citation is still one of the five survivors `M0.29` counted and `M1.md` now enumerates — its fix is to drop the parenthesis or cite NFR-51, not to write FR-31. Serves no FR/NFR | done |
+| M0.32 | The three prose defects M0's closing review found, and a cap argument that covers them | ⚠️ Three sentences are false at HEAD and none is recorded anywhere: `M1.md` routes `SKIPPED_COUNT` as "read by nothing repo-wide" when `M0.30` wired CI to read it one commit later — **an executor following that bullet breaks CI**, which is exactly the shape `M0.31` was written for, recurring in the same section one commit on; `backlog.md`'s cap argument says 30 rows against a table that has grown past it, and stops enumerating at `M0.29`, having declared that a sixth bucket is the unqualified growth `sdd.md` forbids; and `gates.yml` says `reviews/README.md`'s CI claim "stays untrue, and `M0.30`'s notes say so" while those notes say the opposite. ⚠️ **And the five minors `M0.30` and `M0.31` recorded get rows or a routed home**, one of them promised "a row in the next commit" by its own commit body — `review.md` rule 15's interim instruction, unfollowed by the two commits after the one that mirrored it into both skills. Acceptance: each of the three sentences is true; the cap argument covers through this row and is re-argued rather than renumbered; the five have a home a plan reads. Serves no FR/NFR | done |
 | M0.19 | Two rules in `review.md` that bound the loop: a claim about tool behaviour is measured before it is written, and a `minor` on a `pass` is recorded rather than re-reviewed | `review.md` gains both; `which-standards.sh` selects `review.md` for a shell script and a research document, which is where two of the three worked examples lived; the `review` and `milestone` skills that duplicate the resolution rules agree with rule 15, including that nothing is staged for a minor. ⚠️ Comment-density, criterion-length and ADR-length rules were cut from this task — no gate, and the criterion-length one made the 20-task cap binding in the commit that filled slot 20. ⚠️ Names no FR/NFR; `M0.0`'s criterion that every other row does was true when `M0.0` closed | done |
 
 ⚠️ **M0.15 through M0.18 are not blocked by NFR-55 and NFR-56 being

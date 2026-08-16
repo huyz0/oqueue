@@ -267,6 +267,10 @@ jobs:
       # life by design, and a per-push step would be red on a tree where every
       # other gate passes — making a real failure indistinguishable from work in
       # progress, which is the shape this workflow's own header already records
-      # a finding against. `reviews/README.md`'s claim that CI can check
-      # milestone coverage stays untrue, and `M0.30`'s notes say so rather than
-      # this step pretending otherwise.
+      # a finding against. ⚠️ `reviews/README.md`'s claim that CI *can* check
+      # milestone coverage is a claim about **capability** and is true — the
+      # verdicts are tracked, so CI could. What is absent is a wired step, and
+      # `M0.30`'s notes say exactly that. An earlier version of this comment
+      # said the claim "stays untrue" and attributed that to those notes, which
+      # say the opposite; the failure mode was a reader deleting a correct
+      # sentence.
