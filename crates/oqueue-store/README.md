@@ -27,8 +27,9 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 
 | Must stay true | Held by |
 |---|---|
-| Every backend passes the same conformance suite | `M1`'s suite |
+| Every backend passes the same conformance suite | `M1`'s suite, against the fake and S3 (MinIO). ⚠️ **Not yet GCS** — ADR-0014: no available emulator round-trips `object_store`'s GCS requests yet, so `GcsStore` is T0-verified only |
 | Conditional-write semantics match real S3 | ⚠️ **unverified until it runs against real S3** — doc 10 #33 |
+| Conditional-write semantics match real GCS | ⚠️ **unverified against anything live at all**, not even an emulator — ADR-0014, stronger than the S3 row above |
 
 ## Notes for whoever touches this
 

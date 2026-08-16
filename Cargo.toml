@@ -72,18 +72,18 @@ mimalloc = "0.1"
 # Heap profiling, behind a non-default feature. ⚠️ Its ARM page-size trap is
 # why the feature is off by default — see ADR-0007.
 tikv-jemallocator = "0.6"
-# `oqueue-store`'s S3 and GCS backends. ADR-0008 (`M1.1`). `aws` for `M1.15`'s
-# S3 backend; `gcp` reserved for `M1.17`, added when that commit actually
-# needs it rather than compiled unused here. `ring`, not `aws-lc-rs`: ADR-0012
-# keeps the default build's dependency footprint at cargo + a C compiler
-# (NFR-42) — `aws-lc-rs`'s FIPS-validated path needs CMake and Go, a cost `M8`
-# alone should pay.
+# `oqueue-store`'s S3 and GCS backends. ADR-0008 (`M1.1`). `aws-base` for
+# `M1.15`'s S3 backend; `gcp-base` for `M1.17`'s GCS backend. `ring`, not
+# `aws-lc-rs`: ADR-0012 keeps the default build's dependency footprint at
+# cargo + a C compiler (NFR-42) — `aws-lc-rs`'s FIPS-validated path needs
+# CMake and Go, a cost `M8` alone should pay.
 object_store = { version = "0.14", default-features = false, features = [
-    # ⚠️ Not the `aws` convenience feature — it bundles `aws-lc-rs`
-    # unconditionally (`aws = [..., "aws-lc-rs"]` in its own Cargo.toml),
-    # which needs CMake and Go and would put both in the default build's
-    # toolchain (ADR-0012). `aws-base` compiles the same `aws` module
-    # (`#[cfg(feature = "aws-base")]` gates it, not `feature = "aws"`) without
+    # ⚠️ Not the `aws`/`gcp` convenience features — both bundle `aws-lc-rs`
+    # unconditionally (`aws = [..., "aws-lc-rs"]`, `gcp = [..., "aws-lc-rs"]`
+    # in `object_store`'s own Cargo.toml), which needs CMake and Go and would
+    # put both in the default build's toolchain (ADR-0012). `aws-base`/
+    # `gcp-base` compile the same modules (`#[cfg(feature = "aws-base")]`/
+    # `"gcp-base"]` gate them, not `feature = "aws"`/`"gcp"`) without
     # bundling a crypto provider. `reqwest`'s own `rustls` feature *also*
     # bundles `aws-lc-rs` unconditionally (`reqwest`'s Cargo.toml, not this
     # project's) — there is no Cargo feature that reaches through `object_store`
@@ -92,6 +92,7 @@ object_store = { version = "0.14", default-features = false, features = [
     # plus code that installs `ring`'s `CryptoProvider` at runtime instead of
     # letting a Cargo feature pick one at compile time.
     "aws-base",
+    "gcp-base",
     "reqwest",
     "ring",
 ] }

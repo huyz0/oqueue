@@ -15,7 +15,9 @@ what is specific to *changing* it.
 
 ## Status
 
-`M0.8` created the skeleton; `M1.15` landed the first real backend (S3).
-`M1.17` (GCS) is the only backend left before this crate's "every backend
-passes the same conformance suite" invariant is fully held — check
+`M0.8` created the skeleton; `M1.15`/`M1.17` landed both real backends (S3,
+GCS). ⚠️ **"Every backend passes the same conformance suite" is not yet
+actually held for GCS** — ADR-0014: no available emulator round-trips
+`object_store`'s GCS requests yet, so `GcsStore` is verified at T0 only,
+unlike `S3Store`'s MinIO-verified path. Check
 [`backlog.md`](../../docs/internal/product/backlog.md) for what is done.

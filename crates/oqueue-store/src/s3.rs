@@ -1,17 +1,17 @@
 //! An [`ObjectStore`] backed by S3 (or an S3-compatible endpoint, e.g. `MinIO`).
 //!
-//! The pure decision logic lives beside the network calls that carry it out,
-//! split by concept (`code-structure.md` rule 9) into `get`, `put`, and
-//! `classify` — each pulled out specifically so a T0 unit test can reach it
-//! without a live backend; see each module's own doc comment.
+//! The pure decision logic that is genuinely S3-specific lives in `put.rs`
+//! (`code-structure.md` rule 9); everything shared with `gcs.rs` — error
+//! classification, `get`'s range logic, and the size/precondition decision
+//! behind multipart — lives at the crate root (`classify.rs`, `get.rs`,
+//! `multipart.rs`). See each module's own doc comment.
 
-mod classify;
-mod get;
 mod put;
 
-use classify::classify;
-use get::{get_options_for, requested_range, truncated_range_error};
-use put::{PutStrategy, put_options_for, put_strategy_for};
+use crate::classify::classify;
+use crate::get::{get_options_for, requested_range, truncated_range_error};
+use crate::multipart::{PutStrategy, put_strategy_for};
+use put::{S3_MULTIPART_LIMITS, put_options_for};
 // ⚠️ Both traits, unaliased-but-unnamed: `object_store::ObjectStore` (the
 // base trait, for `get_opts`/`put_opts`/`put_multipart_opts`) and
 // `object_store::ObjectStoreExt` (the blanket-implemented convenience trait,
@@ -31,7 +31,6 @@ use oqueue_core::{
     BoxFuture, ByteRange, Error, MultipartLimits, ObjectKey, ObjectMeta, ObjectStore, Precondition,
     PreconditionToken, Result,
 };
-use put::S3_MULTIPART_LIMITS;
 use std::ops::Range;
 
 /// An [`ObjectStore`] talking to S3 (or an S3-compatible endpoint) via the

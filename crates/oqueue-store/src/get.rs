@@ -1,7 +1,12 @@
 //! The pure decision logic behind a `get` — everything that runs before (and
 //! immediately after) the one network call, kept apart from it so a T0 test
-//! can reach it. See `s3.rs`'s own doc comment on `get` for the network call
-//! itself and the one gap this logic cannot close on its own.
+//! can reach it. See `s3.rs`/`gcs.rs`'s own doc comments on `get` for the
+//! network call itself and the one gap this logic cannot close on its own.
+//!
+//! ⚠️ **Shared across every `object_store`-backed backend**, same reasoning
+//! as `classify.rs`: `GetOptions`/`GetRange` are `object_store`'s own
+//! generic types, and `ByteRange`/`Error`/`ObjectKey` are `oqueue-core`'s —
+//! nothing here names S3 or GCS.
 
 // Same reasoning `classify.rs` already gives.
 #![allow(clippy::redundant_pub_crate)]

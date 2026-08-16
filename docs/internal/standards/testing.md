@@ -23,8 +23,18 @@ confidence.
 |---|---|---|---|
 | **T0 unit** | nothing — pure logic, in-memory fakes | every save, every commit | microseconds |
 | **T1 integration, hermetic** | in-process fakes with injected faults and latency | every commit | milliseconds |
-| **T2 integration, containerized** | Docker: MinIO, fake-gcs-server | every push | seconds |
+| **T2 integration, containerized** | Docker: MinIO; a GCS emulator, name TBD ⚠️ | every push | seconds |
 | **T3 real cloud** | actual S3/GCS credentials | scheduled | minutes |
+
+⚠️ **`fake-gcs-server` named here was found not to work for this project's
+actual GCS client, writing `M1.17`** (ADR-0014): `object_store`'s GCS client
+`PUT`s the XML API's bare `<bucket>/<object>` path, which `fake-gcs-server`
+routes to a handler that requires an `uploadType` query parameter or a
+signed-URL scheme, returning `400 invalid uploadType` otherwise — confirmed
+against its published source, not assumed. Google's own `storage-testbench`
+was tried next and has its own gap (its XML `PUT` response omits the
+`ETag`/generation headers `object_store` reads back). Neither is fixed as of
+`M1.17`; ADR-0014 has the full trace and defers finding or fixing one.
 
 1. **T0 and T1 must carry the correctness argument.** T2 and T3 exist to catch
    *fidelity gaps in the fakes*, which is a different failure and the one that
