@@ -1,0 +1,46 @@
+{
+  "commits": [
+    "389dc00790b283ad1b72c410a6c592cf5ac5757e",
+    "07bb0a9cdbc648e7ae0e3bd602de79681f3974c1",
+    "2d13d37f5350da69b7ba034df057a1a8d1e89646",
+    "4f83f47a76bc5b6e88ae7963779e8ded0bab0a14",
+    "4768ea0b33fca2db8bdef0351e58aaf9be312ceb",
+    "4b62f303addae6818e2d3a62137d7e719384b82c",
+    "510ba36523c7c885179d463b65471a863524dfaa",
+    "dfdbeacf84f7aee76793e14bc86d464e4415b395",
+    "efba3ddbca778819376f744c3966c5cbd4c206cf",
+    "e395b4fa4a2b968eb0cb1836ef4a858ac29696e3",
+    "f64dc1952e7f296c090cdb26e164785cab09e158",
+    "492edf7271eaf5c4e69a8fb478c9f7e6fbe9db23",
+    "d34d7d135314b63d310b23166ed11372ccddba8e",
+    "8655dd923e1e73bbb8b513443da39482c64f67c9"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-core/src/rate_governor.rs lines 42-44 ('Doc 04 \u00a73 does not split GCS's ramp by read/write, so neither does this') and RateGovernor::new (seeds write_bucket and read_bucket from the same initial_per_sec for Ramping); docs/internal/product/backlog.md's M1.13 row repeats the same claim; compare docs/researches/04-object-storage-s3-gcs.md \u00a73, 'GCS. Buckets start with roughly 1,000 object-write requests/s and 5,000 object-read requests/s of \"free\" IO capacity'. The three review rounds on this file (recorded in the M1.13 commit message) verified the token-bucket arithmetic exactly but never checked the Ramping policy's shape against the source it cites \u2014 a design-vs-research mismatch invisible to per-commit review of the arithmetic fix. Filed as M1.33.",
+      "id": "c96b7cff7581",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "RateLimitPolicy::Ramping uses one initial_per_sec for both op classes, on a doc-04 \u00a73 citation the source contradicts: GCS's documented starting rates are 1,000 write/s vs 5,000 read/s, a 5x split.",
+      "task_id": "M1.33"
+    },
+    {
+      "evidence": "docs/internal/product/decisions/0010-object-store-ranged-get-delete-and-put-meta.md line 30 vs crates/oqueue-core/src/byte_range.rs's actual Bounded(Bounded) shape (fixed in commit 4f83f47, ADR left unedited); crates/oqueue-core/src/fault.rs line 15 ('[`crate::Error::Permanent`]') vs crates/oqueue-core/src/error.rs (no Permanent variant yet, correctly deferred to M1.15). Neither file was touched again in commits M1.9-M1.14. No gate runs cargo doc, so nothing catches the broken link. Low-severity documentation drift, left unresolved by design at each commit's own review; recorded here since a milestone checkpoint is the natural point to sweep 'defer until next touched' debt that never got touched.",
+      "id": "4e7d71f9e745",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "Two review minors deferred 'until this file is next touched' (review.md rule 15) were never touched again within M1: ADR-0010 still documents the pre-fix ByteRange::Bounded{offset,length} bare struct-variant shape, and fault.rs's StormKind doc comment has a broken intra-doc link to crate::Error::Permanent (a variant that does not exist until M1.15)."
+    },
+    {
+      "evidence": "docs/internal/product/backlog.md M1.0 row ('every row M1.1-M1.21 names at least one of FR-30, FR-31 or NFR-30 ... M1.7 ... name none, each with an explicit note saying so') vs the M1.4 row (dissolved into M1.6/M1.8/M1.15, no Serves clause). Not gated -- check-requirements-trace.sh only checks milestones/M1.md's Serves line against roadmap.md's table, not per-row backlog citations -- so nothing catches this; purely descriptive text drifting from the row set it describes.",
+      "id": "cfb50b81aae0",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "M1.0's own (done) acceptance text says every row M1.1-M1.21 names an FR/NFR with M1.7 as the sole stated exception, but M1.4 -- also dissolved, also with no Serves clause -- is not carved out, so the acceptance text is not literally true of the current row set."
+    }
+  ],
+  "milestone": "M1",
+  "recorded_at": "2026-08-16T14:34:03Z",
+  "reviewer": "claude-sonnet-5-milestone-reviewer",
+  "verdict": "changes-requested"
+}

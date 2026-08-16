@@ -170,7 +170,8 @@ fn a_ceiling_that_does_not_divide_evenly_is_never_exceeded() {
 fn ramping_policy_doubles_after_one_period() {
     let clock = FakeClock::new();
     let policy = RateLimitPolicy::Ramping {
-        initial_per_sec: NonZeroU32::new(2).expect("non-zero"),
+        initial_writes_per_sec: NonZeroU32::new(2).expect("non-zero"),
+        initial_reads_per_sec: NonZeroU32::new(2).expect("non-zero"),
         doubling_period: Duration::from_mins(20), // 20 minutes
     };
     let mut governor = RateGovernor::new(policy, &clock);
@@ -206,7 +207,8 @@ fn ramping_policy_doubles_after_one_period() {
 fn ramping_policy_starts_at_its_initial_rate() {
     let clock = FakeClock::new();
     let policy = RateLimitPolicy::Ramping {
-        initial_per_sec: NonZeroU32::new(3).expect("non-zero"),
+        initial_writes_per_sec: NonZeroU32::new(3).expect("non-zero"),
+        initial_reads_per_sec: NonZeroU32::new(3).expect("non-zero"),
         doubling_period: Duration::from_mins(20),
     };
     let mut governor = RateGovernor::new(policy, &clock);
@@ -218,4 +220,42 @@ fn ramping_policy_starts_at_its_initial_rate() {
         governor.admit(OpClass::Write, &clock),
         RateDecision::Delay(_)
     ));
+}
+
+/// ⚠️ **Regression for M1.33**, found by M1's checkpoint review: a
+/// `Ramping` policy's write and read ceilings are independent, matching
+/// GCS's own documented split (doc 04 §3: roughly 1,000 write/sec, 5,000
+/// read/sec of "free" capacity) — not one shared rate for both, which an
+/// earlier version of this variant collapsed them into.
+#[test]
+fn ramping_policy_writes_and_reads_start_at_different_rates() {
+    let clock = FakeClock::new();
+    let policy = RateLimitPolicy::Ramping {
+        initial_writes_per_sec: NonZeroU32::new(2).expect("non-zero"),
+        initial_reads_per_sec: NonZeroU32::new(5).expect("non-zero"),
+        doubling_period: Duration::from_mins(20),
+    };
+    let mut governor = RateGovernor::new(policy, &clock);
+
+    for _ in 0..2 {
+        assert_eq!(governor.admit(OpClass::Write, &clock), RateDecision::Admit);
+    }
+    assert!(
+        matches!(
+            governor.admit(OpClass::Write, &clock),
+            RateDecision::Delay(_)
+        ),
+        "the write ceiling is 2, not 5"
+    );
+
+    for _ in 0..5 {
+        assert_eq!(governor.admit(OpClass::Read, &clock), RateDecision::Admit);
+    }
+    assert!(
+        matches!(
+            governor.admit(OpClass::Read, &clock),
+            RateDecision::Delay(_)
+        ),
+        "the read ceiling is 5, not 2, and is unaffected by the write bucket"
+    );
 }

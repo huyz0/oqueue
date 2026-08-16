@@ -39,13 +39,22 @@ pub enum RateLimitPolicy {
         /// Reads admitted per second.
         reads_per_sec: NonZeroU32,
     },
-    /// A ceiling that starts at `initial_per_sec` and doubles every
-    /// `doubling_period`, the same for every op class — GCS's shape. Doc 04
-    /// §3 does not split GCS's ramp by read/write, so neither does this.
+    /// A ceiling that starts at a per-op-class initial rate and doubles
+    /// every `doubling_period` — GCS's shape. ⚠️ **Split by op class,
+    /// deliberately** — doc 04 §3 documents GCS buckets starting at roughly
+    /// 1,000 write/sec and 5,000 read/sec of "free" capacity, a 5x
+    /// difference, not one shared rate. Found by M1's checkpoint review
+    /// (`M1.33`): an earlier version of this variant carried a single
+    /// `initial_per_sec` on a citation to this same section that the section
+    /// does not actually support.
     Ramping {
-        /// The ceiling at the moment the governor was created.
-        initial_per_sec: NonZeroU32,
-        /// How often the ceiling doubles.
+        /// The write ceiling at the moment the governor was created.
+        initial_writes_per_sec: NonZeroU32,
+        /// The read ceiling at the moment the governor was created.
+        initial_reads_per_sec: NonZeroU32,
+        /// How often the ceiling doubles, the same cadence for both op
+        /// classes — doc 04 §3's ramp guidance names one cadence, not one
+        /// per class.
         doubling_period: Duration,
     },
 }
@@ -63,9 +72,14 @@ impl RateLimitPolicy {
                 OpClass::Read => reads_per_sec.get(),
             },
             Self::Ramping {
-                initial_per_sec,
+                initial_writes_per_sec,
+                initial_reads_per_sec,
                 doubling_period,
             } => {
+                let initial_per_sec = match op_class {
+                    OpClass::Write => *initial_writes_per_sec,
+                    OpClass::Read => *initial_reads_per_sec,
+                };
                 if doubling_period.is_zero() {
                     // A zero period has no meaningful doubling cadence;
                     // treat it as "already fully ramped" rather than divide
