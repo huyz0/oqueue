@@ -1,0 +1,87 @@
+{
+  "commits": [
+    "ceb33b18bc01019908166a65bd3807fba4a20982",
+    "dfd14066720cf31a25ba6ab1c1229e29c5b97a2d",
+    "5d8f901e10ee5963a86aa2c79be9ce8a4bca4c80",
+    "89fecf5d897d7f647340cfad7363c642cc33c58e",
+    "16c45939000437a9744b6d03a9ac29819797ecbe"
+  ],
+  "findings": [
+    {
+      "evidence": "scripts/check-drift.sh:76 THRESHOLD_RE='...|_ms|_seconds' against its own header at :59-62. Measured in a scratch repo: a file containing `let err_msg = std::env::var(\"OQUEUE_BANNER\").unwrap_or_default();` produces 'FAIL threshold made settable'. There is no suppression mechanism anywhere in the script, so the only exits are renaming a legitimate variable or widening a non-negotiable-2 gate's regex. dfd1406's body records the fix (`_ms([^a-z0-9]|$)`).",
+      "id": "e46130d5692b",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "check-drift.sh's new _ms alternative matches _msg as a substring, so a legitimate env::var line fails non-negotiable 2's gate with a remedy that misdiagnoses it, and the header's promised 'cheap to dismiss on sight' escape does not exist.",
+      "task_id": ""
+    },
+    {
+      "evidence": "scripts/gates/m0-complete.sh:352 versus scripts/lib.sh:14 `set -euo pipefail`. Trigger: writing `readonly THRESHOLD_RE=` or indenting the assignment in check-drift.sh. Compare m0-complete.sh:423-428 ('fail and carry on, never finish') and backlog.md:743-744. Sections 6, 7 and 8 - including the boundary-review refusal - never run.",
+      "id": "ad4197eff0ae",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "m0-complete.sh's THRESHOLD_RE extraction has no || true, so under lib.sh's set -euo pipefail a non-matching grep aborts the whole gate and the fail branch two lines below is unreachable - the early-abort shape M0.26 removed from section 5b in the very next commit.",
+      "task_id": ""
+    },
+    {
+      "evidence": "AGENTS.md:63-67 against roadmap.md:115-119, backlog.md:865 (M-1.12 reads done) and the existence of scripts/check-budget.sh. check-portability.sh check 3 owns that sentence but only fires when every standards-named script exists, so nothing surfaces this until M8.",
+      "id": "f9df0a52605b",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "AGENTS.md still explains a missing script by M-1 completing with a gate row open, which M0.16 closed; roadmap.md was corrected for exactly that fact and AGENTS.md, the file loaded into every session, was not.",
+      "task_id": ""
+    },
+    {
+      "evidence": ".agents/skills/README.md:9 against ls docs/internal/standards/ (14 files) and AGENTS.md:45-61 (14 rows). This is one of the two files M0.24's row title declares 'true at HEAD', and the count sits outside check-portability.sh check 3's population.",
+      "id": "a1873f317fc1",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": ".agents/skills/README.md still says the repository holds seven standards; there are fourteen, and AGENTS.md's own table lists all fourteen.",
+      "task_id": ""
+    },
+    {
+      "evidence": "backlog.md:467-472 against scripts/check-drift.sh:76. Compare dfd1406's body: 'read out of that script at runtime, never copied, because a copied regex drifts silently and that is the failure being fixed.'",
+      "id": "0f722f13623a",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "backlog.md's M0.15 retrospective quotes check-drift.sh's THRESHOLD_RE in the present tense with the pre-M0.23 value - a copied constant that drifted, in the note for the row whose own commit argues a copied regex drifts silently.",
+      "task_id": ""
+    },
+    {
+      "evidence": "docs/internal/standards/review.md:132 versus rule 16 at :146; the same phrase at roadmap.md:194 and milestones/M2.md:92; '31' at roadmap.md:194 against 'roughly thirty' at review.md:135 and M2.md:93. Same replicate-a-known-defect shape M0.25 names for the [ADR-000n]: definitions.",
+      "id": "30a482444306",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "review.md rule 15's 'Rule 16 four lines below' is fourteen lines below after the insertion, the phrase was replicated verbatim into two more documents, and roadmap.md says 31 minors where review.md and M2.md say roughly thirty.",
+      "task_id": ""
+    },
+    {
+      "evidence": ".agents/skills/review/SKILL.md:113-117 and .agents/skills/milestone/SKILL.md:38 against docs/internal/standards/review.md:140-142. backlog.md:84 records M0.19's acceptance that the two skills agree with rule 15.",
+      "id": "1a2b0a11d507",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "review.md rule 15's interim instruction - write the row in the next commit - is absent from both skills that load at review time, so the workaround for the argued spec-wrong finding is inert exactly where it would apply.",
+      "task_id": ""
+    },
+    {
+      "evidence": "5d8f901's body against 16c4593's contents and backlog.md:726-744. The code is correct - verified both directions - but m0-complete.sh:85-93 applies 'a gate nobody has watched fail is untested' to M0's own gates, and this property is not watched.",
+      "id": "c0185ef5d8fa",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "Three of check-portability.sh check 3's four sub-properties are pinned by no negative case; M0.24's body named M0.26 as their home and M0.26 did not do it, and nothing records the debt.",
+      "task_id": ""
+    },
+    {
+      "evidence": "M-1.37 (backlog.md:890) carries five commits, each touching only reviews/milestone-*.json and exempt under scripts/lib.sh:319. M0's review rows M0.20 and M0.22 bundle recording with acting and are non-exempt; the M0 table holds 27 rows, all done, with no M0.27. Nothing in git.md, sdd.md or the milestone-review skill says how the terminating commit gets an id; git.md rule 22 is the nearest precedent.",
+      "id": "0ef46cb4a5a4",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "M-1's convention of one reusable row for reviews/-only recording commits was abandoned in M0, and there is now no row a terminating verdict commit can name without making itself non-exempt.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M0",
+  "recorded_at": "2026-08-16T02:23:25Z",
+  "reviewer": "claude-opus-5 (fresh milestone-review agent, did not drive M0)",
+  "verdict": "pass"
+}
