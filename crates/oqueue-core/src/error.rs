@@ -22,12 +22,19 @@
 /// variant breaks every exhaustive match, which is the compiler doing the
 /// review.
 ///
-/// ⚠️ **Not `Clone`.** `M0.6` added `SecretRejected` carrying key material and
-/// dropped `Clone` so no clone could leave another plaintext copy in freed heap
-/// (`security.md` rules 8-9). `M0.11` removed the material, so that reason is
-/// spent — but the derive stays off, because nothing needs to clone an error
-/// and adding it back should require someone to want it.
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+/// ⚠️ **`Clone`, added in `M1.19`.** `M0.6` added `SecretRejected` carrying key
+/// material and dropped `Clone` so no clone could leave another plaintext copy
+/// in freed heap (`security.md` rules 8-9); `M0.11` removed the material, and
+/// this crate's own note on the derive said adding it back "should require
+/// someone to want it" rather than restoring it speculatively. `M1.19`'s
+/// `MergingObjectStore::get_many` is that want: one backend fetch answers
+/// several of a caller's originally-requested ranges, and a failed fetch must
+/// hand each of them its own independent `Err` — `Result<T, E>` has no
+/// built-in way to fan one `E` out to several owners without `Clone`. Every
+/// variant is a plain value type (identifiers, counts, sizes) with nothing
+/// secret left to duplicate, so this is safe now for the same reason it would
+/// have been safe the day `M0.11` removed the material.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum Error {
     /// A topic identifier was empty.
     #[error("topic id is empty")]
