@@ -1309,6 +1309,63 @@ EOF
 invoke_coverage_below_floor() {
   bash "$1/scripts/check-coverage.sh"
 }
+# --- m0-complete.sh: a threshold check-drift.sh cannot see ------------------
+#
+# `M0.23`. ⚠️ **The assertion exists because the convention failed twice.**
+# Non-negotiable 2 is enforced by a name matcher, so a constant nobody named
+# conventionally is unenforced while every gate reports green — `M0.15` found
+# it with `MIN_CRATE_COVERAGE`, and `M0.16` wrote two more the matcher could
+# not see on the very next commit. The fixture is a workspace that compiles and
+# a seam with its fake, so the two assertions above this one pass and it is
+# this one that fires.
+setup_m0_complete_invisible_threshold() {
+  local dir; dir="$(new_scratch m0-complete-invisible)"
+  _m0_scaffold "$dir" m0-complete-invisible
+  mkdir -p "$dir/scripts/gates"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  cat > "$dir/crates/oqueue-core/src/lib.rs" <<'EOF'
+pub trait Clock: Send + Sync {
+    fn now(&self) -> u64;
+}
+pub struct FakeClock;
+impl Clock for FakeClock {
+    fn now(&self) -> u64 {
+        0
+    }
+}
+EOF
+  # A matcher that sees none of the constants the gate asserts.
+  cat > "$dir/scripts/check-drift.sh" <<'EOF'
+#!/usr/bin/env bash
+THRESHOLD_RE='nothing_matches_this'
+EOF
+  cat > "$dir/scripts/check-coverage.sh" <<'EOF'
+#!/usr/bin/env bash
+COVERAGE_FLOOR=85
+EOF
+  cat > "$dir/scripts/check-budget.sh" <<'EOF'
+#!/usr/bin/env bash
+BUDGET_MS=10000
+COMPILING_GATE_MS=5000
+EOF
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M0.23: a threshold non-negotiable 2 cannot see")
+  printf '%s\n' "$dir"
+}
+
 # ⚠️ **Only runnable where `cargo-llvm-cov` is installed.** Without it the gate
 # *skips* and exits 0, which this suite would report as "reported ok on a broken
 # artifact" -- asserting a regression that does not exist, and turning
@@ -1464,6 +1521,8 @@ run_case "m0-complete.sh (workspace does not compile)" setup_m0_complete_broken_
   "mismatched types"
 run_case "m0-complete.sh (pub trait with no fake beside it)" setup_m0_complete_trait_without_fake invoke_m0_complete \
   "pub trait Clock has no FakeClock in oqueue-core"
+run_case "m0-complete.sh (threshold invisible to check-drift.sh)" setup_m0_complete_invisible_threshold invoke_m0_complete \
+  "is invisible to check-drift.sh"
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
 run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt

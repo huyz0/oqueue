@@ -101,6 +101,12 @@ M0_GATES=(
 declare -A NFR_CONSTANTS=(
   ["scripts/check-coverage.sh|COVERAGE_FLOOR"]="85"
   ["scripts/check-budget.sh|BUDGET_MS"]="10000"
+  # ⚠️ **`COMPILING_GATE_MS` is not a requirement's number and is here anyway**,
+  # because it decides whether NFR-56's budget is *applied*: a run holding one
+  # gate above it is reported as compiling rather than over. A threshold that
+  # switches another threshold off is the one most worth pinning, and until
+  # `M0.23` it was asserted by nothing, anywhere.
+  ["scripts/check-budget.sh|COMPILING_GATE_MS"]="5000"
 )
 
 # run_gate <script> [args...]: runs a gate, captures its output into the global
@@ -334,6 +340,24 @@ for key in "${!NFR_CONSTANTS[@]}"; do
     note "this gate's NFR_CONSTANTS, and requirements.md's NFR-55/NFR-56 row together"
   else
     ok "$name is the literal $want in $file"
+  fi
+
+  # ⚠️ **And visible to `check-drift.sh`**, which is the half that kept
+  # failing. Non-negotiable 2 is enforced by a *name* matcher, so a constant
+  # nobody named conventionally is unenforced while every gate reports green —
+  # `M0.15` found that with `MIN_CRATE_COVERAGE` and recorded that the name is
+  # load-bearing, and `M0.16` wrote two more the matcher could not see on the
+  # very next commit. Asserting the two scripts agree is what makes the
+  # convention a check instead of a thing to remember. `M0.23`.
+  drift_re="$(grep -E "^THRESHOLD_RE=" scripts/check-drift.sh | head -1 | sed "s/^THRESHOLD_RE='//; s/'$//")"
+  if [[ -z "$drift_re" ]]; then
+    fail "could not read THRESHOLD_RE from scripts/check-drift.sh"
+  elif printf '%s\n' "$name" | grep -qEi "$drift_re"; then
+    ok "$name is visible to check-drift.sh"
+  else
+    fail "$name is invisible to check-drift.sh — non-negotiable 2 does not cover it"
+    note "its THRESHOLD_RE is: $drift_re"
+    note "widen that regex, or rename the constant — M0.15's note: the name is load-bearing"
   fi
 done
 

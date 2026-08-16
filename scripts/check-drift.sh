@@ -60,7 +60,20 @@ cd "$REPO_ROOT"
 # reason above. False positives (a variable merely containing "floor") are
 # possible and cheap to dismiss on sight; a missed positive because `\b`
 # silently didn't mean the same thing on two platforms is not.
-THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor'
+#
+# ⚠️ **A name-based matcher only sees what somebody named conventionally**, and
+# `M0` demonstrated the failure twice in three commits. `M0.15` found
+# `MIN_CRATE_COVERAGE` matched nothing — its gate's acceptance said
+# "`check-drift.sh` passes" and it did, having looked at no constant at all —
+# renamed it `COVERAGE_FLOOR`, and recorded that **the name is load-bearing**.
+# `M0.16`, the next commit, wrote `BUDGET_MS` and `COMPILING_GATE_MS`, and this
+# regex saw neither. `_ms` and `_seconds` are here because a duration is the
+# other shape a threshold takes; ⚠️ **the class is still open**, and
+# `m0-complete.sh` is what makes it not depend on someone choosing the right
+# word: it asserts that every constant a requirement names is matched by this
+# regex, so a new one that is invisible here fails a gate rather than passing
+# quietly. `M0.23`.
+THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor|_ms|_seconds'
 
 # Rust environment reads, plus the shell idiom for reading one with a
 # fallback default. `\$\{[A-Za-z_][A-Za-z0-9_]*:[-=]` matches `${FOO:-...}`
