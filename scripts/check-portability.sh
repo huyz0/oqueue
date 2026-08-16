@@ -75,6 +75,15 @@ def build():
         and the disk, which is the only form of this a script can judge and
         the exact form that went stale twice.
 
+        ⚠️ **And the mechanism is a list of phrasings, which is a real bound.**
+        `claims` below holds four; "Some scripts these skills invoke do not
+        exist yet" is not among them and passes with everything present. A
+        general "is this sentence about missing scripts" test is not something
+        a regex can be, so the honest description is: this catches the wordings
+        this repository has actually used, and a new wording is a new entry.
+        Saying only "a conditional, not a word ban" implied the sole limit was
+        timing. Found by review.
+
         ⚠️ **And each claim is judged against the population it is about**,
         which the first version got wrong and the gate caught on its first
         run. `.agents/skills/README.md` says "scripts these *skills* invoke";

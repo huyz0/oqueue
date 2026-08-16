@@ -115,7 +115,7 @@ see — and a count is not that evidence if it is only asserted.
 | M0.25 | The claims M0 falsified and did not fix | Ten sentences are false at HEAD, in a milestone whose own convention is that the commit falsifying a sentence is the commit that fixes it: `Cargo.toml`'s `#[inline]` band stated as a floor against ADR-0003's table; `build.md` rule 5 carrying half of ADR-0003's correction; `clock.rs`'s "in program order" against ADR-0004 guarantee 5, which an M1 implementor would satisfy while violating the ADR; `performance.md`'s "full sharded run" against what `mutants.sh` does; the broken `[ADR-000n]:` reference-link definition **replicated into two more files after being recorded as a defect**; `oqueue-core/README.md`'s "No gate today" for a property `m0-complete.sh` asserts; `lib.rs` and `error.rs` narrating the seams as forthcoming; doc 19 contradicting itself and `architecture.md` on what `oqueue-testkit` holds; `.gitignore` naming target directories no script uses; and the hook count 15 in `requirements.md` and `roadmap.md` against 16 in `check-budget.sh` and `.pre-commit-config.yaml`. ⚠️ The hook count has a gate available and the rest do not — say which is which rather than fixing ten sentences and implying they stay fixed. Serves no FR/NFR | done |
 | M0.26 | `m0-complete.sh` cannot report a skipped negative case as watched | ⚠️ The gate prints "every gate fails on a broken artifact" while the `check-coverage.sh` and `check-mutants.sh` cases sit behind `_have_llvm_cov`/`_have_mutants` and skip when the tool is absent — so on a machine without them, half of M0's four new gates are declared complete having never been watched to fail. That is the skip-is-a-pass shape **the same script refuses for `cargo`**, with the note "a skip here would report M0 complete having checked nothing". Acceptance: `tests/gates/negative.sh` reports how many cases skipped, `m0-complete.sh` fails when a gate it names in `M0_GATES` has a case that did not run, and a negative case proves it. Serves NFR-56's neighbours only indirectly — it is non-negotiable 4's `M0` instance | done |
 | M0.27 | The minors M0 recorded against `check-drift.sh` and `m0-complete.sh` | ⚠️ **Harvested from commit bodies**, which is the collection step `review.md` rule 15 names no owner for — finding `bcf5d6f697f2` defers *the procedure* to M2, and doing it once by hand does not decide it. Fixes: `_ms` matches `_msg`, and the script has no suppression mechanism, so a legitimate `err_msg = env::var(...)` is refused with a remedy that misdiagnoses it; `m0-complete.sh`'s `THRESHOLD_RE` extraction has no `\|\| true` under `pipefail`, making its own fail branch unreachable and skipping sections 6-8; the hook-count extraction is line-oriented, so reflowing a 240-character line turns the gate red; the YAML fallback misses a block-sequence `stages:` and `YAMLError` escapes `except ImportError`; a `stages: [manual]` hook counts as invoked. Each gets a `tests/gates/negative.sh` case or a stated reason it cannot. Serves NFR-55, NFR-56 | done |
-| M0.28 | `check-portability.sh` check 3's four sub-properties, each watched to fail | ⚠️ Three of the four delete cleanly with the whole negative suite green — the population split, the positive direction, and the inspected-nothing guard — which is the property `m0-complete.sh` itself calls untested. `M0.24`'s body named `M0.26` as their home and `M0.26` did not do it. Also: the claim patterns are four literal phrasings and the docstring implies the only limit is timing; `skip_case` records per *gate* where the row asked for a count, and its argument is an unvalidated bare filename nothing checks against `M0_GATES`; and two comment paragraphs are orphaned from what they document. Serves no FR/NFR — it is non-negotiable 4's own coverage | todo |
+| M0.28 | `check-portability.sh` check 3's four sub-properties, each watched to fail | ⚠️ Three of the four delete cleanly with the whole negative suite green — the population split, the positive direction, and the inspected-nothing guard — which is the property `m0-complete.sh` itself calls untested. `M0.24`'s body named `M0.26` as their home and `M0.26` did not do it. Also: the claim patterns are four literal phrasings and the docstring implies the only limit is timing; `skip_case` records per *gate* where the row asked for a count, and its argument is an unvalidated bare filename nothing checks against `M0_GATES`; and two comment paragraphs are orphaned from what they document. Serves no FR/NFR — it is non-negotiable 4's own coverage | done |
 | M0.29 | Every documentation minor M0 recorded and did not fix | ⚠️ **Bounded by what is written down**, not by a fresh audit: the `Recorded, not fixed` sections of M0's commit bodies plus the two boundary-review artifacts. `review.md`'s "four lines below" is fourteen and was replicated into two more documents; `roadmap.md` says 31 minors where two other files say roughly thirty, and carries a doubled word; rule 15's interim sentence is in neither skill that loads at review time, which `M0.19`'s acceptance required; `AGENTS.md` explains a missing script by an M-1 row `M0.16` closed; `.agents/skills/README.md` says seven standards where there are fourteen; `backlog.md` quotes `THRESHOLD_RE`'s pre-`M0.23` value; `build.md` rule 7 says gating `release` gates all four profiles, which is a property of today's manifest and not of the gate; three rustdoc bodies still render a literal `[ADR-000n]`; `testing.md` still calls the full run sharded; `bin/oqueue`'s manifest still names `MALLOC_CONF`. ⚠️ Each is either fixed or given a stated reason it stays. Serves no FR/NFR | todo |
 | M0.19 | Two rules in `review.md` that bound the loop: a claim about tool behaviour is measured before it is written, and a `minor` on a `pass` is recorded rather than re-reviewed | `review.md` gains both; `which-standards.sh` selects `review.md` for a shell script and a research document, which is where two of the three worked examples lived; the `review` and `milestone` skills that duplicate the resolution rules agree with rule 15, including that nothing is staged for a minor. ⚠️ Comment-density, criterion-length and ADR-length rules were cut from this task — no gate, and the criterion-length one made the 20-task cap binding in the commit that filled slot 20. ⚠️ Names no FR/NFR; `M0.0`'s criterion that every other row does was true when `M0.0` closed | done |
 
@@ -813,6 +813,51 @@ fails, but `_msec` being caught *again* is a catch, and a catch is exactly what
 this suite tests. One of six fixes is genuinely untestable now, not four. The
 rule the file states — an untestable claim is worth one attempt at disproof —
 was written in this row and then failed by it three times.
+
+**M0.28** closes a gap that had been *recorded and re-recorded*: `M0.24`'s body
+measured that three of check 3's four sub-properties deleted cleanly with the
+whole suite green, named `M0.26` as their home, and `M0.26` did not do it. Each
+now has a case, and each was mutant-verified — delete the positive check, merge
+the two populations, or drop the inspected-nothing guard, and exactly one case
+turns red.
+
+⚠️ **The merged-population case is the interesting one.** Merging is not
+obviously wrong to read: it only fails when a *skills* claim is false while a
+*standards* deferral is legitimately outstanding, because the merged set then
+contains a missing script and both halves skip. ⚠️ **Today's tree has the
+second half and not the first** — two standard-named scripts are deferred, and
+the README carries no such claim, so `check-portability.sh` is green at HEAD.
+The fixture supplies the missing half, which is why the split needed a case
+rather than a comment: the shape is one commit away and invisible until then.
+
+`skip_case` now refuses an argument that is not a script name this suite knows.
+⚠️ The contract between the suite and `m0-complete.sh` was a bare string matched
+by word splitting, so a descriptive label — the convention every `run_case`
+line uses — or a rename on one side only would have left a gate unproven while
+the completion gate reported otherwise. That is `M0.26`'s own shape, one
+argument over. It also reports `SKIPPED_COUNT` beside the names, because
+`M0.26` was asked for a count and delivered gates: without `cargo-mutants` two
+cases do not run and one `skip_case` fires, so the two numbers genuinely differ.
+
+Review then found a **fourth** deletion path still green — dropping
+`AGENTS.md`'s entry from `populations` left every case passing while the file
+check 3's header names went unread. The merged-population case pins that the
+two sets are *separate*; it does not pin that both exist. Two populations
+needed two cases.
+
+⚠️ **And two defects in this row's own additions.** `skip_case`'s rejection
+branch ended in `return 1`, which under `lib.sh`'s `-e` aborted the suite there
+— so neither `SKIPPED_COUNT` nor `SKIPPED_CASES` printed and `m0-complete.sh`
+reported a *stale suite* when the cause was a typo'd argument. A misdiagnosing
+remedy, inside the function added to stop one. And the new fourth positional
+was undocumented while the signature comment above it still listed three, so
+passing the count where the remedy goes printed a bare `2` and silently
+undercounted.
+
+⚠️ **What is still not pinned**: the four claim phrasings are a list, and a
+sentence saying scripts are missing in some fifth wording passes. That is a
+bound a regex cannot remove, and the docstring now says so instead of implying
+timing was the only limit.
 
 **M0.12** found that three standards had an `applies_to` glob that never
 matched. `contracts.md`, `behavior.md` and `async-concurrency.md` all listed

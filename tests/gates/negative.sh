@@ -98,14 +98,61 @@ FAILED_CASES=0
 # complete having never watched either fail. That is the skip-is-a-pass shape
 # the same script refuses for `cargo`, with a note saying why.
 SKIPPED_GATES=()
+# ⚠️ Cases, not gates — one `skip_case` can stand for several `run_case` lines.
+SKIPPED_CASE_COUNT=0
 
-# skip_case <gate.sh> <reason> [remedy]: report a case that could not run, and
-# record which gate is thereby unproven. ⚠️ The gate name is the machine-
-# readable part: a caller asking "was check-mutants.sh watched to fail?" needs
-# a name, not prose.
+# ⚠️ Every gate this suite may name as skipped. A `skip_case` argument that is
+# not one of these is a **typo, not a report**: `m0-complete.sh` matches the
+# names it is given against its own `M0_GATES`, so a descriptive label — the
+# convention every `run_case` line uses — or a rename on one side only would
+# leave a gate unproven while the completion gate said otherwise. That is the
+# shape `M0.26` exists to remove, one argument over. `M0.28`.
+SKIPPABLE_GATES="check-crate.sh check-coverage.sh check-budget.sh check-mutants.sh m0-complete.sh"
+
+# skip_case <gate.sh> <reason> [remedy] [case-count]: report that one or more
+# cases could not run, and record which gate is thereby unproven.
+#
+# ⚠️ The **gate name** is the machine-readable part — a caller asking "was
+# `check-mutants.sh` watched to fail?" needs a name, not prose — and
+# `case-count` (default 1) is how many `run_case` lines this one call stands
+# for, because a single conditional block can guard several. Both are reported
+# separately at the end, and they differ: without `cargo-mutants` two cases do
+# not run and one call fires.
 skip_case() {
-  local gate="$1" reason="$2" remedy="${3:-}"
+  local gate="$1" reason="$2" remedy="${3:-}" cases="${4:-1}"
+  # ⚠️ A non-numeric count is a swapped argument, not a count. Unchecked, the
+  # arithmetic below dies under `set -u` before either summary line prints and
+  # `m0-complete.sh` reports a stale suite — the same misdiagnosis the branch
+  # below was written to stop, one argument over. Found by review.
+  if [[ ! "$cases" =~ ^[0-9]+$ ]]; then
+    fail "skip_case's fourth argument is a case count, got '$cases'"
+    note "usage: skip_case <gate.sh> <reason> [remedy] [case-count]"
+    FAILED_CASES=$((FAILED_CASES + 1))
+    return 0
+  fi
+  case " $SKIPPABLE_GATES " in
+    *" $gate "*) ;;
+    *)
+      fail "skip_case called with '$gate', which is not a script name this suite knows"
+      note "it must be one of: $SKIPPABLE_GATES"
+      note "⚠️ m0-complete.sh matches these against M0_GATES; a label here is a typo"
+      FAILED_CASES=$((FAILED_CASES + 1))
+      # ⚠️ **`return 0`, deliberately.** `lib.sh` sets `-e`, and this branch is
+      # the last command of its `case` arm — a non-zero return aborted the
+      # whole suite here, so neither `SKIPPED_COUNT` nor `SKIPPED_CASES` was
+      # printed and `m0-complete.sh` then reported "no SKIPPED_CASES line", a
+      # stale suite, when the cause was a typo'd argument. Misdiagnosing
+      # remedy, in the function added to stop one. ⚠️ The non-zero exit comes
+      # from `fail` above — `lib.sh` increments `_FAILURES` and `finish` exits
+      # on it; `FAILED_CASES` only feeds the summary line. Swapping that `fail`
+      # for a `warn` would make a typo'd name exit 0 with the gate missing from
+      # `SKIPPED_CASES`, and `m0-complete.sh` would report every case as having
+      # run. Do not.
+      return 0
+      ;;
+  esac
   SKIPPED_GATES+=("$gate")
+  SKIPPED_CASE_COUNT=$((SKIPPED_CASE_COUNT + cases))
   skip "$gate -- $reason"
   [[ -z "$remedy" ]] || note "$remedy"
   note "⚠️ this case did not run; $gate is unproven on this machine"
@@ -1127,6 +1174,126 @@ invoke_portability_stale_claim() {
   bash "$1/scripts/check-portability.sh"
 }
 
+# _portability_scratch <name>: a scratch repo with check-portability.sh and one
+# valid skill, ready for a check-3 fixture to plant exactly one defect.
+_portability_scratch() {
+  local dir; dir="$(new_scratch "$1")"
+  copy_gate "$dir" check-portability.sh
+  mkdir -p "$dir/.agents/skills/tdd" "$dir/scripts" "$dir/docs/internal/standards"
+  cat > "$dir/.agents/skills/tdd/SKILL.md" <<'EOF'
+---
+name: tdd
+description: Use when implementing a task test-first.
+---
+
+# TDD
+
+Run `scripts/check-crate.sh` when the test is green.
+EOF
+  printf '#!/usr/bin/env bash
+true
+' > "$dir/scripts/check-crate.sh"
+  chmod +x "$dir/scripts/check-crate.sh"
+  echo "# oqueue" > "$dir/AGENTS.md"
+  echo "# Skills" > "$dir/.agents/skills/README.md"
+  printf '%s\n' "$dir"
+}
+
+# --- check-portability.sh: a skill invoking a script that does not exist ----
+#
+# `M0.28`, check 3's **positive** direction. A standard may name a script
+# nobody has written — that is what `roadmap.md`'s deferral table is for — but a
+# skill naming one cannot run, so its absence is a defect and not a schedule.
+# ⚠️ Unpinned until now: `M0.24`'s body measured that deleting this assertion
+# left the whole suite green.
+setup_portability_missing_script() {
+  local dir; dir="$(_portability_scratch portability-missing)"
+  cat >> "$dir/.agents/skills/tdd/SKILL.md" <<'EOF'
+
+Then run `scripts/check-nothing.sh`, which nobody wrote.
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M0.28: a skill invoking a script nobody wrote")
+  printf '%s\n' "$dir"
+}
+
+# --- check-portability.sh: the per-file population split --------------------
+#
+# `M0.28`. ⚠️ **The fix from `M0.24`'s first review round, pinned by nothing
+# until now.** Each claim is judged against the population it is *about*: the
+# README's against scripts skills invoke, `AGENTS.md`'s against scripts the
+# standards name. Merge the two and this fixture goes green — the merged set
+# contains the standard's missing script, so both halves skip and the README's
+# false claim survives. Measured on `M0.24`.
+setup_portability_merged_population() {
+  local dir; dir="$(_portability_scratch portability-merged)"
+  # Every script a *skill* names exists, so the README's claim is false ...
+  cat > "$dir/.agents/skills/README.md" <<'EOF'
+# Skills
+
+A few scripts these skills invoke are still unwritten, so a skill that says
+"run the gate" describes an intended step rather than an available one.
+EOF
+  # ... while a *standard* names one that does not, which is legitimate and is
+  # exactly what a merged population would hide behind.
+  cat > "$dir/docs/internal/standards/security.md" <<'EOF'
+# Security
+
+5. Every decoder has a fuzz target. → `scripts/fuzz.sh`
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M0.28: a false skills claim behind a real standards deferral")
+  printf '%s\n' "$dir"
+}
+
+# --- check-portability.sh: AGENTS.md's own arm of check 3 -------------------
+#
+# `M0.28`. ⚠️ **The two populations need two cases, not one.** The merged-
+# population case above pins that the sets are *separate*; nothing pinned that
+# `AGENTS.md` is read at all — deleting its entry from `populations` left all
+# fifty-one cases green while the file check 3's header names went unchecked.
+# Found by review, after the three the row set out to pin.
+setup_portability_agents_arm() {
+  local dir; dir="$(_portability_scratch portability-agents)"
+  # Every script a *standard* names exists, so AGENTS.md's claim is false.
+  cat > "$dir/docs/internal/standards/security.md" <<'EOF'
+# Security
+
+5. Every decoder has a fuzz target. → `scripts/check-crate.sh`
+EOF
+  cat > "$dir/AGENTS.md" <<'EOF'
+# oqueue
+
+⚠️ A rule whose script is missing is a preference, and some of the scripts
+these standards name are still missing.
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M0.28: AGENTS.md calling a present script missing")
+  printf '%s\n' "$dir"
+}
+
+# --- check-portability.sh: check 3 with nothing to inspect ------------------
+#
+# `M0.28`. ⚠️ A check that inspects nothing and exits 0 is the vacuous-green
+# shape this repository keeps finding; the guard exists so check 3 cannot be
+# that, and until now deleting the guard left the suite green.
+setup_portability_nothing_named() {
+  local dir; dir="$(new_scratch portability-nothing)"
+  copy_gate "$dir" check-portability.sh
+  mkdir -p "$dir/.agents/skills/tdd"
+  cat > "$dir/.agents/skills/tdd/SKILL.md" <<'EOF'
+---
+name: tdd
+description: Use when implementing a task test-first.
+---
+
+# TDD
+
+Write the test first. This skill names no script at all.
+EOF
+  echo "# oqueue" > "$dir/AGENTS.md"
+  echo "# Skills" > "$dir/.agents/skills/README.md"
+  (cd "$dir" && git add -A && git commit -q -m "M0.28: nothing for check 3 to inspect")
+  printf '%s\n' "$dir"
+}
+
 # --- m-1-complete.sh: AGENTS.md missing its ## Non-negotiables section ------
 #
 # `M-1.46`. `copy_gate`'s `<script-name>` argument doubles as the path under
@@ -1748,13 +1915,6 @@ EOF
   printf '%s\n' "$dir"
 }
 
-# ⚠️ **Only runnable where `cargo-llvm-cov` is installed.** Without it the gate
-# *skips* and exits 0, which this suite would report as "reported ok on a broken
-# artifact" -- asserting a regression that does not exist, and turning
-# `m-1-complete.sh` red on any clone that has not installed the tool. Nothing in
-# this repository asks anyone to. So the case is registered conditionally and
-# says so, rather than failing for a missing tool: `lib.sh`'s own rule is that a
-# missing tool is a skip with a named remedy, never a failure.
 # _m0_scaffold <dir> <name>: the two files `_crate_scratch` writes above and
 # for the identical reasons, which `M0.18`'s fixtures needed and did not have.
 #
@@ -1857,6 +2017,13 @@ EOF
   printf '%s\n' "$dir"
 }
 
+# ⚠️ **Only runnable where `cargo-llvm-cov` is installed.** Without it the gate
+# *skips* and exits 0, which this suite would report as "reported ok on a broken
+# artifact" -- asserting a regression that does not exist, and turning
+# `m-1-complete.sh` red on any clone that has not installed the tool. Nothing in
+# this repository asks anyone to. So the case is registered conditionally and
+# says so, rather than failing for a missing tool: `lib.sh`'s own rule is that a
+# missing tool is a skip with a named remedy, never a failure.
 _have_llvm_cov() { cargo llvm-cov --version >/dev/null 2>&1; }
 
 run_case "check-commit-msg.sh"          setup_commit_msg          invoke_commit_msg
@@ -1892,14 +2059,23 @@ run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readm
 run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench
 run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required
 run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover
-# ⚠️ Both portability cases carry an `expect` since `M0.24` gave the gate a
-# fourth property: their fixtures name no script, so they trip check 3's
-# inspected-nothing guard as a *second* problem, and deleting check 1 outright
-# left the suite green. Same regression `M0.21` found for `check-layering.sh`,
-# and the header's own remedy for it.
+# ⚠️ The two **pre-existing** portability cases carry an `expect` since `M0.24`
+# gave the gate a fourth property: their fixtures name no script, so they trip
+# check 3's inspected-nothing guard as a *second* problem, and deleting check 1
+# outright left the suite green. Same regression `M0.21` found for
+# `check-layering.sh`. The four cases below it carry one for the ordinary
+# reason — a gate with four properties needs each case pinned to its own.
 run_case "check-portability.sh"         setup_portability         invoke_portability \
   "vendor syntax (Claude Code's @import)"
 run_case "check-portability.sh (index claims a present script is missing)" setup_portability_stale_claim invoke_portability_stale_claim \
+  "says a script is missing, and all 1 it refers to exist"
+run_case "check-portability.sh (a skill invokes a script that does not exist)" setup_portability_missing_script invoke_portability_stale_claim \
+  "a SKILL.md invokes scripts/check-nothing.sh"
+run_case "check-portability.sh (merged populations hide a false claim)" setup_portability_merged_population invoke_portability_stale_claim \
+  "says a script is missing, and all 1 it refers to exist"
+run_case "check-portability.sh (check 3 inspected nothing)" setup_portability_nothing_named invoke_portability_stale_claim \
+  "check 3 inspected nothing"
+run_case "check-portability.sh (AGENTS.md's own population)" setup_portability_agents_arm invoke_portability_stale_claim \
   "says a script is missing, and all 1 it refers to exist"
 run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence \
   "fence"
@@ -2053,7 +2229,7 @@ if _have_mutants; then
   run_case "check-mutants.sh (narrowed, test constrains nothing)" setup_mutants_narrowed invoke_mutants_narrowed
 else
   skip_case check-mutants.sh "cargo-mutants not installed" \
-    "install: cargo install cargo-mutants"
+    "install: cargo install cargo-mutants" 2
 fi
 
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
@@ -2062,6 +2238,13 @@ note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 # A caller that greps for this must be able to tell "nothing skipped" from
 # "this suite is too old to say", and an absent line cannot carry that
 # difference. `m0-complete.sh` reads it. `M0.26`.
+# ⚠️ Count **and** names. `M0.26`'s acceptance asked how many cases skipped and
+# what shipped was which gates — the more useful thing for `m0-complete.sh`,
+# and not the thing the row said. Both are here now, and they differ: without
+# `cargo-mutants` two `run_case` lines do not run while one `skip_case` fires,
+# so a reader deriving a case count from the names gets 1 where the answer is
+# 2. `SKIPPED_COUNT` is the cases; `SKIPPED_CASES` is the gates. `M0.28`.
+printf 'SKIPPED_COUNT %s\n' "$SKIPPED_CASE_COUNT"
 printf 'SKIPPED_CASES %s\n' "${SKIPPED_GATES[*]:-}"
 
 finish
