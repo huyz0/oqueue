@@ -161,6 +161,30 @@ pub enum Error {
     /// An object key was empty.
     #[error("object key is empty")]
     EmptyObjectKey,
+
+    /// A [`crate::ByteRange::bounded`] was constructed with a zero length.
+    #[error("byte range must not have a zero length")]
+    EmptyByteRange,
+
+    /// A ranged `get` asked for bytes past the object's actual size.
+    ///
+    /// ⚠️ **Not `ObjectNotFound`.** The object exists; the requested range
+    /// does not fit inside it. A caller that conflates the two would retry a
+    /// range error as if the object might reappear, which it will not.
+    #[error(
+        "byte range [{offset}, {offset} + {length}) is out of bounds for object {key} \
+         (size {object_size})"
+    )]
+    ByteRangeOutOfBounds {
+        /// The object the range was requested against.
+        key: crate::ObjectKey,
+        /// The requested range's start.
+        offset: u64,
+        /// The requested range's length.
+        length: u64,
+        /// The object's actual size.
+        object_size: u64,
+    },
 }
 
 /// The crate's result alias.

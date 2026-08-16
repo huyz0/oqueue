@@ -10,9 +10,11 @@
 //! # What is here so far
 //!
 //! The four core identifiers ([`TopicId`], [`PartitionId`], [`Offset`],
-//! [`ObjectKey`]), the [`Error`] enum they can produce, and [`Redacted`] — the
-//! wrapper that makes a secret unprintable so FR-44 holds by construction
-//! rather than by everyone remembering. All three trait seams — [`Clock`],
+//! [`ObjectKey`]), [`ObjectStore`]'s own vocabulary ([`ByteRange`],
+//! [`ObjectMeta`], [`PreconditionToken`]), the [`Error`] enum they can
+//! produce, and [`Redacted`] — the wrapper that makes a secret unprintable so
+//! FR-44 holds by construction rather than by everyone remembering. All three
+//! trait seams — [`Clock`],
 //! [`ObjectStore`] and [`KeyProvider`] — are here, each with its fake beside
 //! it. ⚠️ Shaped as ADR-0002 decided, which is a rule about the **async**
 //! seams: [`ObjectStore`] and [`KeyProvider`] are one `dyn`-compatible trait
@@ -28,20 +30,24 @@
 //! can hand out. That is what lets everything downstream stop re-checking.
 #![forbid(unsafe_code)]
 
+mod byte_range;
 mod clock;
 mod error;
 mod key;
 mod object_key;
+mod object_meta;
 mod offset;
 mod partition;
 mod redacted;
 mod store;
 mod topic;
 
+pub use byte_range::ByteRange;
 pub use clock::{Clock, FakeClock, Timestamp};
 pub use error::{Error, Result};
 pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use object_key::ObjectKey;
+pub use object_meta::{ObjectMeta, PreconditionToken};
 pub use offset::Offset;
 pub use partition::PartitionId;
 pub use redacted::Redacted;
