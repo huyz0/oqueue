@@ -72,6 +72,14 @@ mimalloc = "0.1"
 # Heap profiling, behind a non-default feature. ⚠️ Its ARM page-size trap is
 # why the feature is off by default — see ADR-0007.
 tikv-jemallocator = "0.6"
+# `oqueue-store`'s S3 and GCS backends. ADR-0008 (`M1.1`). ⚠️ No default
+# features and no crypto-provider feature pinned here — `default-features =
+# false` avoids the crate's `fs` default (walkdir/nix, irrelevant to this
+# project), and the TLS backend is `oqueue-store`'s choice to make (`M1.15`,
+# `M1.17`) when it actually compiles this in; unused here, an unpicked
+# provider is not yet a build failure. Not wired into any crate's own
+# `[dependencies]` by this commit — that is M1.15's and M1.17's job.
+object_store = { version = "0.14", default-features = false }
 
 # ── Lints ───────────────────────────────────────────────────────────────────
 #
