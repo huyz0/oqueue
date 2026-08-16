@@ -11,4 +11,5 @@ mod key_layout;
 mod multipart;
 mod precondition;
 mod redaction;
+mod retry;
 mod store;

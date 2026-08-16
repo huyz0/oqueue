@@ -43,6 +43,7 @@ mod offset;
 mod partition;
 mod precondition;
 mod redacted;
+mod retry;
 mod store;
 mod topic;
 
@@ -59,5 +60,6 @@ pub use offset::Offset;
 pub use partition::PartitionId;
 pub use precondition::Precondition;
 pub use redacted::Redacted;
+pub use retry::{RetryClass, RetryDecision, RetryPolicy};
 pub use store::{BoxFuture, FakeObjectStore, ObjectStore};
 pub use topic::TopicId;
