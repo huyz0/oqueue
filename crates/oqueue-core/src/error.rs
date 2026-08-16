@@ -218,6 +218,39 @@ pub enum Error {
         /// The key the conditional write targeted.
         key: crate::ObjectKey,
     },
+
+    /// A multipart part fell under [`crate::MultipartLimits::min_part_size`],
+    /// and was not the upload's last part.
+    #[error("part of {bytes} bytes is under the minimum part size of {min}")]
+    PartTooSmall {
+        /// The rejected part's size.
+        bytes: u64,
+        /// The minimum a non-last part must meet.
+        min: u64,
+    },
+
+    /// A multipart part exceeded [`crate::MultipartLimits::max_part_size`].
+    #[error("part of {bytes} bytes exceeds the maximum part size of {max}")]
+    PartTooLarge {
+        /// The rejected part's size.
+        bytes: u64,
+        /// The maximum any part may have.
+        max: u64,
+    },
+
+    /// Adding another part would exceed [`crate::MultipartLimits::max_parts`].
+    #[error("upload would exceed the maximum of {max} parts")]
+    TooManyParts {
+        /// The maximum part count.
+        max: u32,
+    },
+
+    /// Adding a part would exceed [`crate::MultipartLimits::max_object_size`].
+    #[error("upload would exceed the maximum object size of {max} bytes")]
+    ObjectTooLarge {
+        /// The maximum total object size.
+        max: u64,
+    },
 }
 
 /// The crate's result alias.
