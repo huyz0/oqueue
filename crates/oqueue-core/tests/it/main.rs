@@ -7,6 +7,7 @@ mod clock;
 mod fault;
 mod invariants;
 mod key;
+mod key_layout;
 mod multipart;
 mod precondition;
 mod redaction;
