@@ -68,6 +68,7 @@ impl Error {
             | Self::EmptyObjectKey
             | Self::EmptyByteRange
             | Self::ByteRangeOutOfBounds { .. }
+            | Self::ChunkLengthTooLarge { .. }
             | Self::PartTooSmall { .. }
             | Self::PartTooLarge { .. }
             | Self::TooManyParts { .. }

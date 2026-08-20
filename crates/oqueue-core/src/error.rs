@@ -193,6 +193,24 @@ pub enum Error {
         object_size: u64,
     },
 
+    /// A chunk-addressed read named a length larger than the store's own
+    /// chunk size.
+    ///
+    /// ⚠️ **Not [`Error::ByteRangeOutOfBounds`].** That variant means the
+    /// object turned out to be smaller than the range asked of it — a fact
+    /// about stored data, knowable only once the store has been consulted.
+    /// This one means the caller asked a chunk-addressed store for something
+    /// that is not one of its chunks — a fact about the call, knowable before
+    /// any request is sent. Only an object's *last* chunk is legitimately
+    /// shorter than `chunk_size`; nothing is ever longer.
+    #[error("chunk length {length} exceeds the store's chunk size {chunk_size}")]
+    ChunkLengthTooLarge {
+        /// The rejected length.
+        length: u64,
+        /// The chunk size the store was built with.
+        chunk_size: u64,
+    },
+
     /// The backend is asking the caller to slow down.
     ///
     /// Retry forever with backoff (`error-handling.md` rule 7) — this class

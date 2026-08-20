@@ -31,6 +31,7 @@
 #![forbid(unsafe_code)]
 
 mod byte_range;
+mod chunk;
 mod clock;
 mod error;
 mod fault;
@@ -48,9 +49,12 @@ mod rate_governor;
 mod redacted;
 mod retry;
 mod store;
+#[cfg(test)]
+mod test_executor;
 mod topic;
 
 pub use byte_range::ByteRange;
+pub use chunk::ChunkedObjectStore;
 pub use clock::{Clock, FakeClock, Timestamp};
 pub use error::{Error, Result};
 pub use fault::{FaultConfig, StormKind};

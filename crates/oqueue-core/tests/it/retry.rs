@@ -66,6 +66,10 @@ fn client_errors_are_never_retried() {
             length: 1,
             object_size: 0,
         },
+        Error::ChunkLengthTooLarge {
+            length: 5,
+            chunk_size: 4,
+        },
         Error::PartTooSmall { bytes: 1, min: 10 },
         Error::PartTooLarge { bytes: 10, max: 1 },
         Error::TooManyParts { max: 1 },
