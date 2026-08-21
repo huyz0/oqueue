@@ -236,6 +236,10 @@ jobs:
       # ⚠️ Not a pre-commit hook: it builds several cargo fixtures and NFR-56
       # gives the whole hook suite 10 s. Per-push is where it fits.
       - name: every gate fails on a broken artifact
+        # ⚠️ `always()`: an earlier failing step in this job would otherwise
+        # skip this one, and a run that stops at the first failure never
+        # learns whether the second commit also broke something. `M1.26`.
+        if: always()
         # ⚠️ **And a case that did not run is not a case that passed.** The
         # suite exits 0 with a case skipped for a missing tool, which is right
         # for the suite and wrong for this step: dropping an `install` above
@@ -250,7 +254,11 @@ jobs:
           # for the same reason.
           set -euo pipefail
           tests/gates/negative.sh | tee /tmp/negative.out
-          n="$(grep '^SKIPPED_COUNT ' /tmp/negative.out | tail -1 | sed 's/^SKIPPED_COUNT //')"
+          # ⚠️ `|| true`. Under the `pipefail` above, a non-matching `grep`
+          # exits 1 and `set -e` kills the step *here* — so the guard below,
+          # written for exactly that case, could never run and the absent line
+          # was reported as a shell failure instead. `M1.26`, measured.
+          n="$(grep '^SKIPPED_COUNT ' /tmp/negative.out | tail -1 | sed 's/^SKIPPED_COUNT //')" || true
           if [ -z "$n" ]; then
             echo "::error::the suite printed no SKIPPED_COUNT line"; exit 1
           fi
