@@ -2653,6 +2653,76 @@ harness_check() {
   fi
 }
 
+# --- which-standards.sh routes a diff to the right standards -----------------
+#
+# ⚠️ **`run_case` cannot express this**: `which-standards.sh` is not a pass/fail
+# gate, it prints a list, and this suite's pass condition is a *non-zero exit*.
+# So `M1.31` pins its routing the same way `M1.25` pinned `skip_case` — by
+# running it and asserting on the output. `testing.md` rule 20a's "a stated
+# reason instead" is why this is here rather than as a case.
+# ⚠️ **stdout and stderr kept apart, and the exit status checked.** Merging
+# them was a real hole, not a tidiness point: `which-standards.sh` reports a
+# missing or malformed `applies_to` as `PROBLEM docs/internal/standards/…` on
+# *stderr* and exits 1 — and that line contains the path the check greps for,
+# so with `2>&1` a deleted `applies_to` made both positive checks print `ok`
+# while `security.md` routed to nothing at all. Measured. `review.sh` is the
+# only other consumer of this script and it separates the streams too.
+_routing_run() {
+  local file="$1"
+  _ROUTING_ERR="$(mktemp)"
+  _ROUTING_RC=0
+  _ROUTING_OUT="$(bash "$REPO_ROOT/scripts/which-standards.sh" "$file" \
+    2>"$_ROUTING_ERR")" || _ROUTING_RC=$?
+}
+_routing_fail() {
+  fail "routing: $1"
+  sed 's/^/     out: /' <<< "$_ROUTING_OUT" >&2
+  sed 's/^/     err: /' < "$_ROUTING_ERR" >&2
+  rm -f "$_ROUTING_ERR"
+  HARNESS_FAILURES=$((HARNESS_FAILURES + 1))
+}
+routing_check() {
+  local label="$1" file="$2" want="$3"
+  _routing_run "$file"
+  if (( _ROUTING_RC != 0 )); then
+    _routing_fail "$label -- which-standards.sh exited $_ROUTING_RC"
+  elif grep -qF -- "$want" <<< "$_ROUTING_OUT"; then
+    rm -f "$_ROUTING_ERR"
+    ok "routing: $label"
+  else
+    _routing_fail "$label -- $file should select $want"
+  fi
+}
+
+# ⚠️ `oqueue-core` holds every secret-shaped type in the workspace —
+# `Redacted`, `WrappedKey`, `KeyId`, `Error::SecretRejected`, `FakeKeyProvider`
+# — and was absent from `security.md`'s `applies_to` until `M1.31`, so a diff
+# to the file defining them handed the reviewer no security standard at all.
+routing_check "a diff to oqueue-core's key material selects security.md" \
+  "crates/oqueue-core/src/key.rs" "standards/security.md"
+# ⚠️ And `bin/oqueue` is where the `KeyProvider` implementation is chosen.
+routing_check "a diff to the composition root selects security.md" \
+  "bin/oqueue/src/main.rs" "standards/security.md"
+# ⚠️ The negative direction, so the patterns are not simply matching everything:
+# a pure documentation diff selects no security standard.
+routing_check_absent() {
+  local label="$1" file="$2" unwanted="$3"
+  _routing_run "$file"
+  # ⚠️ A crash is a failure here too. Without the rc check an absent-check
+  # passes whenever the script dies before printing anything, which is the
+  # easiest way for it to "not select" something.
+  if (( _ROUTING_RC != 0 )); then
+    _routing_fail "$label -- which-standards.sh exited $_ROUTING_RC"
+  elif grep -qF -- "$unwanted" <<< "$_ROUTING_OUT"; then
+    _routing_fail "$label -- $file should not select $unwanted"
+  else
+    rm -f "$_ROUTING_ERR"
+    ok "routing: $label"
+  fi
+}
+routing_check_absent "a docs-only diff selects no security standard" \
+  "docs/internal/product/roadmap.md" "standards/security.md"
+
 # A bare number where the remedy goes is refused...
 harness_check "a numeric third argument is refused" \
   "third argument is a remedy, got the bare number '3'" \
@@ -2701,7 +2771,9 @@ harness_check "a legitimate skip is counted" \
   'skip_case check-mutants.sh "reason" "install it" 2'
 
 if (( HARNESS_FAILURES > 0 )); then
-  note "$HARNESS_FAILURES harness self-check(s) failed — this suite's own helper is broken"
+  note "$HARNESS_FAILURES self-check(s) failed — this suite's own helper, or the"
+  note "routing it asserts, is broken. Read the FAIL lines above: 'harness:' is"
+  note "skip_case, 'routing:' is which-standards.sh and a standard's applies_to."
 fi
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 

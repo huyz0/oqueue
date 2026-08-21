@@ -3,7 +3,7 @@ title: "Security"
 description: >
   Read when touching the wire protocol, anything parsing untrusted input, secrets, key material, tenant isolation, or unsafe.
 tags: [quality, untrusted-input, secrets, crypto, isolation, unsafe]
-applies_to: ["*oqueue-codec/*", "*oqueue-crypto/*", "*oqueue-broker/*", "*oqueue-store/*", "*oqueue-buf/*", "*oqueue-checksum/*", "*oqueue-coordinator/*", "*.pem", "*.key"]
+applies_to: ["*oqueue-core/*", "*oqueue-codec/*", "*oqueue-crypto/*", "*oqueue-broker/*", "*oqueue-store/*", "*oqueue-buf/*", "*oqueue-checksum/*", "*oqueue-coordinator/*", "*bin/oqueue/*", "*.pem", "*.key"]
 ---
 
 # Security
