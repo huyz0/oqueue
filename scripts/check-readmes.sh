@@ -49,14 +49,21 @@
 #
 # ## What this does not catch
 #
-# The same limits `check-layering.sh` already names for its own TOML
-# scanner: `[target.'cfg(...)'.dependencies]` is unscanned, and a dependency
-# renamed via Cargo's `package =` key is recorded under its local alias, not
-# its real identity. This script's dependency parser is a second copy of
-# that logic rather than a shared one, because no shared Python module
-# exists across `scripts/*.sh` yet and one script importing another's
-# internals is a coupling this repository has not needed until now — flag
-# it in review if the two ever drift on the same TOML shape.
+# One limit `check-layering.sh` also names: a dependency renamed via Cargo's
+# `package =` key is recorded under its local alias, not its real identity.
+# ⚠️ ~~`[target.'cfg(...)'.dependencies]` is unscanned~~ — **`M1.32` made it
+# scanned.** ⚠️ ~~This script's dependency parser is a second copy of that
+# logic rather than a shared one, because no shared Python module exists
+# across `scripts/*.sh` yet … flag it in review if the two ever drift on the
+# same TOML shape.~~ — **`M1.32` created the module** (`scripts/lib/manifest.py`)
+# and deleted the copy. ⚠️ **That note had nothing to fire on**: the two copies were
+# behaviourally identical on every input this repository has — one
+# `read_text(encoding=...)` apart, which distinguishes them only under
+# `python3 -X utf8=0` with `LC_ALL=C`, on a manifest whose comments carry
+# non-ASCII, as every manifest here does. What had diverged is these
+# two against another reader in `check-layering.sh`, `sections()`, which
+# was already fixed for the header defects both copies still had. That is why
+# the first consolidation picked the weaker reader.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
@@ -73,39 +80,26 @@ require_python || finish
 # this script the moment python exits non-zero, before the PROBLEM lines
 # below could ever be read.
 rc=0
+# ⚠️ `$REPO_ROOT`, which `lib.sh` resolved to an absolute path before it
+# `cd`-ed there. Two wrong answers were measured first: a cwd-relative
+# "scripts/lib" breaks when `negative.sh` runs a copied gate from a scratch
+# tree, and `dirname "${BASH_SOURCE[0]}"` breaks when `review.sh` invokes the
+# gate by a *relative* path from a different cwd — that one failed only inside
+# the review harness, so every packet reported two gates FAILED.
+export OQUEUE_SCRIPTS_DIR="$REPO_ROOT/scripts"
 out="$(python3 - <<'PYEOF'
-import re, sys, pathlib
+import os, re, sys, pathlib
+sys.path.insert(0, os.environ["OQUEUE_SCRIPTS_DIR"] + "/lib")
+from manifest import runtime_deps  # noqa: E402
 
 def build():
     root = pathlib.Path.cwd()
 
-    def runtime_deps(toml_path):
-        """Dependency names under [dependencies], flow or table form, both
-        internal and external. Never [dev-dependencies]/[build-dependencies].
-        Mirrors check-layering.sh's parser -- see this file's header for why
-        it is not shared."""
-        deps = set()
-        section = None
-        for raw in toml_path.read_text(encoding="utf-8").splitlines():
-            s = raw.strip()
-            if not s or s.startswith("#"):
-                continue
-            m = re.match(r'^\[([A-Za-z0-9_.\-]+)\]$', s)
-            if m:
-                header = m.group(1)
-                if header == "dependencies":
-                    section = "deps_flow"
-                elif header.startswith("dependencies."):
-                    deps.add(header[len("dependencies."):])
-                    section = "deps_table"
-                else:
-                    section = "other"
-                continue
-            if section == "deps_flow":
-                m2 = re.match(r'^([A-Za-z0-9_\-]+)(?:\.[A-Za-z0-9_.\-]+)?\s*=', s)
-                if m2:
-                    deps.add(m2.group(1))
-        return deps
+    # ⚠️ Was a near-copy of `check-layering.sh`'s, with a docstring saying
+    # "Mirrors check-layering.sh's parser -- see this file's header for why it
+    # is not shared" — a comment asking to drift. `M1.32` moved both to
+    # `scripts/lib/manifest.py`; that module's header records what all three
+    # copies got wrong the same way, and what they had drifted from.
 
     def stated_deps(readme_text):
         """Names read from `## Upstream`'s bullet list -- see this file's

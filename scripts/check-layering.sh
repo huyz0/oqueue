@@ -58,11 +58,12 @@
 #
 # ## What this does not catch
 #
-# - **`[target.'cfg(...)'.dependencies]`.** A platform-specific dependency
+# - ⚠️ ~~**`[target.'cfg(...)'.dependencies]`.** A platform-specific dependency
 #   section is a distinct header this parser does not special-case; it falls
-#   into "other" and is silently unscanned. Worth adding if this project ever
-#   grows real platform-specific dependencies — `portability.md` is the
-#   standard that would motivate it.
+#   into "other" and is silently unscanned.~~ — **`M1.32` made it scanned**, and
+#   deliberately: a dependency that exists only on one platform still ships, so
+#   NFR-52's rule must see it. It was previously included only by accident, when
+#   the header failed to match and the section before it stayed in force.
 # - **A crate whose directory name and `[package] name` disagree.** The
 #   dependency-name-to-crate mapping assumes they match, which is the
 #   convention `code-structure.md` states (`crates/oqueue-foo/` holds
@@ -94,59 +95,38 @@ require_python || finish
 # it could ever be read — the exact defect class M-1.9's retrospective
 # catalogued for `build-index.sh` and every sibling script since.
 rc=0
+# ⚠️ `$REPO_ROOT`, which `lib.sh` resolved to an absolute path before it
+# `cd`-ed there. Two wrong answers were measured first: a cwd-relative
+# "scripts/lib" breaks when `negative.sh` runs a copied gate from a scratch
+# tree, and `dirname "${BASH_SOURCE[0]}"` breaks when `review.sh` invokes the
+# gate by a *relative* path from a different cwd — that one failed only inside
+# the review harness, so every packet reported two gates FAILED.
+export OQUEUE_SCRIPTS_DIR="$REPO_ROOT/scripts"
 out="$(python3 - <<'PYEOF'
-import re, sys, pathlib
+import os, re, sys, pathlib
 
 root = pathlib.Path.cwd()
 COMPOSERS = {"oqueue-broker", "oqueue"}   # "oqueue" is bin/oqueue's package name
 DEV_ONLY = {"oqueue-testkit"}
 
-def package_name(toml_path):
-    section = None
-    for raw in toml_path.read_text().splitlines():
-        s = raw.strip()
-        if not s or s.startswith("#"):
-            continue
-        m = re.match(r'^\[([A-Za-z0-9_.\-]+)\]$', s)
-        if m:
-            section = m.group(1)
-            continue
-        if section == "package":
-            m2 = re.match(r'^name\s*=\s*"([^"]+)"', s)
-            if m2:
-                return m2.group(1)
-    return None
-
-def runtime_deps(toml_path):
-    """Dependency names under [dependencies], flow or table form. Never
-    [dev-dependencies] or [build-dependencies] -- see the header."""
-    deps = set()
-    section = None
-    for raw in toml_path.read_text().splitlines():
-        s = raw.strip()
-        if not s or s.startswith("#"):
-            continue
-        m = re.match(r'^\[([A-Za-z0-9_.\-]+)\]$', s)
-        if m:
-            header = m.group(1)
-            if header == "dependencies":
-                section = "deps_flow"
-            elif header.startswith("dependencies."):
-                deps.add(header[len("dependencies."):])
-                section = "deps_table"
-            else:
-                section = "other"
-            continue
-        if section == "deps_flow":
-            # `name = ...` and Cargo's dotted-key shorthand `name.workspace =
-            # true` both name a dependency called `name` -- the part before
-            # the first dot, if any.
-            m2 = re.match(r'^([A-Za-z0-9_\-]+)(?:\.[A-Za-z0-9_.\-]+)?\s*=', s)
-            if m2:
-                deps.add(m2.group(1))
-        # section == "deps_table": a field of the dependency named by the
-        # header, e.g. `path = "..."` -- never a new dependency name.
-    return deps
+# ⚠️ **One reader for dependencies and the package name**, shared with
+# `check-readmes.sh` — `M1.32` consolidated the copies. ⚠️ They had not drifted from
+# *each other* on any input this repository has: both were wrong the same way, on `[[bench]]`,
+# target-scoped dependency tables, and either kind of quote. What they had
+# drifted from is `sections()` below, already fixed for the header defects they
+# still had. That module's header records the whole shape.
+#
+# ⚠️ **`sections()` and `table_names()` below are still their own readers**, and
+# saying so is the point: they answer a different question (which table is this
+# line under, for the `[profile]`/`[lints]` assertions) and they hold the
+# *stronger* notion of a table boundary, which `manifest.py` now adopts rather
+# than the other way round. They agree on every spelling measured, but a change
+# to one is not a change to the other — the drift this task closed, still
+# possible one level down.
+# ⚠️ Relative to the repo root, which `lib.sh` has already `cd`-ed to. A
+# heredoc has no `__file__` to resolve against.
+sys.path.insert(0, os.environ["OQUEUE_SCRIPTS_DIR"] + "/lib")
+from manifest import package_name, runtime_deps  # noqa: E402
 
 def sections(text):
     r"""Yield `(table, line)` for every non-header line, `table` being the name

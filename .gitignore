@@ -52,3 +52,7 @@
 .env
 .env.*
 !.env.example
+
+# Python bytecode from scripts/lib/, imported by the gates. `M1.32`.
+__pycache__/
+*.pyc

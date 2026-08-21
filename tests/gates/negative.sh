@@ -84,6 +84,12 @@ new_scratch() {
 copy_gate() {
   cp "$REPO_ROOT/scripts/$2" "$1/scripts/$2"
   chmod +x "$1/scripts/$2"
+  # ⚠️ And whatever the gate imports. `M1.32` moved the Cargo.toml parser to
+  # `scripts/lib/manifest.py`; a gate copied without it fails on the import,
+  # which `run_case` reports as "failed, but not for the reason the fixture
+  # plants" — six cases at once, measured.
+  mkdir -p "$1/scripts/lib"
+  cp "$REPO_ROOT"/scripts/lib/*.py "$1/scripts/lib/" 2>/dev/null || true
 }
 
 TOTAL=0
@@ -2652,6 +2658,157 @@ harness_check() {
     HARNESS_FAILURES=$((HARNESS_FAILURES + 1))
   fi
 }
+
+# --- the shared manifest reader agrees with itself --------------------------
+#
+# ⚠️ `M1.32` consolidated three hand-rolled `Cargo.toml` parsers into
+# `scripts/lib/manifest.py`. Like the routing checks below, this cannot be a
+# `run_case`: the module returns values rather than failing, and this suite's
+# pass condition is a non-zero exit. `testing.md` rule 20a's "a stated reason
+# instead". The fixture is the manifest that broke all three copies at once.
+manifest_check() {
+  local label="$1" toml="$2" want="$3" expr="$4"
+  local dir out
+  dir="$(mktemp -d -p "$SCRATCH_ROOT" manifest-XXXX)"
+  printf '%s\n' "$toml" > "$dir/Cargo.toml"
+  out="$(python3 -c "
+import sys, pathlib
+sys.path.insert(0, 'scripts/lib')
+import manifest
+p = pathlib.Path('$dir/Cargo.toml')
+print($expr)
+" 2>&1)" || out="ERROR: $out"
+  if [[ "$out" == "$want" ]]; then
+    ok "manifest: $label"
+  else
+    fail "manifest: $label -- wanted '$want', got '$out'"
+    HARNESS_FAILURES=$((HARNESS_FAILURES + 1))
+  fi
+}
+
+# ⚠️ **One spelling per check.** A single manifest carrying every case cannot
+# isolate them: whichever header ends the dependency table first hides the ones
+# after it, so mutations to the later branches survive. Measured -- an earlier
+# mega-fixture left three of the module's four fail-safe branches unpinned.
+
+# `M1.23`'s review: single-quoted values were invisible to the old pattern.
+manifest_check "a single-quoted package name is read" \
+  "[package]
+name = 'oqueue-broker'" \
+  "oqueue-broker" "manifest.package_name(p)"
+
+# ⚠️ The one that mattered: `[[bench]]` directly after the flow keys. With a
+# `[dependencies.serde]` table between them the old parser was already in table
+# state, where body lines are ignored, so an earlier fixture proved nothing.
+manifest_check "an array-of-tables ends the dependency table" \
+  '[dependencies]
+tokio = "1"
+"oqueue-core" = { path = "../oqueue-core" }
+
+[[bench]]
+name = "bench_micro"
+harness = false' \
+  "['oqueue-core', 'tokio']" "sorted(manifest.runtime_deps(p))"
+
+# A header carrying a trailing comment is still a header. An anchored pattern
+# does not recognise it, and then every key under it is a runtime dependency --
+# or, on `[dependencies]` itself, none of them are.
+manifest_check "a trailing comment does not hide a header" \
+  '[dependencies]
+tokio = "1"
+
+[dev-dependencies]  # test only
+proptest = "1"' \
+  "['tokio']" "sorted(manifest.runtime_deps(p))"
+# ⚠️ And on `[dependencies]` itself, which is the direction the fail-safe
+# fallback cannot cover for: an anchored pattern makes this an unnameable
+# header, the table never opens, and *every* runtime dependency vanishes --
+# a silent pass on NFR-52 rather than a false red. Measured: with the close
+# bracket anchored, the check above still passed and only this one fails.
+manifest_check "a trailing comment on [dependencies] hides nothing" \
+  '[dependencies]  # runtime only
+tokio = "1"' \
+  "['tokio']" "sorted(manifest.runtime_deps(p))"
+
+# ⚠️ Fail *safe*: a line this reader cannot parse as a header still ends the
+# table before it. Returning None there instead leaves the section sticky and
+# harvests `stray` -- the silent-pass shape `sections()`'s docstring records.
+manifest_check "an unparseable header still ends the table" \
+  '[dependencies]
+tokio = "1"
+
+[this opens a table and never closes it
+stray = "value"' \
+  "['tokio']" "sorted(manifest.runtime_deps(p))"
+
+# ⚠️ The named sub-table form, `[dependencies.<name>]` — the standard spelling
+# once a dependency has several keys. Unpinned until review measured it: with
+# the named-sub-table branch dropped, `oqueue-core` goes invisible to
+# `check-layering.sh` (a silent pass on NFR-52) while `path` and `version` are
+# recorded as dependency names for `check-readmes.sh` to report as
+# undocumented. The `[target...dev-dependencies]` line pins the other half:
+# relaxing the target test to `segments[0] == "target"` alone makes
+# `segments.index("dependencies")` raise and takes the gate down.
+manifest_check "a named dependency sub-table is one dependency, not its keys" \
+  '[dependencies.oqueue-core]
+path = "../oqueue-core"
+version = "0.1"
+
+[target."cfg(unix)".dev-dependencies]
+tempfile = "3"' \
+  "['oqueue-core']" "sorted(manifest.runtime_deps(p))"
+
+# ⚠️ `foo.workspace = true` — the dotted-key form, which this workspace uses
+# for nearly every dependency. Unpinned until review measured it: dropping
+# `_KEY`'s dotted-suffix alternative made every one of them invisible, with the
+# whole suite and `check-layering.sh` still green.
+manifest_check "a dotted key is one dependency" \
+  '[dependencies]
+object_store.workspace = true
+tokio = { workspace = true }' \
+  "['object_store', 'tokio']" "sorted(manifest.runtime_deps(p))"
+
+# ⚠️ A single-quoted dependency key, and a cfg string containing an escaped
+# quote — both valid Cargo, both unpinned until review's fifth mutation pass:
+# dropping `_KEY`'s single-quote alternative loses the dependency entirely, and
+# turning `_SEGMENT`'s skip-a-character fallback into a `break` loses every
+# dependency under a cfg whose text embeds a quote.
+manifest_check "a single-quoted key and an escaped quote in a cfg are read" \
+  "[dependencies]
+'oqueue-core' = { path = '../oqueue-core' }
+
+[target.\"cfg(target_os = \\\"macos\\\")\".dependencies]
+libc = \"0.2\"" \
+  "['libc', 'oqueue-core']" "sorted(manifest.runtime_deps(p))"
+
+# ⚠️ A target-scoped *named* sub-table. Off-by-one in the segment index records
+# a dependency literally called `dependencies`.
+manifest_check "a target-scoped named sub-table names the dependency" \
+  '[target."cfg(unix)".dependencies.libc]
+version = "0.2"' \
+  "['libc']" "sorted(manifest.runtime_deps(p))"
+
+# ⚠️ `name` outside `[package]` is not the package name. Without the section
+# guard the first `name =` anywhere wins — here a benchmark's.
+manifest_check "only [package] supplies the package name" \
+  '[[bench]]
+name = "bench_micro"
+
+[package]
+name = "oqueue-core"' \
+  "oqueue-core" "manifest.package_name(p)"
+
+# dev- and build-dependencies stay out; quoted keys and target-scoped tables in.
+manifest_check "target-scoped deps count, dev-dependencies do not" \
+  '[dependencies]
+tokio = "1"
+
+[dev-dependencies]
+proptest = "1"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2"' \
+  "['libc', 'tokio']" "sorted(manifest.runtime_deps(p))"
 
 # --- which-standards.sh routes a diff to the right standards -----------------
 #
