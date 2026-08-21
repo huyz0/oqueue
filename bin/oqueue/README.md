@@ -8,11 +8,22 @@ I/O shell.
 
 ## Why does it exist?
 
-Because every library crate in this workspace is written against traits rather
-than against S3, a socket or a clock (NFR-51), and something has to make the
-choice those traits defer. ⚠️ **This is the only place that choice is made**
-(FR-50) — which is what lets the entire system be tested with no network, no
-credentials and no container.
+Because a library crate here does not reach for S3, a socket or a clock
+directly — it takes a trait and lets something else choose (NFR-51) — and
+something has to make that choice. ⚠️ **Which is a rule with named exceptions,
+not a property of every crate.** `scripts/check-sans-io.sh` draws the line, and
+what it actually exempts is: `oqueue-store` from the object-storage pattern,
+because it is the crate that implements those backends; and `oqueue-broker`
+from all three, because the I/O shell is meant to live there. Every other
+crate is held to all three — ⚠️ but `bin/` is not scanned at all, so nothing
+here is held to any of them; this crate's own Invariants table says so too.
+
+⚠️ This sentence claimed *every* library crate until `M1.28`. `oqueue-store`
+had falsified it since `M1.15` gave it a real S3 backend — not, as that row
+predicted, the connection loop.
+
+⚠️ **This is the only place that choice is made** (FR-50) — which is what lets
+the entire system be tested with no network, no credentials and no container.
 
 ## Upstream
 
@@ -37,7 +48,7 @@ Nothing. It is the top of the graph.
 
 | Must stay true | Held by |
 |---|---|
-| The only place a concrete implementation is named | ⚠️ **No gate.** `check-sans-io.sh` does not scan `bin/`, so this is review's |
+| The only place the *composition* is chosen — which concrete implementation the running broker gets | ⚠️ **No gate.** `check-sans-io.sh` does not scan `bin/`, so this is review's. ⚠️ Narrowed by `M1.28` from "the only place a concrete implementation is named", which `oqueue-store` falsifies: it names `S3Store` and `GcsStore` because it defines them |
 | No `oqueue-testkit` in `[dependencies]` | `scripts/check-layering.sh` — ⚠️ the *only* dependency rule it enforces here, since a composer is exempt from the star-topology one |
 | Depends only on `oqueue-core` and the crates it composes | ⚠️ **No gate.** Composer exemption means `check-layering.sh` accepts any workspace dependency; review's |
 | No `unsafe` | `#![forbid(unsafe_code)]`, `scripts/check-unsafe.sh` |
