@@ -1567,6 +1567,117 @@ EOF
 invoke_coverage_below_floor() {
   bash "$1/scripts/check-coverage.sh"
 }
+
+# --- check-conformance-matrix.sh --------------------------------------------
+#
+# `M1.21`. ⚠️ **These five cases are why the comparison is its own script.**
+# Review measured two silent regressions in it while it was still a section of
+# `m1-complete.sh` — a status no row matches made one direction vacuous, and
+# deleting the other direction's loop left the gate exiting 0 — and neither
+# could have a case here, because reaching that section meant scaffolding a
+# cargo workspace *and* a Docker daemon. Split out, the whole input is two
+# text files.
+
+# Builds a scratch repo holding a matrix and (optionally) a roster.
+_conformance_scaffold() {
+  local dir="$1" matrix="$2" roster="${3:-}"
+  copy_gate "$dir" check-conformance-matrix.sh
+  mkdir -p "$dir/baselines"
+  printf '%s\n' "$matrix" > "$dir/baselines/conformance-matrix.txt"
+  if [[ -n "$roster" ]]; then
+    mkdir -p "$dir/target/conformance"
+    # ⚠️ **No trailing newline**, deliberately. `record_backend_run` always
+    # writes one, but a hand-edited or truncated roster may not, and the
+    # `while read` that consumes it silently dropped the final line -- which
+    # is the line these fixtures put the defect on.
+    printf '%s' "$roster" > "$dir/target/conformance/backends.txt"
+  fi
+  # ⚠️ Staged, because the gate reads the matrix from the **index** — an
+  # unstaged one would make every case below fail for the wrong reason.
+  git -C "$dir" add -A
+}
+
+# Two rows for one backend: direction 2's comparison stops at the first
+# match, so this passes in one order and fails in the other.
+setup_conformance_matrix_duplicate_backend() {
+  local dir; dir="$(new_scratch conformance-duplicate)"
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+fake  not-yet-run  the same backend, contradicting the row above'
+  printf '%s\n' "$dir"
+}
+
+# ⚠️ `m1-complete.sh`'s own early guard, which needs neither Docker nor
+# cargo to reach -- the rest of that gate does, which is why the comparison
+# it delegates to has the five cases here instead.
+setup_m1_complete_no_matrix() {
+  local dir; dir="$(new_scratch m1-complete-no-matrix)"
+  mkdir -p "$dir/scripts/gates"
+  cp "$REPO_ROOT/scripts/gates/m1-complete.sh" "$dir/scripts/gates/m1-complete.sh"
+  chmod +x "$dir/scripts/gates/m1-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = []
+resolver = "2"
+EOF
+  # No baselines/conformance-matrix.txt at all.
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+invoke_m1_complete_no_matrix() {
+  bash "$1/scripts/gates/m1-complete.sh"
+}
+
+# A row that records a gap without recording anything about it -- the rule
+# `check-mutants.sh` and `check-unsafe.sh` already enforce on their baselines.
+setup_conformance_matrix_no_reason() {
+  local dir; dir="$(new_scratch conformance-no-reason)"
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+azure  not-yet-run'
+  printf '%s\n' "$dir"
+}
+invoke_conformance_matrix() {
+  bash "$1/scripts/check-conformance-matrix.sh"
+}
+
+# The agreement half only runs when asked for it -- see the script's header
+# for why it is not in pre-commit.
+invoke_conformance_matrix_roster() {
+  bash "$1/scripts/check-conformance-matrix.sh" --against-roster
+}
+
+# ⚠️ The sharpest of the five: an unrecognized status makes the row vanish
+# from both comparisons *and* from the counts, so the only visible signal is a
+# plausible `ok` line with a smaller number in it.
+setup_conformance_matrix_bad_status() {
+  local dir; dir="$(new_scratch conformance-bad-status)"
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+gcs  not_yet_run  an underscore where the status wants hyphens'
+  printf '%s\n' "$dir"
+}
+
+# The roster names something the matrix does not -- the sixteen invented
+# backend names `M1.21` actually found sitting in the real artifact.
+setup_conformance_matrix_unknown_in_roster() {
+  local dir; dir="$(new_scratch conformance-unknown-roster)"
+  # ⚠️ The unknown name is **last**, and that is the point: the roster has no
+  # trailing newline, so a `while read` without the `|| [[ -n ]]` guard drops
+  # its final line. With `concurrent-0` first this case passed either way and
+  # pinned nothing.
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake' \
+    'fake
+concurrent-0'
+  printf '%s\n' "$dir"
+}
+
+# The matrix claims a backend is verified and nothing ran it.
+setup_conformance_matrix_verified_never_ran() {
+  local dir; dir="$(new_scratch conformance-verified-never-ran)"
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+s3  verified  claims a MinIO run that never happened' \
+    'fake'
+  printf '%s\n' "$dir"
+}
+
 # --- m0-complete.sh: check-drift.sh with no THRESHOLD_RE at all -------------
 #
 # `M0.27`, and ⚠️ **this case exists because the row first argued it could not
@@ -2140,6 +2251,18 @@ fi
 # pre-commit one. Found by review, which measured exactly that.
 run_case "m0-complete.sh (the no-PyYAML fallback miscounts)" setup_m0_complete_fallback invoke_m0_complete_no_pyyaml \
   "hooks, .pre-commit-config.yaml has"
+run_case "check-conformance-matrix.sh (row with no reason)" setup_conformance_matrix_no_reason invoke_conformance_matrix \
+  "is not <backend>  <status>  <why>"
+run_case "check-conformance-matrix.sh (duplicate backend row)" setup_conformance_matrix_duplicate_backend invoke_conformance_matrix \
+  "more than once"
+run_case "m1-complete.sh (no recorded matrix)" setup_m1_complete_no_matrix invoke_m1_complete_no_matrix \
+  "the recorded backend matrix is the artifact this gate checks"
+run_case "check-conformance-matrix.sh (unrecognized status)" setup_conformance_matrix_bad_status invoke_conformance_matrix \
+  "which is neither verified nor not-yet-run"
+run_case "check-conformance-matrix.sh (roster names an unknown backend)" setup_conformance_matrix_unknown_in_roster invoke_conformance_matrix_roster \
+  "which baselines/conformance-matrix.txt does not name"
+run_case "check-conformance-matrix.sh (verified backend never ran)" setup_conformance_matrix_verified_never_ran invoke_conformance_matrix_roster \
+  "but the roster records no run for it"
 run_case "m-1-complete.sh (missing Non-negotiables section)" setup_m1_complete_missing_section invoke_m1_complete_missing_section
 run_case "m-1-complete.sh (non-UTF-8 AGENTS.md, crash path)" setup_m1_complete_non_utf8 invoke_m1_complete_non_utf8
 run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_fmt \

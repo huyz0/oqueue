@@ -137,6 +137,21 @@ repos:
         pass_filenames: false
         always_run: true
 
+      # Pure text read from the index, so it costs milliseconds: the backend
+      # matrix cannot reach a commit malformed. ⚠️ **Format only.** The
+      # agreement-with-the-roster half is deliberately *not* here and takes
+      # `--against-roster` to run at all: the `check-crate` hook above writes
+      # a roster containing only `fake`, so comparing against it here failed
+      # every commit on a freshly-cleaned tree. It belongs where a complete
+      # roster is guaranteed — `scripts/gates/m1-complete.sh`. `M1.21`.
+      - id: check-conformance-matrix
+        name: "M1.21: the recorded backend matrix is well-formed"
+        entry: scripts/check-conformance-matrix.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
+
       # ⚠️ Narrowed to the staged diff, so cost is proportional to the change:
       # ~4.8 s warm for a 13-mutant diff, and a skip when a diff produces none.
       # `testing.md` rule 17 — a survivor is killed or argued; rule 16 is what

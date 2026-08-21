@@ -187,6 +187,22 @@ fn delete_is_idempotent(store: &dyn ObjectStore) {
 
 fn conditional_write_if_absent(store: &dyn ObjectStore) {
     let k = key("conformance/if_absent.seg");
+    // ⚠️ **Establishes its own precondition instead of assuming a virgin
+    // backend — found by running this suite against MinIO a second time.**
+    // Every other case either opens with an unconditional `put` (which
+    // overwrites whatever a previous run left), deletes what it created, or
+    // writes nothing at all, so the suite as a whole looked idempotent. This one asserts a key is
+    // *absent* and then makes it present, so run two against a persistent
+    // backend failed where run one passed — and run one only passed because
+    // the bucket happened to be empty. A suite that is green exactly once per
+    // bucket cannot be what a milestone's completion condition reads.
+    //
+    // Deleting at the *start* rather than cleaning up at the end is the part
+    // that matters: a run that dies midway through this case leaves the
+    // object behind either way, and only a delete-first recovers from that
+    // without a human emptying the bucket.
+    block_on(store.delete(std::slice::from_ref(&k)))
+        .expect("clearing anything a previous run left behind succeeds");
     block_on(store.put(&k, vec![1], Some(Precondition::IfAbsent)))
         .expect("if-absent succeeds against an absent key");
     let result = block_on(store.put(&k, vec![2], Some(Precondition::IfAbsent)));

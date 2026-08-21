@@ -1,0 +1,40 @@
+# Which backends the conformance suite has been run against, and which it
+# has not. `M1.21`, `FR-31`'s own verification method.
+#
+#   <backend>  <status>  <why>
+#
+# Two columns of fact and one of reason, in the same shape and for the same
+# purpose as `baselines/review.txt`, `mutants.txt` and `unsafe.txt`:
+# ⚠️ **a list nobody grows quietly.** A `not-yet-run` row is a claim a
+# reviewer can check, not a gap nobody wrote down.
+#
+# ## What the two statuses mean
+#
+# `verified`   -- the suite has actually been executed against this backend,
+#                 and `scripts/gates/m1-complete.sh` re-runs it and refuses to
+#                 pass if it does not. ⚠️ **Re-established on every *completed*
+#                 run of that gate** -- a run on a machine with no Docker skips
+#                 the container half and still exits 0, saying so on stdout but
+#                 not in its exit code. So this row is a fact about the last
+#                 run that actually reached MinIO, which is not necessarily the
+#                 last run. `M1.34` is the CI job that would make it a
+#                 schedule; until then, read the gate's output, not just its
+#                 status.
+# `not-yet-run` -- nothing has executed the suite against this backend. ⚠️ Not
+#                 "expected to work": the whole point of naming it here is that
+#                 nobody may quietly read an absent row as a passing one.
+#
+# ⚠️ **`m1-complete.sh` checks this file in both directions.** Every
+# `verified` row must appear in the roster the test run records, and every
+# roster entry must appear here — the second half is not symmetry for its own
+# sake. `M1.21` found sixteen invented backend names (`concurrent-0` ..
+# `concurrent-15`) sitting in that roster, written by the recording
+# mechanism's own unit test, so the artifact claimed eighteen conformance-
+# tested backends of which sixteen did not exist. Nothing noticed, because
+# nothing read the file back.
+
+fake  verified  In-memory FakeObjectStore, oqueue-core. Declares FULL capabilities and runs every case at T1 -- no container, no network, so this row is re-established by `cargo test` alone.
+s3  verified  S3Store against a MinIO container at T2 (`tests/it/s3_minio.rs`), plus the real multipart path from `M1.16`. Credentials and endpoint come from `AWS_*` set before the process starts, never from a literal (`security.md`).
+gcs  not-yet-run  GcsStore is fully built and covered at T0, but no GCS emulator round-trips `object_store`'s actual request shape: `fake-gcs-server` routes the XML PUT to a JSON handler that demands an `uploadType`, and Google's own `storage-testbench` stores the object but returns no ETag or generation header, so the client fails before this crate is reached. Both confirmed against live containers, not inferred. ADR-0014.
+s3-real  not-yet-run  Real AWS S3, deliberately deferred -- doc 10 #33. The suite is written to doc 04 section 6's *documented* conditional-write semantics, which narrows the residual risk to "does the implementation match its own documentation" rather than eliminating it.
+gcs-real  not-yet-run  Real Google Cloud Storage, deferred for the same reason as `s3-real` and additionally blocked by `gcs` above having no emulator to fail fast against first. doc 10 #33.

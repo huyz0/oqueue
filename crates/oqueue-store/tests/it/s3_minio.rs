@@ -3,13 +3,26 @@
 //! ⚠️ **T2, not T0/T1** (`testing.md`'s tier table): needs Docker and the
 //! network, so it is `#[ignore]`d rather than gated by a feature or a
 //! runtime environment check (`testing.md` rule 2 — capability, never
-//! `#[cfg]`). CI's T2 step starts `MinIO` and sets every `AWS_*` variable
-//! this backend reads **before the test process launches**, then runs with
-//! `--ignored` — this file never calls `std::env::set_var` itself
+//! `#[cfg]`). Whatever runs it starts `MinIO` and sets every `AWS_*`
+//! variable this backend reads **before the test process launches**, then
+//! runs with `--ignored` — this file never calls `std::env::set_var` itself
 //! (`testing.md` rule 12: mutating the environment at runtime is unsafe and
 //! racy against every other test in the same binary). A developer without
 //! Docker running locally never opts in; nothing here needs remembering to
 //! turn off.
+//!
+//! ⚠️ **What runs it is `scripts/gates/m1-complete.sh`, not CI.** This
+//! sentence used to say "CI's T2 step" does — `M1.21` went looking for that
+//! step in order to read its bucket setup and found that
+//! `.github/workflows/gates.yml` has no T2 job and never had one.
+//! ⚠️ **That is not the same as never having run**: `M1.15` and `M1.16` both
+//! record running these tests against a real `MinIO` container in their commit
+//! messages, and `check-coverage.sh`'s exemption for this crate rests on that
+//! measurement. What was missing is anything that re-runs them — between one
+//! person's invocation and the next they were unenforced. The milestone gate
+//! now starts the container, creates the bucket, exports the credentials and
+//! runs the suite twice, which makes that invocation repeatable; a CI job
+//! that does it on a schedule is `backlog.md`'s `M1.34`.
 //!
 //! ⚠️ **Must run on a multi-thread Tokio runtime.** The conformance suite's
 //! own case bodies drive their futures with a hand-rolled, no-allocation
@@ -22,10 +35,10 @@
 //! worker threads free to drive it while this task spins. `oqueue-store`'s
 //! own `Cargo.toml` pins `rt-multi-thread` for exactly this reason.
 
-// The workspace denies `expect_used`; the one site below is on a
-// precondition CI's T2 step is responsible for holding (`AWS_*` describing a
-// reachable endpoint) before this test ever runs — a panic here means the
-// test environment is broken, not that this test should recover.
+// The workspace denies `expect_used`; the two sites below are on a
+// precondition whatever runs this suite is responsible for holding (`AWS_*`
+// describing a reachable endpoint) before either test starts — a panic here
+// means the test environment is broken, not that this test should recover.
 #![allow(clippy::expect_used)]
 
 use crate::conformance::{Capabilities, record::record_backend_run, run_conformance_suite};
@@ -33,7 +46,7 @@ use oqueue_core::{ByteRange, Error, MultipartLimits, ObjectKey, ObjectStore, Pre
 use oqueue_store::S3Store;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "T2: needs Docker MinIO and AWS_* env set by CI before the process starts"]
+#[ignore = "T2: run by scripts/gates/m1-complete.sh, which starts MinIO and sets AWS_*"]
 async fn s3_backend_passes_the_full_conformance_suite_against_minio() {
     let store = S3Store::from_env().expect(
         "AWS_* environment variables must describe a reachable MinIO endpoint \
@@ -65,7 +78,7 @@ async fn s3_backend_passes_the_full_conformance_suite_against_minio() {
 /// multi-gigabyte payload to ever reach the multipart path at all. See
 /// `S3Store::with_multipart_limits`'s own doc comment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "T2: needs Docker MinIO and AWS_* env set by CI before the process starts"]
+#[ignore = "T2: run by scripts/gates/m1-complete.sh, which starts MinIO and sets AWS_*"]
 async fn s3_backend_uploads_a_large_payload_as_multipart_and_reads_it_back() {
     let limits = MultipartLimits {
         min_part_size: 5 * 1024 * 1024,
