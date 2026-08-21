@@ -375,7 +375,7 @@ WarpStream has the same class of defect documented as a known limitation: under 
 
 ### Fault-inject pauses, not just kills
 
-**[Synthesis]** Every metastable finding in the Jepsen report came from **pauses and partitions**, not clean crashes. A killed coordinator is the easy case. This is a direct argument for the deterministic-simulation testing surveyed in [05](05-rust-ecosystem.md) §9 — `madsim` in particular, since it ships S3/etcd-aware simulators and can inject pauses deterministically.
+**[Synthesis]** Every metastable finding in the Jepsen report came from **pauses and partitions**, not clean crashes. A killed coordinator is the easy case. This is a direct argument for the deterministic-simulation testing surveyed in [05](05-rust-ecosystem.md) §9 — `madsim` in particular, since it ships S3/etcd-aware simulators and can inject pauses deterministically. ⚠️ **CORRECTION (2026-08-21), from `M1.22`:** the argument for deterministic simulation stands, and this paragraph's own subject — coordinator pauses and partitions — is **broker-socket** simulation, which the spike did not rule on. What it did rule out is the *justification offered here*: `madsim` "ships S3/etcd-aware simulators" is true but does not reach this project's object store, because `madsim-aws-sdk-s3` replaces the **AWS SDK** and `ADR-0008` chose `object_store`, for which no `reqwest`/`hyper` shim exists. So madsim stays a live candidate for the sockets this paragraph is about and is not one for object-store I/O. See [05](05-rust-ecosystem.md) §9's own correction and `docs/internal/standards/testing.md`, "Deterministic simulation".
 
 ### Growth bounds must be enforced, not monitored
 

@@ -56,6 +56,91 @@ was tried next and has its own gap (its XML `PUT` response omits the
    feature flag — a feature-gated test does not compile unless the feature is
    on, so it rots invisibly and breaks the day someone enables it.
 
+## Deterministic simulation: the answer is a transport seam, not a runtime swap
+
+⚠️ **This section is `M1.22`'s finding, the spike M-1 deferred to produce**,
+recorded 2026-08-21 with its reasoning rather than its conclusion alone.
+
+The question as deferred was whether `object_store`'s I/O can run under a
+deterministic simulator via a `cfg`-swapped runtime, without changing crate
+structure. **Under `madsim` specifically: no. But the question turns out to be
+the wrong one, and the right one has a better answer.**
+
+**Why `madsim` does not fit.** It requires `RUSTFLAGS="--cfg madsim"` *and*
+replacing each I/O crate with a shim: its README lists `madsim-tokio`,
+`madsim-tonic`, `madsim-etcd-client`, `madsim-rdkafka` and
+`madsim-aws-sdk-s3`, and states that "all I/O-related interfaces must be
+mocked during the simulation". `object_store` reaches the network through
+`reqwest` → `hyper` → `hyper-util` → `tokio::net::TcpStream` (verified by
+`cargo tree`; `object_store`'s own source names `TcpListener` only in its
+tests). **There is no `madsim` shim for `reqwest` or `hyper`**, so the swap
+would have to be a global `[patch.crates-io]` of `tokio` beneath three
+third-party crates that never agreed to it — and DNS, TLS and the wall clock
+sit in that path too. ⚠️ That `madsim-aws-sdk-s3` exists at all is the tell:
+the ecosystem's own answer for S3 replaces the **SDK**, not the transport
+under it, because simulating a real HTTP client stack is not the shape that
+works.
+
+**What actually fits, and it needs no `cfg` at all.** `object_store` exposes
+a public request/response seam above the socket:
+
+```rust
+#[async_trait]
+pub trait HttpService: Debug + Send + Sync + 'static {
+    async fn call(&self, req: HttpRequest) -> Result<HttpResponse, HttpError>;
+}
+pub trait HttpConnector: Debug + Send + Sync + 'static {
+    fn connect(&self, options: &ClientOptions) -> Result<HttpClient>;
+}
+```
+
+`AmazonS3Builder::with_http_connector` and `GoogleCloudStorageBuilder::with_http_connector`
+take one. ⚠️ **The seam is not something this project's feature choice earned**,
+and saying so would be the comfortable version: `with_http_connector` carries
+no `cfg` beyond the module gate, and `aws = ["aws-base", "reqwest", ...]`
+implies `aws-base`, so the convenience features expose exactly the same seam.
+`object_store`'s feature table does describe `aws-base`/`gcp-base` as "S3/GCS
+without `reqwest` or crypto; supply your own `HttpConnector` and
+`CryptoProvider`" — but this workspace enables `aws-base` **plus** `reqwest`
+**plus** `ring` (ADR-0012, for reasons that have nothing to do with
+simulation), so that sentence does not describe our configuration. The seam is
+available to any consumer of this crate on any feature set.
+
+A deterministic harness therefore implements `HttpService` and answers
+requests from an in-process model of the backend: no runtime swap, no patched
+dependencies, no simulated TCP/TLS/DNS, and `oqueue-store`'s crate structure
+untouched. ⚠️ **Verified by compiling and running it, not by reading**: a
+throwaway probe implementing both traits and passing the connector to
+`AmazonS3Builder` compiles and passes under this workspace's exact feature
+set. The probes were deleted — `M1.22` is a finding, not a code task — and the
+two wrinkles they turned up are recorded here so the next person does not
+rediscover them, both established by compiling the failing form first:
+
+- `HttpService` is `#[async_trait]`, so an implementor either takes that
+  dependency or writes the desugared boxed-future form. The probe wrote the
+  desugared form, so **no new dependency is required**.
+- `HttpResponse` is `http::Response<HttpResponseBody>`, and `object_store`
+  re-exports `Extensions`/`HeaderMap`/`HeaderValue` from `http` but **not**
+  `Response` or `StatusCode`. `HttpResponse::new(body)` works through the
+  alias, but ⚠️ `HttpResponse::builder()` does **not** — `builder()` is an
+  inherent method on `Response<()>`, so it is unreachable through an alias
+  whose body type is fixed. Any model of S3 must return 404s and 412s, so
+  this looks like it forces a direct `http` dependency. It does not:
+  `*resp.status_mut() = 404u16.try_into().expect("a valid status")` fixes the target type from
+  `status_mut()`'s signature and infers `StatusCode` without the crate ever
+  being named. ⚠️ `.expect(...)`, not `?`: `HttpError` has no
+  `From<InvalidStatusCode>`, so the question-mark form is `E0277`. `From<Vec<u8>>` and `From<String>` for `HttpResponseBody`
+  cover the body, so `bytes` and `http-body-util` are not needed either.
+
+⚠️ **What this does *not* buy.** The seam is above HTTP, so a model behind it
+tests this project's request *construction* and response *handling* — not the
+socket, TLS, connection pooling, or `object_store`'s own retry timing. Those
+remain T2's job, which is why this finding does not shrink the tier table.
+`turmoil` (`tokio-rs`) is the option if a future milestone needs simulated
+sockets under a real hyper stack — its `axum` and `grpc` examples show hyper
+running on its `tokio::net` drop-in — but nothing in `M1` needs that, and
+adopting it would mean the transitive-patching problem all over again.
+
 ## Isolation: fakes, not mocks
 
 3. **Prefer a fake over a mock.** A fake is a working implementation with
@@ -168,7 +253,11 @@ was tried next and has its own gap (its XML `PUT` response omits the
     blind spot.
 26. **Deterministic simulation for cluster-level behaviour.** Node failure,
     message reordering, partitions, and clock skew are not reachable by unit
-    tests, and a failing seed is a complete replayable reproduction.
+    tests, and a failing seed is a complete replayable reproduction. ⚠️ **How**
+    is settled for object-store I/O and open for everything else — see
+    "Deterministic simulation: the answer is a transport seam, not a runtime
+    swap" above (`M1.22`), which found the `cfg`-swapped-runtime approach this
+    rule was written assuming is not available here.
 27. **A conformance suite for every `ObjectStore` implementation**, recording
     which backends it has been run against. ⚠️ Conditional-write behaviour stays
     marked unverified until it has run against real S3.

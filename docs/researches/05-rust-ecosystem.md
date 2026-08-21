@@ -225,6 +225,8 @@ v0.7.2 (2024-04-23 — notably staler release cadence than madsim/turmoil), MIT,
 
 **Recommendation:** given the commit-protocol correctness stakes of this project, `madsim` is the stronger fit than `turmoil` specifically because it already ships S3/etcd/Kafka-aware simulators — RisingWave's precedent (a comparable Rust streaming system built on object storage) using madsim for full end-to-end simulation is a strong, directly relevant validation of this approach. `loom` remains complementary for any hand-rolled lock-free structures underneath.
 
+⚠️ **CORRECTION (2026-08-21), from `M1.22`:** this recommendation does not survive contact with `object_store`. `madsim` substitutes I/O crate by crate and ships no shim for `reqwest`/`hyper`, which is how `object_store` reaches the network — so it cannot simulate this project's object-store path at all, whatever its merits for the broker's own sockets. That `madsim` "ships simulators specifically for S3-like services" (above) is real but does not help: `madsim-aws-sdk-s3` replaces the **AWS SDK**, and `ADR-0008` chose `object_store`, not that SDK. See `docs/internal/standards/testing.md`, "Deterministic simulation".
+
 ---
 
 ## 10. Licensing survey

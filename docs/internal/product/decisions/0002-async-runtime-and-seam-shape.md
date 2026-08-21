@@ -126,10 +126,19 @@ async dependency compiled — a floor, and it must say so rather than presenting
 the number as steady state.
 
 **Deterministic simulation.** doc 10 #32 called DST placement open, warning that
-`madsim` "touches every crate that does async". ⚠️ doc 10's own resolved log
-supersedes that: `madsim` swaps the runtime by `cfg` rather than changing crate
+`madsim` "touches every crate that does async". doc 10's own resolved log
+superseded that: `madsim` swaps the runtime by `cfg` rather than changing crate
 structure, so its answer "affects roughly one paragraph of `testing.md` — not
-`architecture.md` or the crate split". This ADR is not blocked on the DST spike,
+`architecture.md` or the crate split".
+
+⚠️ **`M1.22` (2026-08-21) superseded the resolved log in turn, and the sentence
+above is kept only as what was believed.** The spike found `madsim` cannot swap
+this project's runtime by `cfg` at all: it needs a shim per I/O crate and none
+exists for the `reqwest`/`hyper` stack `object_store` reaches the network
+through. The seam that does work is `object_store`'s own `HttpService`, above
+the socket. The *conclusion* survives — one section of `testing.md`, not
+`architecture.md` and not the crate split — but for a different reason.
+`standards/testing.md`'s "Deterministic simulation" section is the answer. This ADR is not blocked on the DST spike,
 nor it on this. What follows: a simulated backend implements these seams, so DST
 cost is bounded by the number of seams, not the number of crates.
 
