@@ -118,18 +118,34 @@ SKIPPABLE_GATES="check-crate.sh check-coverage.sh check-budget.sh check-mutants.
 # for, because a single conditional block can guard several. Both are reported
 # separately at the end, and they differ: without `cargo-mutants` two cases do
 # not run and one call fires.
+# ⚠️ **Every exit from `skip_case` records the gate**, all four of them: the
+# ordinary skip, and three rejection paths — one of which this same commit
+# adds. `M1.25`: the two pre-existing ones used to `return` without touching
+# `SKIPPED_GATES`, so a call the suite refused left the gate absent from
+# `SKIPPED_CASES` — and `m0-complete.sh` reads that line by *matching* names,
+# so an absent one reads exactly like a gate whose case ran. It then printed
+# "every M0 gate's negative case actually ran" for a gate nothing watched.
+# The suite does exit non-zero on those paths (`fail` increments `lib.sh`'s
+# `_FAILURES`), so this is belt to that braces — but the claim on the summary
+# line should be true on its own, not only in combination with an exit code
+# somebody else has to check.
+_skip_case_record() {
+  SKIPPED_GATES+=("$1")
+  # ⚠️ `10#` — a caller writing `08` or `09` for a count otherwise reaches
+  # `$(( ))` as an invalid octal literal, which dies under `set -e` *before*
+  # `SKIPPED_COUNT` prints, and `m0-complete.sh` then reports "no
+  # SKIPPED_CASES line": the exact misdiagnosis the `return 0, deliberately`
+  # note below exists to prevent. Measured: `n=08; echo $(( 0 + n ))` is
+  # "value too great for base".
+  SKIPPED_CASE_COUNT=$((SKIPPED_CASE_COUNT + 10#$2))
+}
+
 skip_case() {
   local gate="$1" reason="$2" remedy="${3:-}" cases="${4:-1}"
-  # ⚠️ A non-numeric count is a swapped argument, not a count. Unchecked, the
-  # arithmetic below dies under `set -u` before either summary line prints and
-  # `m0-complete.sh` reports a stale suite — the same misdiagnosis the branch
-  # below was written to stop, one argument over. Found by review.
-  if [[ ! "$cases" =~ ^[0-9]+$ ]]; then
-    fail "skip_case's fourth argument is a case count, got '$cases'"
-    note "usage: skip_case <gate.sh> <reason> [remedy] [case-count]"
-    FAILED_CASES=$((FAILED_CASES + 1))
-    return 0
-  fi
+  # ⚠️ **The gate name is checked first**, before the argument-shape guards
+  # below. A call that is wrong in two ways — `skip_case mutants "..." 3` — is
+  # then diagnosed as the typo it is, in one round, rather than reporting the
+  # misplaced count, being fixed, and failing again on the name.
   case " $SKIPPABLE_GATES " in
     *" $gate "*) ;;
     *)
@@ -137,6 +153,10 @@ skip_case() {
       note "it must be one of: $SKIPPABLE_GATES"
       note "⚠️ m0-complete.sh matches these against M0_GATES; a label here is a typo"
       FAILED_CASES=$((FAILED_CASES + 1))
+      # Recorded under the name as given. It matches no `M0_GATES` entry, so
+      # `m0-complete.sh` ignores it — but it appears on `SKIPPED_CASES`, where
+      # a reader can see that something was refused rather than nothing.
+      _skip_case_record "$gate" "$([[ "$cases" =~ ^[0-9]+$ ]] && printf '%s' "$cases" || printf 1)"
       # ⚠️ **`return 0`, deliberately.** `lib.sh` sets `-e`, and this branch is
       # the last command of its `case` arm — a non-zero return aborted the
       # whole suite here, so neither `SKIPPED_COUNT` nor `SKIPPED_CASES` was
@@ -151,8 +171,39 @@ skip_case() {
       return 0
       ;;
   esac
-  SKIPPED_GATES+=("$gate")
-  SKIPPED_CASE_COUNT=$((SKIPPED_CASE_COUNT + cases))
+  # ⚠️ **A bare number in the remedy slot is a count somebody put one argument
+  # early**, and it is the silent half of this pair: the count then defaults to
+  # 1, the number is printed to the reader as though it were advice, and the
+  # suite undercounts with nothing failing. `M1.23`'s sibling defect — the
+  # fourth argument was validated and the third was not. A remedy is prose; no
+  # real one is digits alone.
+  if [[ -n "$remedy" && "$remedy" =~ ^[0-9]+$ ]]; then
+    fail "skip_case's third argument is a remedy, got the bare number '$remedy'"
+    note "usage: skip_case <gate.sh> <reason> [remedy] [case-count]"
+    note "to give a count and no remedy, pass an empty one: skip_case $gate \"...\" '' $remedy"
+    FAILED_CASES=$((FAILED_CASES + 1))
+    # Recorded with the count the caller plainly meant, so the summary is
+    # right even though the call is wrong; the `fail` above is what gets the
+    # call fixed. ⚠️ One case reads otherwise and is deliberately not special
+    # -cased: `skip_case gate "reason" 3 2` — both slots filled — records 3
+    # rather than the explicit 2. The call is refused and the suite is red
+    # either way, and guessing between two numbers a confused caller supplied
+    # is worse than taking the one in the slot being complained about.
+    _skip_case_record "$gate" "$remedy"
+    return 0
+  fi
+  # ⚠️ A non-numeric count is a swapped argument, not a count. Unchecked, the
+  # arithmetic below dies under `set -u` before either summary line prints and
+  # `m0-complete.sh` reports a stale suite — the same misdiagnosis the branch
+  # above was written to stop, one argument over. Found by review.
+  if [[ ! "$cases" =~ ^[0-9]+$ ]]; then
+    fail "skip_case's fourth argument is a case count, got '$cases'"
+    note "usage: skip_case <gate.sh> <reason> [remedy] [case-count]"
+    FAILED_CASES=$((FAILED_CASES + 1))
+    _skip_case_record "$gate" 1
+    return 0
+  fi
+  _skip_case_record "$gate" "$cases"
   skip "$gate -- $reason"
   [[ -z "$remedy" ]] || note "$remedy"
   note "⚠️ this case did not run; $gate is unproven on this machine"
@@ -2438,6 +2489,159 @@ else
     "install: cargo install cargo-mutants" 2
 fi
 
+# --- the harness checks itself ----------------------------------------------
+#
+# ⚠️ **`skip_case` is this suite's own code, so `run_case` cannot reach it** —
+# `run_case` invokes a gate script against a scratch directory, and `skip_case`
+# is a shell function in this file. `M1.25` asked for a case proving a
+# malformed third argument is rejected and a legitimate skip is counted;
+# without a harness of its own that promise has nowhere to live, and the two
+# defects `M1.25` fixed were both invisible precisely because nothing ever
+# exercised the function.
+#
+# Each check runs inside a command substitution, which is a subshell: a
+# deliberate `fail` increments `lib.sh`'s `_FAILURES` in a copy of this shell
+# and never in this one, and the `SKIPPED_*` state each check sets up is
+# discarded with it. The suite must not go red for proving its own guard works.
+HARNESS_FAILURES=0
+
+harness_check() {
+  local label="$1" expect="$2" snippet="$3"
+  local out ec=0
+  # ⚠️ The brace group, then `2>&1` on the group. Written as a bare `2>&1`
+  # after the last command it binds to *that command* and `fail`'s message —
+  # which goes to stderr — escapes the capture, so a check looking for it
+  # fails while the guard it tests works fine. Measured writing this.
+  out="$( {
+    SKIPPED_GATES=()
+    SKIPPED_CASE_COUNT=0
+    FAILED_CASES=0
+    # ⚠️ `|| ec=$?` immediately, and printed. Capturing the substitution's own
+    # status instead reads the status of the **last** command in the group —
+    # the `printf` — which is always 0, so `skip_case` returning non-zero was
+    # invisible. Measured: the first version of this guard asserted on that
+    # and stayed green through exactly the regression it was written for.
+    ec=0
+    eval "$snippet" || ec=$?
+    printf 'RECORDED [%s] %s EXIT %s\n' "${SKIPPED_GATES[*]-}" "$SKIPPED_CASE_COUNT" "$ec"
+  } 2>&1 )" || true
+  # ⚠️ `|| true`. Dropping the dead `rc` capture also dropped the only thing
+  # stopping a snippet that aborts its own subshell from aborting this whole
+  # suite: `set -e` fires on the failed substitution, the run stops mid-section
+  # and prints no summary. Measured — removing `10#` made the zero-padded check
+  # kill the suite instead of failing it. A check must fail, not abort; the
+  # `EXIT n` field is what carries the status now, and an aborted subshell
+  # prints none, so the grep below fails cleanly.
+  # ⚠️ **The status is read out of the captured text, not from the
+  # substitution.** `out="$( … )" || rc=$?` reads the status of the *last*
+  # command in the group — the `printf` — which is always 0, so a `skip_case`
+  # that started returning non-zero left every check green. That is the single
+  # regression the function is most heavily commented against (see the
+  # `return 0, deliberately` note above: a non-zero return aborts the whole
+  # suite before `SKIPPED_COUNT`/`SKIPPED_CASES` print, and `m0-complete.sh`
+  # then misreports a stale suite).
+  #
+  # ⚠️ **Two comments here got the bash wrong before this one**, in opposite
+  # directions, so the measurements are recorded rather than the conclusion.
+  # `x=$(false)` **does** abort under `set -e` — the assignment takes the
+  # substitution's status. `x=$(false; echo reached)` **does not** — the
+  # group's status is the last command's, and errexit is not inherited by the
+  # commands inside a substitution unless `inherit_errexit` is set. Those are
+  # different claims and each earlier comment asserted one while meaning the
+  # other. ⚠️ **This file sets `inherit_errexit`** (line 60), so inside these
+  # substitutions the second case aborts too.
+  #
+  # Neither is why this guard reads the text. It reads the text because the
+  # group has two possible endings and the observable status is useless in
+  # both: when the snippet runs to completion the last command is the
+  # `printf`, so the status is 0 no matter what `skip_case` returned; and when
+  # the snippet aborts its own subshell — an arithmetic expansion error under
+  # `inherit_errexit`, say — the `printf` never runs, the substitution fails,
+  # and there is no status to read either. Measured under this file's own
+  # settings: `n=$(( 0 + 08 ))` inside the group yields substitution status 1
+  # and no `EXIT` line at all. That second ending is what `|| true` above
+  # contains, and the missing `EXIT n` line is what makes the check fail
+  # rather than the suite abort. ⚠️ A third version of this comment claimed
+  # the status "is always 0 whatever errexit does", which contradicted the
+  # `|| true` twenty lines above it — a maintainer believing it would remove
+  # that guard and restore the abort.
+  #
+  # ⚠️ `shopt -s inherit_errexit` is set at the **top of this file**, not in
+  # `lib.sh` — an earlier version of this comment sent a reader to the wrong
+  # file, where finding nothing invites deleting the real line. It is what
+  # makes a failing `setup_*` inside `dir="$(setup_fn)"` abort instead of
+  # yielding an empty path, and all 59 `run_case` invocations depend on it.
+  # (55 of those lines are unconditional; the other four sit inside
+  # `if _have_*` branches, which is where a "55" in an earlier draft came
+  # from.)
+  if ! grep -q 'EXIT 0$' <<< "$out"; then
+    fail "harness: $label -- skip_case did not return 0"
+    note "a non-zero return aborts the suite before SKIPPED_CASES is printed"
+    sed 's/^/     /' <<< "$out" >&2
+    HARNESS_FAILURES=$((HARNESS_FAILURES + 1))
+  elif grep -qF -- "$expect" <<< "$out"; then
+    ok "harness: $label"
+  else
+    fail "harness: $label -- expected output containing: $expect"
+    sed 's/^/     /' <<< "$out" >&2
+    # ⚠️ Its own counter, not `FAILED_CASES`. That one feeds "N gate(s)
+    # exercised, M failed to fail as expected", and a harness defect is not a
+    # gate that failed to fail — reporting it there sends the reader hunting a
+    # broken fixture among 59 cases that all passed.
+    HARNESS_FAILURES=$((HARNESS_FAILURES + 1))
+  fi
+}
+
+# A bare number where the remedy goes is refused...
+harness_check "a numeric third argument is refused" \
+  "third argument is a remedy, got the bare number '3'" \
+  'skip_case check-mutants.sh "reason" 3'
+# ...and the count it plainly meant is recorded, not silently defaulted to 1.
+harness_check "the count a numeric third argument meant is still recorded" \
+  "RECORDED [check-mutants.sh] 3" \
+  'skip_case check-mutants.sh "reason" 3'
+
+# An unknown gate name is refused *and* still appears, so `SKIPPED_CASES`
+# cannot read as "nothing was skipped" for a case that did not run.
+harness_check "an unknown gate name is refused" \
+  "not a script name this suite knows" \
+  'skip_case mutants "a typo for check-mutants.sh"'
+# ⚠️ Two checks, not one. With only the `RECORDED` half, deleting the
+# gate-name guard outright left this green — the call fell through to the
+# ordinary path, which emits the identical line. Measured; `testing.md`
+# rule 20a's "passes on an unrelated failure while the property it exists for
+# is deleted" exactly.
+harness_check "an unknown gate name is still recorded" \
+  "RECORDED [mutants] 1" \
+  'skip_case mutants "a typo for check-mutants.sh"'
+
+# A non-numeric fourth argument is refused and the gate still recorded.
+# ⚠️ Two checks again, for the reason the gate-name pair records: with only the
+# `RECORDED` half, replacing this guard's `fail` with a silent `cases=1`
+# leaves every check green and restores on the fourth slot exactly the
+# undercount `M1.25` closed on the third. Measured.
+harness_check "a non-numeric fourth argument is refused" \
+  "fourth argument is a case count" \
+  'skip_case check-mutants.sh "reason" "install it" "two"'
+harness_check "a non-numeric fourth argument is still recorded" \
+  "RECORDED [check-mutants.sh] 1" \
+  'skip_case check-mutants.sh "reason" "install it" "two"'
+
+# ⚠️ Pins the `10#` in `_skip_case_record`. Without it `08` reaches `$(( ))`
+# as an invalid octal literal, `set -e` aborts the subshell, and no `RECORDED`
+# line is printed at all — so this check fails, where nothing pinned it before.
+harness_check "a zero-padded count is arithmetic, not octal" \
+  "RECORDED [check-mutants.sh] 8" \
+  'skip_case check-mutants.sh "reason" "install it" 08'
+
+# The ordinary path still records exactly what it always did.
+harness_check "a legitimate skip is counted" \
+  "RECORDED [check-mutants.sh] 2" \
+  'skip_case check-mutants.sh "reason" "install it" 2'
+
+if (( HARNESS_FAILURES > 0 )); then
+  note "$HARNESS_FAILURES harness self-check(s) failed — this suite's own helper is broken"
+fi
 note "$TOTAL gate(s) exercised, $FAILED_CASES failed to fail as expected"
 
 # ⚠️ **Machine-readable, on its own line, and printed even when none skipped.**
