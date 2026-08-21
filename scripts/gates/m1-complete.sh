@@ -70,16 +70,85 @@ cleanup() {
 }
 trap cleanup EXIT
 
+if [[ ! -f "$MATRIX" ]]; then
+  fail "$MATRIX not found -- the recorded backend matrix is the artifact this gate checks"
+  finish
+fi
+
+# ---------------------------------------------------------------------------
+# 0. The outer loop: every M1 commit read as a whole.
+#
+#    ⚠️ **Above every skip and every tool requirement** — which is the finding
+#    rather than a detail. `M1.43` first appended this as a section 4, after
+#    the `has_rust` skip, the `require_tool cargo` exit and the `docker info`
+#    skip. Review reproduced the hole with a `docker` stub exiting 1: the gate
+#    printed `skip conformance suite against MinIO` and exited **0**, having
+#    never asked whether M1 was reviewed. `finish` exits 0 whenever nothing
+#    failed, and `skip` does not fail. So on any machine without Docker the
+#    check was unreachable — wired into the one file that invokes it and still
+#    enforcing nothing.
+#
+#    This check needs neither cargo nor Docker: it reads git history and
+#    `reviews/`. Nothing below it can be a precondition for it.
+#
+#    ⚠️ **But not above the `$MATRIX` guard**, and that ordering is load-bearing
+#    rather than incidental. A second version of this task hoisted the check to
+#    the very top, which broke `negative.sh`'s `m1-complete.sh (no recorded
+#    matrix)` case: that fixture builds a scratch repo holding only `lib.sh`,
+#    this gate and a `Cargo.toml`, so `check-milestone-review.sh` is absent,
+#    exits 127, and this branch `finish`ed before the guard the case exists to
+#    exercise — turning a registered case red on every push. The `$MATRIX`
+#    guard needs no tool either, so it costs nothing to keep it first.
+#
+#    ⚠️ **This was missing entirely until `M1.43`, and M1 was the only
+#    milestone it was missing from**: `m-1-complete.sh` calls it at line 203
+#    and `m0-complete.sh` at line 658 — once each, the other `grep -c` hits
+#    being comments and message strings — and `m1-complete.sh` never. So the gate that declares
+#    M1 complete could go green over a milestone nobody had read as a whole,
+#    while the skill's own rule was enforced for the milestones either side.
+#    A gate nothing invokes is a preference (`AGENTS.md`); this is the sharper
+#    version, since the check existed, passed its own tests, and was wired into
+#    two of three callers — and no check in this repository can see that,
+#    because which gates a milestone gate must call is genuinely per-milestone.
+# ---------------------------------------------------------------------------
+# ⚠️ The exit code is reported, not collapsed into "not reviewed". Review
+# found the collapsed form told an operator whose `python3` was missing, or
+# whose checkout was not a git repository, to go build a review packet — a
+# remedy for none of those. `m-1-complete.sh` already reports the code.
+mr_rc=0
+bash "$REPO_ROOT/scripts/check-milestone-review.sh" --milestone M1 || mr_rc=$?
+if (( mr_rc == 0 )); then
+  ok "every M1 commit is covered by a milestone review"
+elif (( mr_rc == 127 )); then
+  fail "scripts/check-milestone-review.sh could not be run (exit 127)"
+  note "the gate is absent, not the review -- M1's coverage is unknown, not failing"
+else
+  fail "M1's commits have not been read as a whole (exit $mr_rc)"
+  note "run: scripts/milestone-review.sh context --milestone M1 to build the packet"
+  note "if that reports no commits, the checkout is shallow -- fetch full history"
+fi
+# ⚠️ No `finish` in either branch. `lib.sh` states the contract -- "the caller
+# keeps going so one run reports every violation rather than only the first" --
+# and `m-1-complete.sh` follows it for this same call. Short-circuiting here
+# costs an operator two serialised long runs: record the review, then re-run a
+# gate that pulls a container and runs the integration suite twice, and only
+# then learn the conformance suite was failing too.
+
+
+# ⚠️ **Below the milestone-review check, deliberately.** These two were above
+# it until review measured what that cost: with cargo off `PATH` the gate
+# printed one line — `skip cargo not installed` — and exited **0** over a
+# milestone `check-milestone-review.sh` reports as 21 of 35 commits unread.
+# `require_tool` skips and returns 1; `|| finish` then exits 0 because nothing
+# *failed*. Identical shape to the `docker info` skip found one round earlier,
+# and the comment above claiming the check sat "above every skip" was false
+# while these stood here. Nothing from here down is a precondition for reading
+# git history.
 if ! has_rust; then
   skip "M1 completion (no Cargo.toml yet)"
   finish
 fi
 require_tool cargo "install Rust via https://rustup.rs" || finish
-
-if [[ ! -f "$MATRIX" ]]; then
-  fail "$MATRIX not found -- the recorded backend matrix is the artifact this gate checks"
-  finish
-fi
 
 # ---------------------------------------------------------------------------
 # 1. The fake, at T1. No container, no network.
@@ -224,9 +293,11 @@ if [[ ! -f "$ROSTER" ]]; then
 fi
 
 if bash "$REPO_ROOT/scripts/check-conformance-matrix.sh" --against-roster; then
-  ok "M1 completion condition holds"
+  ok "the recorded backend matrix agrees with what ran"
 else
   fail "the recorded backend matrix does not agree with what ran"
   finish
 fi
+
+ok "M1 completion condition holds"
 finish
