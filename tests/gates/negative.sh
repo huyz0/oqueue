@@ -1539,7 +1539,10 @@ EOF
   printf '%s\n' "$dir"
 }
 invoke_crate_clippy() {
-  bash "$1/scripts/check-crate.sh"
+  # ⚠️ Passes a crate explicitly, so the scope label in the pin is intended
+  # rather than incidental. The -p path had no case at all before this;
+  # `M1.36` will give the failing-test fixture the same treatment.
+  bash "$1/scripts/check-crate.sh" k
 }
 
 setup_crate_test() {
@@ -2282,16 +2285,32 @@ run_case "check-file-size.sh"           setup_file_size           invoke_file_si
 run_case "check-readmes.sh"             setup_readmes             invoke_readmes
 run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readmes_bin \
   "mimalloc"
-# ⚠️ **The nine cases immediately below pin their message**, because each of
-# their gates emits more than one *kind* of failure on a single fixture —
-# `testing.md` rule 20a. Cases further down carry no pin and do not need one:
-# their fixtures produce one property's failure, repeated or alone. That is the
-# real invariant — one property per *fixture output*, not per gate. `check-hot-path-bench.sh`
-# proved why: its first fixture emitted **eight** failures, seven of them from
-# `NOT_YET_BUILT` staleness rather than the unknown marker it plants, so
-# deleting the unknown-marker branch outright left the case green, the suite
-# green, and `m0-complete.sh` green. Measured by review; the pins here are read
-# off each gate's actual output rather than guessed.
+# ⚠️ **The invariant is one property per *fixture output*, not per gate.**
+# `testing.md` rule 20a: a case must pin its message where the fixture's output
+# can carry more than one kind of failure, and "a gate with nine `fail`
+# branches whose fixture trips exactly one of them needs no pin, which is why
+# most cases carry none".
+#
+# ⚠️ **Measured for `M1.27` over the nine pins `M0.30` added** —
+# `build-index.sh --check`, `check-requirements-trace.sh`, the three
+# `check-hot-path-bench.sh` cases below, the four `check-crate.sh` cases
+# further down — **only the first `check-hot-path-bench.sh` fixture emits more
+# than one kind.** So rule 20a requires a pin for that one, and the other
+# eight carry a pin the rule does not require: harmless extra specificity, and
+# cheap insurance for the day one of those gates grows a property, but not an
+# obligation. An earlier version of this comment claimed the rule demanded all
+# nine ("each of their gates emits more than one kind of failure on a single
+# fixture"), which is what the backlog row called wrong for eight of them.
+# ⚠️ A first attempt at `M1.27` measured a different population — the cases
+# nearest this comment, seven of which are portability pins predating `M0.30`
+# and owned by their own comment below — and wrongly reported the row's count
+# as the error.
+#
+# That first fixture is still why the pins exist: it emits eight failures,
+# seven from `NOT_YET_BUILT` staleness rather than the unknown marker it
+# plants, so deleting the unknown-marker branch outright left the case green,
+# the suite green, and `m0-complete.sh` green. The pins here are read off each
+# gate's actual output rather than guessed.
 run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench \
   "bench_micro.rs:1:// hot-path: RecordBatch encode/decode"
 run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required \
@@ -2384,8 +2403,15 @@ run_case "check-crate.sh (unformatted)"  setup_crate_fmt          invoke_crate_f
   "rustfmt: files are not formatted"
 run_case "check-crate.sh (stale lockfile)" setup_crate_stale_lock invoke_crate_stale_lock \
   "Cargo.lock is stale or missing"
+# ⚠️ `clippy (k)`, not `clippy (workspace)`. The scope label is whatever
+# `check-crate.sh` was given, and `workspace` was it only because this fixture
+# passed no argument — an incidental detail rather than a stated intent. The
+# fixture now passes `k` explicitly, which makes the label true by
+# construction, keeps `clippy` inside the pin so a future
+# `fail "rustdoc ($label): warnings denied"` could not satisfy this case, and
+# gives the gate's per-crate scope a case at all.
 run_case "check-crate.sh (clippy warning)" setup_crate_clippy     invoke_crate_clippy \
-  "clippy (workspace): warnings denied"
+  "clippy (k): warnings denied"
 run_case "check-crate.sh (failing test)" setup_crate_test         invoke_crate_test \
   "tests (workspace): failing"
 setup_budget_over() {
