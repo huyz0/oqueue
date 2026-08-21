@@ -84,9 +84,16 @@ cd "$REPO_ROOT"
 # regex, so a new one that is invisible here fails a gate rather than passing
 # quietly. `M0.23`.
 # ⚠️ `_ms` and `_seconds` are **suffix-anchored**; the rest stay substrings.
-# Unanchored, `_ms` matches `_msg`, `_message` and `_msvc` — measured, a plain
-# `let err_msg = std::env::var("OQUEUE_BANNER")...` was refused with a remedy
-# telling the developer to hard-code a banner string. ⚠️ **And this script has
+# Unanchored, `_ms` matches `_msg` and `_msvc` — ⚠️ **not `_message`, which this
+# line claimed until `M1.24` checked it**: `_message` has no `_ms` in it at all
+# (`_me`…), so it never matched, anchored or not. The two that do are enough to
+# make the point, and an example that does not match weakens it. ⚠️ Measured
+# **before the anchoring below existed** — a plain
+# `let err_msg = std::env::var("OQUEUE_BANNER")...` was rejected by the gate,
+# with a remedy telling the developer to hard-code a banner string. Against the
+# pattern as it stands, `err_msg` matches nothing and no such rejection is
+# reachable; the sentence records why the anchoring was added, not what the
+# gate does now. ⚠️ **And this script has
 # no suppression mechanism**, so the header's "cheap to dismiss on sight" is
 # not actually available: the only exits from a false positive are renaming a
 # legitimate variable or widening this regex, and the second is editing a
