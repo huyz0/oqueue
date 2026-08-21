@@ -45,8 +45,18 @@ figure — so the C dependency is justified by an argument, not a measurement,
 and `M14`'s allocator benchmark is what settles it.
 
 The cost is real though: a build host with no `cc` compiles the workspace up to
-`bin/oqueue` and fails there. Everything under `crates/` stays pure Rust, so
-`cargo test --workspace --exclude oqueue` needs no C at all.
+`bin/oqueue` and fails there. ⚠️ ~~Everything under `crates/` stays pure Rust,
+so `cargo test --workspace --exclude oqueue` needs no C at all.~~ — **false
+since `M1.15`, corrected by `M1.42`.** `ADR-0012` chose `ring` for TLS and
+`ring`'s build script compiles C, so `oqueue-store` needs `cc` — and unlike the
+cross-toolchain problem this ADR is about, that applies on the **host**:
+`target/debug/build/ring-*/out` holds `aes_nohw.o`, `curve25519.o`,
+`montgomery.o` and friends from an ordinary native build. So the honest
+statement of this project's C footprint is that `cc` is needed workspace-wide
+for the allocator *and* for TLS, which is still inside NFR-42's budget, and
+what the `--exclude` narrowing buys is only freedom from a **cross** toolchain
+— never freedom from C. That distinction is the one this row's own gate turned
+out to depend on.
 
 ### ⚠️ The jemalloc ARM page-size trap
 

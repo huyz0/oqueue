@@ -2344,7 +2344,9 @@ run_case "check-portability.sh (AGENTS.md's own population)" setup_portability_a
 run_case "check-portability.sh (unterminated fence)" setup_portability_unterminated_fence invoke_portability_unterminated_fence \
   "fence"
 # ⚠️ The `expect` is `"fails for"`, not the full command line. The gate narrows
-# to `--workspace --exclude oqueue` for a non-host target with no cross `cc`, so
+# for a non-host target with no cross `cc` — to `--workspace --exclude oqueue
+# --exclude oqueue-store` today, and the exclusion list has grown once already
+# (`M1.42`), which is a second reason not to pin the scope string — so
 # the exact wording depends on the host triple — on macOS, which
 # `portability.md` rule 2 makes first-class, *both* legs narrow and a substring
 # naming the wide form matches nothing. That would report "failed, but not for

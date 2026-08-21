@@ -88,6 +88,30 @@ deferral ADR-0008 recorded was to *this* commit, not past it.
 compiler, matching every crate already in the workspace. `M8`'s FIPS build
 adds its own feature-gated `aws-lc-rs` path without touching this one.
 
+**Hard — and unweighed until `M1.42` measured it.** "cargo and a C compiler"
+is a claim about the *host*, and this ADR only ever checked the host. `ring`'s
+build script runs `cc` for the **target**, so `oqueue-store` cannot be checked
+for `aarch64-unknown-linux-gnu` without `aarch64-linux-gnu-gcc` — and
+`m0-complete.sh` had been checking exactly that since `M0`. Measured: the
+cross-check passes at `a961ae7~1` and fails at `a961ae7`, this ADR's own
+commit. NFR-40 asks for both architectures first-class and NFR-42 declines to
+require a cross toolchain; those two are only compatible because
+`portability.md` rule 9 builds release artifacts **natively**, so the cross
+check is a fast type-check and never the thing that ships. `oqueue-store` now
+joins `bin/oqueue` in `m0-complete.sh`'s conditional exclusion, for the same
+reason and with the same conditional escape. ⚠️ The cost is real: the crate
+holding every backend is no longer type-checked for aarch64 on a host without
+that toolchain — ⚠️ and **nothing else checks it either**. A first version of
+this paragraph said such an error "surfaces in CI"; review measured that false.
+`gates.yml` is the only workflow, it passes `--target` nowhere, and it never
+invokes `m0-complete.sh` at all. So after `M1.42` an aarch64-only compile error
+in the crate holding every backend is caught by no automated path on any host
+without a cross toolchain. That is a real regression in coverage, recorded in
+`roadmap.md`'s deferral table rather than left in a shell script for someone to
+find — `portability.md` rule 9's own rationale names the fix (arm64 runners are
+free), and NFR-40's verification column already claims a CI matrix that does
+not exist.
+
 **Hard.** `M8` needs to actually wire the `fips` feature and prove the two
 providers are mutually exclusive per artifact, not merely per intention —
 that verification is `M8`'s to do, not `M1`'s, since `M1` never builds a

@@ -64,10 +64,18 @@ TARGETS=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
 # with `ToolNotFound` before rustc is reached. NFR-42 asks for "cargo and a C
 # compiler", not a **cross** C toolchain, and `portability.md` rule 9 builds
 # release artifacts natively, so nothing in this project requires one.
-# Everything under `crates/` is pure Rust and is checked on both targets.
 # ⚠️ The exclusion is **conditional**: where a cross `cc` is present the whole
 # workspace is checked, so a host that can do more is not held to less.
-CROSS_EXCLUDED=oqueue
+#
+# ⚠️ ~~Everything under `crates/` is pure Rust and is checked on both
+# targets.~~ — **false since `M1.15`**, and `M1.42` is the row that found it:
+# `ADR-0012` chose `ring` for TLS, `ring`'s build script runs `cc`, so
+# `oqueue-store` needs `aarch64-linux-gnu-gcc` exactly as `bin/oqueue` needs it
+# for mimalloc. Measured: the check passes at `a961ae7~1` and fails at
+# `a961ae7`. The ADR weighed the *host* compiler against NFR-42 and never the
+# cross target this gate already tested, so a two-target claim went quietly
+# false for five days with nothing running the gate that noticed.
+CROSS_EXCLUDED=(oqueue oqueue-store)
 
 # The five tree-scanning gates `M0.14` instrumented. ⚠️ `check-core-contract.sh`
 # is deliberately absent: alone among the M-1 gates it is scoped to
@@ -171,8 +179,9 @@ for target in "${TARGETS[@]}"; do
   scope="--workspace"
   if [[ "$target" != "$HOST_TARGET" ]] &&
      ! command -v "${target%%-*}-linux-gnu-gcc" >/dev/null 2>&1; then
-    args+=(--exclude "$CROSS_EXCLUDED")
-    scope="--workspace --exclude $CROSS_EXCLUDED"
+    for _x in "${CROSS_EXCLUDED[@]}"; do args+=(--exclude "$_x"); done
+    scope="--workspace $(printf -- '--exclude %s ' "${CROSS_EXCLUDED[@]}")"
+    scope="${scope% }"
   fi
   rc=0
   # ⚠️ `--all-targets`, so tests and benches are checked too. Without it a
@@ -182,8 +191,12 @@ for target in "${TARGETS[@]}"; do
   cargo "${args[@]}" > "$out" 2>&1 || rc=$?
   if (( rc == 0 )); then
     ok "cargo check $scope passes for $target"
+    # ⚠️ `${CROSS_EXCLUDED[*]}`, not `$CROSS_EXCLUDED`. `M1.42` turned this
+    # into an array and left this line scalar, so the gate named `oqueue`
+    # alone and blamed a C allocator — under-reporting the coverage gap in
+    # the one line that exists to report it. Review measured it.
     [[ "$scope" == "--workspace" ]] ||
-      note "⚠️ $CROSS_EXCLUDED was not cross-checked: no ${target%%-*}-linux-gnu-gcc for its C allocator (ADR-0007)"
+      note "⚠️ ${CROSS_EXCLUDED[*]} not cross-checked: no ${target%%-*}-linux-gnu-gcc for mimalloc (ADR-0007) and ring (ADR-0012). Nothing else checks them for $target — see roadmap's deferral table"
   else
     fail "cargo check $scope fails for $target (exit $rc)"
     note "captured output:"
