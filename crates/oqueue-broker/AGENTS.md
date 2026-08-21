@@ -11,7 +11,7 @@ what is specific to *changing* it.
 ## Easy to get wrong here
 
 1. ⚠️ **A composer.** `check-layering.sh` names this crate and `bin/oqueue` as the only two allowed to depend on workspace crates other than `oqueue-core`.
-2. **Generic over its seams, not hardwired to them.** The concrete `ObjectStore` and `KeyProvider` are chosen by `bin/oqueue`; this crate names neither (NFR-51). ⚠️ **`Clock` is deliberately not claimed here** — `check-sans-io.sh`'s exemption says the real one lives in this crate, `architecture.md` says `bin/oqueue` chooses the concrete types, and ADR-0004 calls it "`M1`'s real `Clock`". `README.md`'s Invariants row records the disagreement; M1 settles it and corrects whichever document loses.
+2. **Generic over its seams, not hardwired to them.** The concrete `ObjectStore` and `KeyProvider` are chosen by `bin/oqueue`; this crate names neither (NFR-51). ⚠️ **`Clock` is deliberately not claimed here** — not because the documents disagree, which `M1.29` found they do not, but because `check-sans-io.sh` says the real one lives here, so asserting the negative would be an invariant this crate is expected to break — the socket defect `M0.31` fixed. `check-sans-io.sh`'s exemption says where the real one *lives* (this crate); `architecture.md` says where concrete types are *chosen* (`bin/oqueue`); ADR-0004 takes no position on the real one's home. `README.md`'s Invariants row has the full reading.
 3. ⚠️ **Backpressure between connections and the object-store write path is bespoke** — doc 05 §3 notes the real bottleneck is PUT throughput and request-rate limits, not socket I/O, and no crate provides that off the shelf.
 
 ## ⚠️ This crate is empty
