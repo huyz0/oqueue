@@ -1811,6 +1811,68 @@ invoke_m0_complete_no_pyyaml() {
   PYTHONPATH="$1/noyaml" bash "$1/scripts/gates/m0-complete.sh"
 }
 
+# --- m0-complete.sh: a quoted stage in block form ---------------------------
+#
+# `M1.23`, from M0's boundary review. ⚠️ **The two parse paths disagreed on a
+# config that is valid YAML either way.** The flow branch stripped quotes
+# (`stages: ["pre-commit"]`); the block branch did not, so
+#   stages:
+#     - "pre-commit"
+# parsed as `'"pre-commit"'` without PyYAML and as `'pre-commit'` with it —
+# the hook vanished from the pre-commit count on exactly the machines the
+# fallback exists for.
+#
+# ⚠️ **Inverted, like the `THRESHOLD_RE` case above.** The fixture is not
+# broken: both hooks really are pre-commit hooks, so the true count is 2 and
+# the planted docs say 1. Only a gate that strips the quotes counts 2 and
+# reports the mismatch; before the fix it counted 1, agreed with the docs, and
+# said nothing. The pinned string is therefore present only after the fix,
+# which is what `run_case`'s fourth argument tests.
+setup_m0_complete_quoted_block_stage() {
+  local dir; dir="$(new_scratch m0-complete-quoted-stage)"
+  _m0_scaffold "$dir" m0-complete-quoted-stage
+  mkdir -p "$dir/scripts/gates" "$dir/docs/internal/product" "$dir/noyaml"
+  cp "$REPO_ROOT/scripts/gates/m0-complete.sh" "$dir/scripts/gates/m0-complete.sh"
+  chmod +x "$dir/scripts/gates/m0-complete.sh"
+  printf 'raise ImportError("shadowed by the negative suite")\n' > "$dir/noyaml/yaml.py"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-core/src/lib.rs"
+  # Two pre-commit hooks: one in flow form, one in quoted block form.
+  cat > "$dir/.pre-commit-config.yaml" <<'EOF'
+repos:
+  - repo: local
+    hooks:
+      - id: one
+        entry: /bin/true
+        stages: [pre-commit]
+      - id: two
+        entry: /bin/true
+        stages:
+          - "pre-commit"
+EOF
+  cat > "$dir/docs/internal/product/requirements.md" <<'EOF'
+| NFR-56 | Pre-commit suite completes within **10 s**. | measured across 9 hooks — and **1 today** |
+EOF
+  cat > "$dir/docs/internal/product/roadmap.md" <<'EOF'
+NFR-56 was measured across 9 hooks — 10 once the budget gate itself joined
+them, and **1 today**.
+EOF
+  (cd "$dir" && cargo generate-lockfile >/dev/null 2>&1)
+  (cd "$dir" && git add -A && git commit -q -m "M1.23: a quoted stage in block form")
+  printf '%s\n' "$dir"
+}
+
 # --- m0-complete.sh: a gate parked at stages: [manual] ----------------------
 #
 # `M0.27`. ⚠️ A hook at `stages: [manual]` keeps its `entry:` line and runs on
@@ -2251,6 +2313,8 @@ fi
 # pre-commit one. Found by review, which measured exactly that.
 run_case "m0-complete.sh (the no-PyYAML fallback miscounts)" setup_m0_complete_fallback invoke_m0_complete_no_pyyaml \
   "hooks, .pre-commit-config.yaml has"
+run_case "m0-complete.sh (a quoted stage in block form)" setup_m0_complete_quoted_block_stage invoke_m0_complete_no_pyyaml \
+  "has 2"
 run_case "check-conformance-matrix.sh (row with no reason)" setup_conformance_matrix_no_reason invoke_conformance_matrix \
   "is not <backend>  <status>  <why>"
 run_case "check-conformance-matrix.sh (duplicate backend row)" setup_conformance_matrix_duplicate_backend invoke_conformance_matrix \

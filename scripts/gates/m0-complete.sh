@@ -470,7 +470,13 @@ except ImportError:
             stages = []
             for ln in tail.splitlines():
                 if re.match(r"^\s*-\s*\S+\s*$", ln):
-                    stages.append(ln.strip().lstrip("-").strip())
+                    # ⚠️ `.strip("'\"")` last, exactly as the flow branch
+                    # above does it. Without it a block-form `- "pre-commit"`
+                    # parsed as `'"pre-commit"'` here and as `'pre-commit'`
+                    # under PyYAML, so the two paths disagreed on a config
+                    # that is valid YAML either way -- the single thing this
+                    # fallback exists to prevent. `M1.23`.
+                    stages.append(ln.strip().lstrip("-").strip().strip("'\""))
                 elif ln.strip() and not ln.lstrip().startswith("#"):
                     break
         else:
