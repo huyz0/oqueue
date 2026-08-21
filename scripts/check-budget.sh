@@ -65,7 +65,10 @@
 # threshold are never counted, so two gates at 5.1 s each are read as two small
 # builds rather than as an eroded suite. That is the price of a single-run
 # heuristic. `suite.tsv` marks every exempted run `compiling`, so a trend that is
-# permanently `compiling` is itself the signal — and nothing reads that yet.
+# permanently `compiling` is itself the signal — ⚠️ ~~and nothing reads that
+# yet~~ — **`M1.30` made the exemption branch read it back**; see the comment
+# beside that branch for what it reports and why it still skips rather than
+# fails.
 #
 # ⚠️ **The first honest breach is not resolved by raising this literal.**
 # Non-negotiable 2 forbids it, and the two legal exits are: make the suite
@@ -103,6 +106,22 @@ TIMINGS_KEEP_DAYS=30
 # warm, the slowest gate is `check-coverage.sh` at ~1.0 s; cold, `check-crate.sh`
 # alone is 21.6 s. 5 s sits well clear of the first and well under the second.
 COMPILING_GATE_MS=5000
+
+# ⚠️ When the compiling exemption stops describing builds and starts describing
+# the suite. Measured on this repo's own `suite.tsv` at the time `M1.30` wrote
+# this: 14 of 123 runs exempted, 11% — under this line, deliberately. A quarter
+# is where an exemption is firing too often to be about cold builds. The
+# minimum sample stops a fresh clone's first three runs reading as a trend.
+# ⚠️ **Named so `check-drift.sh` can see them**, which is why they read
+# `_THRESHOLD` and `_FLOOR` rather than the `_DENOMINATOR`/`_MIN_RUNS` a first
+# draft used: that gate's `THRESHOLD_RE` matches those two words and would have
+# matched neither of the originals, so making either environment-settable would
+# have violated non-negotiable 2 with the gate reporting `ok`. `M0.15` renamed
+# `MIN_CRATE_COVERAGE` to `COVERAGE_FLOOR` for exactly this and recorded that
+# the name is load-bearing. ⚠️ They are still absent from `m0-complete.sh`'s
+# `NFR_CONSTANTS`, which is `M1.35`'s row and now names four constants, not two.
+EXEMPT_RATE_THRESHOLD=4
+EXEMPT_RUNS_FLOOR=20
 
 # ⚠️ This gate counts its own elapsed time explicitly below, so it must not also
 # leave a row for the next run in the same process group to pick up. Measured:
@@ -229,6 +248,51 @@ if (( total_ms > BUDGET_MS )); then
     skip "suite budget (${total_ms} ms counted — a compiling run, not measured against the budget)"
     note "${compiling_n} gate(s) over ${COMPILING_GATE_MS} ms account for ${compiling_ms} ms; the rest is ${warm_ms} ms, under the ${BUDGET_MS} ms budget"
     note "slowest was ${slowest_name} at ${slowest_ms} ms; marked 'compiling' in the trend"
+    # ⚠️ **The trend is read back, which `M1.30` is why.** This script's header
+    # said "a trend that is permanently `compiling` is itself the signal — and
+    # nothing reads that yet", and nothing did: measured on this repo's own
+    # `suite.tsv`, 14 of 123 recorded runs were exempted, every one of them
+    # `compiling:check-mutants.sh`, with the worst exempted run at 70 179 ms.
+    # ⚠️ That rate — 11% — does **not** trip the line below, and saying so is
+    # the point: a quarter is where an exemption stops being about builds and
+    # becomes the gate's normal path, and today's trend is under it. This exists
+    # so the crossing is noticed, not to warn about the state it was written in.
+    # Still a `skip`: making
+    # it fail would block a commit for a cold clone, which is the case the
+    # exemption exists for. `M1.40` is where that policy question goes.
+    #
+    # ⚠️ **No case in `negative.sh`, and `testing.md` rule 20a wants the reason
+    # stated instead**: this branch never makes the gate fail, and that suite's
+    # pass condition is inverted — a case passes when the gate fails — so it
+    # structurally cannot express "reports a warning and still exits 0".
+    # ⚠️ The same is true of the exemption's *positive* half, and of the
+    # definition of `warm_ms` itself: `warm_ms=$((total_ms))` and
+    # `warm_ms=$((total_ms - slowest_ms))` — the slowest-only rule this file's
+    # header says it rejected by measurement — both survive the whole negative
+    # suite. Only the `warm_ms <= BUDGET_MS` conjunct is pinned, by
+    # `M1.30`'s eroded-behind-a-build case.
+    #
+    # Verified by hand against planted trends instead: 24% quiet, 25% fires,
+    # 26% fires, 5-of-20 fires, 18-of-19 quiet, empty history quiet, and an
+    # unreadable or malformed `suite.tsv` leaves the exit code at 0.
+    if [[ -f "$suite_file" ]]; then
+      local_runs="$(wc -l < "$suite_file" 2>/dev/null || echo 0)"
+      local_exempt="$(grep -c '	compiling:' "$suite_file" 2>/dev/null || true)"
+      : "${local_exempt:=0}"
+      if (( local_runs >= EXEMPT_RUNS_FLOOR
+            && local_exempt * EXEMPT_RATE_THRESHOLD >= local_runs )); then
+        note "⚠️ ${local_exempt} of the last ${local_runs} recorded runs were exempted this way —"
+        note "   an exemption this frequent is the suite's normal path, not a build."
+        # ⚠️ Precisely what is and is not bounded. Reaching this branch at all
+        # means `warm_ms <= BUDGET_MS`, so the *remainder* was measured and
+        # passed on every one of those runs — saying "the budget is holding
+        # these runs to nothing" would be false, and would argue for removing
+        # a check that is still working. What is unbounded is the compiling
+        # gates' own time: nothing caps how long they may take.
+        note "   the warm remainder was under ${BUDGET_MS} ms on each; what is unbounded is"
+        note "   the compiling gates' own time. Read target/timings/suite.tsv."
+      fi
+    fi
     finish
   fi
   _trend "over"

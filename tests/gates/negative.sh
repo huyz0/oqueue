@@ -2435,6 +2435,39 @@ setup_budget_over() {
   } > "$dir/target/timings/gates.tsv"
   printf '%s\n' "$dir"
 }
+# ⚠️ **Erosion hiding behind a compiling gate.** `check-budget.sh` exempts a run
+# where gates over `COMPILING_GATE_MS` account for the overage -- a build, not an
+# eroded suite -- but the exemption is conditional on what *remains* being under
+# budget. `M1.30` measured that nothing pinned that conjunct: dropping
+# `&& warm_ms <= BUDGET_MS`, so any compiling gate exempts the whole run, left
+# the suite green. The gate's own header calls that rule "tried and rejected by
+# measurement" because it "would have made this gate unfailable from `M0.17`
+# onward, since a mutation run is minutes".
+#
+# The numbers are the header's own worked example: 21 600 ms of build plus
+# 19 904 ms of eroded suite must fail.
+setup_budget_eroded_behind_a_build() {
+  local dir; dir="$(new_scratch budget_eroded_build)"
+  copy_gate "$dir" check-budget.sh
+  mkdir -p "$dir/target/timings"
+  local pg; pg="$(ps -o pgid= -p $$ | tr -d ' ')"
+  local now; now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  {
+    # One genuine build, well over COMPILING_GATE_MS.
+    printf '%s\tcheck-crate.sh\t21600\t%s\n' "$pg" "$now"
+    # And a suite that has eroded past the budget on its own, every entry
+    # under the threshold so none is mistaken for a second build.
+    printf '%s\tcheck-slow-one.sh\t4990\t%s\n' "$pg" "$now"
+    printf '%s\tcheck-slow-two.sh\t4980\t%s\n' "$pg" "$now"
+    printf '%s\tcheck-slow-three.sh\t4970\t%s\n' "$pg" "$now"
+    printf '%s\tcheck-slow-four.sh\t4964\t%s\n' "$pg" "$now"
+  } > "$dir/target/timings/gates.tsv"
+  printf '%s\n' "$dir"
+}
+invoke_budget_eroded_behind_a_build() {
+  bash "$1/scripts/check-budget.sh"
+}
+
 invoke_budget_over() {
   # ⚠️ Run in the *same* process group as the setup that wrote the artifact,
   # which is what the gate keys on.
@@ -2506,6 +2539,8 @@ invoke_mutants_narrowed() {
 }
 
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
+run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \
+  "over the 10000 ms budget"
 _have_mutants() { cargo mutants --version >/dev/null 2>&1; }
 if _have_mutants; then
   run_case "check-mutants.sh (test constrains nothing)" setup_mutants_weakened invoke_mutants_weakened

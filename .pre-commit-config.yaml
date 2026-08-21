@@ -168,6 +168,15 @@ repos:
       # every gate above recorded, so anything after it would be uncounted.
       # `M0.16`.
       - id: check-budget
+        # ⚠️ `verbose: true`, and it is load-bearing rather than tidy.
+        # pre-commit prints a hook's output only when the hook fails; this gate
+        # reports its most important findings on a *passing* exit — the
+        # compiling-run skip, and `M1.30`'s warning that the exemption has
+        # become the suite's normal path. Without this the warning is computed
+        # and thrown away, and "this exists so the crossing is noticed" is
+        # false. Measured: a hook that prints and exits 0 renders as `Passed`
+        # and nothing else.
+        verbose: true
         name: "NFR-56: the pre-commit suite stays within its time budget"
         entry: scripts/check-budget.sh
         language: system
