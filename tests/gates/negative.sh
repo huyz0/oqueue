@@ -1597,7 +1597,8 @@ EOF
 invoke_crate_clippy() {
   # ⚠️ Passes a crate explicitly, so the scope label in the pin is intended
   # rather than incidental. The -p path had no case at all before this;
-  # `M1.36` will give the failing-test fixture the same treatment.
+  # `M1.36` gave the failing-test fixture the same treatment, so there are
+  # two now.
   bash "$1/scripts/check-crate.sh" k
 }
 
@@ -1618,7 +1619,11 @@ EOF
   printf '%s\n' "$dir"
 }
 invoke_crate_test() {
-  bash "$1/scripts/check-crate.sh"
+  # ⚠️ `k`, not no argument — the same fix `M1.27` made to the clippy case, and
+  # for the same reason: `check-crate.sh` builds its label from whatever scope
+  # it is given, so `workspace` was true only because nothing was passed.
+  # `M1.36`. Reproduced before fixing.
+  bash "$1/scripts/check-crate.sh" k
 }
 
 setup_coverage_below_floor() {
@@ -2477,7 +2482,7 @@ run_case "check-crate.sh (stale lockfile)" setup_crate_stale_lock invoke_crate_s
 run_case "check-crate.sh (clippy warning)" setup_crate_clippy     invoke_crate_clippy \
   "clippy (k): warnings denied"
 run_case "check-crate.sh (failing test)" setup_crate_test         invoke_crate_test \
-  "tests (workspace): failing"
+  "tests (k): failing"
 setup_budget_over() {
   local dir; dir="$(new_scratch budget_over)"
   copy_gate "$dir" check-budget.sh
