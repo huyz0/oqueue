@@ -17,9 +17,17 @@ manifest is the one that changes — `M0.13` added the allocator, `M1` adds a
 runtime and a storage SDK — so **adding a dependency here means editing
 `README.md` in the same commit**, and the gate refuses the commit otherwise.
 
-⚠️ **`check-sans-io.sh` does not scan `bin/` at all.** Everything this crate is
-allowed to do that no other crate may — name a backend, read a clock, open a
-socket — is unguarded by construction. That is correct, and it means the "only
+⚠️ **`check-sans-io.sh` does not scan `bin/` at all.** ~~Everything this crate
+is allowed to do that no other crate may — name a backend, read a clock, open
+a socket — is unguarded by construction.~~ What this crate may do unguarded —
+name a backend, read a clock, open a socket — is unguarded by construction.
+⚠️ The struck clause was **false in all three parts,
+and `M1.38` found it as the fourth independently-written copy of one
+universal**: `oqueue-store` names two backends (`S3Store`, `GcsStore`), and
+`oqueue-broker` is exempt from all three patterns because the store scan nests
+inside the broker guard — `check-sans-io.sh`'s own header puts the real
+`Clock` implementation there. What is unique here is not the permission but
+the *absence of a gate*. That is correct, and it means the "only
 place a concrete type is chosen" property rests entirely on review.
 
 ## Easy to get wrong here

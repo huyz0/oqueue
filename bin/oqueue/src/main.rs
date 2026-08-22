@@ -1,10 +1,32 @@
 //! The oqueue broker.
 //!
 //! ⚠️ **This is the composition root, and the only place in the workspace where
-//! a concrete implementation is chosen** (FR-50, NFR-51). Every library crate is
-//! written against the trait seams in `oqueue-core`; the decision about which
-//! `ObjectStore`, which `Clock` and which `KeyProvider` those seams resolve to
-//! is made here and nowhere else.
+//! a concrete implementation is chosen** (FR-50, NFR-51). The decision about
+//! which `ObjectStore`, which `Clock` and which `KeyProvider` the seams in
+//! `oqueue-core` resolve to is made here and nowhere else.
+//!
+//! ⚠️ ~~Every library crate is written against the trait seams in
+//! `oqueue-core`.~~ — **a rule with named exceptions, not a property of every
+//! crate** (`M1.38`, mirroring the same correction `M1.28` made to this
+//! crate's `README.md`). `scripts/check-sans-io.sh` draws the actual line:
+//! `oqueue-store` is exempt from the object-storage pattern because it is the
+//! crate that implements those backends, and `oqueue-broker` from all three
+//! because the I/O shell is meant to live there. Every other library crate is
+//! held to all three. ⚠️ `bin/` is not scanned at all, so nothing in this file
+//! is held to any of them — the Invariants table in `README.md` says so too.
+//!
+//! ⚠️ **This did not spread from anywhere**, which a first version of `M1.38`
+//! claimed and git refutes: the sentence is in this file from `M0.12`
+//! (`b84092b`), *before* `M0.31`, and `git log -S` finds it never in
+//! `oqueue-broker`'s README at all. **Five** sentences making the same universal
+//! claim exist, and they were written in **two** commits rather than
+//! independently: `M0.8` (`fabd3fe`) stamped the broker's `lib.rs` and
+//! `README.md`; `M0.12` (`b84092b`) stamped this file, `bin/oqueue/AGENTS.md`
+//! and `bin/oqueue/README.md`. Four are removed in this one commit, the fifth
+//! by `M1.28`. ⚠️ **A crate-skeleton commit stamps its universal into every
+//! file it creates**, so the copies are as numerous as the files and the two
+//! batches share no phrasing — grep from either finds nothing of the other.
+//! This wants a gate, not a sixth sweep.
 //!
 //! ⚠️ **It starts, prints a version, and exits.** There is no broker yet:
 //! `M2` brings the wire protocol and `oqueue-broker` the I/O shell that runs

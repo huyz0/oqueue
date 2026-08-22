@@ -6,7 +6,7 @@ The I/O shell: the connection loop, request dispatch, and the batching that turn
 
 ## Why does it exist?
 
-Because everything else in this workspace is sans-I/O by construction, and the sockets have to be somewhere. This crate is that somewhere, and it is generic over its seams so it can be tested without any of them being real.
+Because *almost* everything else in this workspace is sans-I/O — ⚠️ **"by construction" overstates it, and `M1.38` found this variant of the same universal**: `check-sans-io.sh` exempts `oqueue-store` from the object-storage pattern because it implements those backends, and never scans `bin/oqueue` at all — it walks `crates/*.rs` only. So there are two exceptions besides this crate, which is itself exempt from all three patterns; every *remaining* library crate is held to all three. And the sockets have to be somewhere. This crate is that somewhere, and it is generic over its seams so it can be tested without any of them being real.
 
 ## Upstream
 
