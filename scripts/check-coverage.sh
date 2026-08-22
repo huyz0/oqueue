@@ -93,7 +93,6 @@ declare -A UNTIL_FILLED=(
   [oqueue-index]="empty skeleton — M3 fills it"
   [oqueue-coordinator]="empty skeleton — M3 fills it"
   [oqueue-compact]="empty skeleton — M5 fills it"
-  [oqueue-broker]="empty skeleton — M2 fills it"
   [oqueue-testkit]="empty skeleton — harness and generators, M1 onward"
 )
 

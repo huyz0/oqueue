@@ -967,7 +967,9 @@ dependencies = [
 name = "oqueue-broker"
 version = "0.0.0"
 dependencies = [
+ "oqueue-codec",
  "oqueue-core",
+ "tokio",
 ]
 
 [[package]]

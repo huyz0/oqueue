@@ -11,6 +11,12 @@
 //! the sockets have to be somewhere. This crate is that somewhere, and it is
 //! generic over its seams so it can be tested without any of them being real.
 //!
-//! ⚠️ **Empty of behaviour.** `M0.8` creates the shape; see this crate's
-//! `README.md` for which milestone fills it in.
+//! `M2.17` began filling it: [`connection`] is the per-connection task —
+//! framed reads, pipelined handlers, in-order writes — generic over the
+//! stream so every test drives a `tokio::io::duplex` and no real socket
+//! exists below `bin/oqueue`.
 #![forbid(unsafe_code)]
+
+pub mod connection;
+
+pub use connection::{ConnectionEnd, ConnectionLimits, Handler, serve_connection};

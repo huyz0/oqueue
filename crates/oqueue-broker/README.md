@@ -11,6 +11,8 @@ Because *almost* everything else in this workspace is sans-I/O — ⚠️ **"by 
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `oqueue-codec` — the protocol surface: frames, headers, batches.
+- `tokio` — the runtime this I/O shell is written against (feature-minimal: io, sync, rt; `net` waits for `bin/oqueue`).
 
 ## Downstream
 
