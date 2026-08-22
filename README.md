@@ -13,8 +13,10 @@ A Kafka-protocol-compatible message broker in Rust that uses object storage
 > research corpus, the development system that builds it, and — as of M0's
 > completion — a Cargo workspace with all eleven crates in it, every
 > `oqueue-core` trait seam with a fake beside it, and the coverage and mutation
-> gates the workspace now enforces on itself. M1, in progress, is where the
-> object store seam gains real S3 and GCS backends.
+> gates the workspace now enforces on itself — and M1's completion: the
+> object store seam with S3 and GCS backends behind it, verified against
+> the fake and MinIO by one conformance suite (GCS live verification is
+> M15's). M2, in progress, is the Kafka wire protocol.
 >
 > What is here is worth reading if you are interested in the design space:
 > ~110,000 words of cited research on object-storage-native streaming, and an
@@ -136,8 +138,8 @@ workspace standard in
 |---|---|---|
 | M-1 | AI development system | complete |
 | M0 | Workspace, contracts, quality gates | complete |
-| M1 | Object store seam and conformance suite | in progress |
-| M2 | Kafka wire protocol: produce and fetch | not started |
+| M1 | Object store seam and conformance suite | complete |
+| M2 | Kafka wire protocol: produce and fetch | in progress |
 | M3 | Coordinator: offset sequencing and the index | not started |
 | M4 | Consumer groups | not started |
 | M5 | Compaction and retention | not started |
@@ -154,7 +156,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Short version: issues and design
 discussion are welcome now; code contributions are not being accepted yet,
 because there is no implementation to contribute to — the development system
 that reviews changes is finished (M-1), the workspace and its crates are built
-(M0), and M1, which gives the object store seam real backends, is in progress.
+(M0), the object store seam has real backends (M1), and M2, the Kafka
+wire protocol, is in progress.
 
 ## License
 
