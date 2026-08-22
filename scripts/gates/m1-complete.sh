@@ -125,7 +125,16 @@ elif (( mr_rc == 127 )); then
 else
   fail "M1's commits have not been read as a whole (exit $mr_rc)"
   note "run: scripts/milestone-review.sh context --milestone M1 to build the packet"
-  note "if that reports no commits, the checkout is shallow -- fetch full history"
+  # ⚠️ **No "if that reports no commits" clause**, which this note carried in
+  # two forms and both were wrong. It first said such a report meant a shallow
+  # checkout -- a diagnosis `gates.yml` makes impossible, since it pins
+  # `fetch-depth: 0` and runs neither this gate nor `check-milestone-review.sh`.
+  # `M1.46` then replaced it with a clause that cannot fire at all: the same
+  # commit gave `milestone-review.sh` the branch that *fails* in that state
+  # rather than reporting nothing, so the antecedent has no reachable case. A
+  # remedy note conditioned on an unreachable state is worse than none -- it
+  # reads as coverage of a failure mode nobody has handled.
+  note "the FAIL line above says which state this is"
 fi
 # ⚠️ No `finish` in either branch. `lib.sh` states the contract -- "the caller
 # keeps going so one run reports every violation rather than only the first" --

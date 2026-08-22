@@ -118,7 +118,20 @@ fi
 require_python || finish
 
 mapfile -t ALL < <(milestone_commits "$MS")
+# ⚠️ The twin of `check-milestone-review.sh`'s branch, and it must make the
+# same distinction — `M1.46` fixed the gate and review found this one still
+# short-circuiting `commits`, `coverage` *and* `context` with an exit-0 skip.
+# That mattered because the gate's own failure message sends the operator
+# here: they would have run the diagnosis and been told there is nothing to
+# diagnose. An empty enumeration beside a non-zero raw count means every
+# commit naming the milestone was review bookkeeping.
+raw="$(git log --format='%H %s' | grep -cE "^[0-9a-f]+ ${MS//./\\.}\.[0-9]+[,:]" || true)"
 if (( ${#ALL[@]} == 0 )); then
+  if (( raw > 0 )); then
+    fail "$MS names $raw commit(s), all of them milestone-review bookkeeping"
+    note "milestone_commits excludes verdict-only commits, so there is no work to review"
+    finish
+  fi
   skip "$MS has no commits yet"
   finish
 fi

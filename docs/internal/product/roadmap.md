@@ -168,7 +168,7 @@ and it is not what M-1.24 asked for.
 |---|---|
 | M-1 | NFR-50, NFR-54 |
 | M0 | FR-44, FR-50, NFR-2, NFR-40, NFR-42, NFR-50, NFR-51, NFR-52, NFR-53, NFR-55, NFR-56 |
-| M1 | FR-30, FR-31 (⚠️ built and verified against the fake and MinIO; verification against real S3 and any real GCS is `M15`'s, deferred by `M1.44`), NFR-30 |
+| M1 | FR-30, FR-31 (⚠️ built for three backends and verified against **two** — the fake and MinIO; verification against **any GCS at all**, emulator or real, and against real S3, is `M15`'s, deferred by `M1.44`), NFR-30 |
 | M2 | FR-1, FR-2, FR-3 |
 | M3 | FR-10, FR-11, FR-12, FR-13, FR-32, NFR-2, NFR-3, NFR-21 |
 | M10 | NFR-20 (the method), FR-51 (the method) |

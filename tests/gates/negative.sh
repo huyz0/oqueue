@@ -805,6 +805,56 @@ invoke_milestone_review() {
   bash "$1/scripts/check-milestone-review.sh" --milestone M-1
 }
 
+# --- check-milestone-review.sh: a milestone whose every commit is review
+# bookkeeping ---------------------------------------------------------------
+#
+# ⚠️ Pins the message. `M1.46` made this branch and the pre-existing "has no
+# commits yet" skip two different outcomes from the same empty enumeration, so
+# this fixture's output can carry more than one kind of result and
+# `testing.md` rule 20a asks for the pin: without it the case passes on a gate
+# that fails for the ordinary uncovered-commit reason instead.
+# ⚠️ Takes the scratch name, because `new_scratch` keys on it and two cases
+# share this fixture. Re-entering one repo makes the second `git commit` find
+# nothing staged, exit 1, and kill the whole suite under `set -e` -- measured:
+# the run ended silently after the previous case with no summary line.
+_setup_milestone_review_bookkeeping() {
+  local dir; dir="$(new_scratch "$1")"
+  # Both, because this fixture feeds two cases: the gate and the driver, which
+  # carry the same branch.
+  copy_gate "$dir" check-milestone-review.sh
+  copy_gate "$dir" milestone-review.sh
+  mkdir -p "$dir/docs/internal/product" "$dir/reviews"
+  cat > "$dir/docs/internal/product/backlog.md" <<'EOF'
+| M-1.1 | a real task | some criterion | done |
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "bootstrap: not a task subject")
+  # The only commit naming the milestone changes nothing but a verdict file,
+  # so milestone_commits excludes it and the enumeration comes back empty.
+  printf '{"milestone":"M-1","commits":[],"verdict":"pass","findings":[]}\n' \
+    > "$dir/reviews/milestone-M-1-0001.json"
+  (cd "$dir" && git add -A && git commit -q -m "M-1.1: record the milestone review")
+  printf '%s\n' "$dir"
+}
+setup_milestone_review_bookkeeping() {
+  _setup_milestone_review_bookkeeping milestone-review-bookkeeping
+}
+setup_milestone_review_driver() {
+  _setup_milestone_review_bookkeeping milestone-review-driver
+}
+invoke_milestone_review_bookkeeping() {
+  bash "$1/scripts/check-milestone-review.sh" --milestone M-1
+}
+
+# ⚠️ The same fixture through the **driver**, because `M1.46` put a
+# byte-identical branch in `milestone-review.sh` and review pointed out only
+# the gate's copy had a case — so the defect that survived a whole round
+# untouched could return with the suite green. `coverage` is the subcommand an
+# operator reaches from the gate's own remedy line, and the branch sits above
+# the `case`, so this covers `commits` and `context` with it.
+invoke_milestone_review_driver() {
+  bash "$1/scripts/milestone-review.sh" coverage --milestone M-1
+}
+
 # --- build-index.sh --check: a generated region that does not match its
 # source -------------------------------------------------------------------
 setup_build_index() {
@@ -2283,6 +2333,12 @@ run_case "check-unsafe.sh (non-UTF-8 file doesn't suppress a real violation)" se
 run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewed
 run_case "check-reviewed.sh (regex task_id)" setup_reviewed_regex_task_id invoke_reviewed_regex_task_id
 run_case "check-milestone-review.sh"    setup_milestone_review    invoke_milestone_review
+run_case "check-milestone-review.sh (every commit is review bookkeeping)" \
+  setup_milestone_review_bookkeeping invoke_milestone_review_bookkeeping \
+  "all of them milestone-review bookkeeping"
+run_case "milestone-review.sh (every commit is review bookkeeping)" \
+  setup_milestone_review_driver invoke_milestone_review_driver \
+  "all of them milestone-review bookkeeping"
 run_case "build-index.sh --check"       setup_build_index         invoke_build_index \
   "index is stale"
 run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace \

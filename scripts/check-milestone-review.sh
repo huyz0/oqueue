@@ -83,7 +83,28 @@ fi
 
 mapfile -t ALL < <(milestone_commits "$MS")
 
+# ⚠️ **An empty enumeration is two different states and only one is a skip.**
+# `M1.46`: this branch used to `skip` on any empty `ALL`, so a caller printed
+# `ok every M1 commit is covered by a milestone review` having verified
+# nothing. Reproduced end to end: a repo whose only milestone-named commit
+# touches solely `reviews/milestone-M1-*.json` has that commit excluded by
+# `milestone_commits` -- the exclusion that stops the review regress -- leaving
+# `ALL` empty while the milestone demonstrably has history.
+#
+# The distinction that fits: **nothing named this milestone** (legitimately
+# true before its first commit, and a bare `fail` there would make the gate
+# unpassable at the start of every milestone) versus **everything that named it
+# was bookkeeping**. The second cannot arise honestly. A milestone whose only
+# commits record reviews has had no work to review, so a verdict covering it
+# is a verdict about nothing -- exactly the claim this gate exists to refuse.
+raw="$(git log --format='%H %s' | grep -cE "^[0-9a-f]+ ${MS//./\\.}\.[0-9]+[,:]" || true)"
 if (( ${#ALL[@]} == 0 )); then
+  if (( raw > 0 )); then
+    fail "$MS names $raw commit(s), all of them milestone-review bookkeeping"
+    note "a verdict covering no work is a verdict about nothing"
+    note "run: scripts/milestone-review.sh commits --milestone $MS"
+    finish
+  fi
   skip "milestone review ($MS has no commits yet)"
   finish
 fi
