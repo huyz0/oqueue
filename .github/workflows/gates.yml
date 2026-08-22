@@ -84,7 +84,7 @@ jobs:
         # convention. **Nothing compares the two copies**, which is the drift
         # `build.md` rule 22 names; `M1.51` is the row for a check, and until
         # it lands this pair is held by review. `minio/mc`'s tag below is
-        # pinned for the same reason and is a third copy of the same problem.
+        # pinned for the same reason and is a second pair with the same gap.
         image: minio/minio:RELEASE.2025-04-22T22-12-26Z
         # ⚠️ **`server /data`, and its absence was a real bug.** The image's
         # entrypoint prepends `minio` only when the first argument is something
