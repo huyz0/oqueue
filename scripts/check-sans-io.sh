@@ -29,9 +29,12 @@
 #   per the same reasoning as the socket exemption — so `oqueue-broker` is
 #   exempt from this pattern too.
 # - **An object-storage SDK call.** `aws_sdk_s3`, `aws_config`,
-#   `google_cloud_storage`, `object_store::`, `opendal::` — the leading
+#   `google_cloud_storage`, `object_store::`, `opendal::` — ⚠️ ~~the leading
 #   candidates named in `docs/researches/05` §1, pending the ADR M1's plan
-#   still calls open. `oqueue-store` is the crate that implements
+#   still calls open~~. `ADR-0008` chose `object_store` (`M1.1`), so the list
+#   is no longer a slate of candidates: `object_store::` is the one this
+#   workspace actually imports and the others are kept so that reaching for a
+#   provider SDK in a library crate still trips the gate. `oqueue-store` is the crate that implements
 #   `ObjectStore` and is therefore exempt from this one pattern only; it is
 #   still held to the socket and clock patterns above like every other
 #   library crate, and `oqueue-broker` is exempt here too, for the same
@@ -45,9 +48,13 @@
 #   alias `Sock`. The alias's own definition line still fails, which is where
 #   the violation actually is.
 # - **An object-storage SDK reached through a dependency's re-export under a
-#   different path than the ones listed above.** The candidate list is fixed
-#   in the ADR doc 05 §1 has not yet settled; once M1's decision #3 lands,
-#   this list should be revisited against the crate actually chosen.
+#   different path than the ones listed above.** ⚠️ ~~The candidate list is
+#   fixed in the ADR doc 05 §1 has not yet settled; once M1's decision #3
+#   lands, this list should be revisited against the crate actually chosen.~~
+#   — that revisit is `M1.45`, and this is its result: `ADR-0008` landed at
+#   `M1.1`, the crate is `object_store`, and the list is kept wider than the
+#   one real import on purpose. A re-export under some other path is still
+#   uncaught, which is the actual residue this bullet exists to name.
 # - **`unsafe` or FFI calls that perform I/O without naming any of the three
 #   patterns above.** Out of scope for this gate; `security.md` rule 18 and
 #   `check-unsafe.sh` (M-1.11) are what bound `unsafe` to begin with.
