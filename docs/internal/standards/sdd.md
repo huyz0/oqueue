@@ -125,6 +125,22 @@ A task is **one commit's worth**: one coherent change leaving the tree green. If
 it cannot be finished that way, split it before writing code, not after
 discovering it.
 
+**A row is terse, and a `done` row is frozen** (ADR-0016). A row carries the
+task, what it serves, an acceptance criterion, and a state. History lives in
+the commit that closes it (`git log --grep <ID>`), so closing a row edits its
+state cell and nothing else, and a later correction goes in the correcting
+commit's message, never back into the row. **One owner per fact**: task state
+lives here, cross-milestone obligations in `roadmap.md`'s deferral table,
+history in commits — everything else links and never restates, and no count a
+command can derive is written into prose. M1 is the measured argument: rows
+grew to hundreds of words duplicating commit messages, and keeping the copies
+consistent cost more review rounds than the code did.
+
+**A sweep is one row carrying several small fixes that share a theme** — a
+review's unowned minors, a batch of stale claims — one commit, one review
+(ADR-0016). It exists so small debt stops carrying full row ceremony each; it
+is not licence to batch unrelated scope, which `git.md` rule 1 still forbids.
+
 **A milestone carries at most 20 tasks.** Past that it is two milestones wearing
 one name, its completion condition stops being a single coherent claim, and the
 cross-cutting review at its boundary exceeds what one reader can hold. ⚠️ M-1 is

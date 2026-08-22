@@ -55,3 +55,11 @@ information — or reconsider whether this needed an ADR.
 Sequential, never reused. Superseding does not delete: mark the old one
 superseded and link forward, because the reasoning that was later overturned is
 often the most instructive thing in the directory.
+
+## Staleness
+
+When the tree diverges from an accepted ADR without overturning the decision,
+record it as a **dated note on the `Status:` line** — e.g. `Status: accepted;
+2026-08-23: consequence 2 overtaken, see M2.10` — never by rewriting the body
+(ADR-0016). A body rewrite is a new reviewed diff, erases what was believed at
+decision time, and is how four of M1's ADRs went stale twice.

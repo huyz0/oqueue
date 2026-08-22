@@ -93,6 +93,11 @@ Every **blocking** or **major** finding names a `task_id` that the backlog
 already lists: write the row first, then cite it. The gate checks the row
 exists. A finding you judge non-actionable is `minor` and needs no task.
 
+⚠️ **Harvest rule 15's minors** (ADR-0016, closing `bcf5d6f697f2`): sweep the
+commit bodies since the last checkpoint for minors recorded there, and turn
+the ones worth work into **sweep rows** (`sdd.md`). This is the step `M0.27`-
+`M0.29` and `M1.58` each performed by hand before it was anyone's job.
+
 The alternative is to **argue** it in `baselines/review.txt` with a reason, the
 same escape a blocking per-commit finding has. It takes two steps, because the
 `id` you argue is assigned by `record`:

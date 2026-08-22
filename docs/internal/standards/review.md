@@ -68,6 +68,15 @@ milestone loop is called out.
    failure scenario. ⚠️ A finding that cannot say how it fails is a style
    opinion, and style is the linter's job, not the reviewer's.
 
+9a. ⚠️ **A severity floor for prose** (ADR-0016). A finding whose subject is a
+   sentence — a comment, a doc, a backlog row, a plan — is `minor` unless
+   acting on it would change code behaviour or a live decision. ADR-0016
+   owns the measured argument: M1's prose-heavy rows took three to nine
+   review rounds each, while both real defects that milestone shipped were
+   found by the milestone review, not those rounds. Rule 12a still holds — an
+   unmeasured tool claim stays a legitimate finding — this rule is about
+   what a prose finding may *block*.
+
 ## Non-skippable
 
 10. **A review is a claim until a gate checks the artifact it produced.**
@@ -128,20 +137,22 @@ milestone loop is called out.
     permitted and usually wrong: the hash changes, review re-runs, and the new
     round's surface is the prose the fix just added.
 
-    ⚠️ **This rule and rule 16 are in tension, and M0's boundary review said so
-    rather than resolving it** (finding `bcf5d6f697f2`). Rule 16 below calls a
-    finding that lives where nothing reads it "one nothing will
-    act on"; a commit body is such a place — `next-task` reads the backlog and
-    so does everyone else. M0's second half recorded upwards of thirty minors this
-    way, and none became a row until `M0.27`-`M0.29` harvested them by hand —
-    which fixed the backlog and decided nothing about who does it next time.
-    ⚠️ **Recorded as an open decision, not
-    silently re-specified**, because the fix is a *procedure* — some step that
-    harvests commit bodies at a milestone boundary — and choosing one is a
-    decision for whoever owns the loop, not a repair a review may make on its
-    own authority. Until that decision exists, a minor worth scheduling should
-    be written as a backlog row in the **next** commit, which costs nothing and
-    is what rule 16 asks for. ⚠️ **Rule 13's
+15a. ⚠️ **Two rounds is the cap** (ADR-0016). Round one finds; round two
+    verifies the fixes and may fail them. A non-blocking finding first raised
+    in round three or later is recorded per rule 15, not fixed inline. A
+    **blocking** finding lifts the cap — correctness has no round limit — and
+    a reviewer who keeps finding new blocking defects past round two is
+    describing a change that should be withdrawn and re-cut, not re-polished.
+
+    ⚠️ **This rule and rule 16 were in tension, and M0's boundary review said
+    so rather than resolving it** (finding `bcf5d6f697f2`): a commit body is a
+    place nothing reads, and M0 recorded upwards of thirty minors there that
+    became rows only when `M0.27`-`M0.29` harvested them by hand.
+    ⚠️ **Settled by ADR-0016**: the **milestone-boundary review harvests
+    commit-body minors into sweep rows** (`sdd.md`) — the step M0 and `M1.58`
+    each performed by hand is now the procedure's. Within a milestone, a minor
+    worth scheduling sooner is still written as a backlog row in the **next**
+    commit. ⚠️ **Rule 13's
     "fixed means review re-runs" governs blocking findings only**; reading it
     onto minors is what turns one review into five; M0.3's commit body records
     that count.

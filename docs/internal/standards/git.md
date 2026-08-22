@@ -73,6 +73,11 @@ atomic and nearly impossible when they are not.
 
 13. **The body explains *why*.** The diff already shows what. A body that
     narrates the diff has spent the reader's attention and told them nothing.
+13a. **Target twenty lines** (ADR-0016). The body carries the why, the
+    rejected alternatives when non-obvious, what is not done, and
+    `review.md` rule 15's minors — never a restatement of the backlog row or a round-by-round
+    review narrative. M1's bodies averaged hundreds of words, duplicating
+    rows that duplicated plans, and every copy could go stale.
 14. **Record what was tried and rejected**, when it is not obvious. The next
     person to touch this — including a future agent with none of your context —
     will otherwise try it again.
