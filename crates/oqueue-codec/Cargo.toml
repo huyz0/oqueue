@@ -10,12 +10,6 @@ license.workspace = true
 # topology, enforced by `check-layering.sh`. A dependency on a sibling crate is a layering violation, not a shortcut.
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
-# ADR-0017: the message layer — headers, bodies, per-version flexible rules —
-# comes generated from Kafka's own JSON specs. `broker` feature only;
-# compression features stay off (lz4/zstd would pull a C toolchain, and the
-# compression seam is this crate's own). This crate is the workspace's single
-# protocol surface: nothing else imports kafka-protocol directly.
-kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker"] }
 # The compression seam's wired codecs, both pure Rust (doc 20 §1: no C
 # toolchain). Decode is all M2 needs -- a fetch echoes stored batches -- so
 # ruzstd's decode-only surface is the point, not a limitation; records.rs's
@@ -42,6 +36,16 @@ oqueue-checksum = { path = "../oqueue-checksum" }
 # the golden cross-check. Not a runtime dep -- M2.16's review took it out of
 # the contract, and it stays out.
 bytes = "1"
+# ⚠️ **Test-only oracle now (`ADR-0019`).** `ADR-0017` had this as a runtime
+# dependency and the single protocol surface; `M2.30` removed the last runtime
+# use (the header path), so it moves here — the differential oracle every
+# hand-rolled codec is byte-checked against. `client` is added for the
+# response *decode* those differentials need (a broker only encodes responses,
+# so the runtime `broker` feature could not decode them).
+kafka-protocol = { version = "0.18.0", default-features = false, features = [
+    "broker",
+    "client",
+] }
 
 [lints]
 workspace = true

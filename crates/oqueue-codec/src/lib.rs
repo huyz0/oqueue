@@ -16,14 +16,20 @@
 //! and knows nothing about tests, so folding the two into one sentence made
 //! the second look gated when it is review's.
 //!
-//! `M2.13` began filling it: [`wire`] holds the byte primitives for the two
-//! layers this crate hand-rolls (the frame codec and the `RecordBatch` v2
-//! path); message bodies are `kafka-protocol`'s per ADR-0017.
+//! ⚠️ **This crate owns the whole codec now (`ADR-0019`).** `ADR-0017` had
+//! left message bodies to `kafka-protocol` and this crate hand-rolled only
+//! the frame and `RecordBatch` paths; the milestone reversed that after a
+//! fuzz-found allocation `DoS`, so [`wire`] and [`flex`] hold the bounded
+//! primitives, [`apikey`]/[`frame`] the headers, and the per-message modules
+//! ([`apiversions`], with Metadata/Produce/Fetch following) the bodies —
+//! every one byte-differentialed against `kafka-protocol`, now a test oracle.
 
 pub mod apikey;
+pub mod apiversions;
 pub mod attributes;
 pub mod batch;
 pub mod compress;
+pub mod error_codes;
 pub mod flex;
 pub mod frame;
 pub mod records;

@@ -16,13 +16,10 @@
 
 use crate::connection::HandlerResponse;
 use core::future::Future;
-use kafka_protocol::error::ResponseError;
-use kafka_protocol::messages::ApiVersionsResponse;
-use kafka_protocol::messages::api_versions_response::ApiVersion;
-use kafka_protocol::protocol::Encodable;
 use oqueue_codec::apikey::ApiKey;
+use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header, read_request_prelude};
-use oqueue_codec::versions::{ADVERTISED, supports};
+use oqueue_codec::versions::supports;
 
 /// Routes decoded frames to API handlers over the stub cluster. `M2.21`
 /// built the frame walk and `ApiVersions`; `M2.22` added `Metadata`;
@@ -95,24 +92,10 @@ fn api_versions_response(prelude: RequestPrelude) -> Vec<u8> {
     // and the table still present, so the client retries at a version this
     // broker named (doc 02 §1.4).
     let (body_version, error_code) = if supported {
-        (prelude.api_version, 0)
+        (prelude.api_version, error_codes::NONE)
     } else {
-        (0, ResponseError::UnsupportedVersion.code())
+        (0, error_codes::UNSUPPORTED_VERSION)
     };
-
-    let mut response = ApiVersionsResponse::default();
-    response.error_code = error_code;
-    response.throttle_time_ms = 0;
-    response.api_keys = ADVERTISED
-        .iter()
-        .map(|a| {
-            let mut v = ApiVersion::default();
-            v.api_key = a.api_key as i16;
-            v.min_version = a.min;
-            v.max_version = a.max;
-            v
-        })
-        .collect();
 
     let mut out = Vec::new();
     if encode_response_header(
@@ -127,9 +110,7 @@ fn api_versions_response(prelude: RequestPrelude) -> Vec<u8> {
         // least carry the frame. Kept non-panicking per error-handling.md.
         out.clear();
     }
-    if response.encode(&mut out, body_version).is_err() {
-        out.clear();
-    }
+    oqueue_codec::apiversions::encode_response(&mut out, body_version, error_code);
     out
 }
 
