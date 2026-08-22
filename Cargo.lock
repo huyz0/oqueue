@@ -902,6 +902,7 @@ name = "oqueue-codec"
 version = "0.0.0"
 dependencies = [
  "oqueue-core",
+ "proptest",
 ]
 
 [[package]]

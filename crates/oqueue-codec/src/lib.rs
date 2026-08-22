@@ -16,5 +16,10 @@
 //! and knows nothing about tests, so folding the two into one sentence made
 //! the second look gated when it is review's.
 //!
-//! ⚠️ **Empty of behaviour.** `M0.8` creates the shape; see this crate's
-//! `README.md` for which milestone fills it in.
+//! `M2.13` began filling it: [`wire`] holds the byte primitives for the two
+//! layers this crate hand-rolls (the frame codec and the `RecordBatch` v2
+//! path); message bodies are `kafka-protocol`'s per ADR-0017.
+
+pub mod wire;
+
+pub use wire::{Cursor, DecodeError};

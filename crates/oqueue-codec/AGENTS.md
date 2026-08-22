@@ -14,8 +14,10 @@ what is specific to *changing* it.
 2. ⚠️ **CRC-32C, not CRC-32/IEEE.** Doc 18 §4.3 records that `crc32fast` implements the wrong polynomial — no compile error, no runtime error, just batches every client rejects. The checksum lives in `oqueue-checksum`.
 3. **Hot-path `pub fn`s crossing into another crate carry `#[inline]`** — ADR-0003, which measured the band where it matters.
 
-## ⚠️ This crate is empty
+## Filling, `M2.13` onward
 
-`M0.8` created the skeleton so the workspace shape exists before any behaviour
-does. Adding code here means the milestone that owns it has started — check
-[`backlog.md`](../../docs/internal/product/backlog.md) rather than assuming.
+`M0.8` created the skeleton. `M2.13` added `wire` — the bounded, zero-copy
+byte primitives for the frame and `RecordBatch` layers. Message bodies,
+headers, and flexible encodings come from `kafka-protocol` (`ADR-0017`) —
+do not hand-roll them here. The `unsafe` budget is allocated and so far
+unused.

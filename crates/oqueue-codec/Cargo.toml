@@ -11,5 +11,8 @@ license.workspace = true
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
 
+[dev-dependencies]
+proptest.workspace = true
+
 [lints]
 workspace = true

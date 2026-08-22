@@ -90,7 +90,6 @@ COVERAGE_FLOOR=85
 # crate starts to matter.
 declare -A UNTIL_FILLED=(
   [oqueue-buf]="empty skeleton — M2 fills it"
-  [oqueue-codec]="empty skeleton — M2 fills it"
   [oqueue-index]="empty skeleton — M3 fills it"
   [oqueue-coordinator]="empty skeleton — M3 fills it"
   [oqueue-compact]="empty skeleton — M5 fills it"
