@@ -50,7 +50,7 @@ which is what makes a shared testkit usable at all.
 | `oqueue-codec` | Kafka wire protocol, RecordBatch encode/decode | **allowed** |
 | `oqueue-checksum` | CRC-32C | **allowed** |
 | `oqueue-index` | Offset→object index and its search | forbid |
-| `oqueue-store` | `ObjectStore` implementations: S3, GCS, in-memory | forbid |
+| `oqueue-store` | `ObjectStore` implementations: S3, GCS (⚠️ **not** in-memory — that is `oqueue-core`'s `FakeObjectStore`; `M1.37`) | forbid |
 | `oqueue-coordinator` | Metadata, offset sequencing, recovery | forbid |
 | `oqueue-crypto` | AEAD, envelope encryption, DEK cache, nonce construction | forbid |
 | `oqueue-compact` | Compaction planning and execution | forbid |

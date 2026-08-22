@@ -14,7 +14,8 @@ change once three traits and their fakes exist.
 **Which runtime**, and **what shape an async method on a core trait takes**. The
 second decides whether the broker's I/O shell can hold an `Arc<dyn ObjectStore>`
 at all, and the composition root exists precisely to choose a backend at startup
-(**FR-31** — one seam over S3, GCS and an in-memory implementation; FR-50 is
+(**FR-31** — one seam over S3, GCS and an in-memory implementation, the last
+in `oqueue-core` (`M1.37`); FR-50 is
 the single-binary/role requirement and was cited here in its place).
 
 The constraint over both is **NFR-51**: `oqueue-core` names no concrete I/O
@@ -103,7 +104,14 @@ a decision to leave the ecosystem, and nothing here needs that.
 ## Consequences
 
 **Easy.** The composition root holds `Arc<dyn ObjectStore>` and chooses S3, GCS,
-or the in-memory backend at startup. Every seam is one trait, so a fake is one
+or the in-memory implementation at startup. ⚠️ **Read that last arm carefully
+(`M1.37`)**: there is no `oqueue-store` in-memory backend, and the in-memory
+implementation is `oqueue-core`'s `FakeObjectStore` — a **test** fake carrying
+a `FaultConfig`. It is the right thing for a test harness to construct behind
+the seam and the wrong thing for a production startup path to offer as a
+`store.backend = memory` option, which would put a fault-injectable double in
+a shipped binary. A composition root should expect two selectable backends,
+not three. Every seam is one trait, so a fake is one
 fake and `check-core-contract.sh`'s implementor check covers it. This shape
 adds no dependency to `oqueue-core` — ⚠️ which is not the same as the crate
 having none: `M0.5` added `thiserror`, as `error-handling.md` rule 3 requires.

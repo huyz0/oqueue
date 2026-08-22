@@ -72,7 +72,7 @@ the reason these have IDs at all.
 | ID | Requirement | Verification | Status |
 |---|---|---|---|
 | FR-30 | Use object storage as the primary log store, with no local disk in the durability path. | Test asserting the durability path issues no filesystem write; sans-I/O gate | agreed |
-| FR-31 | Support S3 and GCS behind one seam, with an in-memory implementation for tests. | Conformance suite run against every backend, recording which ones it has been run against | agreed |
+| FR-31 | Support S3 and GCS behind one seam, with an in-memory implementation for tests (⚠️ `oqueue-core`'s `FakeObjectStore`, not a second one in `oqueue-store` — `M1.37`). | Conformance suite run against every backend, recording which ones it has been run against | agreed |
 | FR-32 | Batch records from many topics into one object. | Test asserting a flush with N topics issues one PUT | agreed |
 | FR-33 | Enforce time- and size-based retention, including on partitions nobody is writing to. | Test asserting an idle partition's data is deleted on schedule | agreed |
 | FR-34 | Compact objects so that historical reads stay bounded in cost. | Test asserting read amplification after compaction is within bound | agreed |

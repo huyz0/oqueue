@@ -8,7 +8,7 @@ Requirements: NFR-51
 
 Object storage is this project's primary log storage, so the seam over it is the
 one every other design decision leans on. It has to admit S3, GCS and an
-in-memory backend behind one trait, be chosen at startup by the composition
+in-memory implementation behind one trait, be chosen at startup by the composition
 root (FR-50), and appear nowhere in `oqueue-core` as a concrete type
 (NFR-51).
 
@@ -16,7 +16,9 @@ root (FR-50), and appear nowhere in `oqueue-core` as a concrete type
 `check-core-contract.sh` refuses the commit without this file.
 
 ⚠️ **FR-31 is deliberately not claimed.** It is the requirement that says S3,
-GCS and in-memory sit behind one seam, and it is `M1`'s — `milestones/M0.md`
+GCS and in-memory sit behind one seam, and it is `M1`'s — ⚠️ the in-memory
+one being `oqueue-core`'s `FakeObjectStore` rather than a second
+`oqueue-store` backend, see *Alternatives* (`M1.37`) — `milestones/M0.md`
 argues at length that M0 defines the seam without satisfying it, since a seam
 with no backend behind it changes no outcome FR-31 describes. This ADR serves
 NFR-51 only.
@@ -39,8 +41,15 @@ pub trait ObjectStore: Send + Sync + fmt::Debug {
    buffered — durable, in the sense that a process crash immediately afterwards
    does not lose it. This is what NFR-20 rests on. ⚠️ An in-memory backend
    cannot meet the crash clause and is not expected to: it is conformant for
-   every guarantee a single process can express, and `M1`'s suite skips this one
-   for it explicitly rather than by omission.
+   every guarantee a single process can express, and ⚠️ ~~`M1`'s suite skips
+   this one explicitly rather than by omission~~ — **false, measured by
+   `M1.37`'s review**: `Capabilities` has exactly two flags,
+   `conditional_writes` and `ranged_reads`, neither about durability, no case
+   in `cases()` exercises the crash clause, and `tests/it/fake.rs` asserts
+   `report.skipped.is_empty()`. So it is skipped **by omission**, which is
+   what this sentence promised it was not. The guarantee still holds as
+   stated; what does not exist is the explicit skip, and whoever writes the
+   durability case owes a capability flag to carry it.
 2. ⚠️ **When `put`'s future resolves `Err`, the key's state is unknown.** Not
    "unchanged" — the object may have landed and the acknowledgement been lost.
    A caller must not treat a failed `put` as proof of absence, and this is
@@ -63,7 +72,7 @@ pub trait ObjectStore: Send + Sync + fmt::Debug {
    ⚠️ **Racing unconditioned overwrites are last-writer-wins, and this guarantee
    does not change that.** Two `put`s to one key, neither ordered before the
    other, both resolve `Ok` and one object survives — on S3, on GCS, and in
-   `M1`'s in-memory backend. A caller that needs to know it won must not
+   `M1`'s in-memory implementation (`FakeObjectStore`; `M1.37`). A caller that needs to know it won must not
    overwrite; it must use the conditional write this trait does not yet have,
    which is the deferral recorded under *Alternatives*. A conformance assertion
    written from this guarantee must therefore quiesce writes to the key first,
@@ -129,10 +138,27 @@ it. See the Payload section.
 
 **The fake in `oqueue-store`, beside the in-memory backend.** Rejected.
 `contracts.md` rule 9 puts a fake beside its trait so a downstream crate can
-test without depending on `oqueue-store`. ⚠️ And the two are different things
-that look alike: `oqueue-store`'s in-memory backend is a *real implementation*
-that must pass the same conformance suite as S3 (`testing.md` rule 6); this fake
-models no failure and no latency at all.
+test without depending on `oqueue-store`. **That half stands** — the fake is in
+`oqueue-core` and every crate above the seam tests without an `oqueue-store`
+dependency.
+
+⚠️ **The other half was overtaken, and `M1.37` found it by looking for a
+backend that does not exist.** ~~The two are different things that look alike:
+`oqueue-store`'s in-memory backend is a *real implementation* that must pass
+the same conformance suite as S3 (`testing.md` rule 6); this fake models no
+failure and no latency at all.~~ Both clauses are now false. `M1.8` gave
+`FakeObjectStore` a `FaultConfig` — latency, error storms,
+`crash_after_put_before_ack` — and `M1.10` runs it through the whole
+conformance suite at `Capabilities::FULL`, recorded `verified` in
+`baselines/conformance-matrix.txt`. So M1 built **one** implementation that
+does both jobs, and the separate in-memory backend was never written because
+nothing was left for it to do.
+
+⚠️ This is a dissolution, not a reversal: the reason for putting the fake in
+`oqueue-core` is unchanged, and FR-31's "in-memory implementation for tests"
+is satisfied — by a crate this ADR did not expect to satisfy it. What is gone
+is the two-implementations premise, and with it the `testing.md` rule 6 that
+pointed readers at the crate that never had one.
 
 ## Consequences
 
@@ -149,9 +175,22 @@ one rather than adding another beside it.** Two fakes with divergent conditional
 -write semantics is the highest-risk defect class in the project — the failure
 is silent, and it makes every test above the seam a test of the wrong thing.
 
-⚠️ **What this fake does not buy.** It models no latency, no failure, no
+⚠️ **What this fake does not buy.** ~~It models no latency, no failure, no
 partial write and no conditional write. A test passing against it has shown
 nothing about behaviour when a PUT fails *after* the object landed but before
 the ack — which is the case the whole commit protocol turns on. That is `M1`'s
 conformance suite, and until it exists, passing tests here are weaker evidence
-than they look.
+than they look.~~
+
+**`M1` built all of it, which is why this ADR's two-implementation premise
+dissolved — `M1.37`.** `FaultConfig` (`M1.8`) models latency, error storms and
+`crash_after_put_before_ack` — the exact PUT-lands-then-ack-is-lost case this
+paragraph named as the one the commit protocol turns on and the fake could not
+show. `put` takes a `Precondition` (`M1.5`, `M1.6`). The conformance suite
+exists (`M1.10`) and this fake passes it at `Capabilities::FULL`, recorded
+`verified` in `baselines/conformance-matrix.txt`.
+
+⚠️ What it still does not buy is anything **cross-process**: guarantee 1's
+crash clause is about a real process dying, and no single-process fake can
+demonstrate that whatever faults it models. That is what real-backend
+verification is for, and `M1.44` deferred it to `M15`.

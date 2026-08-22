@@ -154,9 +154,13 @@ adopting it would mean the transitive-patching problem all over again.
    store — those arrive through injected seams. → `check-sans-io.sh` enforces
    the production side; a test that needs I/O is a signal the logic is in the
    wrong layer.
-6. **Use `oqueue-store`'s in-memory implementation for anything that would
-   otherwise touch object storage.** No scratch at all beats well-managed
-   scratch.
+6. **Use `oqueue-core`'s `FakeObjectStore` for anything that would otherwise
+   touch object storage.** No scratch at all beats well-managed scratch.
+   ⚠️ ~~`oqueue-store`'s in-memory implementation~~ — this rule named a crate
+   that has no such thing, and `M1.37` resolved which way it should read
+   rather than building one: since `M1.8` the fake carries a `FaultConfig`
+   and since `M1.10` it passes the same conformance suite as S3, so the two
+   implementations `ADR-0005` distinguished converged onto one.
 
 ## Determinism — the no-flake rules
 

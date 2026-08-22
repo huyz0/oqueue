@@ -1,6 +1,6 @@
 [package]
 name = "oqueue-store"
-description = "`ObjectStore` implementations: S3, GCS, and an in-memory backend."
+description = "`ObjectStore` implementations: S3 and GCS."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

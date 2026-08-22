@@ -301,7 +301,8 @@ its rows across M2, M3 and later work, not to M2 alone — and measured by M14.
 
 ## M1 — Object store seam and conformance suite
 
-`ObjectStore` and its three implementations (in-memory, S3, GCS), plus the
+`ObjectStore` and its three implementations (in-memory — in `oqueue-core`,
+not `oqueue-store`, per `M1.37` — plus S3 and GCS), plus the
 backend-agnostic conformance suite. ⚠️ **Carried two deferrals and now
 carries neither**, which is what let it close: the madsim spike was discharged
 by `M1.22`, and real-S3 verification — joined by GCS live verification, which

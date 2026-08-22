@@ -2,7 +2,8 @@
 
 ## What is it?
 
-`ObjectStore` implementations: S3, GCS, and an in-memory backend.
+`ObjectStore` implementations: S3 and GCS. The in-memory one is `oqueue-core`'s
+`FakeObjectStore` — see the Notes below for why there is not a second.
 
 ## Why does it exist?
 
@@ -33,5 +34,5 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 
 ## Notes for whoever touches this
 
-- ⚠️ **The in-memory backend here is a real implementation, not a fake.** `testing.md` rule 6 and `contracts.md` rule 9: the *fake* lives beside the trait in `oqueue-core`. Two things that look alike and are not — the fake is for downstream unit tests, this is a backend that must pass the same conformance suite as S3.
-- ⚠️ **Conditional-write semantics are the highest-risk surface in the project** (doc 10 #33). If this backend and the fake disagree about a failed precondition, the result is an architectural error, not a test gap.
+- ⚠️ ~~**The in-memory backend here is a real implementation, not a fake.**~~ — **there is no in-memory backend here, and `M1.37` found the distinction had dissolved rather than been abandoned.** `ADR-0005` planned two things that look alike: a *fake* beside the trait in `oqueue-core` (`contracts.md` rule 9) "modelling no failure and no latency at all", and a real in-memory backend here passing the same conformance suite as S3. `M1` built one thing that does both jobs. `M1.8` gave `oqueue-core`'s `FakeObjectStore` a `FaultConfig` — latency, error storms, `crash_after_put_before_ack` — and `M1.10` runs it through the full conformance suite at `Capabilities::FULL`, recorded `verified` in `baselines/conformance-matrix.txt`. So the second implementation was never built because nothing was left for it to do. This crate holds `S3Store` and `GcsStore`.
+- ⚠️ **Conditional-write semantics are the highest-risk surface in the project** (doc 10 #33). If a real backend and the fake disagree about a failed precondition, the result is an architectural error, not a test gap.

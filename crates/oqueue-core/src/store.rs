@@ -126,12 +126,21 @@ struct KeySlot {
 /// An in-memory [`ObjectStore`] holding whatever was put into it.
 ///
 /// ⚠️ **This is the fake, and it lives here beside the trait** —
-/// `contracts.md` rule 9. It is *not* `oqueue-store`'s in-memory backend, which
-/// is a real implementation that must pass the same conformance suite as S3
-/// (`testing.md` rule 6). ⚠️ **Exactly one `ObjectStore` fake exists in this
+/// `contracts.md` rule 9. ⚠️ **Exactly one `ObjectStore` fake exists in this
 /// tree**: `M1` rewrites this one rather than adding another beside it, because
 /// two fakes with divergent semantics is the highest-risk defect class in the
 /// project (doc 10 #33).
+///
+/// ⚠️ ~~It is *not* `oqueue-store`'s in-memory backend, which is a real
+/// implementation that must pass the same conformance suite as S3
+/// (`testing.md` rule 6).~~ — **`M1.37`: there is no such backend, and this
+/// type is what became of the plan for one.** `ADR-0005` distinguished two
+/// implementations on the grounds that this one "models no failure and no
+/// latency at all"; `M1.8` gave it a [`FaultConfig`] and `M1.10` runs it
+/// through `oqueue-store`'s conformance suite at `Capabilities::FULL`,
+/// `verified` in `baselines/conformance-matrix.txt`. Both halves of the
+/// distinction are gone, so the second implementation was never written.
+/// `testing.md` rule 6 now names this type.
 ///
 /// # Fidelity
 ///
