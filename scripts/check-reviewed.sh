@@ -59,6 +59,29 @@ if [[ ! -f "$artifact" ]]; then
   note "staged-diff sha256: $h"
   note "run: scripts/review.sh context --task <ID>   then have a reviewer that"
   note "     did not write this change return a verdict to review.sh record"
+  # `M2.8` (M1.48): if verdicts exist for *other* hashes, say who recorded
+  # them. Two sessions sharing one git index surfaces exactly here -- as a
+  # verdict for bytes you never staged -- and until this listing the only
+  # symptom was a refusal that read as your own mistake.
+  recent="$(ls -t "$REVIEW_DIR"/*.json 2>/dev/null | head -3 || true)"
+  if [[ -n "$recent" ]]; then
+    note "recent verdicts here (hash-prefix / recorded_at / recorded_by):"
+    while read -r f; do
+      line="$(python3 - "$f" <<'PYID' 2>/dev/null || true
+import json, os, sys
+try:
+    v = json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit(0)
+print(os.path.basename(sys.argv[1])[:12], v.get("recorded_at", "?"),
+      v.get("recorded_by", "(recorded before M2.8)"))
+PYID
+)"
+      [[ -n "$line" ]] && note "  $line"
+    done <<< "$recent"
+    note "a recorded_by that is not this session means two sessions share"
+    note "this index (M1.48) -- coordinate before re-reviewing"
+  fi
   finish
 fi
 

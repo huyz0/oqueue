@@ -97,12 +97,15 @@ mapfile -t ALL < <(milestone_commits "$MS")
 # was bookkeeping**. The second cannot arise honestly. A milestone whose only
 # commits record reviews has had no work to review, so a verdict covering it
 # is a verdict about nothing -- exactly the claim this gate exists to refuse.
-raw="$(git log --format='%H %s' | grep -cE "^[0-9a-f]+ ${MS//./\\.}\.[0-9]+[,:]" || true)"
+raw="$(git log --format='%H %s' | grep -cE "$(milestone_subject_re "$MS")" || true)"
 if (( ${#ALL[@]} == 0 )); then
   if (( raw > 0 )); then
     fail "$MS names $raw commit(s), all of them milestone-review bookkeeping"
     note "a verdict covering no work is a verdict about nothing"
-    note "run: scripts/milestone-review.sh commits --milestone $MS"
+    # `M2.8` (M1.48's minor c): show the commits themselves -- the remedy
+    # this note used to point at prints the identical FAIL and no SHAs.
+    while read -r line; do note "bookkeeping-only $line"; done < <(
+      git log --format='%h %s' | grep -E "$(milestone_subject_re "$MS")" || true)
     finish
   fi
   skip "milestone review ($MS has no commits yet)"

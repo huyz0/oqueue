@@ -321,6 +321,15 @@ milestone_commits() {
     fi
     printf '%s\n' "$c"
   done < <(git log --reverse --format='%H %s' \
-    | grep -E "^[0-9a-f]+ ${ms//./\\.}\.[0-9]+[,:]" \
+    | grep -E "$(milestone_subject_re "$ms")" \
     | cut -d' ' -f1 || true)
+}
+
+# The one regex deciding "this commit's subject names milestone $1" -- `M2.8`
+# (M1.48's minor d): it existed in three byte-similar copies (here and inline
+# in check-milestone-review.sh and milestone-review.sh), and every
+# operator-facing claim about which commits count is true only while the
+# copies agree. Works against `%H` and `%h` alike -- both are `[0-9a-f]+`.
+milestone_subject_re() {
+  printf '^[0-9a-f]+ %s\\.[0-9]+[,:]' "${1//./\\.}"
 }

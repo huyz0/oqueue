@@ -439,6 +439,14 @@ v["recorded_at"] = subprocess.run(
     ["date", "-u", "+%Y-%m-%dT%H:%M:%SZ"], capture_output=True, text=True
 ).stdout.strip()
 v.setdefault("reviewer", "unknown")
+# `M2.8` (M1.48): who recorded this, beside the hash it binds. The identity
+# is `OQUEUE_SESSION` when the driving session exports one, else a weak but
+# honest host:parent-pid fallback. This is diagnosis, not locking -- M1.48's
+# row already rejected the lockfile: the value is that check-reviewed.sh can
+# show *whose* verdict sits in the index when the staged bytes moved, which
+# is how two sessions sharing one index stops being invisible.
+v["recorded_by"] = os.environ.get("OQUEUE_SESSION") or (
+    f"{os.uname().nodename}:ppid-{os.getppid()} (OQUEUE_SESSION unset)")
 
 with open(dest, "w") as fh:
     json.dump(v, fh, indent=2, sort_keys=True)

@@ -125,11 +125,14 @@ mapfile -t ALL < <(milestone_commits "$MS")
 # here: they would have run the diagnosis and been told there is nothing to
 # diagnose. An empty enumeration beside a non-zero raw count means every
 # commit naming the milestone was review bookkeeping.
-raw="$(git log --format='%H %s' | grep -cE "^[0-9a-f]+ ${MS//./\\.}\.[0-9]+[,:]" || true)"
+raw="$(git log --format='%H %s' | grep -cE "$(milestone_subject_re "$MS")" || true)"
 if (( ${#ALL[@]} == 0 )); then
   if (( raw > 0 )); then
     fail "$MS names $raw commit(s), all of them milestone-review bookkeeping"
     note "milestone_commits excludes verdict-only commits, so there is no work to review"
+    # Same listing as check-milestone-review.sh's twin branch -- `M2.8`.
+    while read -r line; do note "bookkeeping-only $line"; done < <(
+      git log --format='%h %s' | grep -E "$(milestone_subject_re "$MS")" || true)
     finish
   fi
   skip "$MS has no commits yet"

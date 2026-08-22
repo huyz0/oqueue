@@ -136,7 +136,7 @@ else
   # rather than reporting nothing, so the antecedent has no reachable case. A
   # remedy note conditioned on an unreachable state is worse than none -- it
   # reads as coverage of a failure mode nobody has handled.
-  note "the FAIL line above says which state this is"
+  note "check-milestone-review.sh's own FAIL line above says which state this is"
 fi
 # ⚠️ No `finish` in either branch. `lib.sh` states the contract -- "the caller
 # keeps going so one run reports every violation rather than only the first" --

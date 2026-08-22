@@ -875,9 +875,10 @@ invoke_milestone_review_bookkeeping() {
 # ⚠️ The same fixture through the **driver**, because `M1.46` put a
 # byte-identical branch in `milestone-review.sh` and review pointed out only
 # the gate's copy had a case — so the defect that survived a whole round
-# untouched could return with the suite green. `coverage` is the subcommand an
-# operator reaches from the gate's own remedy line, and the branch sits above
-# the `case`, so this covers `commits` and `context` with it.
+# untouched could return with the suite green. ⚠️ `coverage` is just the
+# cheapest subcommand to invoke — no remedy line names it (`M2.8`, M1.48's
+# minor b; they name `commits` and `context`) — and the branch sits above
+# the `case`, so any one subcommand covers them all.
 invoke_milestone_review_driver() {
   bash "$1/scripts/milestone-review.sh" coverage --milestone M-1
 }
