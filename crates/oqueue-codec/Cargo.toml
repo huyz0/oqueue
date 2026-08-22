@@ -19,6 +19,10 @@ kafka-protocol = { version = "0.18.0", default-features = false, features = ["br
 
 [dev-dependencies]
 proptest.workspace = true
+# Test-only: the buffer types kafka-protocol's RecordBatchEncoder takes in
+# the golden cross-check. Not a runtime dep -- M2.16's review took it out of
+# the contract, and it stays out.
+bytes = "1"
 
 [lints]
 workspace = true

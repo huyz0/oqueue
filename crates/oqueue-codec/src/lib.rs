@@ -20,6 +20,7 @@
 //! layers this crate hand-rolls (the frame codec and the `RecordBatch` v2
 //! path); message bodies are `kafka-protocol`'s per ADR-0017.
 
+pub mod batch;
 pub mod frame;
 pub mod varint;
 pub mod versions;
