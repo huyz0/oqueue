@@ -10,6 +10,12 @@ license.workspace = true
 # topology, enforced by `check-layering.sh`. A dependency on a sibling crate is a layering violation, not a shortcut.
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
+# ⚠️ `crc-fast`, never `crc32fast` — the latter is CRC-32/IEEE, a different
+# polynomial, and produces batches every Kafka client rejects with no compile
+# error (doc 18 §4.3). Pure Rust, `build = false`, no C toolchain (doc 20 §1);
+# `default-features = false` drops its C-export `ffi` half. Doc 18 §4 chose it
+# for the fusion-class kernels and `checksum_combine`.
+crc-fast = { version = "1.10.0", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

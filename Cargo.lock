@@ -893,6 +893,7 @@ dependencies = [
 name = "oqueue-checksum"
 version = "0.0.0"
 dependencies = [
+ "crc-fast",
  "oqueue-core",
 ]
 

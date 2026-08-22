@@ -13,8 +13,9 @@ what is specific to *changing* it.
 1. ⚠️ **The polynomial is Castagnoli, not IEEE.** Getting this wrong produces batches every Kafka client rejects, with no error anywhere on this side. A known-answer test against published vectors is not optional.
 2. **Runtime dispatch, resolved once.** Doc 18 §3.4: the baseline is `x86-64-v2`, which makes SSE4.2 `crc32` statically available; anything above it goes through a dispatch resolved at startup, not per call (§4.2). ⚠️ Both sections, and this cited only the second until `M0.29` — the baseline recommendation is §3.4's.
 
-## ⚠️ This crate is empty
+## Filled by `M2.12`
 
-`M0.8` created the skeleton so the workspace shape exists before any behaviour
-does. Adding code here means the milestone that owns it has started — check
-[`backlog.md`](../../docs/internal/product/backlog.md) rather than assuming.
+`M0.8` created the skeleton; `M2.12` filled it: `crc32c`, `crc32c_combine`,
+the iSCSI known-answer vectors, a combine property test, and a scalar
+differential reference. The `unsafe` budget is allocated and deliberately
+unused — the SIMD lives in `crc-fast`.

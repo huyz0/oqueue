@@ -11,6 +11,8 @@ Because Kafka's v2 RecordBatch mandates CRC-32C and the spread between a scalar 
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `crc-fast` — the fusion-class CRC kernels and `checksum_combine` (doc 18 §4;
+  `Cargo.toml`'s comment records why never `crc32fast`).
 
 ## Downstream
 
@@ -24,7 +26,7 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 
 | Must stay true | Held by |
 |---|---|
-| The polynomial is Castagnoli, never IEEE | `M2`'s known-answer test against published vectors — ⚠️ nothing today |
+| The polynomial is Castagnoli, never IEEE | the iSCSI known-answer vectors and a scalar differential test in `lib.rs` (`M2.12`) |
 | Dispatch is resolved once, not per call | no gate — review, and `M14`'s benchmarks |
 
 ## Notes for whoever touches this
