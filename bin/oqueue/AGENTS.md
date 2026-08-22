@@ -19,11 +19,11 @@ runtime and a storage SDK — so **adding a dependency here means editing
 
 ⚠️ **`check-sans-io.sh` does not scan `bin/` at all.** ~~Everything this crate
 is allowed to do that no other crate may — name a backend, read a clock, open
-a socket — is unguarded by construction.~~ What this crate may do unguarded —
-name a backend, read a clock, open a socket — is unguarded by construction.
-⚠️ The struck clause was **false in all three parts,
-and `M1.38` found it as the fourth independently-written copy of one
-universal**: `oqueue-store` names two backends (`S3Store`, `GcsStore`), and
+a socket — is unguarded by construction.~~ This crate may name a backend, read
+a clock and open a socket, and no gate stops it doing so.
+⚠️ The struck clause was **false in all three parts, and `M1.38` found it as
+one of five copies of a single universal — stamped into this file by `M0.12`
+along with `main.rs` and `README.md`, not written independently**: `oqueue-store` names two backends (`S3Store`, `GcsStore`), and
 `oqueue-broker` is exempt from all three patterns because the store scan nests
 inside the broker guard — `check-sans-io.sh`'s own header puts the real
 `Clock` implementation there. What is unique here is not the permission but

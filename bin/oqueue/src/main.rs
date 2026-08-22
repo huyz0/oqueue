@@ -55,9 +55,30 @@ use oqueue_crypto::NoOpKeyProvider;
 /// The concrete choices this deployment runs with.
 ///
 /// ⚠️ This is the composition root's entire purpose, and today it has one
-/// member. `Clock` and `ObjectStore` join it when a real implementation of
-/// either exists — `M1` writes the first — and until then choosing between
-/// nothing and nothing would be theatre.
+/// member.
+///
+/// ⚠️ ~~`Clock` and `ObjectStore` join it when a real implementation of either
+/// exists — `M1` writes the first.~~ — **`M1.15` and `M1.17` wrote `S3Store`
+/// and `GcsStore`, so the stated condition is met and this field did not
+/// appear** (`M1.39`). The condition was the wrong one: an implementation
+/// existing is not a reason to wire it. A `Wiring` member with no caller is
+/// unearned infrastructure, and `bin/oqueue` has no `oqueue-store` dependency
+/// precisely so that adding one is a deliberate act.
+///
+/// `ObjectStore` joins when this binary must *hand* one to something —
+/// `M3`, the first milestone where a record is acknowledged only after it is
+/// in object storage. ⚠️ Not "when this binary performs I/O" — it does write
+/// the banner to stdout — but it performs no *object-storage or network* I/O:
+/// a composition root constructs and injects, and the object-storage call
+/// happens behind the seam. `Clock` joins on the same rule, when something it
+/// wires schedules or expires.
+///
+/// ⚠️ **Not because "nothing would observe it."** That argument does not hold
+/// here: the banner prints the chosen `KeyProvider`, and
+/// `tests/it/startup.rs` pins that line byte-for-byte, so a wired member can
+/// be observed. The reason is the one
+/// stated above — no *caller* needs the value, so wiring it would be unearned
+/// infrastructure.
 struct Wiring {
     keys: Box<dyn KeyProvider>,
 }
