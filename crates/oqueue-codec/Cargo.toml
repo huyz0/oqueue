@@ -16,6 +16,19 @@ oqueue-core = { path = "../oqueue-core" }
 # compression seam is this crate's own). This crate is the workspace's single
 # protocol surface: nothing else imports kafka-protocol directly.
 kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker"] }
+# The compression seam's wired codecs, both pure Rust (doc 20 §1: no C
+# toolchain). Decode is all M2 needs -- a fetch echoes stored batches -- so
+# ruzstd's decode-only surface is the point, not a limitation; records.rs's
+# module doc carries the zstd-compression deferral.
+lz4_flex = "0.14"
+ruzstd = "0.9"
+# Behind features, still pure Rust (flate2's default rust_backend; snap).
+flate2 = { version = "1", optional = true }
+snap = { version = "1", optional = true }
+
+[features]
+gzip = ["dep:flate2"]
+snappy = ["dep:snap"]
 
 [dev-dependencies]
 proptest.workspace = true

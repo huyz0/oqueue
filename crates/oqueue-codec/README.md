@@ -11,6 +11,10 @@ Because protocol compatibility is the product. Every byte a client sends or expe
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `lz4_flex` — the LZ4 frame codec, both directions, pure Rust.
+- `ruzstd` — zstd decode, pure Rust; zstd *compression* is deliberately absent (`records.rs`'s module doc records the deferral).
+- `flate2` — gzip, behind the `gzip` feature, pure Rust backend.
+- `snap` — snappy, behind the `snappy` feature, pure Rust.
 - `kafka-protocol` — the generated message layer: headers, bodies, and the
   per-version flexible rules (`ADR-0017`; `Cargo.toml`'s comment records the
   feature choices). This crate is the workspace's single protocol surface.
