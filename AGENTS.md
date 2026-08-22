@@ -135,9 +135,13 @@ where nobody ran it, pushing to CI, has rule 4 enforced by nothing at all.
 1. **One task equals one commit equals one change that leaves the tree green.**
    Split anything that cannot meet that. The commit subject starts with the
    backlog task ID. → `scripts/check-commit-msg.sh` (M-1.6)
-2. **Never lower a threshold or delete a test to make a check pass.** Thresholds
-   are constants no environment can move. → `scripts/check-drift.sh`,
-   `scripts/check-tests-kept.sh` (M-1.7)
+2. **Never move a threshold in the direction that weakens its gate, and never
+   delete a test, to make a check pass.** For a floor that is lowering; for a
+   ceiling, *raising*; `m0-complete.sh`'s `NFR_CONSTANTS` table names the
+   weakening direction per constant (`M2.7` — the old wording said "never
+   lower", which named the safe direction for three of the seven constants it
+   governs). Thresholds are constants no environment can move.
+   → `scripts/check-drift.sh`, `scripts/check-tests-kept.sh` (M-1.7)
 3. **Never claim a test passes without having run it.** **No script enforces
    this, and none can.** It is a rule about what you say, and nothing checks a
    claim against an intention. Every other rule rests on it: a green gate

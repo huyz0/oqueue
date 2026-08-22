@@ -12,8 +12,11 @@
 # warning in *both* directions. ⚠️ `EXEMPT_RATE_THRESHOLD` is **not** in that
 # list: it is the rate's denominator, so raising it tightens. Read
 # `m0-complete.sh`'s per-entry table rather than generalising from a suffix —
-# two of its seven rows were wrong across two drafts. Non-negotiable 2's
-# canonical wording still says "lower", which `M1.49` records. ⚠️ ~~see "What this does not catch" below~~ — **no such section
+# two of its seven rows were wrong across two drafts. ⚠️ Non-negotiable 2's
+# canonical wording now names the weakening *direction* rather than "lower"
+# (`M2.7`, closing `M1.49`), so this header and `AGENTS.md` finally say the
+# same thing — rust-style.md rule 7's raising-a-clippy-ceiling example was
+# already the new wording's shape. ⚠️ ~~see "What this does not catch" below~~ — **no such section
 # exists in this file** (`M1.35`). The half-gate it pointed at now has a real
 # answer: `m0-complete.sh`'s `NFR_CONSTANTS` pins each threshold's *value*, so
 # moving one in either direction fails a gate. ⚠️ **Two limitations, and the second matters more.**

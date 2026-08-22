@@ -40,7 +40,7 @@ human or agent. The parts most likely to surprise:
   Commits go directly to `main`; there are no feature branches. This only works
   because every commit is small and green, and the hooks are what make that true
   rather than aspirational.
-- **Never lower a threshold or delete a test to make a check pass.** Thresholds
+- **Never move a threshold in the direction that weakens its gate, and never delete a test, to make a check pass.** (For a floor that is lowering; for a ceiling, raising — `AGENTS.md` rule 2 points at the per-constant table.) Thresholds
   are constants that no environment can move.
 - **Business logic is sans-I/O.** If it needs a socket, a clock, or an object
   store to test, it is in the wrong layer.

@@ -91,7 +91,9 @@ the problem.
   commit".
 - **Never widen scope silently.** Something worth doing that is out of scope
   becomes a backlog task; that takes ten seconds.
-- **Never lower a threshold or delete a test to make a check pass.**
+- **Never move a threshold in the direction that weakens its gate, and never
+  delete a test, to make a check pass** (`AGENTS.md` rule 2 names the
+  weakening direction per constant).
 
 ## Reporting
 
