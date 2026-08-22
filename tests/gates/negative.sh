@@ -1796,6 +1796,28 @@ invoke_m1_complete_no_matrix() {
   bash "$1/scripts/gates/m1-complete.sh"
 }
 
+# ⚠️ `m2-complete.sh`'s early guard, the same shape as `m1-complete.sh`'s
+# above: the public protocol-support matrix is the artifact that gate
+# vouches for, and its absence must fail before any leg needing cargo or a
+# Kafka client is reached.
+setup_m2_complete_no_matrix() {
+  local dir; dir="$(new_scratch m2-complete-no-matrix)"
+  mkdir -p "$dir/scripts/gates"
+  cp "$REPO_ROOT/scripts/gates/m2-complete.sh" "$dir/scripts/gates/m2-complete.sh"
+  chmod +x "$dir/scripts/gates/m2-complete.sh"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = []
+resolver = "2"
+EOF
+  # No docs/protocol-support.md at all.
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+invoke_m2_complete_no_matrix() {
+  bash "$1/scripts/gates/m2-complete.sh"
+}
+
 # A row that records a gap without recording anything about it -- the rule
 # `check-mutants.sh` and `check-unsafe.sh` already enforce on their baselines.
 setup_conformance_matrix_no_reason() {
@@ -2552,6 +2574,8 @@ run_case "check-conformance-matrix.sh (duplicate backend row)" setup_conformance
   "more than once"
 run_case "m1-complete.sh (no recorded matrix)" setup_m1_complete_no_matrix invoke_m1_complete_no_matrix \
   "the recorded backend matrix is the artifact this gate checks"
+run_case "m2-complete.sh (no protocol-support matrix)" setup_m2_complete_no_matrix invoke_m2_complete_no_matrix \
+  "the public protocol-support matrix is an M2 deliverable"
 run_case "check-conformance-matrix.sh (unrecognized status)" setup_conformance_matrix_bad_status invoke_conformance_matrix \
   "which is neither verified nor not-yet-run"
 run_case "check-conformance-matrix.sh (roster names an unknown backend)" setup_conformance_matrix_unknown_in_roster invoke_conformance_matrix_roster \

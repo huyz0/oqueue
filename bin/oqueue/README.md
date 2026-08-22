@@ -29,6 +29,8 @@ the entire system be tested with no network, no credentials and no container.
 
 - `oqueue-core` — the seams and the types.
 - `oqueue-crypto` — `NoOpKeyProvider`, the default when no KMS is configured.
+- `oqueue-broker` — the I/O shell `serve` composes: connection task, dispatcher, stub cluster (`M2.25`).
+- `tokio` — the runtime under `serve`'s listener; `net` arrived exactly when this binary bound one.
 - `mimalloc` — the global allocator. ⚠️ C, compiled by `cc` at build time;
   within NFR-42 ("cargo and a C compiler") and recorded in ADR-0007.
 - `tikv-jemallocator` — **optional**, behind the non-default `heap-profiling`
@@ -57,9 +59,11 @@ Nothing. It is the top of the graph.
 
 ## Notes for whoever touches this
 
-- **It starts, prints a version, and exits.** `M2` brings the wire protocol and
-  `oqueue-broker` the shell that runs it. The wiring struct exists so that a
-  mistake in it is a compile error now rather than at `M2`.
+- **With no arguments it prints a version and exits;** `oqueue serve
+  <host:port> [advertise]` binds a listener and serves the M2 wire protocol
+  over a stub partition (`M2.25`) — real durability is `M3`'s. `advertise`
+  overrides the identity `Metadata` hands out (doc 02 §7.2: identity is a
+  decision); the harness's capture proxy relies on it.
 - ⚠️ **`cargo build` links this on x86_64 only.** aarch64 stays at `cargo check`
   until a cross-linker exists, which is `M13`'s work — and `M0`'s completion
   condition says so rather than claiming a link it never performed.

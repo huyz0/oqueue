@@ -13,6 +13,12 @@ license.workspace = true
 [dependencies]
 oqueue-core = { path = "../../crates/oqueue-core" }
 oqueue-crypto = { path = "../../crates/oqueue-crypto" }
+# `serve` composes the I/O shell (M2.25): the connection task, the
+# dispatcher and the stub cluster all live there.
+oqueue-broker = { path = "../../crates/oqueue-broker" }
+# The listener itself -- `net` arrives exactly when the composition root
+# binds one, as oqueue-broker's manifest promised.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time"] }
 # ⚠️ The global allocator, and the only place one may be set — ADR-0007.
 mimalloc.workspace = true
 # ⚠️ Heap profiling, **off by default**. jemalloc bakes in the *build host's*

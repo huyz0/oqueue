@@ -958,9 +958,11 @@ name = "oqueue"
 version = "0.0.0"
 dependencies = [
  "mimalloc",
+ "oqueue-broker",
  "oqueue-core",
  "oqueue-crypto",
  "tikv-jemallocator",
+ "tokio",
 ]
 
 [[package]]
