@@ -27,6 +27,21 @@
 # holding the same fact is a promise to keep them in sync forever. A standard
 # that does not say when it applies is a defect this script reports.
 #
+# ## Standards do not select themselves — decided, `M2.6` (closing `M1.41`)
+#
+# `M1.31`'s review noticed that the packet judging an edit *to* `security.md`
+# did not include `security.md`: no standard's `applies_to` names its own
+# path (`git.md`/`review.md` self-select only via their `["*"]`, and `sdd.md`
+# names `docs/internal/standards/*`, which is why editing any standard
+# selects `sdd.md`). ⚠️ **Self-selection is declined.** `applies_to` means
+# "this standard governs files matching these globs", and a standard does
+# not govern itself — adding its own path to every standard would trade that
+# meaning for noise, and the reviewer already *has* the edited standard: it
+# is in the diff, which is the packet's largest section. What was actually
+# missing is an instruction, not a route, and `review.md` rule 5 now carries
+# it: a diff that edits a standard obliges the reviewer to read that
+# standard in full, edited and unedited parts alike.
+#
 # ## The glob dialect
 #
 # Shell patterns matched against repository-relative paths, where ⚠️ **`*`

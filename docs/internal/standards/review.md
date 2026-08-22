@@ -50,7 +50,12 @@ milestone loop is called out.
    not separation of process.
 5. **The reviewer receives:** the task verbatim from the backlog with its
    acceptance criteria, the staged diff, the standards selected by path, and
-   the list of gates already passed.
+   the list of gates already passed. ⚠️ A diff that edits a standard obliges
+   the reviewer to read that standard **in full** — edited and unedited parts
+   alike. Standards deliberately do not route to themselves (`M2.6`:
+   `applies_to` means "governs", and a standard does not govern itself;
+   `which-standards.sh`'s header carries the reasoning), so this sentence is
+   the mechanism that puts the edited standard in front of its reviewer.
 6. **The reviewer must never receive:** the author's transcript, plan, or
    reasoning; the author's own description of what the change does; any
    justification the author produced. ⚠️ This exclusion is the rule that
