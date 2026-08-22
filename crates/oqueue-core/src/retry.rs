@@ -3,9 +3,13 @@
 //!
 //! ⚠️ **This computes a decision; it does not retry anything.** Actually
 //! waiting means touching a clock or a timer, and `oqueue-core` does neither
-//! (NFR-51, the sans-io rule) — the caller that drives an attempt loop
-//! (`oqueue-store`'s backends, `M1.15`/`M1.17`) is the one with a runtime to
-//! sleep on. This module answers "retry, and after how long?" as a pure
+//! (NFR-51, the sans-io rule) — the caller that drives an attempt loop is
+//! the one with a runtime to sleep on. ⚠️ **No such caller exists yet**
+//! (`M2.10`, closing `M1.56`): the backends classify errors and return
+//! them, `object_store`'s own vendor retry covers request-level blips
+//! underneath, and this policy's first real caller is `M3`'s composition —
+//! an earlier version of this sentence named `M1.15`/`M1.17` as the
+//! callers, which no code ever made true. This module answers "retry, and after how long?" as a pure
 //! function of the error and the attempt count; it is never the thing that
 //! makes the second call.
 
@@ -92,8 +96,8 @@ pub enum RetryDecision {
 /// Exponential backoff, capped, applied per [`RetryClass`].
 ///
 /// ⚠️ **No jitter.** `object_store`'s own `RetryConfig` (ADR-0008) adds
-/// decorrelated jitter, and a real backend (`M1.15`, `M1.17`) may prefer that
-/// or its own policy entirely — this type is the seam-level decision
+/// decorrelated jitter, and whatever wires this policy up (`M3` — see the
+/// module doc) may prefer that or its own shape entirely — this type is the seam-level decision
 /// (retry or not, roughly how long), not a claim that this exact backoff
 /// shape is what every backend must use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

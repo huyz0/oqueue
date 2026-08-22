@@ -1,6 +1,11 @@
 # 0005. The `ObjectStore` seam
 
-Status: accepted
+Status: accepted; 2026-08-23 (`M2.10`): two claims below are decision-time
+facts the tree has overtaken — "the conditional write this trait does not
+yet have" (it has: `Precondition` on `put` since `M1.5`/`M1.11`, so a
+conformance assertion presents `IfMatches` rather than quiescing writes),
+and the in-memory-backend split `M1.37` already annotated in the body. The
+durability-flag obligation guarantee 1 leaves is `M3`'s, via `M1.58`
 Date: 2026-08-16
 Requirements: NFR-51
 

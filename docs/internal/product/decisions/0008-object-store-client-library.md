@@ -1,6 +1,14 @@
 # 0008. `object_store` as the client library `oqueue-store`'s backends are built on
 
-Status: accepted
+Status: accepted; 2026-08-23 (`M2.10`, closing `M1.56`): the Consequences'
+"`M1.12`'s retry policy configures `RetryConfig` rather than writing a
+backoff loop" did not happen — what shipped is a sans-I/O `RetryPolicy` in
+`oqueue-core` that **no caller invokes yet**, above `object_store`'s own
+unconfigured vendor retry (measured live: `max_retries: 10`,
+`retry_timeout: 180s`). No double-retry exists today for exactly that
+reason. Wiring `RetryConfig` from the policy's constants belongs to the
+seam's first real attempt-loop caller — `M3`'s composition — not to a
+milestone with nothing to drive it
 Date: 2026-08-16
 Requirements: FR-31
 

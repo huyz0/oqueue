@@ -3,7 +3,11 @@
 Status: accepted; 2026-08-23: `M2.4` made the range contract hold against
 the real backends too — a transient-classified ranged failure is
 disambiguated by one `HEAD` on the error path, closing `M1.54`'s
-fake-vs-real divergence; the contract itself is unchanged
+fake-vs-real divergence; the contract itself is unchanged. Also `M2.10`:
+the body's `ByteRange::Bounded { offset, length }` is decision-time
+spelling — what shipped is a tuple variant wrapping a `Bounded` struct,
+with `ByteRange::bounded` still the only constructor (flagged by M1's
+checkpoint review, unfixed until now)
 Date: 2026-08-16
 Requirements: FR-30, FR-31
 
