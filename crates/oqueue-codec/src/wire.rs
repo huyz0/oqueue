@@ -50,6 +50,13 @@ pub enum DecodeError {
         /// Byte offset of the length field.
         at: usize,
     },
+    /// A varint's continuation bits ran past the widest legal encoding.
+    VarintTooLong {
+        /// The maximum bytes this varint width may span.
+        max_bytes: usize,
+        /// Byte offset the varint started at.
+        at: usize,
+    },
 }
 
 impl core::fmt::Display for DecodeError {
@@ -71,6 +78,12 @@ impl core::fmt::Display for DecodeError {
                 write!(
                     f,
                     "negative length {length} at offset {at} where null is not legal"
+                )
+            }
+            Self::VarintTooLong { max_bytes, at } => {
+                write!(
+                    f,
+                    "varint at offset {at} continues past its maximum {max_bytes} byte(s)"
                 )
             }
         }
@@ -104,6 +117,17 @@ impl<'a> Cursor<'a> {
     #[must_use]
     pub const fn remaining(&self) -> usize {
         self.buf.len() - self.pos
+    }
+
+    /// The next eight bytes as a little-endian word **without consuming**,
+    /// or `None` when fewer than eight remain — the load a SWAR scan needs,
+    /// available only when the slice provably contains it (`varint.rs`'s
+    /// answer to the past-the-end reads that ruled out `varint-simd`).
+    #[must_use]
+    pub fn peek_word(&self) -> Option<u64> {
+        let rest = &self.buf[self.pos..];
+        let first8: &[u8; 8] = rest.first_chunk()?;
+        Some(u64::from_le_bytes(*first8))
     }
 
     /// # Errors
