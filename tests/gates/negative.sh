@@ -379,6 +379,32 @@ invoke_drift_msec() {
   bash "$1/scripts/check-drift.sh"
 }
 
+# --- check-drift.sh: a raised clippy threshold ------------------------------
+#
+# `M2.9` (closing `M1.50`): five clippy.toml thresholds sat on the commit path
+# pinned by nothing — NFR_CONSTANTS greps `NAME=` and cannot read TOML. This
+# plants the exact move rust-style.md rule 7 names — raising
+# too-many-lines-threshold back toward clippy's default — in the spelling
+# review measured slipping a parse-then-compare draft: `+100`, which TOML
+# reads as 100. The other four keys are planted correct, so the case fails
+# for the raised value alone.
+setup_clippy_pin() {
+  local dir; dir="$(new_scratch clippy-pin)"
+  copy_gate "$dir" check-drift.sh
+  {
+    echo 'too-many-lines-threshold = +100'
+    echo 'cognitive-complexity-threshold = 20'
+    echo 'too-many-arguments-threshold = 5'
+    echo 'type-complexity-threshold = 250'
+    echo 'enum-variant-size-threshold = 200'
+  } > "$dir/clippy.toml"
+  (cd "$dir" && git add -A && git commit -q -m "M1.50: a raised clippy threshold")
+  printf '%s\n' "$dir"
+}
+invoke_clippy_pin() {
+  bash "$1/scripts/check-drift.sh"
+}
+
 # --- check-drift.sh: a _days threshold ------------------------------------
 #
 # ⚠️ `M1.35` widened THRESHOLD_RE with `_days?` and left it unpinned; review
@@ -2348,6 +2374,7 @@ run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_k
 run_case "check-drift.sh"               setup_drift               invoke_drift
 run_case "check-drift.sh (a _msec threshold)" setup_drift_msec       invoke_drift_msec \
   "threshold made settable"
+run_case "check-drift.sh (a raised clippy threshold)" setup_clippy_pin invoke_clippy_pin
 run_case "check-drift.sh (a _days threshold)" setup_drift_days       invoke_drift_days \
   "threshold made settable"
 run_case "check-layering.sh"            setup_layering            invoke_layering \

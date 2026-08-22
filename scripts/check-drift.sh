@@ -205,4 +205,59 @@ else
   note "suppression list, and widening its regex to pass is what rule 2 forbids"
 fi
 
+# ── clippy.toml thresholds are pinned by value — `M2.9`, closing `M1.50` ────
+#
+# `m0-complete.sh`'s NFR_CONSTANTS greps `NAME=` in shell and cannot read
+# `key = value` TOML — and that gate runs at milestone boundaries anyway.
+# These five sit here, on the commit path: `rust-style.md` rule 7 says a
+# clippy threshold is a constant whose raising is the move non-negotiable 2
+# forbids, and until this section nothing on any path pinned one. Three
+# checks, each with its own reason: a changed value (the move rule 7 names),
+# a key this map does not know (a list nobody grows quietly), and a key
+# deleted from clippy.toml (which silently re-enables clippy's weaker
+# default — for `too-many-lines-threshold`, 100 against the pinned 50).
+declare -A CLIPPY_THRESHOLDS=(
+  ["too-many-lines-threshold"]="50"
+  ["cognitive-complexity-threshold"]="20"
+  ["too-many-arguments-threshold"]="5"
+  ["type-complexity-threshold"]="250"
+  ["enum-variant-size-threshold"]="200"
+)
+# Guarded: a scratch tree or fork without a clippy.toml has nothing to pin,
+# and failing there would make every fixture in negative.sh plant one.
+#
+# ⚠️ **Exact value-shape matching, not parse-then-compare.** A first draft
+# scanned `= [0-9]+` lines and compared parsed values, and review measured
+# the hole: `= +100` is 100 to TOML (and so to clippy) but matched the scan
+# grep nowhere, so the doubled threshold printed `ok`. Requiring each pinned
+# key's line to carry *exactly* the pinned digits closes value changes, sign
+# and underscore spellings, and deletion in one check — anything else on that
+# line is a fail, which is the right default for a canonical five-line file.
+clippy_violations=0
+if [[ -f clippy.toml ]]; then
+  for key in "${!CLIPPY_THRESHOLDS[@]}"; do
+    if ! grep -qE "^${key}[[:space:]]*=[[:space:]]*${CLIPPY_THRESHOLDS[$key]}([[:space:]]|#|$)" clippy.toml; then
+      fail "clippy.toml: ${key} must read exactly '= ${CLIPPY_THRESHOLDS[$key]}'"
+      note "changed, respelled, or deleted — each re-enables a weaker bound;"
+      note "moving it is a decision with an ADR (rust-style.md rule 7), and"
+      note "the pin in scripts/check-drift.sh moves in the same commit"
+      clippy_violations=$((clippy_violations + 1))
+    fi
+  done
+  # Any threshold-shaped key the map does not know — a list nobody grows
+  # quietly. ⚠️ Unpinned by a negative case (only the value check has one);
+  # stated here rather than implied covered.
+  while IFS= read -r line; do
+    key="${line%%=*}"; key="${key//[[:space:]]/}"
+    if [[ -z "${CLIPPY_THRESHOLDS[$key]+x}" ]]; then
+      fail "clippy.toml: $key is not in check-drift.sh's pin map"
+      note "add it to CLIPPY_THRESHOLDS in the same commit"
+      clippy_violations=$((clippy_violations + 1))
+    fi
+  done < <(grep -E '^[a-z-]+[[:space:]]*=' clippy.toml || true)
+  if (( clippy_violations == 0 )); then
+    ok "clippy.toml thresholds match the pin map (${#CLIPPY_THRESHOLDS[@]} pinned)"
+  fi
+fi
+
 finish

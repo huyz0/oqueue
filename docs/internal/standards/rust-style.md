@@ -51,6 +51,8 @@ configuration.
    function grew past it is the exact move non-negotiable 2 forbids for any
    other gate — the fix is splitting the function, and the ADR, if any, is
    about why the *default* was wrong, never about this one function.
+   → `scripts/check-drift.sh`'s pin map (`M2.9`) holds the values on the
+   commit path.
 
 ## Naming
 

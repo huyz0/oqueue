@@ -105,7 +105,8 @@ M0_GATES=(
 # every threshold in the repository: `clippy.toml` sets five of its own
 # (`too-many-lines-threshold`, `cognitive-complexity-threshold`,
 # `too-many-arguments-threshold`, `type-complexity-threshold`,
-# `enum-variant-size-threshold`), and **nothing pins those values**. ⚠️ `M1.35`
+# `enum-variant-size-threshold`) — pinned on the commit path by
+# `check-drift.sh`'s own pin map since `M2.9`. ⚠️ `M1.35`
 # found them while sweeping and left them as a **recorded gap, not a
 # justified exclusion** — a draft of this comment said they are "lint
 # configuration rather than gate constants and changing one does not make a
@@ -113,8 +114,9 @@ M0_GATES=(
 # `too-many-lines-threshold` from 50 to 100 turns a `cargo clippy` exit 101
 # into exit 0, clippy is on the commit path via the `check-crate` hook, and
 # `rust-style.md` rule 7 says raising one "is the exact move non-negotiable 2
-# forbids for any other gate". So they belong here and pinning them is
-# `M1.50`'s row.
+# forbids for any other gate". So `M1.50`'s row asked for the pin, and
+# `M2.9` put it in `check-drift.sh` — the commit path, which this
+# milestone-boundary gate is not.
 # ⚠️ Checked here as well as by `check-drift.sh` because they are different
 # questions: `check-drift.sh` asks whether *any* threshold reads the
 # environment, and this asks whether **each one** still holds the number it was
