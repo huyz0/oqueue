@@ -60,6 +60,97 @@ name: gates
     branches: [main]
 
 jobs:
+  # ⚠️ **T2, and a separate job on purpose.** `M1.34`: `s3_minio.rs` described
+  # a CI step that was never written, so a commit breaking the S3 backend was
+  # caught only whenever a person next ran `scripts/gates/m1-complete.sh` — a
+  # milestone-boundary gate, which is not a schedule. `testing.md`'s T2 tier
+  # names a container per push and this is it.
+  #
+  # ⚠️ Separate from `gates` rather than a step inside it because that job is
+  # already the long one (mutation testing, the negative suite) and these are
+  # independent: a MinIO failure and a lint failure should both be visible from
+  # one push, not serialised behind each other. GitHub runs jobs concurrently.
+  #
+  # ⚠️ **A `services:` container, not `docker run`.** The local gate starts
+  # MinIO itself and reads back a kernel-assigned port, because it cannot
+  # assume a free 9000 on a developer's machine. A runner is a fresh VM, so the
+  # fixed mapping is safe here and the health check is the runner's job.
+  conformance-t2:
+    runs-on: ubuntu-latest
+    services:
+      minio:
+        # ⚠️ The same pinned tag `m1-complete.sh` uses — a dated `RELEASE.`
+        # tag, not a digest, so it is mutable in principle and pinned by
+        # convention. **Nothing compares the two copies**, which is the drift
+        # `build.md` rule 22 names; `M1.51` is the row for a check, and until
+        # it lands this pair is held by review. `minio/mc`'s tag below is
+        # pinned for the same reason and is a third copy of the same problem.
+        image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+        # ⚠️ **`server /data`, and its absence was a real bug.** The image's
+        # entrypoint prepends `minio` only when the first argument is something
+        # else, so with no command it runs `minio` sub-commandless, prints
+        # usage and **exits 0** — reproduced by review against this exact tag:
+        # `state=exited exit=0 health=unhealthy`, and the port refuses
+        # connections. `m1-complete.sh` passes it and the CI copy dropped it.
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        # ⚠️ `command:`, not `options:` — GitHub passes this as the container's
+        # arguments, which is where `server /data` belongs.
+        command: server /data
+        ports:
+          - 9000:9000
+        options: >-
+          --health-cmd "mc ready local"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: install the pinned toolchain
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: create the bucket
+        run: |
+          set -euo pipefail
+          docker run --rm --network host --entrypoint sh \
+            minio/mc:RELEASE.2025-04-16T18-13-26Z -c \
+            "mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && \
+             mc mb --ignore-existing local/oqueue-conformance"
+
+      # ⚠️ **Twice, against the same bucket** — the property `m1-complete.sh`
+      # asserts locally and the reason it asserts it: a suite green exactly
+      # once per bucket is not green. `M1.21` found a case that asserted a key
+      # absent and then created it without cleanup, which passes on an empty
+      # bucket and fails on the second run. A CI job that ran once would not
+      # have caught it.
+      - name: conformance suite against MinIO, twice
+        env:
+          AWS_ENDPOINT: http://127.0.0.1:9000
+          AWS_ACCESS_KEY_ID: minioadmin
+          AWS_SECRET_ACCESS_KEY: minioadmin
+          AWS_BUCKET: oqueue-conformance
+          AWS_REGION: us-east-1
+          AWS_ALLOW_HTTP: "true"
+          CARGO_INCREMENTAL: "0"
+        run: |
+          set -euo pipefail
+          # ⚠️ `--locked` (build.md rule 2) and `CARGO_INCREMENTAL=0`
+          # (rule 21) — a CI job builds once and throws the tree away, so
+          # incremental state is cost with no reuse. No cache action here
+          # deliberately: this job's value is catching a backend regression on
+          # every push, and a stale cache is the failure mode that would make
+          # it lie. Cost is a full debug build of one crate and its deps.
+          for run in 1 2; do
+            echo "::group::conformance run $run of 2"
+            cargo test --locked -p oqueue-store --test it -- \
+              --include-ignored --test-threads=1
+            echo "::endgroup::"
+          done
+
   gates:
     runs-on: ubuntu-latest
     steps:

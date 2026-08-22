@@ -24,8 +24,10 @@
 # writing this file:
 #
 #   1. `tests/it/s3_minio.rs` said "CI's T2 step starts MinIO and sets every
-#      AWS_* variable" -- there is no T2 step in `.github/workflows/gates.yml`
-#      and never was. ⚠️ Not that those tests had never run: `M1.15` and
+#      AWS_* variable" -- there was no T2 step in `.github/workflows/gates.yml`
+#      and never had been. ⚠️ There is now: `M1.34` added the
+#      `conformance-t2` job, so this gate is no longer the only thing that
+#      runs the suite against a container. ⚠️ Not that those tests had never run: `M1.15` and
 #      `M1.16` record running them against real MinIO by hand. Nothing
 #      *re-ran* them, which is what a gate is for.
 #   2. The conformance suite passed against MinIO once and failed on the

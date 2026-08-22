@@ -23,20 +23,22 @@ confidence.
 |---|---|---|---|
 | **T0 unit** | nothing — pure logic, in-memory fakes | every save, every commit | microseconds |
 | **T1 integration, hermetic** | in-process fakes with injected faults and latency | every commit | milliseconds |
-| **T2 integration, containerized** | Docker: MinIO; a GCS emulator, name TBD ⚠️ | milestone boundary ⚠️ | seconds |
+| **T2 integration, containerized** | Docker: MinIO; a GCS emulator, name TBD ⚠️ | every push, and at the milestone boundary ⚠️ | seconds |
 | **T3 real cloud** | actual S3/GCS credentials | scheduled | minutes |
 
-⚠️ **The T2 row's cadence says "milestone boundary", and that is a correction,
-not a target.** It said "every push" until `M1.21` went looking for the CI job
-that would do it and found `.github/workflows/gates.yml` has none and never
-had one. ⚠️ **That does not mean the T2 tests never ran** — `M1.15` and
-`M1.16` each record running them against a real MinIO container in their own
-commit messages, by hand. It means nothing *re-runs* them: between one
-person's invocation and the next they are unenforced.
-`scripts/gates/m1-complete.sh` at least makes that invocation a defined,
-repeatable step rather than an ad-hoc one. ⚠️ **Nothing enforces this cadence for a T2 test not wired into that
-gate**, which is the same shape as the claim being corrected; `backlog.md`'s
-`M1.34` is the CI job that would make "every push" true again.
+⚠️ **The T2 row's cadence was "milestone boundary" for one milestone, as a
+correction rather than a target, and `M1.34` restored "every push".** It said
+"every push" until `M1.21` went looking for the CI job that would do it and
+found `.github/workflows/gates.yml` had none and never had one — a cadence
+asserted by a standard and implemented by nothing. ⚠️ **That did not mean the
+T2 tests never ran**: `M1.15` and `M1.16` each record running them against a
+real MinIO container by hand. What was missing is anything that *re-runs*
+them. `scripts/gates/m1-complete.sh` made that invocation defined and
+repeatable, and `M1.34`'s `conformance-t2` job now runs it on every push with
+a MinIO service container — so both halves of the cadence are real.
+⚠️ **A T2 test wired into neither is still enforced by nothing**, which is the
+same shape as the claim originally corrected: the cadence holds for the suite
+those two run, not for the tier by construction.
 
 ⚠️ **`fake-gcs-server` named here was found not to work for this project's
 actual GCS client, writing `M1.17`** (ADR-0014): `object_store`'s GCS client

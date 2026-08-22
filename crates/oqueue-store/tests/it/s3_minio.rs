@@ -11,18 +11,24 @@
 //! Docker running locally never opts in; nothing here needs remembering to
 //! turn off.
 //!
-//! ⚠️ **What runs it is `scripts/gates/m1-complete.sh`, not CI.** This
-//! sentence used to say "CI's T2 step" does — `M1.21` went looking for that
-//! step in order to read its bucket setup and found that
-//! `.github/workflows/gates.yml` has no T2 job and never had one.
+//! ⚠️ **Two things run it: `scripts/gates/m1-complete.sh` and CI's
+//! `conformance-t2` job.** This sentence used to say "CI's T2 step" does —
+//! `M1.21` went looking for that step in order to read its bucket setup and
+//! found that `.github/workflows/gates.yml` had no T2 job and never had one.
+//! `M1.34` wrote it.
 //! ⚠️ **That is not the same as never having run**: `M1.15` and `M1.16` both
 //! record running these tests against a real `MinIO` container in their commit
 //! messages, and `check-coverage.sh`'s exemption for this crate rests on that
 //! measurement. What was missing is anything that re-runs them — between one
 //! person's invocation and the next they were unenforced. The milestone gate
-//! now starts the container, creates the bucket, exports the credentials and
-//! runs the suite twice, which makes that invocation repeatable; a CI job
-//! that does it on a schedule is `backlog.md`'s `M1.34`.
+//! starts the container, creates the bucket, exports the credentials and runs
+//! the suite twice, which makes that invocation repeatable — and `M1.34`'s
+//! `conformance-t2` job does the same on every push, so between one person's
+//! invocation and the next these are no longer unenforced. ⚠️ Both run the
+//! suite **twice against one bucket**, which is the property that matters
+//! rather than an incidental repetition: `M1.21` found a case asserting a key
+//! absent and then creating it without cleanup, which passes on an empty
+//! bucket and fails on the second run.
 //!
 //! ⚠️ **Must run on a multi-thread Tokio runtime.** The conformance suite's
 //! own case bodies drive their futures with a hand-rolled, no-allocation
@@ -46,7 +52,7 @@ use oqueue_core::{ByteRange, Error, MultipartLimits, ObjectKey, ObjectStore, Pre
 use oqueue_store::S3Store;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "T2: run by scripts/gates/m1-complete.sh, which starts MinIO and sets AWS_*"]
+#[ignore = "T2: run by CI's conformance-t2 job and by scripts/gates/m1-complete.sh"]
 async fn s3_backend_passes_the_full_conformance_suite_against_minio() {
     let store = S3Store::from_env().expect(
         "AWS_* environment variables must describe a reachable MinIO endpoint \
@@ -78,7 +84,7 @@ async fn s3_backend_passes_the_full_conformance_suite_against_minio() {
 /// multi-gigabyte payload to ever reach the multipart path at all. See
 /// `S3Store::with_multipart_limits`'s own doc comment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "T2: run by scripts/gates/m1-complete.sh, which starts MinIO and sets AWS_*"]
+#[ignore = "T2: run by CI's conformance-t2 job and by scripts/gates/m1-complete.sh"]
 async fn s3_backend_uploads_a_large_payload_as_multipart_and_reads_it_back() {
     let limits = MultipartLimits {
         min_part_size: 5 * 1024 * 1024,
