@@ -19,6 +19,7 @@
 
 pub mod connection;
 pub mod dispatch;
+pub mod fetch;
 pub mod metadata;
 pub mod produce;
 pub mod stub;

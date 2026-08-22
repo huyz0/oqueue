@@ -15,6 +15,11 @@
 //! shape: answering it would desync the client's read stream, so the
 //! outcome is `Silent`, not an empty reply.
 
+// The test module is pub(crate) so fetch's tests can share the golden
+// fixtures; clippy calls the inner pub(crate) redundant while
+// `unreachable_pub` refuses the alternative -- codec's batch.rs precedent.
+#![allow(clippy::redundant_pub_crate)]
+
 use crate::connection::HandlerResponse;
 use crate::stub::StubCluster;
 use kafka_protocol::error::ResponseError;
@@ -55,9 +60,10 @@ pub(crate) fn handle(
         for partition in &topic.partition_data {
             let entry = match (&resolved_name, acks_valid) {
                 (_, false) => refused(partition.index, ResponseError::InvalidRequiredAcks),
-                // An id this broker never issued: the partition-level
-                // refusal every client maps back through the echoed id.
-                (None, true) => refused(partition.index, ResponseError::UnknownTopicOrPartition),
+                // An id this broker never issued: its own error (100),
+                // mapped back through the echoed id — the name path's
+                // UNKNOWN_TOPIC_OR_PARTITION stays in one_partition.
+                (None, true) => refused(partition.index, ResponseError::UnknownTopicId),
                 (Some(name), true) => {
                     one_partition(cluster, name, partition.index, partition.records.as_deref())
                 }
@@ -165,7 +171,7 @@ fn one_partition(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     #![allow(clippy::expect_used)]
 
     use super::handle;
@@ -176,7 +182,7 @@ mod tests {
     use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
     use oqueue_codec::frame::RequestPrelude;
 
-    fn produce_body(version: i16, topic: &str, acks: i16, records: Vec<u8>) -> Vec<u8> {
+    pub(crate) fn produce_body(version: i16, topic: &str, acks: i16, records: Vec<u8>) -> Vec<u8> {
         let mut t = TopicProduceData::default();
         t.name = TopicName(StrBytes::from_string(topic.to_owned()));
         body_for(version, t, acks, records)
@@ -222,7 +228,7 @@ mod tests {
     /// batch — the same authority `oqueue-codec`'s golden tests use
     /// (`ADR-0017`), rebuilt here because a `#[cfg(test)]` helper is
     /// invisible across crates.
-    fn golden_batch() -> Vec<u8> {
+    pub(crate) fn golden_batch() -> Vec<u8> {
         use kafka_protocol::records::{
             Compression, Record, RecordBatchEncoder, RecordEncodeOptions, TimestampType,
         };
@@ -410,7 +416,8 @@ mod tests {
         assert_eq!(response.responses[0].topic_id, ghost);
         assert_eq!(
             response.responses[0].partition_responses[0].error_code,
-            kafka_protocol::error::ResponseError::UnknownTopicOrPartition.code()
+            kafka_protocol::error::ResponseError::UnknownTopicId.code(),
+            "ids have their own refusal, echoed through the id"
         );
     }
 

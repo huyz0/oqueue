@@ -26,10 +26,10 @@ kafka-protocol = { version = "0.18.0", default-features = false, features = ["br
 # Topic ids on the modern wire (Produce v13, Fetch v13+, Metadata v10+).
 # Already in the tree via kafka-protocol; no C toolchain.
 uuid = { version = "1", default-features = false }
+# The generated messages carry records as Bytes; also in the tree already.
+bytes = "1"
 
 [dev-dependencies]
-# Produce tests hand the dependency's request types their batch bytes.
-bytes = "1"
 # Tests act as the client and decode responses, which needs the client half.
 kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker", "client"] }
 # duplex-driven T1 tests: no real socket below bin/oqueue.

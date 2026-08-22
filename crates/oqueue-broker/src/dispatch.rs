@@ -78,9 +78,9 @@ impl Dispatcher {
         match api_key {
             ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body),
             ApiKey::Produce => crate::produce::handle(&self.cluster, prelude, body),
-            // `M2.24` lands fetch here. An advertised API without its
-            // handler wired yet is exactly as unanswerable as an
-            // unadvertised one.
+            ApiKey::Fetch => crate::fetch::handle(&self.cluster, prelude, body),
+            // Unreachable while every advertised API is wired above; kept
+            // because `supports()` is the gate, not this match.
             _ => HandlerResponse::Close,
         }
     }
@@ -220,15 +220,15 @@ mod tests {
     }
 
     #[test]
-    fn an_advertised_api_without_a_handler_yet_closes_too() {
+    fn an_advertised_api_at_an_unadvertised_version_closes() {
         let mut body = Vec::new();
-        put_i16(&mut body, 1); // Fetch
-        put_i16(&mut body, 4);
+        put_i16(&mut body, 0); // Produce
+        put_i16(&mut body, 2); // removed by KIP-896, below the floor
         put_i32(&mut body, 1);
         assert_eq!(
             dispatcher().dispatch(&body),
             HandlerResponse::Close,
-            "M2.24 wires fetch; until then, close"
+            "outside ApiVersions' fallback there is nothing parsable to say"
         );
     }
 
