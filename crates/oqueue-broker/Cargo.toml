@@ -10,10 +10,10 @@ license.workspace = true
 # topology, enforced by `check-layering.sh`. This crate is a named composer, so it may also depend on other workspace crates as it grows.
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
-# A composer (architecture.md): the protocol surface. The checksum joins
-# when the ingest rule wires in (M2.23), not before -- an unused dep is a
-# claim review measured false once already.
+# A composer (architecture.md): the protocol surface, and the checksum the
+# ingest rule composes with it (M2.19's one-liner, wired at M2.23).
 oqueue-codec = { path = "../oqueue-codec" }
+oqueue-checksum = { path = "../oqueue-checksum" }
 # The runtime this shell is written against (ADR-0008 already chose the
 # ecosystem; doc 05 §3 the crate). Feature-minimal: the connection task
 # needs io + sync + rt; `net` stays out until bin/oqueue binds a listener.
@@ -23,8 +23,13 @@ tokio = { version = "1", features = ["io-util", "sync", "rt", "time"] }
 # same single-surface rule as oqueue-codec's (ADR-0017): only these two
 # crates touch it.
 kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker"] }
+# Topic ids on the modern wire (Produce v13, Fetch v13+, Metadata v10+).
+# Already in the tree via kafka-protocol; no C toolchain.
+uuid = { version = "1", default-features = false }
 
 [dev-dependencies]
+# Produce tests hand the dependency's request types their batch bytes.
+bytes = "1"
 # Tests act as the client and decode responses, which needs the client half.
 kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker", "client"] }
 # duplex-driven T1 tests: no real socket below bin/oqueue.

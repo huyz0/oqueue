@@ -17,14 +17,22 @@ use kafka_protocol::messages::{BrokerId, MetadataRequest, MetadataResponse, Topi
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 
-/// Decodes, answers, encodes. `None` only when the body cannot be decoded —
-/// a malformed request from a client that negotiated fine is a closed
-/// connection, same policy as the dispatcher's other unanswerables.
+/// Decodes, answers, encodes. `Close` only when the body cannot be
+/// decoded — a malformed request from a client that negotiated fine is a
+/// closed connection, same policy as the dispatcher's other unanswerables.
 pub(crate) fn handle(
     cluster: &StubCluster,
     prelude: RequestPrelude,
     body: &[u8],
-) -> Option<Vec<u8>> {
+) -> crate::connection::HandlerResponse {
+    answer(cluster, prelude, body).map_or(
+        crate::connection::HandlerResponse::Close,
+        crate::connection::HandlerResponse::Reply,
+    )
+}
+
+/// The `Option` body `handle` wraps: `None` is the close decision.
+fn answer(cluster: &StubCluster, prelude: RequestPrelude, body: &[u8]) -> Option<Vec<u8>> {
     let mut buf = body;
     let request = MetadataRequest::decode(&mut buf, prelude.api_version).ok()?;
 
@@ -62,7 +70,13 @@ pub(crate) fn handle(
     response.brokers = vec![broker];
 
     for name in names {
-        response.topics.push(topic_entry(cluster, &name, &request));
+        let mut entry = topic_entry(cluster, &name, &request);
+        // Topic ids ride the wire from v10; below that the field is
+        // absent and the encoder refuses a non-default value there.
+        if prelude.api_version >= 10 {
+            entry.topic_id = cluster.topic_id(&name).unwrap_or_default();
+        }
+        response.topics.push(entry);
     }
 
     let mut out = Vec::new();
@@ -144,6 +158,14 @@ mod tests {
         }
     }
 
+    /// The reply's bytes, or a panic naming the other verdict.
+    fn answered(cluster: &StubCluster, prelude: RequestPrelude, body: &[u8]) -> Vec<u8> {
+        match handle(cluster, prelude, body) {
+            crate::connection::HandlerResponse::Reply(out) => out,
+            other => panic!("expected a reply, got {other:?}"),
+        }
+    }
+
     fn decode(bytes: &[u8], version: i16) -> MetadataResponse {
         // Metadata responses: header v0 below v9, v1 (tagged) from v9.
         let header_len = if version >= 9 { 5 } else { 4 };
@@ -157,7 +179,7 @@ mod tests {
     fn v12_with_the_flag_creates_and_answers() {
         let cluster = StubCluster::new("h.example", 9092);
         let body = request_bytes(12, Some(vec!["orders"]), true);
-        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let out = answered(&cluster, prelude(12), &body);
         let response = decode(&out, 12);
         assert_eq!(response.brokers.len(), 1);
         assert_eq!(response.brokers[0].port, 9092);
@@ -165,13 +187,20 @@ mod tests {
         assert_eq!(response.topics[0].error_code, 0);
         assert_eq!(response.topics[0].partitions.len(), 1);
         assert_eq!(cluster.partition_count("orders"), Some(1));
+        // From v10 the topic's id rides along -- how id-addressed produce
+        // and fetch learn their targets.
+        assert_eq!(
+            response.topics[0].topic_id,
+            cluster.topic_id("orders").expect("created with an id")
+        );
+        assert_ne!(response.topics[0].topic_id, uuid::Uuid::nil());
     }
 
     #[test]
     fn v12_without_the_flag_refuses_the_missing_topic() {
         let cluster = StubCluster::new("h", 1);
         let body = request_bytes(12, Some(vec!["ghost"]), false);
-        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let out = answered(&cluster, prelude(12), &body);
         let response = decode(&out, 12);
         assert_eq!(
             response.topics[0].error_code,
@@ -190,7 +219,7 @@ mod tests {
         cluster.ensure_topic("a");
         cluster.ensure_topic("b");
         let body = request_bytes(12, None, false);
-        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let out = answered(&cluster, prelude(12), &body);
         let response = decode(&out, 12);
         let mut names: Vec<String> = response
             .topics
@@ -209,7 +238,7 @@ mod tests {
         // and the decoder defaults it true, the historical behaviour this
         // handler inherits.
         let body = request_bytes(1, Some(vec!["implicit"]), true);
-        let out = handle(&cluster, prelude(1), &body).expect("answered");
+        let out = answered(&cluster, prelude(1), &body);
         let response = decode(&out, 1);
         assert_eq!(response.topics[0].error_code, 0);
         assert_eq!(cluster.partition_count("implicit"), Some(1));
@@ -220,7 +249,7 @@ mod tests {
         let cluster = StubCluster::new("h", 1);
         cluster.ensure_topic("v0-visible");
         let body = request_bytes(0, Some(vec![]), true);
-        let out = handle(&cluster, prelude(0), &body).expect("answered");
+        let out = answered(&cluster, prelude(0), &body);
         let response = decode(&out, 0);
         assert_eq!(response.topics.len(), 1, "v0's empty array is all-topics");
     }
@@ -230,7 +259,7 @@ mod tests {
         let cluster = StubCluster::new("h", 1);
         cluster.ensure_topic("hidden");
         let body = request_bytes(12, Some(vec![]), true);
-        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let out = answered(&cluster, prelude(12), &body);
         let response = decode(&out, 12);
         assert!(response.topics.is_empty());
     }
@@ -254,7 +283,10 @@ mod tests {
             .expect("header encodes");
         request.extend_from_slice(&request_bytes(12, Some(vec!["routed"]), true));
 
-        let out = dispatcher.dispatch(&request).expect("answered");
+        let out = match dispatcher.dispatch(&request) {
+            crate::connection::HandlerResponse::Reply(out) => out,
+            other => panic!("expected a reply, got {other:?}"),
+        };
         let response = decode(&out, 12);
         assert_eq!(response.brokers[0].host.as_str(), "routed.example");
         assert_eq!(response.topics[0].error_code, 0);
@@ -265,7 +297,7 @@ mod tests {
     fn the_advertised_identity_is_the_configured_one() {
         let cluster = StubCluster::new("adv.example.test", 31234);
         let body = request_bytes(9, None, false);
-        let out = handle(&cluster, prelude(9), &body).expect("answered");
+        let out = answered(&cluster, prelude(9), &body);
         let response = decode(&out, 9);
         assert_eq!(response.brokers[0].host.as_str(), "adv.example.test");
         assert_eq!(response.brokers[0].port, 31234);

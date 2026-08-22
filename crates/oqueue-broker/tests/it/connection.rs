@@ -52,7 +52,7 @@ async fn responses_stay_in_request_order_despite_reversed_completion() {
                 } else {
                     second_done.notify_one();
                 }
-                Some(req)
+                oqueue_broker::HandlerResponse::Reply(req)
             }
         }
     };
@@ -96,7 +96,7 @@ async fn the_in_flight_bound_stops_the_read_half() {
                     observed_two.notify_one();
                 }
                 let _permit = park.acquire().await.expect("never closed");
-                Some(req)
+                oqueue_broker::HandlerResponse::Reply(req)
             }
         }
     };
@@ -130,7 +130,7 @@ async fn the_in_flight_bound_stops_the_read_half() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_frame_over_the_cap_ends_the_connection_loudly() {
     let (mut client, server) = tokio::io::duplex(4096);
-    let handler = |req: Vec<u8>| async move { Some(req) };
+    let handler = |req: Vec<u8>| async move { oqueue_broker::HandlerResponse::Reply(req) };
     let conn = tokio::spawn(serve_connection(server, Arc::new(handler), LIMITS));
     client
         .write_all(&2048i32.to_be_bytes())
@@ -146,7 +146,7 @@ async fn a_frame_over_the_cap_ends_the_connection_loudly() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_negative_frame_size_ends_the_connection_loudly() {
     let (mut client, server) = tokio::io::duplex(4096);
-    let handler = |req: Vec<u8>| async move { Some(req) };
+    let handler = |req: Vec<u8>| async move { oqueue_broker::HandlerResponse::Reply(req) };
     let conn = tokio::spawn(serve_connection(server, Arc::new(handler), LIMITS));
     client
         .write_all(&(-5i32).to_be_bytes())
@@ -166,7 +166,7 @@ async fn a_panicking_handler_is_this_connections_error_alone() {
         #[allow(unreachable_code)]
         {
             panic!("handler bug");
-            None::<Vec<u8>>
+            oqueue_broker::HandlerResponse::Close
         }
     };
     let conn = tokio::spawn(serve_connection(server, Arc::new(handler), LIMITS));
@@ -180,7 +180,7 @@ async fn a_panicking_handler_is_this_connections_error_alone() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_peer_dying_mid_frame_is_an_io_ending() {
     let (mut client, server) = tokio::io::duplex(4096);
-    let handler = |req: Vec<u8>| async move { Some(req) };
+    let handler = |req: Vec<u8>| async move { oqueue_broker::HandlerResponse::Reply(req) };
     let conn = tokio::spawn(serve_connection(server, Arc::new(handler), LIMITS));
     client.write_all(&10i32.to_be_bytes()).await.expect("size");
     client.write_all(b"abc").await.expect("partial body");
@@ -227,7 +227,7 @@ async fn every_ending_displays_its_facts() {
 #[tokio::test(start_paused = true)]
 async fn a_silent_peer_times_out_deterministically() {
     let (mut client, server) = tokio::io::duplex(4096);
-    let handler = |req: Vec<u8>| async move { Some(req) };
+    let handler = |req: Vec<u8>| async move { oqueue_broker::HandlerResponse::Reply(req) };
     let limits = ConnectionLimits {
         max_frame: 1024,
         max_in_flight: 2,
@@ -255,7 +255,8 @@ async fn a_silent_peer_times_out_deterministically() {
 async fn a_peer_that_never_reads_times_out_the_write() {
     // A tiny pipe fills fast; the client never reads.
     let (mut client, server) = tokio::io::duplex(8);
-    let handler = |req: Vec<u8>| async move { Some(req.repeat(16)) };
+    let handler =
+        |req: Vec<u8>| async move { oqueue_broker::HandlerResponse::Reply(req.repeat(16)) };
     let limits = ConnectionLimits {
         max_frame: 1024,
         max_in_flight: 2,

@@ -3,7 +3,11 @@
 Status: accepted; 2026-08-24 (`M2.21`): the response became
 `Option<Vec<u8>>` — `None` closes the connection, the dispatcher's only
 safe answer to a request no response schema fits (an unknown api key, an
-unadvertised version outside `ApiVersions`' fallback)
+unadvertised version outside `ApiVersions`' fallback); 2026-08-26
+(`M2.23`): the response became the three-way `HandlerResponse` —
+`Reply`/`Silent`/`Close` — because `acks=0` produce is fire-and-forget:
+any reply would desync the client's read stream, yet the connection must
+stay open, which `Option`'s two states cannot spell
 Date: 2026-08-24
 Requirements: FR-1
 

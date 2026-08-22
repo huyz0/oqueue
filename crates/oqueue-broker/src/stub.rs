@@ -17,6 +17,7 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use uuid::Uuid;
 
 /// One partition: batches as received, and the offset the next one gets.
 #[derive(Debug, Default)]
@@ -25,6 +26,17 @@ pub struct StubPartition {
     pub batches: Vec<Vec<u8>>,
     /// The offset the next produced batch's first record is assigned.
     pub next_offset: i64,
+}
+
+/// One topic: its id and its partitions. Ids exist because the modern
+/// wire addresses topics by uuid — `Produce` v13, `Fetch` v13+, and
+/// `Metadata` from v10 all carry them.
+#[derive(Debug)]
+pub struct StubTopic {
+    /// The topic's id: deterministic (creation order), never nil.
+    pub id: Uuid,
+    /// The topic's partitions.
+    pub partitions: Vec<StubPartition>,
 }
 
 /// The whole stub cluster: identity plus topics.
@@ -39,7 +51,7 @@ pub struct StubCluster {
     // ⚠️ A std `Mutex`, deliberately (`async-concurrency.md` rules 6 and 8):
     // every critical section is a map touch with no `.await` inside, and
     // the lock protects data, never control flow.
-    topics: Mutex<HashMap<String, Vec<StubPartition>>>,
+    topics: Mutex<HashMap<String, StubTopic>>,
 }
 
 impl StubCluster {
@@ -61,7 +73,31 @@ impl StubCluster {
             .topics
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        topics.get(topic).map(Vec::len)
+        topics.get(topic).map(|t| t.partitions.len())
+    }
+
+    /// The topic's id, or `None` if it does not exist.
+    #[must_use]
+    pub fn topic_id(&self, topic: &str) -> Option<Uuid> {
+        let topics = self
+            .topics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        topics.get(topic).map(|t| t.id)
+    }
+
+    /// The name behind a topic id, or `None` — how the id-addressed APIs
+    /// (`Produce` v13, `Fetch` v13+) resolve their targets.
+    #[must_use]
+    pub fn topic_name_by_id(&self, id: Uuid) -> Option<String> {
+        let topics = self
+            .topics
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        topics
+            .iter()
+            .find(|(_, t)| t.id == id)
+            .map(|(name, _)| name.clone())
     }
 
     /// Creates `topic` with one partition if absent. Returns whether it
@@ -72,9 +108,14 @@ impl StubCluster {
             .topics
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        topics
-            .entry(topic.to_owned())
-            .or_insert_with(|| vec![StubPartition::default()]);
+        // Creation-order ids, starting at 1: deterministic, never nil
+        // (nil is the wire's "no id" sentinel), unique because topics are
+        // never removed.
+        let next_id = Uuid::from_u128(topics.len() as u128 + 1);
+        topics.entry(topic.to_owned()).or_insert_with(|| StubTopic {
+            id: next_id,
+            partitions: vec![StubPartition::default()],
+        });
         true
     }
 
@@ -101,14 +142,30 @@ impl StubCluster {
         batch: Vec<u8>,
         records: i64,
     ) -> Option<i64> {
+        self.append_with(topic, partition, records, |_| batch)
+    }
+
+    /// [`Self::append`], with `make` handed the assigned base offset and
+    /// returning the batch to store — *inside the critical section*, because
+    /// produce's offset rewrite must be atomic with the reservation, or two
+    /// in-flight produces could each stamp the other's offset. The closure
+    /// runs under the lock; it must not block (`async-concurrency.md`
+    /// rule 6).
+    pub fn append_with(
+        &self,
+        topic: &str,
+        partition: usize,
+        records: i64,
+        make: impl FnOnce(i64) -> Vec<u8>,
+    ) -> Option<i64> {
         let mut topics = self
             .topics
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let p = topics.get_mut(topic)?.get_mut(partition)?;
+        let p = topics.get_mut(topic)?.partitions.get_mut(partition)?;
         let base = p.next_offset;
         p.next_offset += records.max(1);
-        p.batches.push(batch);
+        p.batches.push(make(base));
         drop(topics);
         Some(base)
     }
@@ -129,7 +186,7 @@ impl StubCluster {
             .topics
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let p = topics.get(topic)?.get(partition)?;
+        let p = topics.get(topic)?.partitions.get(partition)?;
         let result = (p.batches.clone(), p.next_offset);
         drop(topics);
         Some(result)
@@ -156,5 +213,20 @@ mod tests {
         assert_eq!(batches.len(), 2);
         assert_eq!(high, 5);
         assert_eq!(cluster.append("missing", 0, vec![], 1), None);
+    }
+
+    #[test]
+    fn topic_ids_are_stable_unique_and_resolvable() {
+        let cluster = StubCluster::new("h", 1);
+        cluster.ensure_topic("a");
+        cluster.ensure_topic("b");
+        cluster.ensure_topic("a"); // idempotent: no id churn
+        let a = cluster.topic_id("a").expect("a has an id");
+        let b = cluster.topic_id("b").expect("b has an id");
+        assert_ne!(a, b);
+        assert_ne!(a, super::Uuid::nil());
+        assert_eq!(cluster.topic_name_by_id(a).as_deref(), Some("a"));
+        assert_eq!(cluster.topic_name_by_id(super::Uuid::nil()), None);
+        assert_eq!(cluster.topic_id("ghost"), None);
     }
 }

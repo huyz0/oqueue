@@ -11,9 +11,10 @@
 //! the client can pick a version and retry. That fallback is `ApiVersions`'
 //! alone: any other unanswerable request — an unknown key, an unadvertised
 //! version — has no response the client would parse, and the only safe
-//! answer is closing the connection, which is what a `None` from the
-//! [`crate::Handler`] seam means (ADR-0018's status note).
+//! answer is closing the connection: [`HandlerResponse::Close`] from the
+//! [`crate::Handler`] seam (ADR-0018's status notes).
 
+use crate::connection::HandlerResponse;
 use core::future::Future;
 use kafka_protocol::error::ResponseError;
 use kafka_protocol::messages::api_versions_response::ApiVersion;
@@ -39,7 +40,7 @@ impl Dispatcher {
 }
 
 impl crate::Handler for Dispatcher {
-    fn handle(&self, request: Vec<u8>) -> impl Future<Output = Option<Vec<u8>>> + Send {
+    fn handle(&self, request: Vec<u8>) -> impl Future<Output = HandlerResponse> + Send {
         // Nothing here awaits yet (`M2.23`'s produce path will); a ready
         // future keeps the seam's Send bound without an async block clippy
         // would rather see as `async fn`.
@@ -49,32 +50,38 @@ impl crate::Handler for Dispatcher {
 
 impl Dispatcher {
     /// The synchronous body — the seam is async for the APIs that will
-    /// await (`M2.23`'s produce path).
-    pub(crate) fn dispatch(&self, request: &[u8]) -> Option<Vec<u8>> {
-        let prelude = read_request_prelude(request).ok()?;
+    /// await (a durable produce path, `M3`).
+    pub(crate) fn dispatch(&self, request: &[u8]) -> HandlerResponse {
+        let Ok(prelude) = read_request_prelude(request) else {
+            return HandlerResponse::Close;
+        };
         let Ok(api_key) = ApiKey::try_from(prelude.api_key) else {
             // An unknown key has no parsable response; close (module doc).
-            return None;
+            return HandlerResponse::Close;
         };
         if api_key != ApiKey::ApiVersions && !supports(api_key, prelude.api_version) {
             // Outside ApiVersions' fallback, an unadvertised version has no
             // response the client would parse.
-            return None;
+            return HandlerResponse::Close;
+        }
+        if api_key == ApiKey::ApiVersions {
+            return HandlerResponse::Reply(api_versions_response(prelude));
         }
         // The message body starts after the full request header, whose
         // shape is per-API and generated -- never computed here.
-        let body = || {
-            oqueue_codec::frame::decode_request_header(request)
-                .ok()
-                .map(|(_, consumed)| &request[consumed..])
+        let Some(body) = oqueue_codec::frame::decode_request_header(request)
+            .ok()
+            .map(|(_, consumed)| &request[consumed..])
+        else {
+            return HandlerResponse::Close;
         };
         match api_key {
-            ApiKey::ApiVersions => Some(api_versions_response(prelude)),
-            ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body()?),
-            // `M2.23`/`M2.24` land here. An advertised API without its
+            ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body),
+            ApiKey::Produce => crate::produce::handle(&self.cluster, prelude, body),
+            // `M2.24` lands fetch here. An advertised API without its
             // handler wired yet is exactly as unanswerable as an
             // unadvertised one.
-            _ => None,
+            _ => HandlerResponse::Close,
         }
     }
 }
@@ -130,11 +137,20 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::Dispatcher;
+    use crate::connection::HandlerResponse;
     use crate::stub::StubCluster;
     use std::sync::Arc;
 
     fn dispatcher() -> Dispatcher {
         Dispatcher::new(Arc::new(StubCluster::new("localhost", 9092)))
+    }
+
+    /// The reply's bytes, or a panic naming the other verdict.
+    fn replied(dispatcher: &Dispatcher, request: &[u8]) -> Vec<u8> {
+        match dispatcher.dispatch(request) {
+            HandlerResponse::Reply(out) => out,
+            other => panic!("expected a reply, got {other:?}"),
+        }
     }
     use kafka_protocol::messages::ApiVersionsResponse;
     use kafka_protocol::protocol::Decodable;
@@ -167,9 +183,7 @@ mod tests {
 
     #[test]
     fn a_supported_version_is_answered_at_that_version() {
-        let out = dispatcher()
-            .dispatch(&api_versions_request(3, 77))
-            .expect("answered");
+        let out = replied(&dispatcher(), &api_versions_request(3, 77));
         let (correlation, response) = decode_response(&out, 3);
         assert_eq!(correlation, 77);
         assert_eq!(response.error_code, 0);
@@ -183,9 +197,7 @@ mod tests {
 
     #[test]
     fn an_unsupported_version_gets_the_v0_bodied_fallback() {
-        let out = dispatcher()
-            .dispatch(&api_versions_request(99, 5))
-            .expect("the fallback answers");
+        let out = replied(&dispatcher(), &api_versions_request(99, 5));
         let (correlation, response) = decode_response(&out, 0);
         assert_eq!(correlation, 5);
         assert_eq!(
@@ -204,19 +216,19 @@ mod tests {
         put_i16(&mut body, 0x7F00);
         put_i16(&mut body, 0);
         put_i32(&mut body, 1);
-        assert_eq!(dispatcher().dispatch(&body), None);
+        assert_eq!(dispatcher().dispatch(&body), HandlerResponse::Close);
     }
 
     #[test]
     fn an_advertised_api_without_a_handler_yet_closes_too() {
         let mut body = Vec::new();
-        put_i16(&mut body, 0); // Produce
-        put_i16(&mut body, 9);
+        put_i16(&mut body, 1); // Fetch
+        put_i16(&mut body, 4);
         put_i32(&mut body, 1);
         assert_eq!(
             dispatcher().dispatch(&body),
-            None,
-            "M2.23 wires produce; until then, close"
+            HandlerResponse::Close,
+            "M2.24 wires fetch; until then, close"
         );
     }
 
