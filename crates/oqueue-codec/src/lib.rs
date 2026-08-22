@@ -23,6 +23,7 @@
 pub mod attributes;
 pub mod batch;
 pub mod compress;
+pub mod flex;
 pub mod frame;
 pub mod records;
 pub mod varint;

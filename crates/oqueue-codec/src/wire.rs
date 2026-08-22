@@ -1,8 +1,5 @@
-//! Byte-level primitives for the frame codec and the `RecordBatch` v2 path.
-//!
-//! Those are the two layers this crate hand-rolls (`ADR-0017`) —
-//! message-*body* primitives, flexible encodings included, are
-//! `kafka-protocol`'s job, and nothing here duplicates them.
+//! Byte-level primitives for the frame codec, the `RecordBatch` v2 path, and
+//! the message bodies this crate now owns (`ADR-0019`).
 //!
 //! Kafka's wire format is big-endian throughout. Decoding is zero-copy — a
 //! [`Cursor`] hands out slices of the caller's buffer — and every
@@ -10,11 +7,13 @@
 //! caller-stated bound **before** any allocation or slice (`security.md`
 //! rules 1-2: bound, validate, then touch).
 //!
-//! ⚠️ **No string primitives, deliberately.** The frame carries sizes and a
-//! correlation id; a `RecordBatch` carries fixed-width fields and opaque
-//! records. Every string on this wire lives in a message body, which is the
-//! dependency's layer — a string reader here would be unearned code waiting
-//! to drift from the one that actually runs.
+//! ⚠️ **Fixed-width and length-prefixed primitives live here; the
+//! flexible-versions encodings (compact strings, bytes, arrays, tagged
+//! fields) live in [`crate::flex`].** `ADR-0017` had left the message body to
+//! `kafka-protocol` and this module carried no string reader; `ADR-0019`
+//! reversed that, and `flex` is where the reversal's bounded string/array
+//! primitives went — this module stays the fixed-width and `i32`-length base
+//! they build on.
 
 /// Why a decode stopped. Carries what a debugger needs: how much was asked
 /// for, how much existed, where.
@@ -57,6 +56,18 @@ pub enum DecodeError {
         /// Byte offset the varint started at.
         at: usize,
     },
+    /// A string field's bytes are not valid UTF-8. Kafka strings are UTF-8;
+    /// a malformed one is as unusable as a malformed length.
+    InvalidUtf8 {
+        /// Byte offset the string's bytes started at.
+        at: usize,
+    },
+    /// A field is null where the caller said null is not legal — the
+    /// compact encoding's `0` length, distinct from a negative i32 length.
+    UnexpectedNull {
+        /// Byte offset of the length field.
+        at: usize,
+    },
 }
 
 impl core::fmt::Display for DecodeError {
@@ -85,6 +96,12 @@ impl core::fmt::Display for DecodeError {
                     f,
                     "varint at offset {at} continues past its maximum {max_bytes} byte(s)"
                 )
+            }
+            Self::InvalidUtf8 { at } => {
+                write!(f, "string at offset {at} is not valid UTF-8")
+            }
+            Self::UnexpectedNull { at } => {
+                write!(f, "null at offset {at} where null is not legal")
             }
         }
     }

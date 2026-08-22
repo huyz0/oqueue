@@ -26,6 +26,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "flex"
+path = "fuzz_targets/flex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "varint"
 path = "fuzz_targets/varint.rs"
 test = false
