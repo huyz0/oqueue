@@ -36,14 +36,17 @@ An unmodified Kafka client connects, negotiates versions, produces, and
 fetches against a stub partition; "real" is decided by librdkafka. Plan:
 [milestones/M2.md](milestones/M2.md). Serves FR-1, FR-2, FR-3.
 
-⚠️ **M2 carries 28 rows, over `sdd.md`'s cap of 20; the argument the standard
-requires:** seventeen rows (`M2.2`, `M2.12`-`M2.27`) are the milestone itself —
-one codec decision and the protocol layer it decides, `M2.27` a security fix
-the `M2.26` fuzz harness surfaced during the milestone (found debt, not new
-scope — `M1`'s precedent for a row opened mid-milestone); nine (`M2.3`-`M2.11`)
-absorb the eleven rows M1 closed `deferred`, the third-bucket reasoning
-M0→M1 already established (carried debt, not new scope); two (`M2.0`,
-`M2.1`) are the opening and the loop's own repair.
+⚠️ **M2 carries 35 rows, over `sdd.md`'s cap of 20; the argument the standard
+requires:** sixteen rows (`M2.2`, `M2.12`-`M2.26`) are the milestone's first
+pass at the protocol layer; **eight** (`M2.27`-`M2.34`) are its second — the
+protocol-ownership rewrite (`ADR-0019`) the milestone review forced when
+`M2.26`'s fuzz harness found a blocking allocation DoS the chosen dependency
+could not be made not to have (found debt turned into a decision mid-milestone,
+`M1`'s precedent at larger scale); nine (`M2.3`-`M2.11`) absorb the eleven rows
+M1 closed `deferred`, the third-bucket reasoning M0→M1 established (carried
+debt, not new scope); two (`M2.0`, `M2.1`) are the opening and the loop's own
+repair. ⚠️ The rewrite is the milestone's new center of gravity, not a patch:
+`M2.md` records why owning the codec beats bounding the dependency.
 
 ⚠️ **Rows here are deliberately terse**: a task, what it serves, an
 acceptance criterion, a state. History lives in the commit that closes a
@@ -79,7 +82,14 @@ row — `git log --grep <ID>` — not in edits to it; `done` rows are frozen.
 | M2.24 | `Fetch` v4-17, echoing session fields, parsing `IsolationLevel` | Serves FR-1. librdkafka's fetch returns the records `M2.23` produced — the real-librdkafka half is `M2.25`'s harness, same precedent | done |
 | M2.25 | Golden-byte corpus, librdkafka harness, protocol-support matrix, `scripts/gates/m2-complete.sh` | Serves FR-1, FR-2. Idempotence decided: documented `enable.idempotence=false` (`InitProducerId` is M11's), in `docs/protocol-support.md`. The gate asserts the completion condition: librdkafka 2.15 and kafka-clients 3.9.1 round trips, byte-exact corpus re-encode, CRC differential, FR-2 matrix test | done |
 | M2.26 | `scripts/fuzz.sh` and a fuzz target on every decoder | Serves `security.md` rule 5 and `testing.md` rule 24, deferred to M2 by M0's checkpoint review. Five targets — frame, varint, batch, records, compress — one per codec decoder module, seeded from the librdkafka capture; `fuzz.sh` fails on a crash, a build failure, or an unaccounted codec module; `fuzz.yml` schedules it nightly; the deferral row is discharged. The end-to-end request-path target is `M2.27`'s (it found a real DoS) | done |
-| M2.27 | Bound untrusted request-decode allocation, and fuzz the request path | Serves `security.md` rules 1-2. `M2.26`'s in-progress `request` fuzz target — the dispatcher's full path through the generated per-API decoders — found a 64-byte Fetch v16 frame demanding a 30 GB allocation: `kafka-protocol`'s decoder does `Vec::with_capacity(n)` (types.rs:988) from an attacker-controlled compact-array count with no bound against remaining bytes. A single packet OOMs the broker (rule 1's exact case). Bound it (likely an ADR — the generated decoder allocates eagerly and cannot be intercepted), add the `request` target seeded with the reproducer as a regression, and wire the `tokio` `macros` feature the standalone fuzz build needs into oqueue-broker's lib deps | todo |
+| M2.27 | Eliminate the unbounded request-decode allocation DoS | Serves `security.md` rules 1-2. `M2.26`'s `request` fuzz target found a 64-byte Fetch v16 frame demanding ~30 GB: `kafka-protocol`'s decoder does `Vec::with_capacity(n)` (types.rs:988/1096) from an attacker-controlled array count, unbounded, uninterceptable. M2's milestone review ranked it **blocking**. Resolved not by bounding the dependency but by owning the codec (`ADR-0019`): the umbrella row the rewrite `M2.28`-`M2.34` closes — done when the `Fetch` decoder is ours and the `request` fuzz target is green | todo |
+| M2.28 | ADR-0019 + re-plan: own the protocol message codec | The decision to hand-roll request decode / response encode for perf and security, superseding `ADR-0017`, and the decomposition below. Records M2's milestone-review verdict (the blocking DoS that triggered it). `kafka-protocol` scheduled to become a `dev-dependency` oracle | todo |
+| M2.29 | Flexible-versions wire primitives | Serves FR-3. In `oqueue-codec`: compact (unsigned-varint length) string, nullable string, bytes, and array; the tagged-fields section (unknown tags skipped, not dropped on re-encode); every length bounded against remaining bytes before any allocation (rules 1-2). Property + boundary + fuzz; differential against `kafka-protocol`'s encoder for the same values | todo |
+| M2.30 | Own the ApiKey set and the header codec | Serves FR-1, FR-2. Replace `kafka-protocol`'s `ApiKey`/`RequestHeader`/`ResponseHeader` in `frame.rs` and `versions.rs` with ours: request-header v0-2 (v2 flexible, client-id stays legacy), response-header v0-1, the `ApiVersions` v0-header special case kept. Golden-corpus + differential tested; no runtime `kafka_protocol` left in `oqueue-codec` outside message bodies | todo |
+| M2.31 | Own `ApiVersions` v0-3 | Serves FR-2. Hand-rolled request decode + response encode incl. the v0-bodied `UNSUPPORTED_VERSION` fallback; the dispatcher stops building it from the dependency. Differential + the existing round-trip and fallback tests, now against our codec | todo |
+| M2.32 | Own `Metadata` v0-13 | Serves FR-1. Hand-rolled decode/encode: null-vs-empty topic lists per version, `allow_auto_topic_creation` from v4, topic ids from v10, the flexible transition at v9. The existing behaviour tests re-pointed at our codec; differential + corpus | todo |
+| M2.33 | Own `Produce` v3-13 | Serves FR-1. Hand-rolled decode/encode: acks, the one-batch records blob passed through opaque, topic-by-name below v13 and by-id from v13, per-partition responses. Validate-before-allocate on every count. Ingest rule and offset rewrite unchanged (already ours); differential + corpus + the M2.23 behaviour tests | todo |
+| M2.34 | Own `Fetch` v4-17, closing the DoS | Serves FR-1, `security.md` rule 1. Hand-rolled decode/encode: the DoS reproducer's path, now validate-before-allocate. Add the `request` fuzz target seeded with the M2.26 reproducer and the `tokio` `macros` lib feature the standalone build needs; the target is green, `M2.27` is closed, and no runtime crate imports `kafka-protocol` — it is now a `dev-dependency` oracle only | todo |
 
 ## M1: Object store seam and conformance suite
 

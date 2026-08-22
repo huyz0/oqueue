@@ -1,0 +1,45 @@
+{
+  "commits": [
+    "da708a97645343c209f9e03b9b0ffaab8f5032af",
+    "bfb248d74aa25ebb8a7ddcc14ce7d024c23bbba1",
+    "ab8bfab0defa20a11718ba205c5ab0bb1ba26c8a",
+    "04e5ee7d3900049af7514f99c6e9de532b6cf843",
+    "65c9aa80f0ecda1c6ae10fae07f4cb801516307d",
+    "e0c2ba545a9ad89e4ee7448d569b647e024e3b52",
+    "0ad12ec99bd6c724873df85f9d4b34ac012aa517",
+    "82deaa12be1ae3680234f41acb08206da5f9b526",
+    "909d631155d2e2a9c1c1c471d407a5410106caa5",
+    "b11be8fec59accaee0e13ac07a70afa27511cb69",
+    "4e33dbaf4c3aa1a85d2d3de7ae6c669a22584c68",
+    "7a1a4ed3e17b77b67c786ac4c3f25535e00e4500",
+    "c9018824bd55003790f91bf2097a7b843651b838",
+    "d7c702a4daa4dc23a67b054d9b868fc1bef5b121",
+    "3d03735fdc884403ba92d83917e6c7bdd0864ec2",
+    "919dd7816829a0b728dbba933f1d7caa9a8d614e",
+    "4b04266580b1de2d9eabfdb9138159bb6e962a1c",
+    "6a33cd523a2bbcb00de14502b283c72cad180f97",
+    "9bb6a282dd59529746c8d0548cdcdd8efd29a6ef",
+    "8cda37c98bae06d447db076def55c2007d19ea35",
+    "f5dd0dbd6f2882a9ce2918fc57b68e88d4d35a1c",
+    "82df7503d622c3a3bd365d91180617aee5d8353c",
+    "1024395b4b763f0cf7ffb4db76e74263e690c7db",
+    "3da0fa87996df4deee97dc791de6725c34b5c669",
+    "e68f6a52ae2284599d3efc83d545e68d89e48024",
+    "02b03e7952b20cfed49591166832df63e983ae8f",
+    "efde37087c48c645aebfd7dff1fa3b4068a9411e"
+  ],
+  "findings": [
+    {
+      "evidence": "M2.13 (crates/oqueue-codec/src/wire.rs) established the milestone's invariant -- 'every client-supplied length bounded before allocation ... the layer every untrusted byte enters through' -- but ADR-0017 handed message bodies to kafka-protocol, whose generated Array decoder (types.rs:988/:1096) allocates from an attacker-controlled count with no bound against remaining bytes. crates/oqueue-broker/src/dispatch.rs (dispatch) then calls ProduceRequest/FetchRequest/MetadataRequest::decode directly on untrusted bytes (produce.rs:39, fetch.rs:32, metadata.rs:37) with no cap. bin/oqueue/src/main.rs bounds only max_frame (16 MiB), which does not defend because the 30 GB allocation is driven by a count field inside a tiny frame. The completion gate scripts/gates/m2-complete.sh asserts M2.md's condition (real-client round trips, corpus re-encode, FR-2 matrix, CRC differential) and passes green without asserting any allocation bound, so the gate goes green while a single packet crashes any broker. This is the milestone's own stated design contradicting its actual entry path, found DURING M2 by M2.26's request fuzz target and already recorded as backlog M2.27 (todo) and the roadmap deferral table. Compare M2.13's wire.rs bound-before-slice discipline against dispatch.rs's unbounded handoff. Resolution is task M2.27 (bound the request-decode allocation, likely via ADR since the generated decoder allocates eagerly, plus a regression fuzz target); alternatively the deferral must be argued explicitly as a decision rather than M2 flipping to complete.",
+      "id": "990117f6dc40",
+      "kind": "standard-not-followed",
+      "severity": "blocking",
+      "summary": "The request-decode path violates security.md rules 1-2 (bound every client-supplied length before allocation): an unauthenticated 64-byte Fetch v16 frame drives kafka-protocol's generated compact-array decoder to Vec::with_capacity(~30 GB), OOM-killing the whole broker; M2 cannot be coherently declared complete while this sits in todo.",
+      "task_id": "M2.27"
+    }
+  ],
+  "milestone": "M2",
+  "recorded_at": "2026-08-22T21:12:23Z",
+  "reviewer": "Claude Opus 4.8 (milestone-reviewer)",
+  "verdict": "changes-requested"
+}

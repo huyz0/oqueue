@@ -1,10 +1,14 @@
 # 0017. kafka-protocol for the message layer; oqueue-codec owns the frame and the batch hot path
 
-Status: accepted; 2026-08-24 (`M2.21`): `oqueue-broker` joined
-`oqueue-codec` as the second — and last — crate importing
-`kafka-protocol`: the dispatcher builds responses from the generated
-types, and a re-export shim through the codec would be a phantom layer.
-The Decision's "no other crate" sentence reads with that amendment
+Status: **superseded by [ADR-0019](0019-own-the-protocol-codec.md)**,
+2026-08-24 (`M2.28`): `M2.26`'s fuzz harness found an unbounded-allocation
+DoS the generated decoder cannot be made not to have, and the milestone
+review ranked it blocking; `oqueue` now owns the message codec and
+`kafka-protocol` becomes a test-only differential oracle. The Decision
+below (the dependency as the single runtime protocol surface) no longer
+holds. ⚠️ Earlier amendment, 2026-08-24 (`M2.21`): `oqueue-broker` had
+joined `oqueue-codec` as the second crate importing `kafka-protocol`;
+`ADR-0019` removes both from the runtime surface
 Date: 2026-08-23
 Requirements: FR-1, FR-2, FR-3
 

@@ -335,6 +335,18 @@ versions, RecordBatch v2, and the minimum API set for produce, fetch, metadata,
 and version negotiation. ⚠️ CRC-32C is **Castagnoli**, and the obvious crate
 implements the wrong polynomial with no compile error.
 
+⚠️ **Mid-milestone, M2 reversed its message-layer decision.** The first pass
+(`M2.12`-`M2.26`) built the protocol on `kafka-protocol` per `ADR-0017`, with
+real-client round trips, a golden byte corpus, an FR-2 matrix, and a fuzz
+harness. The fuzz harness then found an unbounded-allocation DoS the generated
+decoder cannot be made not to have (a 64-byte frame demands ~30 GB), and M2's
+milestone review ranked it blocking. `ADR-0019` supersedes `ADR-0017`: `oqueue`
+now **owns its protocol codec**, hand-rolled for perf and security with
+validate-before-allocate throughout, and `kafka-protocol` becomes a test-only
+differential oracle beside the corpus. The rewrite (`M2.27`-`M2.34`) is the
+milestone's second and larger half; the oracle the first half built is what
+makes hand-rolling safe now when `ADR-0017` judged it too risky without one.
+
 ## M3 — Coordinator: offset sequencing and the index
 
 Offsets that are monotonic and gap-free under concurrent producers, the
