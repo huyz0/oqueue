@@ -20,7 +20,9 @@
 mod put;
 
 use crate::classify::classify;
-use crate::get::{get_options_for, requested_range, truncated_range_error};
+use crate::get::{
+    disambiguate_failed_ranged_get, get_options_for, requested_range, truncated_range_error,
+};
 use crate::multipart::{PutStrategy, put_strategy_for};
 use put::{S3_MULTIPART_LIMITS, put_options_for};
 // ⚠️ Both traits, unaliased-but-unnamed: `object_store::ObjectStore` (the
@@ -187,11 +189,25 @@ impl ObjectStore for S3Store {
             let path = object_store_path(key)?;
             let requested = requested_range(range, key)?;
             let options = get_options_for(requested.as_ref());
-            let result = self
-                .inner
-                .get_opts(&path, options)
-                .await
-                .map_err(|source| classify(&source, key))?;
+            let result = match self.inner.get_opts(&path, options).await {
+                Ok(result) => result,
+                Err(source) => {
+                    // `M2.4`: a ranged request that failed as transient gets
+                    // one `HEAD` to tell "can never satisfy" apart from a
+                    // network blip — see `get.rs`'s
+                    // `disambiguate_failed_ranged_get` for the measured
+                    // reasoning, including why the 416 status itself is
+                    // deliberately not inspected.
+                    let classified = classify(&source, key);
+                    if let (Some(requested), Error::Transient) = (&requested, &classified)
+                        && let Some(err) =
+                            disambiguate_failed_ranged_get(&self.inner, key, &path, requested).await
+                    {
+                        return Err(err);
+                    }
+                    return Err(classified);
+                }
+            };
             let object_size = result.meta.size;
             // ⚠️ **Fidelity to `FakeObjectStore`'s strict contract, at no
             // extra round trip.** `object_store`'s own `GetRange::Bounded`
@@ -208,16 +224,9 @@ impl ObjectStore for S3Store {
             {
                 return Err(err);
             }
-            // ⚠️ **Not fully symmetric.** A range whose *start* is at or past
-            // the object's actual size is rejected by `object_store` itself
-            // before this function ever sees a `GetResult` to inspect — it
-            // surfaces as the `Generic` arm of `classify`, i.e.
-            // `Error::Transient`, not `Error::ByteRangeOutOfBounds`. Closing
-            // that gap needs either a `HEAD` before every ranged `get` (an
-            // extra round trip on every call, for a genuinely rare shape) or
-            // reaching into `object_store`'s own `pub(crate)` error internals
-            // (which `error-handling.md` rule 8 already rules out) — neither
-            // is `M1.15`'s to spend on "core ops."
+            // Symmetric since `M2.4`: the start-past-size half is handled
+            // on the error path above, so both halves of the range contract
+            // now hold against a live backend, not only against the fake.
             let bytes = result
                 .bytes()
                 .await

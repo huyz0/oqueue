@@ -82,53 +82,61 @@ pub struct ConformanceReport {
     pub skipped: Vec<&'static str>,
 }
 
+/// One entry per case, densely -- the registry grows by one entry per case
+/// instead of a five-line struct literal, which is what keeps `cases` inside
+/// `too_many_lines` as the suite grows.
+fn c(name: &'static str, requires: fn(Capabilities) -> bool, run: fn(&dyn ObjectStore)) -> Case {
+    Case {
+        name,
+        requires,
+        run,
+    }
+}
+
 fn cases() -> Vec<Case> {
     vec![
-        Case {
-            name: "put_get_roundtrip",
-            requires: |_| true,
-            run: put_get_roundtrip,
-        },
-        Case {
-            name: "get_of_never_put_key_is_not_found",
-            requires: |_| true,
-            run: get_of_never_put_key_is_not_found,
-        },
-        Case {
-            name: "empty_object_is_distinct_from_missing",
-            requires: |_| true,
-            run: empty_object_is_distinct_from_missing,
-        },
-        Case {
-            name: "delete_is_idempotent",
-            requires: |_| true,
-            run: delete_is_idempotent,
-        },
-        Case {
-            name: "conditional_write_if_absent",
-            requires: |c| c.conditional_writes,
-            run: conditional_write_if_absent,
-        },
-        Case {
-            name: "conditional_write_if_matches_succeeds_with_the_current_token",
-            requires: |c| c.conditional_writes,
-            run: conditional_write_if_matches_succeeds_with_the_current_token,
-        },
-        Case {
-            name: "conditional_write_if_matches_rejects_stale_token",
-            requires: |c| c.conditional_writes,
-            run: conditional_write_if_matches_rejects_stale_token,
-        },
-        Case {
-            name: "conditional_write_above_the_chunk_preference_is_one_request",
-            requires: |c| c.conditional_writes,
-            run: conditional_write_above_the_chunk_preference_is_one_request,
-        },
-        Case {
-            name: "ranged_get_reads_exactly_the_requested_slice",
-            requires: |c| c.ranged_reads,
-            run: ranged_get_reads_exactly_the_requested_slice,
-        },
+        c("put_get_roundtrip", |_| true, put_get_roundtrip),
+        c(
+            "get_of_never_put_key_is_not_found",
+            |_| true,
+            get_of_never_put_key_is_not_found,
+        ),
+        c(
+            "empty_object_is_distinct_from_missing",
+            |_| true,
+            empty_object_is_distinct_from_missing,
+        ),
+        c("delete_is_idempotent", |_| true, delete_is_idempotent),
+        c(
+            "conditional_write_if_absent",
+            |c| c.conditional_writes,
+            conditional_write_if_absent,
+        ),
+        c(
+            "conditional_write_if_matches_succeeds_with_the_current_token",
+            |c| c.conditional_writes,
+            conditional_write_if_matches_succeeds_with_the_current_token,
+        ),
+        c(
+            "conditional_write_if_matches_rejects_stale_token",
+            |c| c.conditional_writes,
+            conditional_write_if_matches_rejects_stale_token,
+        ),
+        c(
+            "conditional_write_above_the_chunk_preference_is_one_request",
+            |c| c.conditional_writes,
+            conditional_write_above_the_chunk_preference_is_one_request,
+        ),
+        c(
+            "ranged_get_starting_past_the_object_size_is_out_of_bounds",
+            |c| c.ranged_reads,
+            ranged_get_starting_past_the_object_size_is_out_of_bounds,
+        ),
+        c(
+            "ranged_get_reads_exactly_the_requested_slice",
+            |c| c.ranged_reads,
+            ranged_get_reads_exactly_the_requested_slice,
+        ),
     ]
 }
 
@@ -210,6 +218,28 @@ fn conditional_write_above_the_chunk_preference_is_one_request(store: &dyn Objec
         block_on(store.get(&k, ByteRange::Full)),
         Ok(payload),
         "the large conditional write landed whole"
+    );
+}
+
+/// `M2.4`, closing `M1.54`: a range starting at or past the object's size
+/// is [`Error::ByteRangeOutOfBounds`] on every backend -- the fake decides
+/// it locally; the real backends map the vendor's definitive 416, fetching
+/// the size with a `HEAD` on that error path alone. Before the fix this
+/// exact call was `Transient` on both real backends -- "retry with backoff"
+/// for a range that can never satisfy -- and no case could see it.
+fn ranged_get_starting_past_the_object_size_is_out_of_bounds(store: &dyn ObjectStore) {
+    let k = key("conformance/past_size.seg");
+    block_on(store.put(&k, vec![1, 2, 3], None)).expect("put succeeds");
+    let range = ByteRange::bounded(10, 5).expect("a valid range");
+    assert_eq!(
+        block_on(store.get(&k, range)),
+        Err(Error::ByteRangeOutOfBounds {
+            key: k.clone(),
+            offset: 10,
+            length: 5,
+            object_size: 3,
+        }),
+        "start-past-size is deterministic and never retryable, on every backend"
     );
 }
 

@@ -25,7 +25,9 @@
 mod put;
 
 use crate::classify::classify;
-use crate::get::{get_options_for, requested_range, truncated_range_error};
+use crate::get::{
+    disambiguate_failed_ranged_get, get_options_for, requested_range, truncated_range_error,
+};
 use crate::multipart::{PutStrategy, put_strategy_for};
 use put::{GCS_MULTIPART_LIMITS, put_options_for};
 // Same reasoning `s3.rs`'s matching comment gives for its own trait imports.
@@ -188,11 +190,23 @@ impl ObjectStore for GcsStore {
             let path = object_store_path(key)?;
             let requested = requested_range(range, key)?;
             let options = get_options_for(requested.as_ref());
-            let result = self
-                .inner
-                .get_opts(&path, options)
-                .await
-                .map_err(|source| classify(&source, key))?;
+            let result = match self.inner.get_opts(&path, options).await {
+                Ok(result) => result,
+                Err(source) => {
+                    // `M2.4` — same reasoning as `s3.rs`'s matching branch
+                    // and `get.rs`'s `disambiguate_failed_ranged_get`: one
+                    // `HEAD` after a transient ranged failure tells "can
+                    // never satisfy" apart from a network blip.
+                    let classified = classify(&source, key);
+                    if let (Some(requested), Error::Transient) = (&requested, &classified)
+                        && let Some(err) =
+                            disambiguate_failed_ranged_get(&self.inner, key, &path, requested).await
+                    {
+                        return Err(err);
+                    }
+                    return Err(classified);
+                }
+            };
             let object_size = result.meta.size;
             // ⚠️ Same fidelity gap and the same fix — see `s3.rs`'s
             // matching comment on `get`, which this reasoning is identical

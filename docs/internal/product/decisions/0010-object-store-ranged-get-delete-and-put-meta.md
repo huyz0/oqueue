@@ -1,6 +1,9 @@
 # 0010. `ObjectStore` gains ranged `get`, batch `delete`, and a returned `ObjectMeta`
 
-Status: accepted
+Status: accepted; 2026-08-23: `M2.4` made the range contract hold against
+the real backends too — a transient-classified ranged failure is
+disambiguated by one `HEAD` on the error path, closing `M1.54`'s
+fake-vs-real divergence; the contract itself is unchanged
 Date: 2026-08-16
 Requirements: FR-30, FR-31
 
