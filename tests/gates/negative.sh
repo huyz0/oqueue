@@ -353,7 +353,8 @@ setup_drift() {
 # `M0.27`. ⚠️ **The narrowing that fixed `_msg` dropped `_msec`**, which is a
 # unit spelling too, so a threshold an environment moves passed non-negotiable
 # 2. `m0-complete.sh` section 5 does not backstop it — `NFR_CONSTANTS` names
-# `BUDGET_MS` and `COMPILING_GATE_MS` and no `*_MSEC`. The row first argued this
+# no `*_MSEC` (⚠️ seven entries since `M1.35`; the load-bearing part is only
+# that no `*_MSEC` is among them). The row first argued this
 # half could not have a case, on the grounds that removing a false positive is
 # inexpressible in an inverted suite; **re-widening is the other half of the
 # same fix and makes the gate start catching something**, which is exactly what
@@ -375,6 +376,32 @@ setup_drift_msec() {
   printf '%s\n' "$dir"
 }
 invoke_drift_msec() {
+  bash "$1/scripts/check-drift.sh"
+}
+
+# --- check-drift.sh: a _days threshold ------------------------------------
+#
+# ⚠️ `M1.35` widened THRESHOLD_RE with `_days?` and left it unpinned; review
+# measured that removing the alternative again passes the whole commit path and
+# CI green, because only `m0-complete.sh` notices and nothing invokes that on a
+# push. Exactly the regression `M0.27` hit when a narrowing edit dropped
+# `_msec`, which is why the case above exists.
+setup_drift_days() {
+  local dir; dir="$(new_scratch drift-days)"
+  copy_gate "$dir" check-drift.sh
+  mkdir -p "$dir/scripts"
+  # Split for the reason `setup_drift` records: a literal here would trip the
+  # real gate on this very file.
+  local dollar='$'
+  local keep_expr="${dollar}{OQUEUE_KEEP_DAYS:-30}"
+  {
+    echo '#!/usr/bin/env bash'
+    printf 'TIMINGS_KEEP_DAYS="%s"\n' "$keep_expr"
+  } > "$dir/scripts/retain.sh"
+  (cd "$dir" && git add -A && git commit -q -m "M1.35: a settable retention window in days")
+  printf '%s\n' "$dir"
+}
+invoke_drift_days() {
   bash "$1/scripts/check-drift.sh"
 }
 
@@ -2319,6 +2346,8 @@ run_case "check-commit-msg.sh (unstaged backlog row)" setup_commit_msg_unstaged_
 run_case "check-tests-kept.sh"          setup_tests_kept          invoke_tests_kept
 run_case "check-drift.sh"               setup_drift               invoke_drift
 run_case "check-drift.sh (a _msec threshold)" setup_drift_msec       invoke_drift_msec \
+  "threshold made settable"
+run_case "check-drift.sh (a _days threshold)" setup_drift_days       invoke_drift_days \
   "threshold made settable"
 run_case "check-layering.sh"            setup_layering            invoke_layering \
   "depends on oqueue-codec, not oqueue-core"

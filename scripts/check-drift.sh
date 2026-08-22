@@ -5,9 +5,23 @@
 #
 # Non-negotiable 2: "thresholds are constants no environment can move." This
 # is the half of that rule about *how* a threshold could move — the other
-# half, a value silently lowered, is `check-tests-kept.sh`'s sibling concern
-# for tests and has no equivalent gate for thresholds yet; see "What this
-# does not catch" below.
+# half, a value silently **weakened**, is `check-tests-kept.sh`'s sibling
+# concern for tests. ⚠️ Not "lowered": for **three** of the seven thresholds
+# `m0-complete.sh` pins — `FILE_LINE_LIMIT`, `BUDGET_MS`, `EXEMPT_RUNS_FLOOR`
+# — raising is the weakening move, and `TIMINGS_KEEP_DAYS` silences its
+# warning in *both* directions. ⚠️ `EXEMPT_RATE_THRESHOLD` is **not** in that
+# list: it is the rate's denominator, so raising it tightens. Read
+# `m0-complete.sh`'s per-entry table rather than generalising from a suffix —
+# two of its seven rows were wrong across two drafts. Non-negotiable 2's
+# canonical wording still says "lower", which `M1.49` records. ⚠️ ~~see "What this does not catch" below~~ — **no such section
+# exists in this file** (`M1.35`). The half-gate it pointed at now has a real
+# answer: `m0-complete.sh`'s `NFR_CONSTANTS` pins each threshold's *value*, so
+# moving one in either direction fails a gate. ⚠️ **Two limitations, and the second matters more.**
+# The map is hand-maintained (see `THRESHOLD_RE` below). And `m0-complete.sh` is
+# a *milestone-boundary* gate — invoked by neither `.pre-commit-config.yaml` nor
+# `gates.yml` — so moving a value lands green on the commit path and is caught
+# whenever someone next runs that gate. This script is on the commit path; the
+# one it points at is not.
 #
 # ## What "settable" means here
 #
@@ -63,7 +77,8 @@ cd "$REPO_ROOT"
 # unanchored matched `_msg`, which is a word everybody chooses.
 #
 # ⚠️ **And a false positive is *not* cheap to dismiss**, which this comment used
-# to claim. There is no suppression mechanism in this script — no baseline, no
+# to claim — ⚠️ and `M1.35` removed the last place that still quoted the retracted
+# phrase as though it were current wording, further down this same file. There is no suppression mechanism in this script — no baseline, no
 # per-line escape — so the only exits are renaming a legitimate variable or
 # widening the regex, and widening it is editing a non-negotiable-2 gate to make
 # a check pass. `_limit` is the live one: `rate_limit_header = env::var(...)` is
@@ -79,10 +94,25 @@ cd "$REPO_ROOT"
 # `M0.16`, the next commit, wrote `BUDGET_MS` and `COMPILING_GATE_MS`, and this
 # regex saw neither. `_ms` and `_seconds` are here because a duration is the
 # other shape a threshold takes; ⚠️ **the class is still open**, and
-# `m0-complete.sh` is what makes it not depend on someone choosing the right
+# ~~`m0-complete.sh` is what makes it not depend on someone choosing the right
 # word: it asserts that every constant a requirement names is matched by this
 # regex, so a new one that is invisible here fails a gate rather than passing
-# quietly. `M0.23`.
+# quietly.~~ `M0.23`.
+#
+# ⚠️ **False, measured by `M1.35`.** `m0-complete.sh` asserts that only for the
+# constants *listed in its own `NFR_CONSTANTS` literal*, and that list is
+# hand-maintained: delete all four of `M1.35`'s entries and the gate still
+# exits 0. So a threshold whose name matches neither this regex nor that map is
+# unenforced for non-negotiable 2 while every gate reports `ok`. ⚠️ Of the four
+# `M1.35` found, **`LIMIT` and `TIMINGS_KEEP_DAYS` were invisible to both** —
+# the latter matches this regex only since `M1.35` widened it below.
+# `EXEMPT_RATE_THRESHOLD` and `EXEMPT_RUNS_FLOOR` already matched, because
+# `M1.30` chose names that would. All four were absent from the map, so none
+# was pinned by value.
+# **Adding a threshold means making its name visible to this regex *and*
+# listing it in that map — the map does not substitute for the regex, since
+# `m0-complete.sh` asserts both — and nothing will tell you that you did
+# neither.**
 # ⚠️ `_ms` and `_seconds` are **suffix-anchored**; the rest stay substrings.
 # Unanchored, `_ms` matches `_msg` and `_msvc` — ⚠️ **not `_message`, which this
 # line claimed until `M1.24` checked it**: `_message` has no `_ms` in it at all
@@ -94,8 +124,9 @@ cd "$REPO_ROOT"
 # pattern as it stands, `err_msg` matches nothing and no such rejection is
 # reachable; the sentence records why the anchoring was added, not what the
 # gate does now. ⚠️ **And this script has
-# no suppression mechanism**, so the header's "cheap to dismiss on sight" is
-# not actually available: the only exits from a false positive are renaming a
+# no suppression mechanism**, so dismissing a false positive is not actually
+# available — ⚠️ this sentence quoted "cheap to dismiss on sight" as the
+# header's wording, which the header itself retracted (`M1.35`): the only exits from a false positive are renaming a
 # legitimate variable or widening this regex, and the second is editing a
 # non-negotiable-2 gate to make a check pass. A duration constant ends in its
 # unit; a message variable does not — ⚠️ **except that `msec` is also a unit
@@ -103,7 +134,13 @@ cd "$REPO_ROOT"
 # matched before and matched neither branch after, so narrowing to fix a false
 # positive opened a false negative on the same gate. Measured by review. The
 # optional `ec`/`ecs` and the digit-tolerant tail keep both.
-THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor|_ms(ecs?)?[0-9]*([^a-z0-9]|$)|_secs?(onds?)?[0-9]*([^a-z0-9]|$)'
+# ⚠️ `_days?` added by `M1.35`. `check-budget.sh`'s `TIMINGS_KEEP_DAYS=30` is a
+# retention window, which is the same kind of threshold as one in seconds or
+# milliseconds — both of which this regex already matched — so widening is the
+# right remedy here rather than the rename `FILE_LINE_LIMIT` took. The choice
+# is per-constant: rename when the name is simply wrong — `LIMIT` became
+# `FILE_LINE_LIMIT` — and widen when the naming convention has a genuine gap.
+THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor|_ms(ecs?)?[0-9]*([^a-z0-9]|$)|_secs?(onds?)?[0-9]*([^a-z0-9]|$)|_days?([^a-z0-9]|$)'
 
 # Rust environment reads, plus the shell idiom for reading one with a
 # fallback default. `\$\{[A-Za-z_][A-Za-z0-9_]*:[-=]` matches `${FOO:-...}`

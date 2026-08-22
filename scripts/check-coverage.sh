@@ -32,9 +32,13 @@
 # ## The threshold
 #
 # A literal, below, and ⚠️ **no environment variable moves it.** `check-drift.sh`
-# is what enforces that — and it matches on names containing `threshold`,
-# `_limit`, `_budget`, `_ceiling` or `_floor`, which is why the constant is
-# called `COVERAGE_FLOOR` and not something outside that set. ⚠️ Review measured
+# is what enforces that — and it matches names *containing* `threshold`,
+# `_limit`, `_budget`, `_ceiling` or `_floor`, and names *ending* in `_ms`,
+# `_msec`, `_sec`, `_seconds` or `_days`. ⚠️ The last five are **suffix-
+# anchored**, so `MAX_PENDING_MSGS` is invisible — measured. That is why the
+# constant is called `COVERAGE_FLOOR` and not something outside the set.
+# ⚠️ **Read the regex, not this list**: it named five of the eight when
+# `M1.35` widened it, and then described three of them wrongly. ⚠️ Review measured
 # the first version: named `MIN_CRATE_COVERAGE`, it could be made
 # environment-settable and `check-drift.sh` passed anyway. Non-negotiable 2 is
 # why any of this matters: raising it is fine, lowering it is the thing this

@@ -73,8 +73,14 @@ fi
 # about. ⚠️ A
 # literal here would be one more number nobody has measured — and one neither
 # gate would catch going stale: `check-drift.sh` only reports a threshold that
-# is *also* environment-settable, and `m0-complete.sh` pins the two constants
-# `requirements.md` names. When a
+# is *also* environment-settable, and ~~`m0-complete.sh` pins the two constants
+# `requirements.md` names~~ — ⚠️ **that leg was already false when written**:
+# `M0.23` had put `COMPILING_GATE_MS` in the map with a comment saying it is
+# "not a requirement's number and is here anyway". `M1.35` widened the map
+# further, to seven entries, five of them with no requirements row, so a gate-internal
+# constant *can* be pinned there and this argument's second leg no longer
+# holds. What remains true is that nothing pins a literal with no name at all,
+# which is what a timeout written inline here would be. When a
 # test appears whose own timeout is load-bearing, rule 18 is the reason to
 # revisit this; until then the default is the sized cap the rule asks for.
 args=(--colors=never --no-times)

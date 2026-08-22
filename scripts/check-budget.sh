@@ -118,8 +118,11 @@ COMPILING_GATE_MS=5000
 # matched neither of the originals, so making either environment-settable would
 # have violated non-negotiable 2 with the gate reporting `ok`. `M0.15` renamed
 # `MIN_CRATE_COVERAGE` to `COVERAGE_FLOOR` for exactly this and recorded that
-# the name is load-bearing. ⚠️ They are still absent from `m0-complete.sh`'s
-# `NFR_CONSTANTS`, which is `M1.35`'s row and now names four constants, not two.
+# the name is load-bearing. ⚠️ ~~They are still absent from `m0-complete.sh`'s
+# `NFR_CONSTANTS`~~ — **`M1.35` added them**, along with `TIMINGS_KEEP_DAYS`
+# above and `check-file-size.sh`'s limit, so both are now pinned by *value* as
+# well as against environment reads: changing either fails that gate — ⚠️ at
+# the milestone boundary, since nothing on the commit path invokes it.
 EXEMPT_RATE_THRESHOLD=4
 EXEMPT_RUNS_FLOOR=20
 

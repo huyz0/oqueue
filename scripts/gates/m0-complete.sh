@@ -101,11 +101,32 @@ M0_GATES=(
   check-mutants.sh
 )
 
-# NFR-55 and NFR-56's constants, and the values the requirements table states.
+# Every threshold **this map** pins, and the value each is pinned to. ⚠️ Not
+# every threshold in the repository: `clippy.toml` sets five of its own
+# (`too-many-lines-threshold`, `cognitive-complexity-threshold`,
+# `too-many-arguments-threshold`, `type-complexity-threshold`,
+# `enum-variant-size-threshold`), and **nothing pins those values**. ⚠️ `M1.35`
+# found them while sweeping and left them as a **recorded gap, not a
+# justified exclusion** — a draft of this comment said they are "lint
+# configuration rather than gate constants and changing one does not make a
+# failing check pass", and review measured that false: raising
+# `too-many-lines-threshold` from 50 to 100 turns a `cargo clippy` exit 101
+# into exit 0, clippy is on the commit path via the `check-crate` hook, and
+# `rust-style.md` rule 7 says raising one "is the exact move non-negotiable 2
+# forbids for any other gate". So they belong here and pinning them is
+# `M1.50`'s row.
 # ⚠️ Checked here as well as by `check-drift.sh` because they are different
 # questions: `check-drift.sh` asks whether *any* threshold reads the
-# environment, and this asks whether **these two** still hold the numbers two
-# requirements were agreed against. A literal nothing can move is only half of
+# environment, and this asks whether **each one** still holds the number it was
+# agreed against. ⚠️ **Not only the constants a requirement names** — `M0.23`
+# already put `COMPILING_GATE_MS` here for that reason, saying so twelve lines
+# below, and `M1.35` added four more. Five of the seven entries have no
+# requirements row. ⚠️ **Listing a constant here is an *additional* pin, never
+# a substitute for `THRESHOLD_RE` visibility** — section 5 asserts both, so an
+# entry whose name the regex cannot see fails this gate and is handed "widen
+# that regex, or rename the constant". A draft of this sentence said "unless it
+# is listed here", which would have sent an author adding `MAX_RETRIES=5`
+# straight into that failure. A literal nothing can move is only half of
 # it; the other half is that it is still the agreed number.
 declare -A NFR_CONSTANTS=(
   ["scripts/check-coverage.sh|COVERAGE_FLOOR"]="85"
@@ -116,6 +137,26 @@ declare -A NFR_CONSTANTS=(
   # switches another threshold off is the one most worth pinning, and until
   # `M0.23` it was asserted by nothing, anywhere.
   ["scripts/check-budget.sh|COMPILING_GATE_MS"]="5000"
+  # ⚠️ **`M1.35`: four thresholds that were live and invisible.** This map is a
+  # literal, and the visibility assertion below loops over exactly its entries
+  # — so a threshold matching neither this map nor `check-drift.sh`'s
+  # `THRESHOLD_RE` is unenforced for non-negotiable 2 while every gate reports
+  # `ok`. Measured before adding: `check-file-size.sh`'s line limit, made
+  # settable from the environment, passed the whole suite green. ⚠️ The idiom
+  # is described rather than written, because `check-drift.sh` fails any line
+  # holding both a threshold name and an environment read.
+  #
+  # ⚠️ Two of these four already match `THRESHOLD_RE`, because `M1.30` chose
+  # names that would — `check-budget.sh`'s own comment records dropping the
+  # `_DENOMINATOR`/`_MIN_RUNS` a first draft used, and `M1.30`'s commit body
+  # calls it a rename. No rename appears in any *diff* — `git log -S` puts both
+  # strings first in that commit — so it happened before the commit landed. So those
+  # two were covered against *environment* reads and not against silent
+  # deletion or drift, which is what this map adds. The other two had neither.
+  ["scripts/check-file-size.sh|FILE_LINE_LIMIT"]="500"
+  ["scripts/check-budget.sh|TIMINGS_KEEP_DAYS"]="30"
+  ["scripts/check-budget.sh|EXEMPT_RATE_THRESHOLD"]="4"
+  ["scripts/check-budget.sh|EXEMPT_RUNS_FLOOR"]="20"
 )
 
 # run_gate <script> [args...]: runs a gate, captures its output into the global
@@ -325,7 +366,7 @@ for gate in "${INSTRUMENTED[@]}"; do
   fi
 done
 
-# ── 5. NFR-55 and NFR-56's constants are literals, and still the agreed ones ─
+# ── 5. Every NFR_CONSTANTS entry is a literal, and still the agreed one ─────
 for key in "${!NFR_CONSTANTS[@]}"; do
   file="${key%%|*}"
   name="${key##*|}"
@@ -338,8 +379,8 @@ for key in "${!NFR_CONSTANTS[@]}"; do
     continue
   fi
   # ⚠️ A literal, so `${NAME:-85}` and `$NAME` both fail. `check-drift.sh`
-  # enforces this across every threshold; here it is asserted for the two the
-  # requirements table names, against the values it names.
+  # enforces this across every threshold whose *name* it can see; here it is
+  # asserted for each entry in NFR_CONSTANTS against the value recorded there.
   got="${line#*=}"
   got="${got%%#*}"                 # a trailing `# NFR-55` is not part of the value
   got="${got%"${got##*[![:space:]]}"}"
@@ -350,8 +391,52 @@ for key in "${!NFR_CONSTANTS[@]}"; do
     # numbers — the script, the requirements row, and here — which is the cost
     # of asserting them at all, and the reason the remedy names every place.
     fail "$file: $name is '$got'; M0.18's gate holds $want"
-    note "raising it is fine and is a requirements change — update the script,"
-    note "this gate's NFR_CONSTANTS, and requirements.md's NFR-55/NFR-56 row together"
+    # ⚠️ **Stated by effect, not by direction, because the direction differs
+    # per constant and two drafts of this comment got it wrong.** "Raising it
+    # is fine" was true when the map held COVERAGE_FLOOR alone — a floor.
+    # Measured, entry by entry:
+    #
+    #   COVERAGE_FLOOR         floor    — lowering weakens
+    #   EXEMPT_RATE_THRESHOLD  ⚠️ reciprocal, and a draft of this table had it
+    #                          backwards too: the test is
+    #                          `exempt * THRESHOLD >= runs`, so 4 means "a
+    #                          quarter" and **raising** it lowers the rate at
+    #                          which the warning trips — raising tightens,
+    #                          LOWERING weakens. Measured: 20 runs / 5 exempt
+    #                          warns at 4 and is silent at 2.
+    #   FILE_LINE_LIMIT        ceiling  — raising weakens
+    #   BUDGET_MS              ceiling  — raising weakens
+    #   EXEMPT_RUNS_FLOOR      ⚠️ named a floor, behaves as a gate on a warning:
+    #                          raising it suppresses the signal, so raising
+    #                          weakens — the opposite of COVERAGE_FLOOR despite
+    #                          the shared suffix
+    #   TIMINGS_KEEP_DAYS      ⚠️ **both** directions weaken, measured:
+    #                          shortening prunes the runs the exemption
+    #                          warning reads, and lengthening dilutes the rate
+    #                          with old clean runs. 20 recent runs / 5 exempt
+    #                          warns at 5 days, silent at 30 and at 60. The
+    #                          shortening half needs the other fixture — 24
+    #                          runs aged 3 days, 6 exempt: silent at 1-2 days,
+    #                          warns at 3+.
+    #   COMPILING_GATE_MS      ⚠️ **lowering** weakens: a gate counts as
+    #                          "compiling" when it exceeds this, and a run with
+    #                          any compiling gate is exempted from the budget,
+    #                          so a smaller value exempts more runs. A draft of
+    #                          this comment listed it with the ceilings and
+    #                          review measured the reverse: at 5000 an eroded
+    #                          12 204 ms suite FAILS; at 3000 the same fixture
+    #                          is skipped as compiling.
+    note "⚠️ non-negotiable 2: moving it in the direction that makes a failing"
+    note "check PASS is what this project does not do. Which direction that is"
+    note "depends on the constant — COVERAGE_FLOOR is a floor, FILE_LINE_LIMIT"
+    note "and BUDGET_MS are ceilings, and EXEMPT_RUNS_FLOOR inverts its own"
+    note "suffix (raising it suppresses a warning). The table above this fail"
+    note "branch names all seven. Tightening is fine; loosening to clear a"
+    note "failure is the thing the rule forbids. Update the script and this"
+    note "gate's NFR_CONSTANTS together. ⚠️ If a requirement names the constant"
+    note "— today COVERAGE_FLOOR (NFR-55) and BUDGET_MS (NFR-56) —"
+    note "requirements.md's row must move with it. The rest are gate-internal"
+    note "and have no requirements row (M1.35)"
   else
     ok "$name is the literal $want in $file"
   fi

@@ -31,7 +31,18 @@ if ! has_rust; then
   finish
 fi
 
-LIMIT=500
+# ⚠️ `FILE_LINE_LIMIT`, not `LIMIT` — the name is load-bearing (`M0.15`).
+# `check-drift.sh`'s THRESHOLD_RE matches `_limit`, so the bare name was
+# invisible to it: made settable from the environment, it passed the whole
+# suite green. `M1.35`, which also lists it in `m0-complete.sh`'s
+# `NFR_CONSTANTS`, so changing the value fails that gate — ⚠️ at the milestone
+# boundary, since nothing on the commit path invokes it.
+#
+# ⚠️ The env-read form is deliberately **not** written out here. `check-drift.sh`
+# fails any line carrying both a threshold name and an environment read, and
+# excludes only itself — so a worked example in this file is one comment reflow
+# away from a permanent failure with no suppression available.
+FILE_LINE_LIMIT=500
 
 # path (relative to repo root) -> why it is allowed past the limit. Empty
 # until a real crate needs an entry.
@@ -68,11 +79,11 @@ for f in "${files[@]}"; do
   lines="$(wc -l < "$f")"
   lines="${lines//[[:space:]]/}"
 
-  if (( lines > LIMIT )); then
+  if (( lines > FILE_LINE_LIMIT )); then
     if [[ -n "${ALLOWLIST[$f]:-}" ]]; then
-      note "$f: $lines lines, over $LIMIT, allowlisted -- ${ALLOWLIST[$f]}"
+      note "$f: $lines lines, over $FILE_LINE_LIMIT, allowlisted -- ${ALLOWLIST[$f]}"
     else
-      fail "$f: $lines lines, over the $LIMIT-line limit"
+      fail "$f: $lines lines, over the $FILE_LINE_LIMIT-line limit"
       note "rule 18: a design signal, not a formatting problem -- split by concept"
       note "rule 17: legitimate cases (generated tables, exhaustive match arms) go in this script's ALLOWLIST, with a reason"
       violations=$((violations + 1))
