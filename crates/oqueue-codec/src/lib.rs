@@ -21,6 +21,7 @@
 //! path); message bodies are `kafka-protocol`'s per ADR-0017.
 
 pub mod varint;
+pub mod versions;
 pub mod wire;
 
 pub use wire::{Cursor, DecodeError};

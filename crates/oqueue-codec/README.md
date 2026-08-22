@@ -11,6 +11,9 @@ Because protocol compatibility is the product. Every byte a client sends or expe
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `kafka-protocol` — the generated message layer: headers, bodies, and the
+  per-version flexible rules (`ADR-0017`; `Cargo.toml`'s comment records the
+  feature choices). This crate is the workspace's single protocol surface.
 
 ## Downstream
 

@@ -10,6 +10,12 @@ license.workspace = true
 # topology, enforced by `check-layering.sh`. A dependency on a sibling crate is a layering violation, not a shortcut.
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
+# ADR-0017: the message layer — headers, bodies, per-version flexible rules —
+# comes generated from Kafka's own JSON specs. `broker` feature only;
+# compression features stay off (lz4/zstd would pull a C toolchain, and the
+# compression seam is this crate's own). This crate is the workspace's single
+# protocol surface: nothing else imports kafka-protocol directly.
+kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker"] }
 
 [dev-dependencies]
 proptest.workspace = true
