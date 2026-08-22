@@ -1,6 +1,10 @@
 # 0017. kafka-protocol for the message layer; oqueue-codec owns the frame and the batch hot path
 
-Status: accepted
+Status: accepted; 2026-08-24 (`M2.21`): `oqueue-broker` joined
+`oqueue-codec` as the second — and last — crate importing
+`kafka-protocol`: the dispatcher builds responses from the generated
+types, and a re-export shim through the codec would be a phantom layer.
+The Decision's "no other crate" sentence reads with that amendment
 Date: 2026-08-23
 Requirements: FR-1, FR-2, FR-3
 

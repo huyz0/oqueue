@@ -44,20 +44,23 @@ pub struct ConnectionLimits {
     pub idle_timeout: std::time::Duration,
 }
 
-/// What a connection does with one decoded frame: the dispatcher `M2.21`
-/// builds. Returns the complete response body (header included); framing is
-/// this module's.
+/// What a connection does with one decoded frame.
+///
+/// The dispatcher `M2.21` builds. `Some` is the complete response body
+/// (header included; framing is this module's); `None` closes the
+/// connection — the only safe answer to a request no response schema fits
+/// (ADR-0018's status note).
 pub trait Handler: Send + Sync + 'static {
     /// The response future for one request frame.
-    fn handle(&self, request: Vec<u8>) -> impl Future<Output = Vec<u8>> + Send;
+    fn handle(&self, request: Vec<u8>) -> impl Future<Output = Option<Vec<u8>>> + Send;
 }
 
 impl<F, Fut> Handler for F
 where
     F: Fn(Vec<u8>) -> Fut + Send + Sync + 'static,
-    Fut: Future<Output = Vec<u8>> + Send,
+    Fut: Future<Output = Option<Vec<u8>>> + Send,
 {
-    fn handle(&self, request: Vec<u8>) -> impl Future<Output = Vec<u8>> + Send {
+    fn handle(&self, request: Vec<u8>) -> impl Future<Output = Option<Vec<u8>>> + Send {
         self(request)
     }
 }
@@ -134,8 +137,9 @@ where
     let (read_half, write_half) = tokio::io::split(socket);
     // Completed responses, sequenced: capacity ties memory to the in-flight
     // bound rather than to the peer's appetite.
-    let (done_tx, done_rx) =
-        mpsc::channel::<(u64, tokio::task::JoinHandle<Vec<u8>>)>(limits.max_in_flight.max(1));
+    let (done_tx, done_rx) = mpsc::channel::<(u64, tokio::task::JoinHandle<Option<Vec<u8>>>)>(
+        limits.max_in_flight.max(1),
+    );
     // Abort-on-drop guards: cancelling `serve_connection` genuinely ends
     // both tasks (rule 10) instead of detaching them against a live socket.
     let mut writer = AbortOnDrop(tokio::spawn(write_in_order(
@@ -160,19 +164,26 @@ where
                 .await
                 .map_err(|_| ConnectionEnd::ConnectionTaskFailed)?;
             read_result?;
-            write_result
+            write_result.map(|_| ())
         }
         w = &mut writer.0 => {
             match w.map_err(|_| ConnectionEnd::ConnectionTaskFailed)? {
-                // ⚠️ A clean writer exit means the channel closed, and only
-                // the reader ending closes it — so the reader has a verdict
-                // and it, not this Ok, is the connection's. Found live:
-                // `select!` picks arms at random when both tasks finish in
-                // one poll gap, and this arm was swallowing the reader's
-                // timeout as a clean close.
-                Ok(()) => (&mut reader.0)
+                // ⚠️ A drained exit means the channel closed, which only the
+                // reader ending does — so the reader has a verdict and it,
+                // not this Ok, is the connection's. Found live: `select!`
+                // picks arms at random when both tasks finish in one poll
+                // gap, and this arm was swallowing the reader's timeout as
+                // a clean close.
+                Ok(WriterEnd::Drained) => (&mut reader.0)
                     .await
                     .map_err(|_| ConnectionEnd::ConnectionTaskFailed)?,
+                // A handler chose to close: the socket is already shut
+                // down; end the reads now rather than let them idle out
+                // blaming the peer (round 1's second live find).
+                Ok(WriterEnd::HandlerClosed) => {
+                    reader.0.abort();
+                    Ok(())
+                }
                 // A writer error is the connection's end; stop reading into
                 // a dead pipe (rule 13: this is the owner observing).
                 Err(e) => {
@@ -199,7 +210,7 @@ async fn read_frames<S, H>(
     mut read_half: tokio::io::ReadHalf<S>,
     handler: Arc<H>,
     limits: ConnectionLimits,
-    done_tx: mpsc::Sender<(u64, tokio::task::JoinHandle<Vec<u8>>)>,
+    done_tx: mpsc::Sender<(u64, tokio::task::JoinHandle<Option<Vec<u8>>>)>,
 ) -> Result<(), ConnectionEnd>
 where
     S: AsyncRead + AsyncWrite + Send + 'static,
@@ -259,11 +270,18 @@ where
 /// The write half: joins each handler in sequence order and writes its
 /// frame. Sequential joining *is* the reordering — task `n+1` may finish
 /// first, but its bytes wait until `n`'s are on the wire.
+/// How the writer finished: drained after the reader ended, or a handler
+/// decided to close the connection.
+enum WriterEnd {
+    Drained,
+    HandlerClosed,
+}
+
 async fn write_in_order<W: AsyncWrite + Send + Unpin>(
     mut write_half: W,
-    mut done_rx: mpsc::Receiver<(u64, tokio::task::JoinHandle<Vec<u8>>)>,
+    mut done_rx: mpsc::Receiver<(u64, tokio::task::JoinHandle<Option<Vec<u8>>>)>,
     idle_timeout: std::time::Duration,
-) -> Result<(), ConnectionEnd> {
+) -> Result<WriterEnd, ConnectionEnd> {
     let mut expected: u64 = 0;
     while let Some((sequence, task)) = done_rx.recv().await {
         debug_assert_eq!(
@@ -271,7 +289,15 @@ async fn write_in_order<W: AsyncWrite + Send + Unpin>(
             "the reader hands out sequences in order"
         );
         expected = expected.wrapping_add(1);
-        let response = task.await.map_err(|_| ConnectionEnd::HandlerPanicked)?;
+        let Some(response) = task.await.map_err(|_| ConnectionEnd::HandlerPanicked)? else {
+            // The handler's close decision: everything already written
+            // stands, nothing more is, and the socket is shut down NOW —
+            // round 1's review found the first draft leaving the reader
+            // parked against a peer waiting for a reply that never comes.
+            write_half.flush().await.map_err(ConnectionEnd::Io)?;
+            let _ = write_half.shutdown().await;
+            return Ok(WriterEnd::HandlerClosed);
+        };
         let mut frame = Vec::with_capacity(response.len() + 4);
         if write_frame(&mut frame, &response).is_err() {
             // A response over i32::MAX is a broker bug, not a peer error;
@@ -288,5 +314,5 @@ async fn write_in_order<W: AsyncWrite + Send + Unpin>(
             .map_err(ConnectionEnd::Io)?;
     }
     write_half.flush().await.map_err(ConnectionEnd::Io)?;
-    Ok(())
+    Ok(WriterEnd::Drained)
 }

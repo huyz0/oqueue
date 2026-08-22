@@ -19,7 +19,14 @@ oqueue-codec = { path = "../oqueue-codec" }
 # needs io + sync + rt; `net` stays out until bin/oqueue binds a listener.
 tokio = { version = "1", features = ["io-util", "sync", "rt", "time"] }
 
+# The dispatcher builds responses from the generated message layer -- the
+# same single-surface rule as oqueue-codec's (ADR-0017): only these two
+# crates touch it.
+kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker"] }
+
 [dev-dependencies]
+# Tests act as the client and decode responses, which needs the client half.
+kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker", "client"] }
 # duplex-driven T1 tests: no real socket below bin/oqueue.
 tokio = { version = "1", features = ["io-util", "sync", "rt", "rt-multi-thread", "macros", "time", "test-util"] }
 

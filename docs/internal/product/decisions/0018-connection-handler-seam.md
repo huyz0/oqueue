@@ -1,6 +1,9 @@
 # 0018. The connection `Handler` seam is bytes in, bytes out
 
-Status: accepted
+Status: accepted; 2026-08-24 (`M2.21`): the response became
+`Option<Vec<u8>>` — `None` closes the connection, the dispatcher's only
+safe answer to a request no response schema fits (an unknown api key, an
+unadvertised version outside `ApiVersions`' fallback)
 Date: 2026-08-24
 Requirements: FR-1
 

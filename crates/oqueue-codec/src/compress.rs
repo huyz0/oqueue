@@ -272,6 +272,7 @@ mod tests {
         ));
     }
 
+    #[cfg(feature = "gzip")]
     fn hex_bytes(hex: &str) -> Vec<u8> {
         let clean: String = hex.chars().filter(|c| !c.is_whitespace()).collect();
         (0..clean.len())

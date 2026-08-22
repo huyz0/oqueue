@@ -12,6 +12,7 @@ Because *almost* everything else in this workspace is sans-I/O — ⚠️ **"by 
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
 - `oqueue-codec` — the protocol surface: frames, headers, batches.
+- `kafka-protocol` — the generated message layer the dispatcher builds responses from (`ADR-0017`'s status note admits this crate to the surface).
 - `tokio` — the runtime this I/O shell is written against (feature-minimal: io, sync, rt; `net` waits for `bin/oqueue`).
 
 ## Downstream

@@ -18,5 +18,7 @@
 #![forbid(unsafe_code)]
 
 pub mod connection;
+pub mod dispatch;
 
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, serve_connection};
+pub use dispatch::Dispatcher;
