@@ -262,7 +262,19 @@ if (( total_ms > BUDGET_MS )); then
     # so the crossing is noticed, not to warn about the state it was written in.
     # Still a `skip`: making
     # it fail would block a commit for a cold clone, which is the case the
-    # exemption exists for. `M1.40` is where that policy question goes.
+    # exemption exists for.
+    #
+    # ⚠️ **Decided — `M2.5`, closing `M1.40`: this branch warns and never
+    # fails, at any rate.** The exemption's legitimate triggers — a fresh
+    # clone, `cargo clean`, a toolchain bump, CI's fresh checkout — cluster
+    # in time, so a rate-triggered *failure* lands precisely on the
+    # environments the exemption exists to protect, and hands the author
+    # nothing fixable: "your build cache is cold" is not a defect a commit
+    # can address. What a persistent crossing actually signals is compile
+    # time growing, and the remedy for that is build work, not a blocked
+    # commit. So the crossing warns (visibly — `M1.30` set `verbose: true`
+    # on this hook for exactly this line), `suite.tsv` keeps the record,
+    # and acting on it is a scheduled-work decision, not a gate's.
     #
     # ⚠️ **No case in `negative.sh`, and `testing.md` rule 20a wants the reason
     # stated instead**: this branch never makes the gate fail, and that suite's
