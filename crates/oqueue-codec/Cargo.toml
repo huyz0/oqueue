@@ -19,6 +19,12 @@ kafka-protocol = { version = "0.18.0", default-features = false, features = ["br
 
 [dev-dependencies]
 proptest.workspace = true
+# Test-only: the differential CRC check composes this crate's coverage slice
+# with the real checksum. At runtime that composition is the broker's
+# (check-layering.sh: a library depends on oqueue-core and nothing else);
+# manifest.py's runtime_deps deliberately excludes dev-dependencies, so this
+# crosses no layering rule.
+oqueue-checksum = { path = "../oqueue-checksum" }
 # Test-only: the buffer types kafka-protocol's RecordBatchEncoder takes in
 # the golden cross-check. Not a runtime dep -- M2.16's review took it out of
 # the contract, and it stays out.

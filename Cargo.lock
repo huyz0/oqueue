@@ -947,6 +947,7 @@ version = "0.0.0"
 dependencies = [
  "bytes",
  "kafka-protocol",
+ "oqueue-checksum",
  "oqueue-core",
  "proptest",
 ]

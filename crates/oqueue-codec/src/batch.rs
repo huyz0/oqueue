@@ -231,13 +231,77 @@ pub fn encode_batch_header(out: &mut Vec<u8>, header: &BatchHeader) {
     put_i32(out, header.record_count);
 }
 
+/// The slice the batch's CRC covers — `attributes` (byte 21) to the end of
+/// what `batchLength` declares — after checking the buffer really spans it.
+///
+/// ⚠️ This crate computes no checksum (`check-layering.sh`: `oqueue-core`
+/// and nothing else at runtime). The composition is one line at the caller:
+/// `oqueue_checksum::crc32c(crc_coverage(batch)?) == stored_crc(batch)?` is
+/// the ingest rule, and the differential test below proves it against the
+/// dependency's own encoder with exactly that composition as a dev-dep.
+///
+/// # Errors
+/// [`BatchError::Decode`] when the fixed header is short or `batchLength`
+/// declares more bytes than the buffer holds — the length is
+/// attacker-supplied, so it is checked against reality before any slice.
+pub fn crc_coverage(batch: &[u8]) -> Result<&[u8], BatchError> {
+    let header = decode_batch_header(batch)?;
+    let declared_end = usize::try_from(header.batch_length)
+        .ok()
+        .and_then(|l| l.checked_add(12))
+        .ok_or_else(|| {
+            BatchError::Decode(DecodeError::LengthOutOfBounds {
+                length: header.batch_length.unsigned_abs().into(),
+                max: u64::try_from(usize::MAX).unwrap_or(u64::MAX),
+                at: 8,
+            })
+        })?;
+    if declared_end > batch.len() || declared_end < BATCH_HEADER_LEN {
+        return Err(BatchError::Decode(DecodeError::UnexpectedEof {
+            needed: declared_end,
+            remaining: batch.len(),
+            at: 8,
+        }));
+    }
+    Ok(&batch[CRC_COVERAGE_START..declared_end])
+}
+
+/// The CRC as stored in the header.
+///
+/// # Errors
+/// As [`decode_batch_header`].
+pub fn stored_crc(batch: &[u8]) -> Result<u32, BatchError> {
+    Ok(decode_batch_header(batch)?.crc)
+}
+
+/// Assigns `base_offset` and `partition_leader_epoch` **in place**.
+///
+/// The produce hot path (doc 18 §4.4): both fields sit outside the CRC's
+/// coverage, so this decodes zero varints and recomputes nothing. Every
+/// byte from `magic` onward is untouched, which the tests prove by byte
+/// comparison rather than by re-decoding.
+///
+/// # Errors
+/// As [`decode_batch_header`] — a batch that does not parse (short, or the
+/// wrong magic) is not rewritten.
+pub fn rewrite_base_offset(
+    batch: &mut [u8],
+    base_offset: i64,
+    partition_leader_epoch: i32,
+) -> Result<(), BatchError> {
+    decode_batch_header(batch)?;
+    batch[0..8].copy_from_slice(&base_offset.to_be_bytes());
+    batch[12..16].copy_from_slice(&partition_leader_epoch.to_be_bytes());
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{
-        Attributes, BATCH_HEADER_LEN, BatchError, BatchHeader, Compression, decode_batch_header,
-        encode_batch_header,
+        Attributes, BATCH_HEADER_LEN, BatchError, BatchHeader, Compression, crc_coverage,
+        decode_batch_header, encode_batch_header, rewrite_base_offset, stored_crc,
     };
     use crate::wire::DecodeError;
 
@@ -267,13 +331,11 @@ mod tests {
         assert_eq!(decode_batch_header(&buf), Ok(sample_header()));
     }
 
-    /// The golden cross-check: `kafka-protocol`'s own `RecordBatchEncoder`
-    /// (generated against Kafka's spec) produces a batch, and this module's
-    /// hand-rolled header decode must agree with it field for field — the
-    /// dependency is the authority `ADR-0017` chose, standing in until
-    /// `M2.25`'s corpus captures real client bytes.
-    #[test]
-    fn a_batch_the_dependency_encodes_decodes_field_for_field() {
+    /// `kafka-protocol`'s own `RecordBatchEncoder` (generated against
+    /// Kafka's spec) producing the two-record golden batch every test here
+    /// shares — the authority `ADR-0017` chose, standing in until `M2.25`'s
+    /// corpus captures real client bytes.
+    fn encoded_two_record_batch() -> Vec<u8> {
         use kafka_protocol::records::{
             Compression as KpCompression, Record, RecordBatchEncoder, RecordEncodeOptions,
             TimestampType,
@@ -309,7 +371,14 @@ mod tests {
             },
         )
         .expect("the dependency encodes its own records");
+        buf.to_vec()
+    }
 
+    /// The golden cross-check: our hand-rolled header decode agrees with
+    /// the dependency's encoder field for field.
+    #[test]
+    fn a_batch_the_dependency_encodes_decodes_field_for_field() {
+        let buf = encoded_two_record_batch();
         let header = decode_batch_header(&buf).expect("our decode agrees with its layout");
         assert_eq!(header.base_offset, 0);
         assert_eq!(header.record_count, 2);
@@ -355,6 +424,66 @@ mod tests {
             decode_batch_header(&buf),
             Err(BatchError::WrongMagic { magic: 1 })
         );
+    }
+
+    /// `M2.19`'s ingest rule, proven against the dependency's own encoder:
+    /// the coverage slice's real CRC-32C equals the stored field — which
+    /// also pins `CRC_COVERAGE_START` and `CRC_OFFSET` to reality
+    /// (`M2.18`'s review noted the constants were asserted by nothing).
+    #[test]
+    fn the_dependency_batch_verifies_through_the_composition() {
+        let buf = encoded_two_record_batch();
+        let coverage = crc_coverage(&buf).expect("the declared length is real");
+        assert_eq!(
+            oqueue_checksum::crc32c(coverage),
+            stored_crc(&buf).expect("the header decodes"),
+            "crc32c(bytes[21..]) must equal the stored crc"
+        );
+    }
+
+    /// The produce hot path: assign offsets, touch nothing else. Byte
+    /// comparison, not re-decoding -- an untouched CRC that still verifies
+    /// is the whole design (doc 18 4.4).
+    #[test]
+    fn the_rewrite_changes_twelve_bytes_and_the_crc_still_verifies() {
+        let mut buf = encoded_two_record_batch();
+        let before = buf.clone();
+        rewrite_base_offset(&mut buf, 7_000_000, 42).expect("a v2 batch rewrites");
+
+        let header = decode_batch_header(&buf).expect("still decodes");
+        assert_eq!(header.base_offset, 7_000_000);
+        assert_eq!(header.partition_leader_epoch, 42);
+        assert_eq!(buf[8..12], before[8..12], "batchLength untouched");
+        assert_eq!(buf[16..], before[16..], "magic onward is byte-identical");
+        assert_eq!(
+            oqueue_checksum::crc32c(crc_coverage(&buf).expect("spans")),
+            stored_crc(&buf).expect("decodes"),
+            "no recompute was needed: the rewritten fields sit outside the CRC"
+        );
+    }
+
+    #[test]
+    fn a_declared_length_past_the_buffer_is_refused_before_any_slice() {
+        let mut buf = encoded_two_record_batch();
+        // Inflate batchLength beyond what the buffer holds.
+        let huge = (i32::try_from(buf.len()).expect("fits") + 100).to_be_bytes();
+        buf[8..12].copy_from_slice(&huge);
+        assert!(matches!(
+            crc_coverage(&buf),
+            Err(BatchError::Decode(DecodeError::UnexpectedEof { .. }))
+        ));
+    }
+
+    #[test]
+    fn a_wrong_magic_batch_is_not_rewritten() {
+        let mut buf = encoded_two_record_batch();
+        buf[16] = 1;
+        let before = buf.clone();
+        assert!(matches!(
+            rewrite_base_offset(&mut buf, 5, 5),
+            Err(BatchError::WrongMagic { magic: 1 })
+        ));
+        assert_eq!(buf, before, "a refused rewrite writes nothing");
     }
 
     #[test]
