@@ -21,6 +21,14 @@ pub struct MultipartLimits {
     pub max_part_size: u64,
     /// The maximum number of parts one upload may have.
     pub max_parts: u32,
+    /// The largest payload one single-request `put` may carry. ⚠️ **This is
+    /// the ceiling a *conditional* write is checked against** (`M2.3`): a
+    /// precondition can never ride a multipart completion (ADR-0013), so a
+    /// conditional write is allowed up to this bound — never up to
+    /// [`max_part_size`](Self::max_part_size), which is only the size at
+    /// which an *unconditional* upload switches to parts, and on GCS is a
+    /// chunking preference far below what one request may carry.
+    pub max_single_put: u64,
     /// The maximum total size of the assembled object.
     pub max_object_size: u64,
 }

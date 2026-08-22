@@ -1,6 +1,9 @@
 # 0013. S3 multipart completion is unconditional in `M1`; conditioning it is deferred to `M3`
 
-Status: accepted
+Status: accepted; 2026-08-23: `M2.3` decoupled the conditional-write
+ceiling from the part size — a precondition is now bounded by
+`MultipartLimits::max_single_put`, closing `M1.53`'s S3/GCS divergence;
+the decision here (completion itself is unconditional) stands
 Date: 2026-08-17
 Requirements: FR-31
 

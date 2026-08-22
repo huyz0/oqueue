@@ -12,6 +12,7 @@ use oqueue_core::{Error, MultipartLimits, MultipartSession};
 /// realistic test data, not as a constant this crate exports. `oqueue-store`
 /// (`M1.16`) constructs its own when it actually talks to S3.
 const S3_SHAPED_LIMITS: MultipartLimits = MultipartLimits {
+    max_single_put: 5 * 1024 * 1024 * 1024,
     min_part_size: 5 * 1024 * 1024,        // 5 MiB
     max_part_size: 5 * 1024 * 1024 * 1024, // 5 GiB
     max_parts: 10_000,
@@ -21,6 +22,7 @@ const S3_SHAPED_LIMITS: MultipartLimits = MultipartLimits {
 /// Small bounds, so a test can actually construct "one over" without
 /// allocating gigabytes.
 const TINY_LIMITS: MultipartLimits = MultipartLimits {
+    max_single_put: 20,
     min_part_size: 10,
     max_part_size: 100,
     max_parts: 3,

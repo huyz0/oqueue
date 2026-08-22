@@ -33,6 +33,12 @@ pub(crate) const GCS_MULTIPART_LIMITS: MultipartLimits = MultipartLimits {
     min_part_size: 256 * 1024,
     max_part_size: 8 * 1024 * 1024,
     max_parts: u32::MAX,
+    // ⚠️ The 8 MiB above is this project's chunking preference; what one
+    // request may carry is bounded only by the object cap below -- GCS
+    // documents no smaller single-request ceiling. `M2.3`: the conditional
+    // write ceiling is this field, so a conditional 9 MiB segment is one
+    // request here, exactly as it is on S3.
+    max_single_put: 5 * 1024 * 1024 * 1024 * 1024,
     // GCP's published per-object quota (cloud.google.com/storage/quotas:
     // "Maximum size for a single object: 5 TiB") — not itself in doc 04,
     // unlike every other number here.
@@ -93,6 +99,7 @@ mod tests {
                 max_part_size: 8_388_608,           // 8 MiB
                 max_parts: 4_294_967_295,           // u32::MAX -- no real cap exists
                 max_object_size: 5_497_558_138_880, // 5 TiB
+                max_single_put: 5_497_558_138_880,  // the object cap itself
             }
         );
     }
@@ -127,6 +134,7 @@ mod tests {
     /// approaching real GCS's numbers.
     fn tiny_limits() -> MultipartLimits {
         MultipartLimits {
+            max_single_put: 20,
             min_part_size: 5,
             max_part_size: 10,
             max_parts: 4,

@@ -91,6 +91,9 @@ async fn s3_backend_uploads_a_large_payload_as_multipart_and_reads_it_back() {
         max_part_size: 5 * 1024 * 1024,
         max_parts: 10,
         max_object_size: 100 * 1024 * 1024,
+        // Unused by this unconditional upload; S3's real value, so the only
+        // lowered numbers are the ones this test is about.
+        max_single_put: 5 * 1024 * 1024 * 1024,
     };
     let store = S3Store::from_env()
         .expect(
@@ -123,13 +126,52 @@ async fn s3_backend_uploads_a_large_payload_as_multipart_and_reads_it_back() {
         "every byte of a multipart upload must round-trip, not just its length"
     );
 
-    // ADR-0013: this backend cannot condition a multipart completion, and
-    // must say so loudly rather than silently drop the precondition.
-    let result = store.put(&key, payload, Some(Precondition::IfAbsent)).await;
-    assert_eq!(result, Err(Error::Permanent));
+    // ADR-0013 still holds -- a precondition can never ride a multipart
+    // completion. What `M2.3` moved is the bound it fires at: the refusal
+    // now triggers on `max_single_put`, not the chunking preference. With
+    // this test's limits (the real 5 GiB ceiling), an 11 MiB conditional
+    // put is a *single* request -- and against the key this test just
+    // created, `IfAbsent` fails at the backend, proving the request was
+    // genuinely sent rather than refused locally.
+    let result = store
+        .put(&key, payload.clone(), Some(Precondition::IfAbsent))
+        .await;
+    assert_eq!(
+        result,
+        Err(Error::PreconditionFailed { key: key.clone() }),
+        "an over-part-size conditional put is a real single request (M2.3)"
+    );
 
     store
         .delete(std::slice::from_ref(&key))
         .await
         .expect("cleaning up the multipart-uploaded object succeeds");
+}
+
+/// The loud refusal at the bound it actually lives at (`M2.3`): a payload
+/// over `max_single_put` turns a conditional put into `Err(Permanent)`
+/// before any request is made -- locally, so this cannot flake on the
+/// network even though it runs in the T2 group for the same `from_env`
+/// environment.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "T2: run by CI's conformance-t2 job and by scripts/gates/m1-complete.sh"]
+async fn s3_backend_refuses_a_conditional_put_over_the_single_request_ceiling() {
+    let refusing = S3Store::from_env()
+        .expect(
+            "AWS_* environment variables must describe a reachable MinIO endpoint \
+             when this test is run with --ignored",
+        )
+        .with_multipart_limits(MultipartLimits {
+            min_part_size: 5 * 1024 * 1024,
+            max_part_size: 5 * 1024 * 1024,
+            max_parts: 10,
+            max_object_size: 100 * 1024 * 1024,
+            max_single_put: 5 * 1024 * 1024,
+        });
+    let key = ObjectKey::new("s3-minio/refused.seg").expect("a non-empty key");
+    let payload = vec![0u8; 6 * 1024 * 1024];
+    let result = refusing
+        .put(&key, payload, Some(Precondition::IfAbsent))
+        .await;
+    assert_eq!(result, Err(Error::Permanent));
 }

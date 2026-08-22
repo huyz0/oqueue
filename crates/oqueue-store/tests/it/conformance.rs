@@ -120,6 +120,11 @@ fn cases() -> Vec<Case> {
             run: conditional_write_if_matches_rejects_stale_token,
         },
         Case {
+            name: "conditional_write_above_the_chunk_preference_is_one_request",
+            requires: |c| c.conditional_writes,
+            run: conditional_write_above_the_chunk_preference_is_one_request,
+        },
+        Case {
             name: "ranged_get_reads_exactly_the_requested_slice",
             requires: |c| c.ranged_reads,
             run: ranged_get_reads_exactly_the_requested_slice,
@@ -183,6 +188,29 @@ fn delete_is_idempotent(store: &dyn ObjectStore) {
     );
     block_on(store.delete(std::slice::from_ref(&k)))
         .expect("second delete, of an already-absent key, also succeeds");
+}
+
+/// `M2.3`, closing `M1.53`'s divergence: a conditional write's ceiling is
+/// the backend's single-request bound (`max_single_put`), never its chunking
+/// preference (`max_part_size`) -- before that fix, this exact payload was
+/// `Ok` on S3 and `Err(Permanent)` on GCS, and no case could see it.
+///
+/// 12 MiB: above GCS's 8 MiB chunking preference, far below every backend's
+/// single-request ceiling, and small enough to upload twice per gate run.
+fn conditional_write_above_the_chunk_preference_is_one_request(store: &dyn ObjectStore) {
+    let k = key("conformance/conditional_large.seg");
+    // Delete-first, same reasoning as `conditional_write_if_absent`.
+    block_on(store.delete(std::slice::from_ref(&k)))
+        .expect("clearing anything a previous run left behind succeeds");
+    let payload = vec![0xa5u8; 12 * 1024 * 1024];
+    block_on(store.put(&k, payload.clone(), Some(Precondition::IfAbsent))).expect(
+        "a conditional write above the chunk preference is a single request, not a refusal",
+    );
+    assert_eq!(
+        block_on(store.get(&k, ByteRange::Full)),
+        Ok(payload),
+        "the large conditional write landed whole"
+    );
 }
 
 fn conditional_write_if_absent(store: &dyn ObjectStore) {

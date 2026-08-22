@@ -36,9 +36,13 @@ pub(crate) enum PutStrategy {
 /// # Errors
 ///
 /// [`Error::Permanent`] if `precondition` is `Some` and `payload_len` exceeds
-/// `limits.max_part_size` — no backend built here can condition a multipart
+/// `limits.max_single_put` — no backend built here can condition a multipart
 /// completion (ADR-0013), and retrying the same oversized, conditioned
-/// payload will never change that. Otherwise, whatever
+/// payload will never change that. ⚠️ **The conditional ceiling is
+/// `max_single_put`, never `max_part_size`** (`M2.3`): the part size is only
+/// the point an *unconditional* upload switches to parts, and treating it as
+/// the conditional bound made a 9 MiB conditional write fail on GCS while
+/// succeeding on S3 (`M1.53`). Otherwise, whatever
 /// [`MultipartSession::add_part`]/[`MultipartSession::finish`] reject as a
 /// bound violation — unreachable in practice at either backend's real
 /// numbers for any payload that fits in this process' memory, but a real
@@ -49,11 +53,18 @@ pub(crate) fn put_strategy_for(
     limits: MultipartLimits,
 ) -> Result<PutStrategy> {
     let len = u64::try_from(payload_len).unwrap_or(u64::MAX);
+    if precondition.is_some() {
+        // A conditional write is single-request or nothing (ADR-0013), so
+        // its bound is the single-request ceiling -- not the chunking
+        // preference an unconditional upload switches to parts at (`M2.3`).
+        return if len <= limits.max_single_put {
+            Ok(PutStrategy::Single)
+        } else {
+            Err(Error::Permanent)
+        };
+    }
     if len <= limits.max_part_size {
         return Ok(PutStrategy::Single);
-    }
-    if precondition.is_some() {
-        return Err(Error::Permanent);
     }
     let part_size = usize::try_from(limits.max_part_size)
         .unwrap_or(usize::MAX)
@@ -90,6 +101,7 @@ mod tests {
             max_part_size: 10,
             max_parts: 4,
             max_object_size: 35,
+            max_single_put: 20,
         }
     }
 
@@ -107,9 +119,25 @@ mod tests {
     }
 
     #[test]
-    fn a_payload_over_the_part_size_with_a_precondition_is_permanent() {
+    fn a_conditional_payload_over_the_part_size_is_still_single() {
+        // M2.3: the chunking preference does not bound a conditional write --
+        // 11 is over `max_part_size` (10) and under `max_single_put` (20).
         assert_eq!(
             put_strategy_for(11, Some(&Precondition::IfAbsent), tiny_limits()),
+            Ok(PutStrategy::Single),
+            "a conditional write is bounded by max_single_put, not max_part_size"
+        );
+        assert_eq!(
+            put_strategy_for(20, Some(&Precondition::IfAbsent), tiny_limits()),
+            Ok(PutStrategy::Single),
+            "the ceiling is inclusive -- exactly max_single_put still fits one request"
+        );
+    }
+
+    #[test]
+    fn a_conditional_payload_over_the_single_put_ceiling_is_permanent() {
+        assert_eq!(
+            put_strategy_for(21, Some(&Precondition::IfAbsent), tiny_limits()),
             Err(Error::Permanent),
             "no backend built here can condition a multipart completion (ADR-0013)"
         );
@@ -170,6 +198,7 @@ mod tests {
             max_part_size: 4,
             max_parts: 10,
             max_object_size: 100,
+            max_single_put: 100,
         };
         assert_eq!(
             put_strategy_for(9, None, limits),

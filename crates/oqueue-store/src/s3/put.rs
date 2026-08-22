@@ -20,6 +20,12 @@ pub(crate) const S3_MULTIPART_LIMITS: MultipartLimits = MultipartLimits {
     max_part_size: 5 * 1024 * 1024 * 1024,
     max_parts: 10_000,
     max_object_size: 5 * 1024 * 1024 * 1024 * 1024,
+    // A single `PutObject` carries at most 5 GiB (ADR-0013's Decision
+    // records the cap; doc 04 §5 states it as the max *part* size, the same
+    // number by S3's own design) -- on S3 the
+    // single-request ceiling and the multipart switchover genuinely
+    // coincide, which is what let `M1.53`'s divergence hide (`M2.3`).
+    max_single_put: 5 * 1024 * 1024 * 1024,
 };
 
 /// The `PutOptions` a `put_opts` call sends for `precondition`.
@@ -82,8 +88,9 @@ mod tests {
         assert_eq!(
             S3_MULTIPART_LIMITS,
             MultipartLimits {
-                min_part_size: 5_242_880,     // 5 MiB
-                max_part_size: 5_368_709_120, // 5 GiB
+                max_single_put: 5_368_709_120, // 5 GiB
+                min_part_size: 5_242_880,      // 5 MiB
+                max_part_size: 5_368_709_120,  // 5 GiB
                 max_parts: 10_000,
                 max_object_size: 5_497_558_138_880, // 5 TiB
             }
@@ -119,6 +126,7 @@ mod tests {
     /// approaching real S3's numbers.
     fn tiny_limits() -> MultipartLimits {
         MultipartLimits {
+            max_single_put: 20,
             min_part_size: 5,
             max_part_size: 10,
             max_parts: 4,
