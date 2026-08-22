@@ -1808,6 +1808,37 @@ invoke_conformance_matrix() {
   bash "$1/scripts/check-conformance-matrix.sh"
 }
 
+# `M2.11` (closing `M1.55`): the measured hole — deleting the gcs rows left
+# every check green, so a never-run backend read as covered. This matrix is
+# valid in every other way; only `gcs` is missing.
+setup_conformance_matrix_missing_backend() {
+  local dir; dir="$(new_scratch conformance-missing-backend)"
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+s3  verified  MinIO at T2
+s3-real  not-yet-run  deferred, doc 10 #33
+gcs-real  not-yet-run  deferred, doc 10 #33'
+  printf '%s\n' "$dir"
+}
+
+# `M2.11` (closing `M1.51`): the same image pinned to two different tags in
+# two tracked files — the gate and CI silently testing different servers.
+setup_conformance_image_pins() {
+  local dir; dir="$(new_scratch conformance-image-pins)"
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+s3  verified  MinIO at T2
+gcs  not-yet-run  no emulator round-trips the client
+s3-real  not-yet-run  deferred
+gcs-real  not-yet-run  deferred'
+  printf 'image: minio/minio:RELEASE.2025-04-22T22-12-26Z\n' > "$dir/a.yml"
+  # ⚠️ The decoy tag is assembled via %s so THIS tracked file never carries
+  # the literal -- round 1 of M2.11's review measured the fixture itself
+  # tripping the real gate: the check greps every tracked file, and
+  # negative.sh is one.
+  printf 'MINIO_IMAGE="minio/minio:%s"\n' 'RELEASE.2020-01-01T00-00-00Z' > "$dir/b.sh"
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+
 # The agreement half only runs when asked for it -- see the script's header
 # for why it is not in pre-commit.
 invoke_conformance_matrix_roster() {
@@ -2511,6 +2542,10 @@ run_case "m0-complete.sh (the no-PyYAML fallback miscounts)" setup_m0_complete_f
   "hooks, .pre-commit-config.yaml has"
 run_case "m0-complete.sh (a quoted stage in block form)" setup_m0_complete_quoted_block_stage invoke_m0_complete_no_pyyaml \
   "has 2"
+run_case "check-conformance-matrix.sh (a claimed backend with no row)" setup_conformance_matrix_missing_backend invoke_conformance_matrix \
+  "has no row for"
+run_case "check-conformance-matrix.sh (one image, two pins)" setup_conformance_image_pins invoke_conformance_matrix \
+  "different tags"
 run_case "check-conformance-matrix.sh (row with no reason)" setup_conformance_matrix_no_reason invoke_conformance_matrix \
   "is not <backend>  <status>  <why>"
 run_case "check-conformance-matrix.sh (duplicate backend row)" setup_conformance_matrix_duplicate_backend invoke_conformance_matrix \

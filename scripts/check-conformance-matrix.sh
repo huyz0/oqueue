@@ -185,6 +185,68 @@ fi
 
 ok "backend matrix is well-formed (${n_verified} verified, ${n_pending} not-yet-run)"
 
+# ── Every backend this project claims has a row — `M2.11`, closing `M1.55` ──
+#
+# Measured before this existed: deleting the `gcs` rows outright left every
+# check in this file green, so the disclosure that `GcsStore` has never
+# executed rested on a hand-written line nothing compared — in a repository
+# whose `AGENTS.md` records hand-maintained lists going stale four times.
+# This list is the other half of the claim: a backend can leave the matrix
+# only by leaving the project. ⚠️ Hand-maintained itself, deliberately — the
+# alternative, deriving it from `lib.rs` exports, ties a text gate to Rust
+# parsing for five names that change once per backend ever.
+REQUIRED_BACKENDS="fake s3 gcs s3-real gcs-real"
+missing_required=0
+for b in $REQUIRED_BACKENDS; do
+  if ! rows | awk -v b="$b" '$1 == b { found=1 } END { exit !found }'; then
+    fail "$MATRIX has no row for '$b'"
+    note "every backend the project claims appears here, verified or not —"
+    note "deleting a row is how a never-run backend starts reading as covered"
+    missing_required=$((missing_required + 1))
+  fi
+done
+if (( missing_required == 0 )); then
+  ok "every claimed backend has a matrix row"
+fi
+
+# ── The pinned conformance containers agree everywhere — `M2.11` (M1.51) ────
+#
+# `minio/minio` and `minio/mc` are each pinned in two places
+# (`m1-complete.sh` and `gates.yml`), and until this section nothing
+# compared either pair — the gate and CI could silently test different
+# server versions. One distinct tag per image, across every tracked file;
+# a doc quoting the current tag matches too, which is what keeps quotes
+# current.
+# ⚠️ `git grep` failing is not the same as `git grep` finding nothing, and
+# collapsing them printed an `ok` that had compared nothing — measured by
+# round 1's review in the review packet's own scratch tree, which is not a
+# git repository. rc>1 (error) skips loudly; rc==1 (no matches) is a tree
+# with nothing pinned, which is genuinely fine. ⚠️ `backlog.md` is excluded:
+# its `done` rows are frozen history and may quote the tag of their day —
+# a *pin* lives in a gate or a workflow, never in a frozen row.
+diverged_images=0
+images_checked=1
+for image in minio/minio minio/mc; do
+  rc=0
+  raw="$(git grep -hoE "${image}:[A-Za-z0-9.TZ-]+" -- ':(exclude)target' ':(exclude)docs/internal/product/backlog.md' 2>/dev/null)" || rc=$?
+  if (( rc > 1 )); then
+    skip "image pins ($image): git grep cannot run here, so nothing was compared"
+    images_checked=0
+    continue
+  fi
+  tags="$(printf '%s' "$raw" | sort -u)"
+  n_tags="$(printf '%s' "$tags" | grep -c . || true)"
+  if (( n_tags > 1 )); then
+    fail "$image is pinned to $n_tags different tags across tracked files"
+    while IFS= read -r t; do [[ -n "$t" ]] && note "  $t"; done <<< "$tags"
+    note "pin every site to one tag in the same commit"
+    diverged_images=$((diverged_images + 1))
+  fi
+done
+if (( diverged_images == 0 && images_checked == 1 )); then
+  ok "pinned conformance images carry one tag each"
+fi
+
 # --- Agreement with what actually ran ---------------------------------------
 if (( AGAINST_ROSTER == 0 )); then
   finish
