@@ -1,0 +1,107 @@
+{
+  "commits": [
+    "c4470d401065431c4dc2c3f0da62875f5d3a41bc",
+    "a961ae7ae4037b7082bdae80bc895de3f0d0dc69",
+    "66fa3106f0a1a3a2a46cfe1c4b5e42a9c1b6957f",
+    "150872603d80ae2fb95de746a3909a7b54bc14b9",
+    "11f2017f7fb37786bd9a40887e05272f81345ec1",
+    "47b1bd4b34fcdc98a91b1224de238bde1cf66934",
+    "8daf26eaf20c216c39daa80ab31560ab8750339b",
+    "3a39be083e8570cb19d1066494783c9c43ba643e",
+    "b6ef72a5b4cac4e6403f2912a4e7adbccd1a5822",
+    "ad55ac53e8dff64acca779f58ab4629d88d98330",
+    "c4f2af2f388a0a5b65f1e8ddaed4941e3c66eb14",
+    "5cd3060348f5069d4f94031d26ac7cc2401821b5",
+    "4fea111d2b69a89fcaa453939641edeca1eea1ef",
+    "fd03c4d6a78e78f18039dda540d77bd8b0d6584c",
+    "6912e4b427ee2e22f1cd119c01f9704bc29774b6",
+    "5daa64bc8c82ef82b02ae63efec02357be3b7ca6",
+    "97632f7bfdb38f87b19e84973f475aa367c2c018",
+    "ef14a54853e41b127353546366756133fe5fd5cc",
+    "a434aff0aa1f21a97d9fac270b47f582c85ae734",
+    "b5749fe5e40b4858e5a36d5dcba3d79d213707aa",
+    "2ca7febabd465aef7d9ffaf17c89545d69579f87",
+    "a51954b3700ee49539e5445f8f5b356c8949f59f",
+    "1af72aa820228a0c2ba9754798cced304adbe89b",
+    "479c40416380a523c6b4e3340d234dad1835510b",
+    "f663276bf7c9d50df89278ca646a4561aaa78147",
+    "08c66e3ecb5d1c3753320e6e2f371b5db7ba581b",
+    "f6e4bd56bf721a5d80ae7476b13066537e5240c3",
+    "4e223663130d5882b8028d2ee435d2b2fcf91860",
+    "a3c4190d33a721908b6a6c6af469021bf501ad5c",
+    "76af2dd1b02c3be99645020d1b7b6d96f84e54a2",
+    "c380dbe8a2d89143a4f003e162582b297cb800e3",
+    "2ed55396c5a135a5eb7196e3d40de6424e45456e",
+    "cf4a185069d97dfd4991475d9a1606949b4ff433"
+  ],
+  "findings": [
+    {
+      "evidence": "multipart.rs's put_strategy_for gates on `len <= limits.max_part_size` and then returns Error::Permanent for any precondition above it. s3/put.rs sets 5 GiB, where the two meanings legitimately coincide (5 GiB is also S3's single-PUT maximum); gcs/put.rs sets 8 MiB and its own comment says '8 MiB here -- this project's own choice of chunk size, not a GCS-imposed ceiling, since none is documented'. Reproduced with a temporary probe against both real constants: 9 MiB with IfAbsent is Ok(Single) for S3 and Err(Permanent) for GCS. ADR-0013's consequence exempts only writes above 5 GiB, calling that a shape 'this project's own write pattern is not expected to ever produce' -- a claim about S3's number, inherited by GCS where it is wrong by ~640x; gcs.rs asserts the ADR was 'confirmed to apply here too', but only the unconditional-completion half was re-derived. Doc 12 records the reference write path buffering to 8 MiB, so M3's first segment over that, committed with IfAbsent, fails permanently on GCS and succeeds on S3. Recorded nowhere -- not the suite, not Capabilities, not the ADR, not the deferral table.",
+      "id": "3e92bffe63a4",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "A conditional write over 8 MiB fails permanently on GCS and succeeds on S3, because one constant serves as both the multipart threshold and the conditional-write ceiling.",
+      "task_id": "M1.53"
+    },
+    {
+      "evidence": "ObjectStore's # Errors and ADR-0010 both document ByteRangeOutOfBounds for a range that does not fit inside the object's size; FakeObjectStore honours it. get.rs's truncated_range_error closes the truncation half, so offset 0 / length N+1 agrees across fake and S3 -- the divergence is offset >= N, which object_store rejects before this crate sees a GetResult, surfacing through classify's Generic arm as Error::Transient. s3.rs documents this; gcs.rs inherits it. retry.rs classifies ByteRangeOutOfBounds as RetryClass::Never and Transient as RetryClass::Bounded, so the identical call is 'never retry' against the fake and 'retry with backoff' against S3 -- a caller written against the fake retries a permanently-wrong request. The suite has one ranged case, in-bounds only, and Capabilities has two flags, neither able to declare the divergence, so 'fake verified' and 's3 verified' sit beside each other over a disagreement the mechanism is blind to.",
+      "id": "f52389b17719",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "A range whose start is past the object's size is ByteRangeOutOfBounds on the fake and Transient on both real backends, and the conformance suite has no case and no capability flag that could see it.",
+      "task_id": "M1.54"
+    },
+    {
+      "evidence": "check-conformance-matrix.sh implements matrix<->roster agreement in both directions only, so a backend absent from both satisfies both vacuously. Measured in a scratch tree: with the gcs rows removed and a roster of fake/s3, it prints 'ok backend matrix is well-formed' and 'ok backend matrix agrees with the recorded roster, in both directions', exit 0. So the disclosure that GcsStore has never executed rests on a hand-written line, in a repository whose AGENTS.md records a hardcoded list going stale four times. Two overstatements ride on the same unchecked prose: the matrix calls GcsStore 'fully built and covered at T0' while check-coverage.sh's permanent exemption records the backends' async bodies as the ~31% that only execute against a live endpoint -- for GcsStore, 0%. And FR-31's verification method is 'conformance suite run against every backend, recording which ones it has been run against' while M1.md's completion condition narrows the first half to 'the fake and MinIO', so the gate structurally cannot fail for the milestone's largest known gap. The recording half is what M1 discharges, and it is the half nothing checks.",
+      "id": "b4f3be2ffae1",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "m1-complete.sh's header claims it checks the matrix is honest 'including about the backends it has not run against', and nothing compares the matrix to the set of backends that exist.",
+      "task_id": "M1.55"
+    },
+    {
+      "evidence": "ADR-0008's Consequences say 'M1.12's retry policy configures RetryConfig rather than writing a backoff loop', and its Context item 3 makes the same argument in different words. Measured: `grep -rEn 'RetryConfig|RetryPolicy' crates/oqueue-store` returns two hits, both comments in classify.rs; both from_env constructors call *Builder::from_env().build() and never touch RetryConfig; no crate outside oqueue-core references RetryPolicy or RateGovernor. So a standalone policy no backend calls sits above an unconfigured vendor retry loop. classify.rs documents the consequence without noticing the contradiction -- 'by the time this function runs, that budget is spent, so a residual backend hiccup is Transient here' -- which also means RetryClass::Forever and the governor's throttling response have no producer reachable from a real backend. Two module docs assert the missing wiring as fact, naming M1.15/M1.17 as the callers; both are done and neither does.",
+      "id": "06c0240f88fd",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "ADR-0008 accepted object_store partly because M1.12's retry policy would configure RetryConfig rather than write a backoff loop; nothing wires it, and what shipped is the shape the ADR said it was avoiding.",
+      "task_id": "M1.56"
+    },
+    {
+      "evidence": "M1.47 already names the mechanism: check-core-contract.sh accepts any path under decisions/, which is how M1.3 satisfied it with a new ADR-0010 and M1.6 with ADR-0011 while ADR-0005 went untouched, so an ADR goes stale precisely when the contract it states changes. What the milestone view adds is the scale: ADR-0005 still says 'the conditional write this trait does not yet have' and still tells a conformance-case author to quiesce writes first; ADR-0010 still documents ByteRange::Bounded as a struct variant against the tuple that shipped, flagged as a minor by M1's own checkpoint review and never fixed; plus the ADR-0008 and ADR-0013 contradictions filed above. The wider pattern is that the artifact under review is largely prose asserting facts about the tree, and the per-commit reviewer has been spent fact-checking it: rows took three to nine rounds each, and M1.24, M1.27, M1.28, M1.29, M1.37, M1.38, M1.39 and M1.45 are entirely this class. Every gate in scripts/ checks code, format or history; none checks whether a sentence about the tree is true.",
+      "id": "faf8f3631f9c",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "An accepted ADR asserting something the code contradicts, with nothing able to notice, is the milestone's dominant defect mode -- it now spans ADR-0005, ADR-0008, ADR-0010 and ADR-0013, and M1.47's scope is one document.",
+      "task_id": "M1.47"
+    },
+    {
+      "evidence": "Both module docs claim 'everything shared with [the other] -- error classification, get's range logic, and the size/precondition decision behind multipart -- lives at the crate root'. The only genuine difference across ~120 duplicated lines is result.e_tag versus result.version, which put_options_for already isolates; gcs.rs says so itself ('Same fidelity gap and the same fix -- see s3.rs's matching comment'). No defect today, and a generic adapter may cost more clarity than it buys -- but the divergence risk is asymmetric: an edit to s3.rs alone is caught by the MinIO suite, the same edit to gcs.rs alone is caught by nothing. No row; recorded so the asymmetry is on the record rather than invented later.",
+      "id": "f68048b53159",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "s3.rs and gcs.rs each state that everything shared lives at the crate root, then keep byte-identical copies of get, delete, put_multipart, object_store_path, Debug and the test fixture.",
+      "task_id": ""
+    },
+    {
+      "evidence": "The rule's applies_to includes '*.rs' and rule 10 puts tests in scope. `find . -name mod.rs -not -path './target/*'` returns exactly one file, crates/oqueue-store/tests/it/conformance/mod.rs, added by M1.10. `grep -rn 'mod.rs' scripts/` returns nothing, so the rule names no gate -- AGENTS.md's 'a rule whose script is missing is a preference'. The fix is a rename to conformance.rs beside the directory.",
+      "id": "f360cf459329",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "code-structure.md rule 8 says 'No mod.rs', nothing enforces it, and M1 introduced the tree's only one.",
+      "task_id": ""
+    },
+    {
+      "evidence": "ADR-0005 guarantee 1 now records that the durability skip happens 'by omission, which is what this sentence promised it was not', ending 'whoever writes the durability case owes a capability flag to carry it'. Capabilities has two flags, neither about durability, and its doc claims the mechanism means 'never silently passing a case the backend never ran'. Per AGENTS.md an obligation in neither the backlog nor the deferral table is genuinely unscheduled, and this one is attached to the guarantee ADR-0005 says NFR-20 rests on.",
+      "id": "834802880b6a",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "ADR-0005's M1.37 annotation leaves a live obligation -- a durability capability flag and case -- recorded in neither the backlog nor roadmap.md's deferral table.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M1",
+  "recorded_at": "2026-08-22T07:54:55Z",
+  "reviewer": "claude-opus-5 (independent milestone reviewer; packet-only, did not drive M1)",
+  "verdict": "changes-requested"
+}
