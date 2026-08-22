@@ -22,33 +22,60 @@ use kafka_protocol::protocol::Encodable;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header, read_request_prelude};
 use oqueue_codec::versions::{ADVERTISED, supports};
 
-/// Routes decoded frames to API handlers. `M2.21` builds the frame walk and
-/// `ApiVersions`; `M2.22`-`M2.24` plug their APIs in beside it.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Dispatcher;
+/// Routes decoded frames to API handlers over the stub cluster. `M2.21`
+/// built the frame walk and `ApiVersions`; `M2.22` added `Metadata`;
+/// `M2.23`/`M2.24` plug produce and fetch in beside them.
+#[derive(Debug)]
+pub struct Dispatcher {
+    cluster: std::sync::Arc<crate::stub::StubCluster>,
+}
+
+impl Dispatcher {
+    /// A dispatcher over `cluster`.
+    #[must_use]
+    pub const fn new(cluster: std::sync::Arc<crate::stub::StubCluster>) -> Self {
+        Self { cluster }
+    }
+}
 
 impl crate::Handler for Dispatcher {
     fn handle(&self, request: Vec<u8>) -> impl Future<Output = Option<Vec<u8>>> + Send {
         // Nothing here awaits yet (`M2.23`'s produce path will); a ready
         // future keeps the seam's Send bound without an async block clippy
         // would rather see as `async fn`.
-        core::future::ready(dispatch(&request))
+        core::future::ready(self.dispatch(&request))
     }
 }
 
-/// The synchronous body — nothing here awaits yet; the seam is async for
-/// the APIs that will (`M2.23`'s produce path).
-fn dispatch(request: &[u8]) -> Option<Vec<u8>> {
-    let prelude = read_request_prelude(request).ok()?;
-    let Ok(api_key) = ApiKey::try_from(prelude.api_key) else {
-        // An unknown key has no parsable response; close (module doc).
-        return None;
-    };
-    match api_key {
-        ApiKey::ApiVersions => Some(api_versions_response(prelude)),
-        // `M2.22`-`M2.24` land here. An advertised API without its handler
-        // wired yet is exactly as unanswerable as an unadvertised one.
-        _ => None,
+impl Dispatcher {
+    /// The synchronous body — the seam is async for the APIs that will
+    /// await (`M2.23`'s produce path).
+    pub(crate) fn dispatch(&self, request: &[u8]) -> Option<Vec<u8>> {
+        let prelude = read_request_prelude(request).ok()?;
+        let Ok(api_key) = ApiKey::try_from(prelude.api_key) else {
+            // An unknown key has no parsable response; close (module doc).
+            return None;
+        };
+        if api_key != ApiKey::ApiVersions && !supports(api_key, prelude.api_version) {
+            // Outside ApiVersions' fallback, an unadvertised version has no
+            // response the client would parse.
+            return None;
+        }
+        // The message body starts after the full request header, whose
+        // shape is per-API and generated -- never computed here.
+        let body = || {
+            oqueue_codec::frame::decode_request_header(request)
+                .ok()
+                .map(|(_, consumed)| &request[consumed..])
+        };
+        match api_key {
+            ApiKey::ApiVersions => Some(api_versions_response(prelude)),
+            ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body()?),
+            // `M2.23`/`M2.24` land here. An advertised API without its
+            // handler wired yet is exactly as unanswerable as an
+            // unadvertised one.
+            _ => None,
+        }
     }
 }
 
@@ -102,7 +129,13 @@ fn api_versions_response(prelude: RequestPrelude) -> Vec<u8> {
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{Dispatcher, dispatch};
+    use super::Dispatcher;
+    use crate::stub::StubCluster;
+    use std::sync::Arc;
+
+    fn dispatcher() -> Dispatcher {
+        Dispatcher::new(Arc::new(StubCluster::new("localhost", 9092)))
+    }
     use kafka_protocol::messages::ApiVersionsResponse;
     use kafka_protocol::protocol::Decodable;
     use oqueue_codec::wire::{Cursor, put_i16, put_i32};
@@ -134,7 +167,9 @@ mod tests {
 
     #[test]
     fn a_supported_version_is_answered_at_that_version() {
-        let out = dispatch(&api_versions_request(3, 77)).expect("answered");
+        let out = dispatcher()
+            .dispatch(&api_versions_request(3, 77))
+            .expect("answered");
         let (correlation, response) = decode_response(&out, 3);
         assert_eq!(correlation, 77);
         assert_eq!(response.error_code, 0);
@@ -148,7 +183,9 @@ mod tests {
 
     #[test]
     fn an_unsupported_version_gets_the_v0_bodied_fallback() {
-        let out = dispatch(&api_versions_request(99, 5)).expect("the fallback answers");
+        let out = dispatcher()
+            .dispatch(&api_versions_request(99, 5))
+            .expect("the fallback answers");
         let (correlation, response) = decode_response(&out, 0);
         assert_eq!(correlation, 5);
         assert_eq!(
@@ -167,7 +204,7 @@ mod tests {
         put_i16(&mut body, 0x7F00);
         put_i16(&mut body, 0);
         put_i32(&mut body, 1);
-        assert_eq!(dispatch(&body), None);
+        assert_eq!(dispatcher().dispatch(&body), None);
     }
 
     #[test]
@@ -177,7 +214,7 @@ mod tests {
         put_i16(&mut body, 9);
         put_i32(&mut body, 1);
         assert_eq!(
-            dispatch(&body),
+            dispatcher().dispatch(&body),
             None,
             "M2.23 wires produce; until then, close"
         );
@@ -187,7 +224,6 @@ mod tests {
     /// and the bytes on the wire carry the v0 header both ways.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn api_versions_round_trips_through_a_connection() {
-        use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let (mut client, server) = tokio::io::duplex(4096);
@@ -198,7 +234,7 @@ mod tests {
         };
         let conn = tokio::spawn(crate::serve_connection(
             server,
-            Arc::new(Dispatcher),
+            Arc::new(dispatcher()),
             limits,
         ));
 
@@ -226,7 +262,6 @@ mod tests {
     /// through `serve_connection`).
     #[tokio::test(start_paused = true)]
     async fn an_unknown_key_closes_the_connection_promptly() {
-        use std::sync::Arc;
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         let (mut client, server) = tokio::io::duplex(4096);
@@ -237,7 +272,7 @@ mod tests {
         };
         let conn = tokio::spawn(crate::serve_connection(
             server,
-            Arc::new(Dispatcher),
+            Arc::new(dispatcher()),
             limits,
         ));
 

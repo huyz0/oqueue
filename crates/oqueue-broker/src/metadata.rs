@@ -1,0 +1,274 @@
+//! The `Metadata` answer, v0-v13, against the stub cluster.
+//!
+//! ⚠️ **`allow_auto_topic_creation` exists from v4** (`M2.md` task 16): at
+//! v4+ a requested topic that does not exist is created only when the flag
+//! says so, else answered `UNKNOWN_TOPIC_OR_PARTITION` for that topic
+//! alone. Below v4 the field does not exist on the wire and the protocol's
+//! historical behaviour — creation allowed, the broker's config deciding —
+//! is what the generated decoder's default (`true`) expresses.
+
+use crate::stub::StubCluster;
+use kafka_protocol::error::ResponseError;
+use kafka_protocol::messages::ApiKey;
+use kafka_protocol::messages::metadata_response::{
+    MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
+};
+use kafka_protocol::messages::{BrokerId, MetadataRequest, MetadataResponse, TopicName};
+use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
+use oqueue_codec::frame::{RequestPrelude, encode_response_header};
+
+/// Decodes, answers, encodes. `None` only when the body cannot be decoded —
+/// a malformed request from a client that negotiated fine is a closed
+/// connection, same policy as the dispatcher's other unanswerables.
+pub(crate) fn handle(
+    cluster: &StubCluster,
+    prelude: RequestPrelude,
+    body: &[u8],
+) -> Option<Vec<u8>> {
+    let mut buf = body;
+    let request = MetadataRequest::decode(&mut buf, prelude.api_version).ok()?;
+
+    // Null asks for every topic this broker has — and so does v0's empty
+    // array, which is that version's only all-topics spelling (empty means
+    // none only from v1; round 1's review caught the inversion).
+    let all_topics = request.topics.is_none()
+        || (prelude.api_version == 0 && request.topics.as_ref().is_some_and(Vec::is_empty));
+    let names: Option<Vec<String>> = if all_topics {
+        Some(cluster.topic_names())
+    } else {
+        // ⚠️ A null NAME inside an entry (v10+ describe-by-topic-id) is a
+        // request this id-less stub cannot serve — refusing beats creating
+        // a topic literally named "" and polluting every later response.
+        request.topics.as_ref().map_or(Some(Vec::new()), |topics| {
+            topics
+                .iter()
+                .map(|t| t.name.as_ref().map(|n| n.to_string()))
+                .collect::<Option<Vec<String>>>()
+        })
+    };
+    let Some(names) = names else {
+        // Same policy as every other unanswerable shape: close.
+        return None;
+    };
+
+    let mut response = MetadataResponse::default();
+    response.throttle_time_ms = 0;
+    response.cluster_id = Some(StrBytes::from_static_str("oqueue"));
+    response.controller_id = BrokerId(cluster.node_id);
+    let mut broker = MetadataResponseBroker::default();
+    broker.node_id = BrokerId(cluster.node_id);
+    broker.host = StrBytes::from_string(cluster.host.clone());
+    broker.port = cluster.port;
+    response.brokers = vec![broker];
+
+    for name in names {
+        response.topics.push(topic_entry(cluster, &name, &request));
+    }
+
+    let mut out = Vec::new();
+    encode_response_header(
+        &mut out,
+        ApiKey::Metadata,
+        prelude.api_version,
+        prelude.correlation_id,
+    )
+    .ok()?;
+    response.encode(&mut out, prelude.api_version).ok()?;
+    Some(out)
+}
+
+/// One topic's rows: existing topics list their partitions; missing ones
+/// are created or refused by the flag.
+fn topic_entry(
+    cluster: &StubCluster,
+    name: &str,
+    request: &MetadataRequest,
+) -> MetadataResponseTopic {
+    let mut entry = MetadataResponseTopic::default();
+    entry.name = Some(TopicName(StrBytes::from_string(name.to_owned())));
+
+    let exists = cluster.partition_count(name).is_some();
+    if !exists && !request.allow_auto_topic_creation {
+        entry.error_code = ResponseError::UnknownTopicOrPartition.code();
+        return entry;
+    }
+    if !exists {
+        cluster.ensure_topic(name);
+    }
+    let partitions = cluster.partition_count(name).unwrap_or(1);
+    for index in 0..partitions {
+        let mut p = MetadataResponsePartition::default();
+        p.partition_index = i32::try_from(index).unwrap_or(0);
+        p.leader_id = BrokerId(cluster.node_id);
+        p.replica_nodes = vec![BrokerId(cluster.node_id)];
+        p.isr_nodes = vec![BrokerId(cluster.node_id)];
+        entry.partitions.push(p);
+    }
+    entry
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::handle;
+    use crate::stub::StubCluster;
+    use kafka_protocol::messages::metadata_request::MetadataRequestTopic;
+    use kafka_protocol::messages::{ApiKey, MetadataRequest, MetadataResponse, TopicName};
+    use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
+    use oqueue_codec::frame::RequestPrelude;
+
+    fn request_bytes(version: i16, topics: Option<Vec<&str>>, allow_create: bool) -> Vec<u8> {
+        let mut request = MetadataRequest::default();
+        request.topics = topics.map(|names| {
+            names
+                .into_iter()
+                .map(|n| {
+                    let mut t = MetadataRequestTopic::default();
+                    t.name = Some(TopicName(StrBytes::from_string(n.to_owned())));
+                    t
+                })
+                .collect()
+        });
+        request.allow_auto_topic_creation = allow_create;
+        let mut out = Vec::new();
+        request.encode(&mut out, version).expect("encodes");
+        out
+    }
+
+    fn prelude(version: i16) -> RequestPrelude {
+        RequestPrelude {
+            api_key: 3,
+            api_version: version,
+            correlation_id: 11,
+        }
+    }
+
+    fn decode(bytes: &[u8], version: i16) -> MetadataResponse {
+        // Metadata responses: header v0 below v9, v1 (tagged) from v9.
+        let header_len = if version >= 9 { 5 } else { 4 };
+        let mut rest = &bytes[header_len..];
+        let r = MetadataResponse::decode(&mut rest, version).expect("decodes");
+        assert!(rest.is_empty());
+        r
+    }
+
+    #[test]
+    fn v12_with_the_flag_creates_and_answers() {
+        let cluster = StubCluster::new("h.example", 9092);
+        let body = request_bytes(12, Some(vec!["orders"]), true);
+        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let response = decode(&out, 12);
+        assert_eq!(response.brokers.len(), 1);
+        assert_eq!(response.brokers[0].port, 9092);
+        assert_eq!(response.topics.len(), 1);
+        assert_eq!(response.topics[0].error_code, 0);
+        assert_eq!(response.topics[0].partitions.len(), 1);
+        assert_eq!(cluster.partition_count("orders"), Some(1));
+    }
+
+    #[test]
+    fn v12_without_the_flag_refuses_the_missing_topic() {
+        let cluster = StubCluster::new("h", 1);
+        let body = request_bytes(12, Some(vec!["ghost"]), false);
+        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let response = decode(&out, 12);
+        assert_eq!(
+            response.topics[0].error_code,
+            kafka_protocol::error::ResponseError::UnknownTopicOrPartition.code()
+        );
+        assert_eq!(
+            cluster.partition_count("ghost"),
+            None,
+            "nothing was created"
+        );
+    }
+
+    #[test]
+    fn a_null_topic_list_answers_everything() {
+        let cluster = StubCluster::new("h", 1);
+        cluster.ensure_topic("a");
+        cluster.ensure_topic("b");
+        let body = request_bytes(12, None, false);
+        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let response = decode(&out, 12);
+        let mut names: Vec<String> = response
+            .topics
+            .iter()
+            .map(|t| t.name.as_ref().expect("named").to_string())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["a", "b"]);
+    }
+
+    #[test]
+    fn below_v4_the_wire_has_no_flag_and_creation_is_the_default() {
+        let cluster = StubCluster::new("h", 1);
+        // The field is not on the v1 wire at all -- the dependency's encoder
+        // refuses a non-default value there, which itself proves the claim --
+        // and the decoder defaults it true, the historical behaviour this
+        // handler inherits.
+        let body = request_bytes(1, Some(vec!["implicit"]), true);
+        let out = handle(&cluster, prelude(1), &body).expect("answered");
+        let response = decode(&out, 1);
+        assert_eq!(response.topics[0].error_code, 0);
+        assert_eq!(cluster.partition_count("implicit"), Some(1));
+    }
+
+    #[test]
+    fn v0_empty_array_means_all_topics() {
+        let cluster = StubCluster::new("h", 1);
+        cluster.ensure_topic("v0-visible");
+        let body = request_bytes(0, Some(vec![]), true);
+        let out = handle(&cluster, prelude(0), &body).expect("answered");
+        let response = decode(&out, 0);
+        assert_eq!(response.topics.len(), 1, "v0's empty array is all-topics");
+    }
+
+    #[test]
+    fn from_v1_an_empty_array_means_no_topics() {
+        let cluster = StubCluster::new("h", 1);
+        cluster.ensure_topic("hidden");
+        let body = request_bytes(12, Some(vec![]), true);
+        let out = handle(&cluster, prelude(12), &body).expect("answered");
+        let response = decode(&out, 12);
+        assert!(response.topics.is_empty());
+    }
+
+    /// The whole route through the dispatcher — `supports()` gate, header
+    /// decode, body slice — not just the handler (round 1's review noted a
+    /// mis-slice would close every connection with nothing failing here).
+    #[test]
+    fn metadata_routes_through_the_dispatcher() {
+        use kafka_protocol::messages::RequestHeader;
+        let cluster = std::sync::Arc::new(StubCluster::new("routed.example", 7));
+        let dispatcher = crate::Dispatcher::new(std::sync::Arc::clone(&cluster));
+
+        let mut request = Vec::new();
+        let mut header = RequestHeader::default();
+        header.request_api_key = 3;
+        header.request_api_version = 12;
+        header.correlation_id = 21;
+        header
+            .encode(&mut request, ApiKey::Metadata.request_header_version(12))
+            .expect("header encodes");
+        request.extend_from_slice(&request_bytes(12, Some(vec!["routed"]), true));
+
+        let out = dispatcher.dispatch(&request).expect("answered");
+        let response = decode(&out, 12);
+        assert_eq!(response.brokers[0].host.as_str(), "routed.example");
+        assert_eq!(response.topics[0].error_code, 0);
+        assert_eq!(cluster.partition_count("routed"), Some(1));
+    }
+
+    #[test]
+    fn the_advertised_identity_is_the_configured_one() {
+        let cluster = StubCluster::new("adv.example.test", 31234);
+        let body = request_bytes(9, None, false);
+        let out = handle(&cluster, prelude(9), &body).expect("answered");
+        let response = decode(&out, 9);
+        assert_eq!(response.brokers[0].host.as_str(), "adv.example.test");
+        assert_eq!(response.brokers[0].port, 31234);
+        let _ = ApiKey::Metadata;
+    }
+}

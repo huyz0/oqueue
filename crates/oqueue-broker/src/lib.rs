@@ -19,6 +19,9 @@
 
 pub mod connection;
 pub mod dispatch;
+pub mod metadata;
+pub mod stub;
 
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, serve_connection};
 pub use dispatch::Dispatcher;
+pub use stub::StubCluster;
