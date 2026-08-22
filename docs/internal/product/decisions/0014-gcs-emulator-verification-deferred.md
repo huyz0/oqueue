@@ -40,8 +40,9 @@ standard, and `GcsStore`'s decision logic (classification, precondition
 encoding, multipart planning) is fully covered at T0 independent of either
 emulator, the same way `S3Store`'s was before `M1.15`'s MinIO test existed.
 
-`M1.md`'s own completion condition (the prose `scripts/gates/m1-complete.sh`
-does not exist yet to enforce) names only the fake and MinIO — not a GCS
+`M1.md`'s own completion condition (⚠️ ~~the prose `scripts/gates/m1-complete.sh`
+does not exist yet to enforce~~ — `M1.21` wrote that gate, and `M1.43` wired
+the milestone-review check into it) names only the fake and MinIO — not a GCS
 emulator — so this is not blocking `M1`'s own close, the same way real-S3
 verification already isn't (`roadmap.md`'s deferred table, doc 10 #33).
 
@@ -58,12 +59,24 @@ which this task should do.
 `fake-gcs-server` as workable, which this investigation found false for
 `object_store`'s actual request shape. The table now says so and points here.
 
-**Live GCS verification is deferred to `M1.21`**, not a later milestone via
+⚠️ **This paragraph's choice was correct when written and its outcome was
+wrong; `M1.44` moved the deferral to `roadmap.md`'s cross-milestone table with
+`M15` receiving.** `M1.21` closed with `gcs` recorded `not-yet-run`, which is
+the honest matrix entry but leaves the obligation ownerless: the reasoning
+below turns on the deferral not crossing a milestone boundary, and it crossed
+one the moment M1's last row went `done`. The lesson is narrower than "use the
+table always" — it is that **deferring to a task inside the current milestone
+only holds if that task actually discharges it**, and nothing checks that,
+which is why the table exists for the case where it does not.
+
+~~**Live GCS verification is deferred to `M1.21`**, not a later milestone via
 `roadmap.md`'s cross-milestone table — that table is for a deferral crossing
 a milestone boundary, and `M1.21` ("conformance suite completion") is still
 `M1`'s own task, the one that already planned to record the GCS row of the
 backend matrix. `M1.21`'s own backlog row now carries this finding directly,
-so it is not silently assumed there. Whoever picks it up next has three
+so it is not silently assumed there.~~
+
+Whoever picks it up in `M15` has three
 options this ADR does not choose between: get
 `storage-testbench` to return the missing headers (file the gap upstream, or
 find a still-unfound flag), get `fake-gcs-server` to accept the XML path (an
