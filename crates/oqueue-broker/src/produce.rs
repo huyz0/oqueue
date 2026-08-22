@@ -24,8 +24,9 @@ use crate::connection::HandlerResponse;
 use crate::stub::StubCluster;
 use kafka_protocol::error::ResponseError;
 use kafka_protocol::messages::produce_response::{PartitionProduceResponse, TopicProduceResponse};
-use kafka_protocol::messages::{ApiKey, ProduceRequest, ProduceResponse};
+use kafka_protocol::messages::{ProduceRequest, ProduceResponse};
 use kafka_protocol::protocol::{Decodable, Encodable};
+use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::batch::{crc_coverage, decode_batch_header, rewrite_base_offset, stored_crc};
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 

@@ -9,12 +9,12 @@
 
 use crate::stub::StubCluster;
 use kafka_protocol::error::ResponseError;
-use kafka_protocol::messages::ApiKey;
 use kafka_protocol::messages::metadata_response::{
     MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
 };
 use kafka_protocol::messages::{BrokerId, MetadataRequest, MetadataResponse, TopicName};
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
+use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 
 /// Decodes, answers, encodes. `Close` only when the body cannot be
@@ -128,8 +128,9 @@ mod tests {
     use super::handle;
     use crate::stub::StubCluster;
     use kafka_protocol::messages::metadata_request::MetadataRequestTopic;
-    use kafka_protocol::messages::{ApiKey, MetadataRequest, MetadataResponse, TopicName};
+    use kafka_protocol::messages::{MetadataRequest, MetadataResponse, TopicName};
     use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
+    use oqueue_codec::apikey::ApiKey;
     use oqueue_codec::frame::RequestPrelude;
 
     fn request_bytes(version: i16, topics: Option<Vec<&str>>, allow_create: bool) -> Vec<u8> {

@@ -11,11 +11,11 @@
 use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
 use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
 use kafka_protocol::messages::{
-    ApiKey, ApiVersionsRequest, FetchRequest, MetadataRequest, ProduceRequest, RequestHeader,
-    TopicName,
+    ApiVersionsRequest, FetchRequest, MetadataRequest, ProduceRequest, RequestHeader, TopicName,
 };
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
 use oqueue_broker::{Dispatcher, Handler, HandlerResponse, StubCluster};
+use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::versions::ADVERTISED;
 use std::sync::Arc;
 
@@ -23,7 +23,7 @@ use std::sync::Arc;
 fn framed(api_key: ApiKey, version: i16, body: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
     let mut header = RequestHeader::default();
-    header.request_api_key = api_key as i16;
+    header.request_api_key = api_key.as_i16();
     header.request_api_version = version;
     header.correlation_id = 99;
     header
@@ -80,7 +80,6 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &StubCluster) -> Vec<u8>
             request.topics.push(topic);
             request.encode(&mut body, version).expect("encodes");
         }
-        other => panic!("no minimal body for unadvertised {other:?}"),
     }
     body
 }
@@ -120,7 +119,6 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .expect("Fetch reply decodes");
             0
         }
-        other => panic!("no decoder for unadvertised {other:?}"),
     };
     assert!(
         rest.is_empty(),

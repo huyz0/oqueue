@@ -4,30 +4,32 @@
 //! Reading one is [`crate::wire::Cursor::read_length_prefixed`] with the
 //! connection's frame cap; what this module adds is the *header* handling
 //! around a body — the prelude sniff a dispatcher needs before it knows the
-//! message type, the full header decode through `kafka-protocol`, and
-//! response-header encoding.
+//! message type, the full request-header decode, and response-header
+//! encoding.
 //!
-//! ⚠️ **The `ApiVersions` special case lives here and nowhere else.** Its
+//! ⚠️ **`ADR-0019` made this ours.** The header codec was `kafka-protocol`'s;
+//! now the header versions come from [`crate::apikey::ApiKey`] and the bytes
+//! from [`crate::wire`] and [`crate::flex`]. A request header is the prelude,
+//! then (v1+) a legacy `client_id` string, then (v2) a tagged-fields section;
+//! a response header is the correlation id, then (v1) tagged fields.
+//!
+//! ⚠️ **The `ApiVersions` special case lives in [`crate::apikey`].** Its
 //! *response* header is v0 — bare correlation id, no tagged fields — even at
 //! v3, where the body and the *request* header are flexible. Emit a v1
 //! header there and every client fails at the first byte after connect
-//! (doc 02 §7.6). Nothing in this module hand-computes header versions:
-//! both directions go through the dependency's generated
-//! `request_header_version`/`response_header_version`, whose generated
-//! `ApiVersionsResponse::header_version` is unconditionally 0 — and a golden
-//! byte test below pins that at the byte level, so a dependency bump that
-//! loses the special case fails here rather than against librdkafka.
+//! (doc 02 §7.6). A golden byte test below pins it, and `versions`'s
+//! differential test holds our header-version answers to the dependency's.
 
-use crate::wire::{Cursor, DecodeError};
-use kafka_protocol::messages::{ApiKey, RequestHeader, ResponseHeader};
-use kafka_protocol::protocol::{Decodable, Encodable};
+use crate::apikey::ApiKey;
+use crate::flex::{TaggedFields, put_tagged_fields, read_tagged_fields};
+use crate::wire::{Cursor, DecodeError, put_i32};
 
 /// The three fixed fields every request starts with, whatever its header
 /// version — what a dispatcher reads before it knows the message type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RequestPrelude {
-    /// The API key, raw — [`ApiKey::try_from`] may still refuse it, and an
-    /// unknown key is the caller's `UNSUPPORTED_VERSION` cue, not a decode
+    /// The API key, raw — [`ApiKey::from_i16`] may still refuse it, and a
+    /// key this broker does not serve is a reason to close, not a decode
     /// failure.
     pub api_key: i16,
     /// The API version the client asked for.
@@ -36,27 +38,39 @@ pub struct RequestPrelude {
     pub correlation_id: i32,
 }
 
+/// A decoded request header: the prelude, and the `client_id` present from
+/// header v1.
+///
+/// Tagged fields (v2) are read and dropped — this broker recognises none,
+/// and a request's unknown tags are not echoed anywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestHeader {
+    /// The API key, raw.
+    pub api_key: i16,
+    /// The API version.
+    pub api_version: i16,
+    /// Echoed in the response.
+    pub correlation_id: i32,
+    /// The client's id, or `None` — absent at header v0, nullable above.
+    pub client_id: Option<String>,
+}
+
 /// Why a header could not be handled.
 ///
-/// ⚠️ No `anyhow` in this contract (`error-handling.md` rule 4): the
-/// dependency's errors cross this boundary as the plain trait object their
-/// source chain survives in, and the one case a dispatcher must tell apart —
-/// a well-formed prelude naming an API nobody serves — is its own variant,
-/// because "answer `UNSUPPORTED_VERSION`" and "close the connection" are
-/// different responses to different failures.
+/// ⚠️ The one case a dispatcher must tell apart — a well-formed prelude
+/// naming an API nobody serves — is its own variant, because closing the
+/// connection and answering are different responses to different failures.
+/// Everything else is a [`DecodeError`] the bytes themselves caused.
 #[derive(Debug)]
 pub enum FrameError {
     /// The bytes themselves ran out or violated a bound.
     Decode(DecodeError),
-    /// A well-formed prelude naming an API key the dependency does not
-    /// know — the caller's `UNSUPPORTED_VERSION` cue, never a reason to
-    /// close.
+    /// A well-formed prelude naming an API key this broker does not serve —
+    /// the caller's cue to close, never a decode failure.
     UnknownApiKey {
         /// The key as sent.
         api_key: i16,
     },
-    /// `kafka-protocol` refused the header bytes.
-    Header(Box<dyn std::error::Error + Send + Sync>),
     /// A frame body larger than `i32::MAX` cannot be length-prefixed.
     BodyTooLarge {
         /// The unencodable size.
@@ -75,9 +89,8 @@ impl core::fmt::Display for FrameError {
         match self {
             Self::Decode(e) => write!(f, "{e}"),
             Self::UnknownApiKey { api_key } => {
-                write!(f, "api key {api_key} is not one this broker knows")
+                write!(f, "api key {api_key} is not one this broker serves")
             }
-            Self::Header(e) => write!(f, "header refused: {e}"),
             Self::BodyTooLarge { length } => {
                 write!(f, "a {length}-byte body cannot carry an i32 length prefix")
             }
@@ -103,50 +116,67 @@ pub fn read_request_prelude(body: &[u8]) -> Result<RequestPrelude, DecodeError> 
 /// Decodes the full request header, returning it with the byte offset the
 /// message body starts at.
 ///
-/// The header version is the dependency's
-/// `request_header_version(api_version)` for the key — per-API, generated
-/// from Kafka's own specs, never computed here.
+/// The header version is [`ApiKey::request_header_version`] for the key: v1
+/// carries the `client_id`, v2 adds a tagged-fields section. `client_id` is
+/// a legacy `i16`-length string in *both* — Kafka froze that field even in
+/// the flexible header.
 ///
 /// # Errors
-/// [`FrameError::Decode`] for an unparsable prelude,
-/// [`FrameError::UnknownApiKey`] for a key the dependency does not know
-/// (answer `UNSUPPORTED_VERSION`, do not close), and [`FrameError::Header`]
-/// when the header bytes themselves refuse.
+/// [`FrameError::Decode`] for an unparsable prelude or header, and
+/// [`FrameError::UnknownApiKey`] for a key this broker does not serve (close,
+/// do not answer).
 pub fn decode_request_header(body: &[u8]) -> Result<(RequestHeader, usize), FrameError> {
     let prelude = read_request_prelude(body)?;
-    let api_key = ApiKey::try_from(prelude.api_key).map_err(|()| FrameError::UnknownApiKey {
+    let api_key = ApiKey::from_i16(prelude.api_key).ok_or(FrameError::UnknownApiKey {
         api_key: prelude.api_key,
     })?;
     let header_version = api_key.request_header_version(prelude.api_version);
-    let mut buf = body;
-    let before = buf.len();
-    let header = RequestHeader::decode(&mut buf, header_version)
-        .map_err(|e| FrameError::Header(e.into()))?;
-    Ok((header, before - buf.len()))
+
+    let mut cur = Cursor::new(body);
+    // Re-read the prelude through the cursor so its position tracks the body
+    // offset; the fields are already validated by `read_request_prelude`.
+    cur.read_i16()?;
+    cur.read_i16()?;
+    cur.read_i32()?;
+
+    let client_id = if header_version >= 1 {
+        cur.read_legacy_nullable_string()?.map(str::to_owned)
+    } else {
+        None
+    };
+    if header_version >= 2 {
+        // Read and drop: no request tag is recognised, and nothing echoes a
+        // request's tagged fields.
+        let _: TaggedFields = read_tagged_fields(&mut cur)?;
+    }
+
+    let header = RequestHeader {
+        api_key: prelude.api_key,
+        api_version: prelude.api_version,
+        correlation_id: prelude.correlation_id,
+        client_id,
+    };
+    Ok((header, cur.position()))
 }
 
 /// Appends the response header for `api_key` at `api_version`, correlation
-/// id echoed — through the dependency's `response_header_version`, which is
-/// where the `ApiVersions` v0 special case lives.
+/// id echoed — the header version is [`ApiKey::response_header_version`],
+/// which is where the `ApiVersions` v0 special case lives.
 ///
 /// # Errors
-/// [`FrameError::Header`] if the dependency refuses to encode — unreachable
-/// for a header this simple, kept a `Result` so no panic path enters the
-/// connection task.
+/// [`FrameError::BodyTooLarge`] never fires here; the `Result` shape matches
+/// the other frame writers so no caller special-cases this one.
 pub fn encode_response_header(
     out: &mut Vec<u8>,
     api_key: ApiKey,
     api_version: i16,
     correlation_id: i32,
 ) -> Result<(), FrameError> {
-    let header_version = api_key.response_header_version(api_version);
-    let mut header = ResponseHeader::default();
-    header.correlation_id = correlation_id;
-    // Straight into the caller's buffer — `ByteBufMut` is implemented for
-    // `Vec<u8>`, so no intermediate allocation on the response path.
-    header
-        .encode(out, header_version)
-        .map_err(|e| FrameError::Header(e.into()))?;
+    put_i32(out, correlation_id);
+    if api_key.response_header_version(api_version) >= 1 {
+        // The only tagged fields a response header carries are none.
+        put_tagged_fields(out, &TaggedFields::default());
+    }
     Ok(())
 }
 
@@ -159,7 +189,7 @@ pub fn write_frame(out: &mut Vec<u8>, body: &[u8]) -> Result<(), FrameError> {
     let Ok(length) = i32::try_from(body.len()) else {
         return Err(FrameError::BodyTooLarge { length: body.len() });
     };
-    crate::wire::put_i32(out, length);
+    put_i32(out, length);
     out.extend_from_slice(body);
     Ok(())
 }
@@ -172,8 +202,8 @@ mod tests {
         FrameError, decode_request_header, encode_response_header, read_request_prelude,
         write_frame,
     };
+    use crate::apikey::ApiKey;
     use crate::wire::{Cursor, DecodeError};
-    use kafka_protocol::messages::ApiKey;
 
     #[test]
     fn a_frame_round_trips_through_the_cursor() {

@@ -16,9 +16,10 @@
 #![allow(clippy::expect_used)]
 
 use kafka_protocol::messages::{
-    ApiKey, ApiVersionsRequest, FetchRequest, MetadataRequest, ProduceRequest,
+    ApiVersionsRequest, FetchRequest, MetadataRequest, ProduceRequest, RequestHeader,
 };
 use kafka_protocol::protocol::{Decodable, Encodable};
+use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::frame::decode_request_header;
 
 fn fixture(name: &str) -> Vec<u8> {
@@ -31,20 +32,35 @@ fn fixture(name: &str) -> Vec<u8> {
         .collect()
 }
 
-/// Decode header and body, re-encode both, demand the original bytes.
+/// Three claims per real frame, on the M2.30-owned header and the still-
+/// borrowed body:
+/// 1. **Our** header decode extracts the right fields and body offset.
+/// 2. It agrees with the `kafka-protocol` oracle on those fields (the
+///    `ADR-0019` differential, on bytes a real client actually sent).
+/// 3. The oracle round-trips the whole frame byte-for-byte — the golden
+///    guarantee that the captured bytes are what they claim.
 fn assert_reencodes<T: Decodable + Encodable>(name: &str, api_key: ApiKey) {
     let frame = fixture(name);
-    let (header, consumed) = decode_request_header(&frame).expect("header decodes");
-    assert_eq!(header.request_api_key, api_key as i16);
-    let version = header.request_api_version;
 
-    let mut body = &frame[consumed..];
-    let request = T::decode(&mut body, version).expect("body decodes");
-    assert!(body.is_empty(), "the whole frame is consumed");
+    // (1) Our header decode.
+    let (ours, consumed) = decode_request_header(&frame).expect("our header decodes");
+    assert_eq!(ours.api_key, api_key.as_i16());
+    let version = ours.api_version;
+    let header_version = api_key.request_header_version(version);
 
+    // (2) The oracle decodes the same header; agree on fields and offset.
+    let mut cur: &[u8] = &frame;
+    let kp_header = RequestHeader::decode(&mut cur, header_version).expect("oracle header decodes");
+    assert_eq!(consumed, frame.len() - cur.len(), "{name}: body offset");
+    assert_eq!(ours.correlation_id, kp_header.correlation_id);
+    assert_eq!(ours.client_id.as_deref(), kp_header.client_id.as_deref());
+
+    // (3) The oracle round-trips header + body byte-for-byte.
+    let request = T::decode(&mut cur, version).expect("body decodes");
+    assert!(cur.is_empty(), "the whole frame is consumed");
     let mut reencoded = Vec::new();
-    header
-        .encode(&mut reencoded, api_key.request_header_version(version))
+    kp_header
+        .encode(&mut reencoded, header_version)
         .expect("header re-encodes");
     request
         .encode(&mut reencoded, version)

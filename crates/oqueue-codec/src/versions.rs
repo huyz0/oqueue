@@ -1,16 +1,16 @@
 //! What this broker advertises, per API — and the pins that hold the
 //! dependency to it.
 //!
-//! The flexible-versions rules are `kafka-protocol`'s (`ADR-0017`); ours is
-//! the *decision* of what to advertise, which `FR-2` binds to what is
-//! actually implemented. ⚠️ **No global flexible cutover exists** — Produce
-//! goes flexible at v9, Fetch at v12, `ApiVersions` at v3 — and nothing
-//! here computes those rules: the table records each cutover and the golden
-//! tests below hold the dependency's generated code to them, so a
-//! `kafka-protocol` bump that moves one fails here rather than against a
-//! live client.
+//! What to advertise is *our* decision (`FR-2` binds it to what is
+//! implemented); the flexible-versions cutovers are the protocol's.
+//! ⚠️ **No global cutover exists** — Produce goes flexible at v9, Fetch at
+//! v12, `ApiVersions` at v3 — so the table records each one and a
+//! differential test below holds our [`crate::apikey::ApiKey`] header-version
+//! logic to `kafka-protocol`'s generated answer (the `ADR-0019` oracle), at
+//! every advertised version. A dependency bump that moves a cutover, or our
+//! own logic drifting from it, fails here rather than against a live client.
 
-use kafka_protocol::messages::ApiKey;
+use crate::apikey::ApiKey;
 
 /// One advertised API: the version range this broker serves, and where the
 /// wire goes flexible (`None` — never — has no instance in this table yet,
@@ -81,10 +81,58 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{ADVERTISED, Advertised, advertised_for, supports};
+    use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
-        ApiKey, ApiVersionsRequest, FetchRequest, MetadataRequest, ProduceRequest,
+        ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse, MetadataRequest,
+        MetadataResponse, ProduceRequest, ProduceResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
+
+    /// The `ADR-0019` oracle for header versions: our
+    /// [`ApiKey::request_header_version`] and
+    /// [`ApiKey::response_header_version`] must equal `kafka-protocol`'s
+    /// generated `header_version` for the paired request and response types,
+    /// at every advertised version. The `ApiVersions` response-header special
+    /// case is the one this most needs to hold — the dependency's generated
+    /// `ApiVersionsResponse::header_version` is 0 at every version, and so
+    /// must ours.
+    #[test]
+    fn our_header_versions_match_the_dependency() {
+        for row in &ADVERTISED {
+            for version in row.min..=row.max {
+                let (req, resp) = match row.api_key {
+                    ApiKey::Produce => (
+                        ProduceRequest::header_version(version),
+                        ProduceResponse::header_version(version),
+                    ),
+                    ApiKey::Fetch => (
+                        FetchRequest::header_version(version),
+                        FetchResponse::header_version(version),
+                    ),
+                    ApiKey::Metadata => (
+                        MetadataRequest::header_version(version),
+                        MetadataResponse::header_version(version),
+                    ),
+                    ApiKey::ApiVersions => (
+                        ApiVersionsRequest::header_version(version),
+                        ApiVersionsResponse::header_version(version),
+                    ),
+                };
+                assert_eq!(
+                    row.api_key.request_header_version(version),
+                    req,
+                    "{:?} v{version} request header",
+                    row.api_key
+                );
+                assert_eq!(
+                    row.api_key.response_header_version(version),
+                    resp,
+                    "{:?} v{version} response header",
+                    row.api_key
+                );
+            }
+        }
+    }
 
     /// The golden pin: at each advertised cutover the request header goes
     /// v2 (flexible), and one version below it is still v1. This is the
@@ -117,7 +165,6 @@ mod tests {
                 ApiKey::Fetch => pin::<FetchRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
-                other => panic!("no pin written for advertised API {other:?}"),
             }
         }
     }
@@ -143,7 +190,6 @@ mod tests {
                 ApiKey::Fetch => within::<FetchRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
-                other => panic!("no bound check written for advertised API {other:?}"),
             }
         }
     }
@@ -179,9 +225,17 @@ mod tests {
         assert!(!supports(ApiKey::Produce, 2), "KIP-896 removed v0-v2");
         assert!(!supports(ApiKey::Produce, 14));
         assert!(!supports(ApiKey::ApiVersions, 4), "v4 is not advertised");
-        assert!(
-            advertised_for(ApiKey::SaslHandshake).is_none(),
-            "an API not in the table is the UNSUPPORTED_VERSION cue"
-        );
+        // ⚠️ An API this broker does not serve can no longer even be named:
+        // our `ApiKey` has only the four served variants (`ADR-0019`), so
+        // every variant is in the table and the unserved case is
+        // `ApiKey::from_i16` returning `None` (pinned in `apikey`), not a
+        // table miss. So this asserts the table's own completeness instead.
+        for row in &ADVERTISED {
+            assert!(
+                advertised_for(row.api_key).is_some(),
+                "{:?} is a served key and must have a row",
+                row.api_key
+            );
+        }
     }
 }

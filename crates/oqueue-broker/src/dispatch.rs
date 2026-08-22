@@ -17,9 +17,10 @@
 use crate::connection::HandlerResponse;
 use core::future::Future;
 use kafka_protocol::error::ResponseError;
+use kafka_protocol::messages::ApiVersionsResponse;
 use kafka_protocol::messages::api_versions_response::ApiVersion;
-use kafka_protocol::messages::{ApiKey, ApiVersionsResponse};
 use kafka_protocol::protocol::Encodable;
+use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header, read_request_prelude};
 use oqueue_codec::versions::{ADVERTISED, supports};
 
@@ -55,7 +56,7 @@ impl Dispatcher {
         let Ok(prelude) = read_request_prelude(request) else {
             return HandlerResponse::Close;
         };
-        let Ok(api_key) = ApiKey::try_from(prelude.api_key) else {
+        let Some(api_key) = ApiKey::from_i16(prelude.api_key) else {
             // An unknown key has no parsable response; close (module doc).
             return HandlerResponse::Close;
         };
@@ -68,7 +69,7 @@ impl Dispatcher {
             return HandlerResponse::Reply(api_versions_response(prelude));
         }
         // The message body starts after the full request header, whose
-        // shape is per-API and generated -- never computed here.
+        // per-API shape `oqueue_codec::frame` now owns (`ADR-0019`).
         let Some(body) = oqueue_codec::frame::decode_request_header(request)
             .ok()
             .map(|(_, consumed)| &request[consumed..])
@@ -79,9 +80,9 @@ impl Dispatcher {
             ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body),
             ApiKey::Produce => crate::produce::handle(&self.cluster, prelude, body),
             ApiKey::Fetch => crate::fetch::handle(&self.cluster, prelude, body),
-            // Unreachable while every advertised API is wired above; kept
-            // because `supports()` is the gate, not this match.
-            _ => HandlerResponse::Close,
+            // Answered above by the early return; named rather than a
+            // wildcard so a fifth API cannot be silently swallowed here.
+            ApiKey::ApiVersions => HandlerResponse::Close,
         }
     }
 }

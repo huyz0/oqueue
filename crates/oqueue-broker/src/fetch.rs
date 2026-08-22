@@ -18,8 +18,9 @@ use crate::connection::HandlerResponse;
 use crate::stub::StubCluster;
 use kafka_protocol::error::ResponseError;
 use kafka_protocol::messages::fetch_response::{FetchableTopicResponse, PartitionData};
-use kafka_protocol::messages::{ApiKey, FetchRequest, FetchResponse};
+use kafka_protocol::messages::{FetchRequest, FetchResponse};
 use kafka_protocol::protocol::{Decodable, Encodable};
+use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 
 /// Decodes, resolves, reads, answers — or closes on a malformed body.
@@ -316,7 +317,8 @@ mod tests {
     /// through it — header slicing, `supports()` gate and all.
     #[test]
     fn a_produce_then_fetch_round_trips_through_the_dispatcher() {
-        use kafka_protocol::messages::{ApiKey, RequestHeader};
+        use kafka_protocol::messages::RequestHeader;
+        use oqueue_codec::apikey::ApiKey;
         let cluster = std::sync::Arc::new(StubCluster::new("h", 1));
         cluster.ensure_topic("t");
         let dispatcher = crate::Dispatcher::new(std::sync::Arc::clone(&cluster));
@@ -327,7 +329,7 @@ mod tests {
             header.request_api_key = api_key;
             header.request_api_version = version;
             header.correlation_id = 7;
-            let header_version = ApiKey::try_from(api_key)
+            let header_version = ApiKey::from_i16(api_key)
                 .expect("a known key")
                 .request_header_version(version);
             header

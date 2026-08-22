@@ -248,6 +248,39 @@ impl<'a> Cursor<'a> {
         // error offsets point at it, same as the non-nullable path.
         self.read_length_prefixed(max).map(Some)
     }
+
+    /// A legacy (non-flexible) nullable string: an `i16` length, `-1` null,
+    /// then that many UTF-8 bytes — the shape of every string in a
+    /// non-flexible message version, and of `client_id` in *every* request
+    /// header (Kafka froze that field's encoding even in the flexible
+    /// header). Zero-copy: the `&str` borrows the buffer.
+    ///
+    /// The length is bounded against the remaining input before the slice is
+    /// taken (`security.md` rules 1-2) — no separate `max`, because an `i16`
+    /// length caps at 32 KiB and the input is the tighter bound anyway.
+    ///
+    /// # Errors
+    /// [`DecodeError::UnexpectedEof`] past the input,
+    /// [`DecodeError::NegativeLength`] for a negative length other than `-1`,
+    /// and [`DecodeError::InvalidUtf8`] for non-UTF-8 bytes.
+    pub fn read_legacy_nullable_string(&mut self) -> Result<Option<&'a str>, DecodeError> {
+        let at = self.pos;
+        let length = self.read_i16()?;
+        if length == -1 {
+            return Ok(None);
+        }
+        if length < 0 {
+            return Err(DecodeError::NegativeLength {
+                length: i32::from(length),
+                at,
+            });
+        }
+        let at = self.pos;
+        let bytes = self.take(length.unsigned_abs() as usize)?;
+        core::str::from_utf8(bytes)
+            .map(Some)
+            .map_err(|_| DecodeError::InvalidUtf8 { at })
+    }
 }
 
 /// Appends `v` big-endian. The writers mirror the readers; a `Vec` is the
