@@ -7,12 +7,20 @@
 //! this crate's own tests could point `GOOGLE_BASE_URL` at.
 //!
 //! The pure decision logic that is genuinely GCS-specific lives in `put.rs`
-//! (`code-structure.md` rule 9); everything shared with `s3.rs` — error
-//! classification, `get`'s range logic, and the size/precondition decision
-//! behind multipart — lives at the crate root (`classify.rs`, `get.rs`,
-//! `multipart.rs`). See each module's own doc comment, and `s3.rs`'s own
-//! module doc for why the two backends are this similar in shape: both are
-//! `object_store` adapters over the same generic `ObjectStore` trait.
+//! (`code-structure.md` rule 9); the decision logic shared with `s3.rs` —
+//! error classification, `get`'s range logic, and the size/precondition
+//! decision behind multipart — lives at the crate root (`classify.rs`,
+//! `get.rs`, `multipart.rs`). See each module's own doc comment, and
+//! `s3.rs`'s own module doc for why the two backends are this similar in
+//! shape: both are `object_store` adapters over the same generic
+//! `ObjectStore` trait.
+//!
+//! ⚠️ **The adapter bodies below are deliberate near-copies of `s3.rs`'s**
+//! (`M1.58` — see the matching warning there). The asymmetry lands on this
+//! file: an edit to `s3.rs` alone is exercised by the `MinIO` conformance run,
+//! while an edit here alone is exercised by nothing until GCS live
+//! verification lands (`M15`) — so change the twin in the same commit, by
+//! hand.
 
 mod put;
 

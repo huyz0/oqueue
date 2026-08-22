@@ -1,10 +1,21 @@
 //! An [`ObjectStore`] backed by S3 (or an S3-compatible endpoint, e.g. `MinIO`).
 //!
 //! The pure decision logic that is genuinely S3-specific lives in `put.rs`
-//! (`code-structure.md` rule 9); everything shared with `gcs.rs` — error
-//! classification, `get`'s range logic, and the size/precondition decision
-//! behind multipart — lives at the crate root (`classify.rs`, `get.rs`,
-//! `multipart.rs`). See each module's own doc comment.
+//! (`code-structure.md` rule 9); the decision logic shared with `gcs.rs` —
+//! error classification, `get`'s range logic, and the size/precondition
+//! decision behind multipart — lives at the crate root (`classify.rs`,
+//! `get.rs`, `multipart.rs`). See each module's own doc comment.
+//!
+//! ⚠️ **The adapter bodies below are deliberate near-copies of `gcs.rs`'s** —
+//! `get`, `delete`, `put_multipart`, `object_store_path`, `Debug` and the
+//! test fixture differ only where `put_options_for` already isolates the
+//! backends (`e_tag` vs `version`). M1's closing review left the copies
+//! standing rather than demanding a generic adapter, which it judged may
+//! cost more clarity than it buys (`M1.58`). ⚠️ The risk that keeps is
+//! asymmetric: an edit here alone is exercised by the `MinIO` conformance
+//! run, while the same edit to `gcs.rs` alone is exercised by nothing until
+//! GCS live verification lands (`M15`) — so change the twin in the same
+//! commit, by hand.
 
 mod put;
 
