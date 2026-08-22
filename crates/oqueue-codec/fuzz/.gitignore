@@ -1,0 +1,6 @@
+# cargo-fuzz working state: build tree, crash artifacts, and the growing
+# corpus (fuzz.sh seeds each run from ../seeds/, which IS committed).
+target/
+artifacts/
+corpus/
+coverage/

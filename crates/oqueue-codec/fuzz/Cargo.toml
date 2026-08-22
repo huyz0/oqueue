@@ -1,0 +1,56 @@
+# The fuzz harness for every decoder in oqueue-codec -- security.md rule 5,
+# testing.md rule 24, invoked by scripts/fuzz.sh.
+#
+# ⚠️ Deliberately its own workspace ([workspace] below): fuzz targets need
+# libfuzzer-sys and a nightly sanitizer runtime, and neither belongs in the
+# root workspace's dependency tree or under its lints. cargo-fuzz owns this
+# manifest's shape.
+[package]
+name = "oqueue-codec-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oqueue-codec = { path = "..", features = ["gzip", "snappy"] }
+
+[[bin]]
+name = "frame"
+path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "varint"
+path = "fuzz_targets/varint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "batch"
+path = "fuzz_targets/batch.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "records"
+path = "fuzz_targets/records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "compress"
+path = "fuzz_targets/compress.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

@@ -19,6 +19,20 @@ Because protocol compatibility is the product. Every byte a client sends or expe
   per-version flexible rules (`ADR-0017`; `Cargo.toml`'s comment records the
   feature choices). This crate is the workspace's single protocol surface.
 
+## The fuzz harness
+
+`fuzz/` is a cargo-fuzz workspace of its own (deliberately outside the root
+workspace: libFuzzer needs nightly), holding one target per decoder module —
+frame, varint, batch, records, compress — each seeded from `fuzz/seeds/`,
+which includes the real librdkafka frames the golden corpus captured.
+`scripts/fuzz.sh` runs every target bounded and fails on a crash, a build
+failure, or a codec module with neither a target nor an allowlisted reason
+(`security.md` rule 5, `testing.md` rule 24); `.github/workflows/fuzz.yml`
+schedules it nightly, the rule's "nightly tier" clause made real. ⚠️ The
+end-to-end **request** path (the generated per-API body decoders behind the
+dispatcher) is `M2.27`'s target, held back because the first thing it found
+was a real unbounded-allocation DoS whose fix is its own task.
+
 ## Downstream
 
 `oqueue-broker`, and through it `bin/oqueue`.

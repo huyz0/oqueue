@@ -1,0 +1,38 @@
+# The nightly tier's fuzz leg — security.md rule 5's "run in the nightly
+# tier", delivered by an actual schedule rather than by a script nothing
+# invokes (M2.26; the deferral row's original complaint was exactly that
+# the rule read as enforced and was not).
+#
+# ⚠️ Scheduled AND push-runnable-by-hand (workflow_dispatch): a cron-only
+# job that breaks stays broken invisibly until the next night someone
+# happens to look. The dispatch trigger is the "run it now" a red nightly
+# needs.
+#
+# scripts/fuzz.sh owns everything below the trigger: target discovery, the
+# fail-closed decoder-coverage check, seed corpora, run depth, and the
+# crash-vs-build distinction. This file only provides the toolchain the
+# script's own skip lines name.
+name: fuzz
+
+on:
+  schedule:
+    # 03:17 UTC daily — an off-peak minute, deliberately not :00 (GitHub
+    # delays on-the-hour crons under load).
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Run every decoder's fuzz target
+        run: bash scripts/fuzz.sh

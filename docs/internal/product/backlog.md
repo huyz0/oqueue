@@ -36,9 +36,11 @@ An unmodified Kafka client connects, negotiates versions, produces, and
 fetches against a stub partition; "real" is decided by librdkafka. Plan:
 [milestones/M2.md](milestones/M2.md). Serves FR-1, FR-2, FR-3.
 
-⚠️ **M2 carries 27 rows, over `sdd.md`'s cap of 20; the argument the standard
-requires:** sixteen rows (`M2.2`, `M2.12`-`M2.26`) are the milestone itself —
-one codec decision and the protocol layer it decides; nine (`M2.3`-`M2.11`)
+⚠️ **M2 carries 28 rows, over `sdd.md`'s cap of 20; the argument the standard
+requires:** seventeen rows (`M2.2`, `M2.12`-`M2.27`) are the milestone itself —
+one codec decision and the protocol layer it decides, `M2.27` a security fix
+the `M2.26` fuzz harness surfaced during the milestone (found debt, not new
+scope — `M1`'s precedent for a row opened mid-milestone); nine (`M2.3`-`M2.11`)
 absorb the eleven rows M1 closed `deferred`, the third-bucket reasoning
 M0→M1 already established (carried debt, not new scope); two (`M2.0`,
 `M2.1`) are the opening and the loop's own repair.
@@ -76,7 +78,8 @@ row — `git log --grep <ID>` — not in edits to it; `done` rows are frozen.
 | M2.23 | `Produce` v3-13 against a stub partition | Serves FR-1. v0-2 removed by KIP-896. librdkafka's produce round trip lands records in the stub — the real-librdkafka half is `M2.25`'s harness, `M2.21`'s precedent | done |
 | M2.24 | `Fetch` v4-17, echoing session fields, parsing `IsolationLevel` | Serves FR-1. librdkafka's fetch returns the records `M2.23` produced — the real-librdkafka half is `M2.25`'s harness, same precedent | done |
 | M2.25 | Golden-byte corpus, librdkafka harness, protocol-support matrix, `scripts/gates/m2-complete.sh` | Serves FR-1, FR-2. Idempotence decided: documented `enable.idempotence=false` (`InitProducerId` is M11's), in `docs/protocol-support.md`. The gate asserts the completion condition: librdkafka 2.15 and kafka-clients 3.9.1 round trips, byte-exact corpus re-encode, CRC differential, FR-2 matrix test | done |
-| M2.26 | `scripts/fuzz.sh` and a fuzz target on every decoder | Serves `security.md` rule 5 and `testing.md` rule 24, deferred to M2 by M0's checkpoint review. Each decoder has a target; `fuzz.sh` runs each briefly and fails on a crash; the deferral-table row is discharged | todo |
+| M2.26 | `scripts/fuzz.sh` and a fuzz target on every decoder | Serves `security.md` rule 5 and `testing.md` rule 24, deferred to M2 by M0's checkpoint review. Five targets — frame, varint, batch, records, compress — one per codec decoder module, seeded from the librdkafka capture; `fuzz.sh` fails on a crash, a build failure, or an unaccounted codec module; `fuzz.yml` schedules it nightly; the deferral row is discharged. The end-to-end request-path target is `M2.27`'s (it found a real DoS) | done |
+| M2.27 | Bound untrusted request-decode allocation, and fuzz the request path | Serves `security.md` rules 1-2. `M2.26`'s in-progress `request` fuzz target — the dispatcher's full path through the generated per-API decoders — found a 64-byte Fetch v16 frame demanding a 30 GB allocation: `kafka-protocol`'s decoder does `Vec::with_capacity(n)` (types.rs:988) from an attacker-controlled compact-array count with no bound against remaining bytes. A single packet OOMs the broker (rule 1's exact case). Bound it (likely an ADR — the generated decoder allocates eagerly and cannot be intercepted), add the `request` target seeded with the reproducer as a regression, and wire the `tokio` `macros` feature the standalone fuzz build needs into oqueue-broker's lib deps | todo |
 
 ## M1: Object store seam and conformance suite
 
