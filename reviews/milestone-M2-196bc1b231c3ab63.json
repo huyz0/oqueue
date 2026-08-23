@@ -1,0 +1,18 @@
+{
+  "commits": [
+    "96333685300097553eba405ea126c16f1c49c94a"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-codec/README.md lines ~35-38: 'The end-to-end request path (the generated per-API body decoders behind the dispatcher) is M2.27's target, held back because the first thing it found was a real unbounded-allocation DoS whose fix is its own task.' Compare to the same file's Invariants table row (edited by 9633368) which now reads '`scripts/fuzz.sh` ... one target per decoder module plus `request` for the full dispatch path, run nightly ... (M2.26, M2.34)', to crates/oqueue-codec/fuzz/fuzz_targets/request.rs (exists, real target, added by M2.34/e5a3641 per its module doc citing M2.34), and to docs/internal/product/backlog.md's M2.34 row ('The request fuzz target added ... replays in 0 ms now'). `git log --oneline -- crates/oqueue-codec/README.md` shows M2.34 (e5a3641) never touched this file, so the paragraph was already stale before 9633368, which then fixed the row immediately below it but not this one. Per review.md rule 9a (ADR-0016's severity floor for prose), this is prose-only and does not change code behaviour or a live decision, so minor rather than major -- no task proposed.",
+      "id": "971e74c08a60",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "oqueue-codec/README.md's 'Fuzz harness' paragraph still describes the end-to-end request-path fuzz target as future/held-back work, while the Invariants row two sections below (fixed by this very commit) and the backlog's M2.34 row both say it landed and runs nightly -- a contradiction inside the file 9633368 just edited for the identical staleness class."
+    }
+  ],
+  "milestone": "M2",
+  "recorded_at": "2026-08-23T01:23:43Z",
+  "reviewer": "Claude Sonnet 5 (addendum milestone-reviewer)",
+  "verdict": "pass"
+}
