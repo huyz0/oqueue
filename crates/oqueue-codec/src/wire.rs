@@ -15,6 +15,13 @@
 //! primitives went — this module stays the fixed-width and `i32`-length base
 //! they build on.
 
+// The byte writers live in [`crate::emit`] so this module stays under the
+// size limit; re-exported here because every caller reaches them as
+// `crate::wire::put_*` and the split is an implementation detail.
+pub use crate::emit::{
+    put_bool, put_i8, put_i16, put_i32, put_i64, put_legacy_nullable_string, put_u32,
+};
+
 /// Why a decode stopped. Carries what a debugger needs: how much was asked
 /// for, how much existed, where.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -249,6 +256,44 @@ impl<'a> Cursor<'a> {
         self.read_length_prefixed(max).map(Some)
     }
 
+    /// A single byte as a bool: `0` is false, any other value true (Kafka
+    /// encodes booleans as one byte).
+    ///
+    /// # Errors
+    /// [`DecodeError::UnexpectedEof`] if empty.
+    pub fn read_bool(&mut self) -> Result<bool, DecodeError> {
+        Ok(self.read_i8()? != 0)
+    }
+
+    /// A legacy (non-flexible) nullable array length: an `i32` count, `-1`
+    /// null, bounded against the remaining input before the caller sizes
+    /// anything (`security.md` rules 1-2). The caller decodes that many
+    /// elements. `None` is the null array.
+    ///
+    /// # Errors
+    /// [`DecodeError::NegativeLength`] for a negative count other than `-1`,
+    /// [`DecodeError::LengthOutOfBounds`] for a count past the remaining
+    /// input (no valid array of that many one-byte-minimum elements exists).
+    pub fn read_legacy_array_len(&mut self) -> Result<Option<usize>, DecodeError> {
+        let at = self.pos;
+        let count = self.read_i32()?;
+        if count == -1 {
+            return Ok(None);
+        }
+        if count < 0 {
+            return Err(DecodeError::NegativeLength { length: count, at });
+        }
+        let count = count.unsigned_abs() as usize;
+        if count > self.remaining() {
+            return Err(DecodeError::LengthOutOfBounds {
+                length: count as u64,
+                max: self.remaining() as u64,
+                at,
+            });
+        }
+        Ok(Some(count))
+    }
+
     /// A legacy (non-flexible) nullable string: an `i16` length, `-1` null,
     /// then that many UTF-8 bytes — the shape of every string in a
     /// non-flexible message version, and of `client_id` in *every* request
@@ -281,33 +326,6 @@ impl<'a> Cursor<'a> {
             .map(Some)
             .map_err(|_| DecodeError::InvalidUtf8 { at })
     }
-}
-
-/// Appends `v` big-endian. The writers mirror the readers; a `Vec` is the
-/// right buffer because every frame this crate assembles is written once and
-/// handed to the socket task whole.
-pub fn put_i8(buf: &mut Vec<u8>, v: i8) {
-    buf.push(v.cast_unsigned());
-}
-
-/// Appends `v` big-endian.
-pub fn put_i16(buf: &mut Vec<u8>, v: i16) {
-    buf.extend_from_slice(&v.to_be_bytes());
-}
-
-/// Appends `v` big-endian.
-pub fn put_i32(buf: &mut Vec<u8>, v: i32) {
-    buf.extend_from_slice(&v.to_be_bytes());
-}
-
-/// Appends `v` big-endian.
-pub fn put_u32(buf: &mut Vec<u8>, v: u32) {
-    buf.extend_from_slice(&v.to_be_bytes());
-}
-
-/// Appends `v` big-endian.
-pub fn put_i64(buf: &mut Vec<u8>, v: i64) {
-    buf.extend_from_slice(&v.to_be_bytes());
 }
 
 #[cfg(test)]

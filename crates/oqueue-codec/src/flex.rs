@@ -23,7 +23,61 @@
 //! cursor (zero-copy, like every other read in this crate).
 
 use crate::varint::{put_unsigned_varint, read_unsigned_varint};
-use crate::wire::{Cursor, DecodeError};
+use crate::wire::{Cursor, DecodeError, put_i32, put_legacy_nullable_string};
+
+/// A nullable string, compact when `flexible` else legacy — the version-aware
+/// combinator every message field uses, so a codec writes `flexible` once per
+/// message rather than branching at each string.
+///
+/// # Errors
+/// As the underlying [`read_compact_nullable_string`] /
+/// [`Cursor::read_legacy_nullable_string`].
+pub fn read_nullable_string<'a>(
+    cur: &mut Cursor<'a>,
+    flexible: bool,
+) -> Result<Option<&'a str>, DecodeError> {
+    if flexible {
+        read_compact_nullable_string(cur)
+    } else {
+        cur.read_legacy_nullable_string()
+    }
+}
+
+/// Appends a nullable string, compact when `flexible` else legacy.
+pub fn put_nullable_string(buf: &mut Vec<u8>, flexible: bool, value: Option<&str>) {
+    if flexible {
+        put_compact_nullable_string(buf, value);
+    } else {
+        put_legacy_nullable_string(buf, value);
+    }
+}
+
+/// A nullable array length, compact when `flexible` else legacy.
+///
+/// The caller decodes that many elements; `None` is the null array. Bounded
+/// against the remaining input either way (`security.md` rules 1-2).
+///
+/// # Errors
+/// As [`read_compact_array_len`] / [`Cursor::read_legacy_array_len`].
+pub fn read_array_len(cur: &mut Cursor<'_>, flexible: bool) -> Result<Option<usize>, DecodeError> {
+    if flexible {
+        read_compact_array_len(cur)
+    } else {
+        cur.read_legacy_array_len()
+    }
+}
+
+/// Appends a nullable array length, compact when `flexible` else legacy.
+pub fn put_array_len(buf: &mut Vec<u8>, flexible: bool, count: Option<usize>) {
+    if flexible {
+        put_compact_array_len(buf, count);
+    } else {
+        match count {
+            None => put_i32(buf, -1),
+            Some(n) => put_i32(buf, i32::try_from(n).unwrap_or(i32::MAX)),
+        }
+    }
+}
 
 /// A tagged field the decoder did not recognise, kept verbatim so a
 /// re-encode reproduces the peer's bytes (KIP-482 requires unknown tags to

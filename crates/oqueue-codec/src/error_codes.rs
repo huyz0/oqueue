@@ -9,6 +9,8 @@
 
 /// No error.
 pub const NONE: i16 = 0;
+/// The topic or partition does not exist on this broker (3).
+pub const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
 /// The requested API version is not supported (35). The one code
 /// `ApiVersions` answers with, in its v0-bodied fallback.
 pub const UNSUPPORTED_VERSION: i16 = 35;
@@ -23,6 +25,10 @@ mod tests {
         assert_eq!(
             super::UNSUPPORTED_VERSION,
             ResponseError::UnsupportedVersion.code()
+        );
+        assert_eq!(
+            super::UNKNOWN_TOPIC_OR_PARTITION,
+            ResponseError::UnknownTopicOrPartition.code()
         );
         // NONE is the protocol's "no error" sentinel, which the dependency
         // represents as the absence of a ResponseError (code 0).
