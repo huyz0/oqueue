@@ -30,6 +30,47 @@ re-derived rather than copied when a milestone opens. Read the plan's
 "Decisions required first" before writing any of that milestone's code; see
 [`sdd.md`](../standards/sdd.md) §Decomposition.
 
+## M3: Coordinator — offset sequencing and the index
+
+A record is acknowledged only after it is durable in object storage **and**
+its position is committed; offsets are monotonic and gap-free per partition
+under concurrent producers; a reader resolves offset→object through an index
+rather than by listing anything. Plan: [milestones/M3.md](milestones/M3.md).
+Serves FR-10, FR-11, FR-12, FR-13, FR-32, NFR-2, NFR-3, NFR-21.
+
+⚠️ **Of the three decisions M3.md named "required first," one needs no ADR and
+is resolved by this commit; the other two are `todo` rows below, `M3.1` and
+`M3.2`, per the `milestone` skill's ordering (decisions before decomposition
+means before the rest of the table, not before this opening row lands).**
+Metadata distribution (doc 10 #9) is settled directly by doc 12 §4.4 with
+nothing to decide, struck in `roadmap.md`'s decision-gate table by this same
+commit; `M3.9` implements it. Offset sequencing (doc 10 #1) and the bounded
+staleness limit (doc 10 #11) are real decisions with live alternatives —
+`ADR-0020` and `ADR-0021` — and neither is recorded yet: this commit does not
+touch `docs/internal/product/decisions/`, and `roadmap.md`'s #1 row is
+unchanged, still open. `M3.1` and `M3.2` are the commits that record them.
+
+| ID | Task | Acceptance | State |
+|---|---|---|---|
+| M3.0 | Open M3: decompose, absorb M1/M2's deferred rows, flip the state cells | The four rows in `roadmap.md`'s deferral table targeting M3 (`ADR-0008` `RetryConfig` wiring from `M2.11`, the region header `alg` field from `M1.7`, the streaming multipart writer from `M1.16`, the durability conformance case from `M1.58`) each read discharged with a pointer to the M3 row receiving it; M2 reads `complete` and M3 `in progress` in `roadmap.md` and `README.md` | done |
+| M3.1 | `ADR-0020`: offset sequencing and coordinator shape | Doc 06 §1, doc 10 #1. Resolves external-store vs object-storage-CAS vs local-consensus: a single in-process coordinator, WarpStream's retroactive-commit shape, realized without a separately-hosted store (doc 15 §6) and without per-partition local consensus (`AGENTS.md`'s no-partition-leadership constraint). ADR accepted; doc 10 #1 marked resolved | todo |
+| M3.2 | `ADR-0021`: bounded staleness limit | Doc 12 §4.6 (H4), doc 10 #11. Sets `max_metadata_staleness = 5 s`, the floor for M5's `deletion_delay`. ADR accepted; doc 10 #11 marked resolved | todo |
+| M3.3 | Core coordinator types in `oqueue-core`: `CommitVersion`, the metadata-log record enum, `CoordinatorEpoch`, `ReadMode` | Serves FR-11, FR-12, FR-13. `CommitVersion(u64)` non-wrapping like `Offset::add`; record enum event/delta-shaped, not key-value (M3.md task 2 — what makes snapshotting right and compaction wrong later); `CoordinatorEpoch(u64)`; `ReadMode::{Stale, AtLeast(CommitVersion), Linearizable}`. Sans-I/O; round-trip and monotonicity property tests | todo |
+| M3.4 | Durable metadata-log trait + in-memory fake | Serves `ADR-0020` point 5 — seam before engine, the materialized-state-engine choice (doc 10 #12) stays open per that ADR. A trait: durably append entries in `CommitVersion` order, read them back; out-of-order append rejected (M3.md task 14). `FakeMetadataLog` beside it (`contracts.md` rules 9, 11). Conformance-style suite the fake satisfies | todo |
+| M3.5 | `MaterializedIndex` trait: cache, not source of truth | Serves FR-12, FR-13, NFR-2, NFR-3. `oqueue-index`'s first code (M3.md task 9): droppable and refillable, rebuilt from the metadata log, never authoritative itself. A fake plus an in-memory materialization. Drop-and-refill test proves the cache property | todo |
+| M3.6 | `ObjectRef` layout + two-tier index | Serves FR-13; doc 15 §7 (doc 10 #8, already decided). ~40-byte `ObjectRef` (M3.md task 7); inline byte ranges for the tail window, footer-resolved refs for history (task 8). Size-budget test pins the layout | todo |
+| M3.7 | Single coordinator: assign → journal → ack allocator | Serves FR-10, FR-11; `ADR-0020`. `CommitVersion` assigned at log-append time, not flush time (M3.md task 4); no offset externally visible before its record commits (task 5); error paths return `-1`, never `0` (task 6). Property test: concurrent producers over one partition yield exactly `0..k`, no gaps — the FR-11 case `m3-complete.sh` runs | todo |
+| M3.8 | Batched apply, `applied_upto` transactional, `find_batches`, HWM derived | Serves FR-12, FR-13, NFR-2, NFR-3. Commits every N≥1,000 entries, mandatory not optional (task 10); `applied_upto` persisted in the same transaction as the entries it covers (task 11); `find_batches(topic, partition, start, max_bytes) → ordered [ObjectRef]` (task 12); high watermark has no setter, always derived (task 13). Fault-injection test: kill mid-batch, restart, replay is bounded to the delta | todo |
+| M3.9 | Push subscription for the tail, bounded pull for history, wired into `fetch.max.wait.ms` | Serves FR-12, NFR-2; doc 12 §4.4 (doc 10 #9, resolved without an ADR). Long-poll subscription delivering `(CommitVersion, [IndexDelta])`, snapshot+delta bootstrap (task 15); bounded-page pull for history; the existing Fetch park wakes on push or deadline, not a poll interval (task 17). Test: a fetch racing a concurrent produce sees it in ~1 ms; a fetch at the HWM issues zero GETs | todo |
+| M3.10 | Read modes and the staleness hazards, end to end (H1-H5) | Serves FR-11, FR-12, FR-13; `ADR-0021`. `ListOffsets(LATEST/EARLIEST)` always `Linearizable`, routed to the coordinator, never derived from cache (H1); session watermark carries `AtLeast(v_produced)` for read-your-writes (H2); LSO derived like HWM, never ahead of it (H3); past `max_metadata_staleness` since the last push an agent stops serving cache and forces a round trip, object IDs never reused so 404 means "reaped" not "not yet written" and is retried through a coordinator refresh before `OFFSET_OUT_OF_RANGE` (H4); `CoordinatorEpoch` bump fences stale reads after failover (H5) | todo |
+| M3.11 | Index growth: enforced, alarmed quota with an explicit degraded mode | Serves NFR-11 (per-node metadata cost proportional to partitions active on that node). Not a dashboard (task 18); cleanup on by default. Test: exceeding the quota trips the degraded mode observably | todo |
+| M3.12 | ADR: the streaming-multipart-writer seam capability | Serves FR-32 (deferred from `M1.16`, `ADR-0013`). Picks among `ADR-0013`'s three still-live alternatives (hand-rolled signing, `HttpConnector` interception, upstream fix) now that task M3.13 is a real caller. ADR accepted | todo |
+| M3.13 | Multi-topic flush batching: one PUT for N topics | Serves FR-32. One flush spanning N topics issues exactly one PUT — the FR-32 case `m3-complete.sh` runs (task 19); the region header's `alg` field lands here, default `none` (deferred from `M1.7`; `M8` is where a decoder acts on anything else); `ADR-0008`'s `RetryConfig` wired from `RetryPolicy`'s constants for the first real attempt-loop caller (deferred from `M2.11`); built on `M3.12`'s sealed streaming writer | todo |
+| M3.14 | Wire Produce/Fetch to the real coordinator, replacing M2's stub partition | Serves FR-1, FR-10, FR-11. `oqueue-broker`'s handlers compose `oqueue-coordinator`/`oqueue-index`/`oqueue-store` instead of M2's stub. A real client's produce-then-fetch round trip is durable and ordered end to end | todo |
+| M3.15 | The durability conformance case + `Capabilities` flag | Serves FR-10 (deferred from `M1.37`/`M1.58`). A conformance case exercising `crash_after_put_before_ack`, gated by a new durability `Capabilities` flag so a backend that cannot run it skips explicitly, never by omission — the FR-10 fault-injection case `m3-complete.sh` requires | todo |
+| M3.16 | `scripts/gates/m3-complete.sh` | Serves FR-10, FR-11, FR-12, FR-13, FR-32. Asserts the five completion-condition claims: concurrent-producer property test (`0..k`, no gaps), fault injection (kill between PUT and ack loses nothing acked), zero-GET tail fetch, bounded-GET zero-LIST cold fetch, one-PUT N-topic flush | todo |
+| M3.17 | Record M3's closing milestone-review findings | Serves no FR/NFR — the closing bookkeeping `M1.57`/`M1.58`/`M2.35` set the shape for. Fresh cross-cutting reviewer covers the whole milestone; findings fixed or argued | todo |
+
 ## M2: Kafka wire protocol — produce and fetch
 
 An unmodified Kafka client connects, negotiates versions, produces, and
