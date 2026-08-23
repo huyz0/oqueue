@@ -1006,6 +1006,7 @@ dependencies = [
  "proptest",
  "ruzstd",
  "snap",
+ "uuid",
 ]
 
 [[package]]

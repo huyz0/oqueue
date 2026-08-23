@@ -22,13 +22,21 @@
 
 use crate::connection::HandlerResponse;
 use crate::stub::StubCluster;
-use kafka_protocol::error::ResponseError;
-use kafka_protocol::messages::produce_response::{PartitionProduceResponse, TopicProduceResponse};
-use kafka_protocol::messages::{ProduceRequest, ProduceResponse};
-use kafka_protocol::protocol::{Decodable, Encodable};
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::batch::{crc_coverage, decode_batch_header, rewrite_base_offset, stored_crc};
+use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
+use oqueue_codec::produce::{
+    ProduceResponse, ProduceResponsePartition, ProduceResponseTopic, decode_request,
+};
+
+/// One topic's response, owned so the borrowed [`ProduceResponseTopic`] can
+/// point into its echoed name.
+struct TopicOutcome {
+    name: Option<String>,
+    topic_id: [u8; 16],
+    partitions: Vec<ProduceResponsePartition>,
+}
 
 /// Decodes, verifies, appends, answers — or stays silent for `acks=0`.
 pub(crate) fn handle(
@@ -36,8 +44,8 @@ pub(crate) fn handle(
     prelude: RequestPrelude,
     body: &[u8],
 ) -> HandlerResponse {
-    let mut buf = body;
-    let Ok(request) = ProduceRequest::decode(&mut buf, prelude.api_version) else {
+    let version = prelude.api_version;
+    let Ok(request) = decode_request(body, version) else {
         return HandlerResponse::Close;
     };
 
@@ -45,60 +53,78 @@ pub(crate) fn handle(
     // INVALID_REQUIRED_ACKS per partition with nothing stored.
     let acks_valid = matches!(request.acks, -1..=1);
 
-    let mut response = ProduceResponse::default();
-    for topic in &request.topic_data {
-        let mut topic_response = TopicProduceResponse::default();
-        // From v13 the wire addresses topics by id, not name — echo what
-        // the wire carries at this version (the encoder refuses the other
-        // field), and resolve the id against the stub's registry.
-        let resolved_name = if prelude.api_version >= 13 {
-            topic_response.topic_id = topic.topic_id;
-            cluster.topic_name_by_id(topic.topic_id)
-        } else {
-            topic_response.name = topic.name.clone();
-            Some(topic.name.to_string())
-        };
-        for partition in &topic.partition_data {
-            let entry = match (&resolved_name, acks_valid) {
-                (_, false) => refused(partition.index, ResponseError::InvalidRequiredAcks),
-                // An id this broker never issued: its own error (100),
-                // mapped back through the echoed id — the name path's
-                // UNKNOWN_TOPIC_OR_PARTITION stays in one_partition.
-                (None, true) => refused(partition.index, ResponseError::UnknownTopicId),
-                (Some(name), true) => {
-                    one_partition(cluster, name, partition.index, partition.records.as_deref())
-                }
-            };
-            topic_response.partition_responses.push(entry);
-        }
-        response.responses.push(topic_response);
-    }
+    let outcomes: Vec<TopicOutcome> = request
+        .topics
+        .iter()
+        .map(|topic| one_topic(cluster, topic, version, acks_valid))
+        .collect();
 
     if request.acks == 0 {
         return HandlerResponse::Silent;
     }
+
+    let response = ProduceResponse {
+        topics: outcomes
+            .iter()
+            .map(|t| ProduceResponseTopic {
+                name: t.name.as_deref(),
+                topic_id: t.topic_id,
+                partitions: t.partitions.clone(),
+            })
+            .collect(),
+    };
+
     let mut out = Vec::new();
-    if encode_response_header(
-        &mut out,
-        ApiKey::Produce,
-        prelude.api_version,
-        prelude.correlation_id,
-    )
-    .is_err()
-        || response.encode(&mut out, prelude.api_version).is_err()
-    {
+    if encode_response_header(&mut out, ApiKey::Produce, version, prelude.correlation_id).is_err() {
         return HandlerResponse::Close;
     }
+    oqueue_codec::produce::encode_response(&mut out, version, &response);
     HandlerResponse::Reply(out)
 }
 
+/// One topic's outcome: resolve its addressing, then every partition.
+fn one_topic(
+    cluster: &StubCluster,
+    topic: &oqueue_codec::produce::ProduceTopic<'_>,
+    version: i16,
+    acks_valid: bool,
+) -> TopicOutcome {
+    // From v13 the wire addresses topics by id, not name — echo what the
+    // wire carries at this version, and resolve the id against the stub's
+    // registry.
+    let (name, resolved_name) = if version >= 13 {
+        (
+            None,
+            cluster.topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id)),
+        )
+    } else {
+        (topic.name.clone(), topic.name.clone())
+    };
+    let partitions = topic
+        .partitions
+        .iter()
+        .map(|p| match (&resolved_name, acks_valid) {
+            (_, false) => refused(p.index, error_codes::INVALID_REQUIRED_ACKS),
+            // An id this broker never issued: its own error (100), mapped
+            // back through the echoed id.
+            (None, true) => refused(p.index, error_codes::UNKNOWN_TOPIC_ID),
+            (Some(topic_name), true) => one_partition(cluster, topic_name, p.index, p.records),
+        })
+        .collect();
+    TopicOutcome {
+        name,
+        topic_id: topic.topic_id,
+        partitions,
+    }
+}
+
 /// A partition entry carrying only a refusal.
-fn refused(index: i32, error: ResponseError) -> PartitionProduceResponse {
-    let mut p = PartitionProduceResponse::default();
-    p.index = index;
-    p.base_offset = -1;
-    p.error_code = error.code();
-    p
+const fn refused(index: i32, error_code: i16) -> ProduceResponsePartition {
+    ProduceResponsePartition {
+        index,
+        error_code,
+        base_offset: -1,
+    }
 }
 
 /// One partition's verdict: the ingest rule, then assignment.
@@ -107,17 +133,17 @@ fn one_partition(
     topic: &str,
     index: i32,
     records: Option<&[u8]>,
-) -> PartitionProduceResponse {
+) -> ProduceResponsePartition {
     let partition = usize::try_from(index).unwrap_or(usize::MAX);
     if cluster
         .partition_count(topic)
         .is_none_or(|n| partition >= n)
     {
-        return refused(index, ResponseError::UnknownTopicOrPartition);
+        return refused(index, error_codes::UNKNOWN_TOPIC_OR_PARTITION);
     }
     let Some(records) = records else {
         // A produce with no records is a client bug; nothing to store.
-        return refused(index, ResponseError::InvalidRecord);
+        return refused(index, error_codes::INVALID_RECORD);
     };
 
     let batch = records.to_vec();
@@ -127,9 +153,9 @@ fn one_partition(
         // precedent, and the error names the format problem rather than
         // steering the client at a compression setting (`M2.md`'s risks).
         Err(oqueue_codec::batch::BatchError::WrongMagic { .. }) => {
-            return refused(index, ResponseError::UnsupportedForMessageFormat);
+            return refused(index, error_codes::UNSUPPORTED_FOR_MESSAGE_FORMAT);
         }
-        Err(_) => return refused(index, ResponseError::CorruptMessage),
+        Err(_) => return refused(index, error_codes::CORRUPT_MESSAGE),
     };
     // Exactly one batch, whole: the header's declared span must be the
     // blob. Longer is a second batch or trailing garbage — bytes the CRC
@@ -141,7 +167,7 @@ fn one_partition(
         .ok()
         .and_then(|l| l.checked_add(12));
     if declared != Some(batch.len()) {
-        return refused(index, ResponseError::InvalidRecord);
+        return refused(index, error_codes::INVALID_RECORD);
     }
     // The ingest rule — one line, exactly as `M2.19` shaped it.
     let verified = crc_coverage(&batch)
@@ -149,7 +175,7 @@ fn one_partition(
         .zip(stored_crc(&batch).ok())
         .is_some_and(|(coverage, stored)| oqueue_checksum::crc32c(coverage) == stored);
     if !verified {
-        return refused(index, ResponseError::CorruptMessage);
+        return refused(index, error_codes::CORRUPT_MESSAGE);
     }
 
     let records_in_batch = i64::from(header.record_count.max(1));
@@ -163,12 +189,13 @@ fn one_partition(
         let _ = rewrite_base_offset(&mut batch, base, 0);
         batch
     }) else {
-        return refused(index, ResponseError::UnknownTopicOrPartition);
+        return refused(index, error_codes::UNKNOWN_TOPIC_OR_PARTITION);
     };
-    let mut p = PartitionProduceResponse::default();
-    p.index = index;
-    p.base_offset = base;
-    p
+    ProduceResponsePartition {
+        index,
+        error_code: error_codes::NONE,
+        base_offset: base,
+    }
 }
 
 #[cfg(test)]

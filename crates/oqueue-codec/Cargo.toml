@@ -36,6 +36,10 @@ oqueue-checksum = { path = "../oqueue-checksum" }
 # the golden cross-check. Not a runtime dep -- M2.16's review took it out of
 # the contract, and it stays out.
 bytes = "1"
+# Test-only: constructing the `Uuid` topic-id values the differential feeds
+# `kafka-protocol`. Runtime code represents ids as `[u8; 16]`, so this is a
+# dev dependency, not a contract one.
+uuid = { version = "1", default-features = false }
 # ⚠️ **Test-only oracle now (`ADR-0019`).** `ADR-0017` had this as a runtime
 # dependency and the single protocol surface; `M2.30` removed the last runtime
 # use (the header path), so it moves here — the differential oracle every

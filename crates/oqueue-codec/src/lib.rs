@@ -34,6 +34,7 @@ pub mod error_codes;
 pub mod flex;
 pub mod frame;
 pub mod metadata;
+pub mod produce;
 pub mod records;
 pub mod varint;
 pub mod versions;

@@ -87,7 +87,10 @@ pub fn decode_request(body: &[u8], version: i16) -> Result<MetadataRequest, Deco
     })
 }
 
-fn read_topic_id(cur: &mut Cursor<'_>) -> Result<TopicId, DecodeError> {
+/// Reads a topic id: 16 raw bytes, shared with [`crate::produce`] (both
+/// messages address topics by the same wire shape from their id-addressed
+/// version).
+pub(crate) fn read_topic_id(cur: &mut Cursor<'_>) -> Result<TopicId, DecodeError> {
     let bytes = cur.take(16)?;
     // `take(16)` returns exactly 16 bytes, so the conversion cannot fail.
     Ok(bytes.try_into().unwrap_or([0u8; 16]))
