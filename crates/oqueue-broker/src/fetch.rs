@@ -16,12 +16,31 @@
 
 use crate::connection::HandlerResponse;
 use crate::stub::StubCluster;
-use kafka_protocol::error::ResponseError;
-use kafka_protocol::messages::fetch_response::{FetchableTopicResponse, PartitionData};
-use kafka_protocol::messages::{FetchRequest, FetchResponse};
-use kafka_protocol::protocol::{Decodable, Encodable};
 use oqueue_codec::apikey::ApiKey;
+use oqueue_codec::error_codes;
+use oqueue_codec::fetch::{
+    FetchResponse, FetchResponsePartition, FetchResponseTopic, decode_request,
+};
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
+
+/// One topic's response, owned so the borrowed [`FetchResponseTopic`] can
+/// point into its echoed name and its concatenated batch bytes.
+struct TopicOutcome {
+    name: Option<String>,
+    topic_id: [u8; 16],
+    partitions: Vec<PartitionOutcome>,
+}
+
+/// One partition's outcome, owned so the borrowed [`FetchResponsePartition`]
+/// can point into the concatenated batch bytes.
+struct PartitionOutcome {
+    index: i32,
+    error_code: i16,
+    high_watermark: i64,
+    last_stable_offset: i64,
+    log_start_offset: i64,
+    records: Vec<u8>,
+}
 
 /// Decodes, resolves, reads, answers — or closes on a malformed body.
 pub(crate) fn handle(
@@ -29,8 +48,8 @@ pub(crate) fn handle(
     prelude: RequestPrelude,
     body: &[u8],
 ) -> HandlerResponse {
-    let mut buf = body;
-    let Ok(request) = FetchRequest::decode(&mut buf, prelude.api_version) else {
+    let version = prelude.api_version;
+    let Ok(request) = decode_request(body, version) else {
         return HandlerResponse::Close;
     };
     // The two isolation levels the protocol defines; anything else is a
@@ -42,99 +61,147 @@ pub(crate) fn handle(
         return HandlerResponse::Close;
     }
 
-    let mut response = FetchResponse::default();
-    // Sessions declined: id 0 tells the client to keep full-fetching.
-    response.session_id = 0;
-    for topic in &request.topics {
-        let mut topic_response = FetchableTopicResponse::default();
-        // From v13 the wire addresses topics by id — same split as
-        // produce: echo what this version carries, resolve the rest.
-        let resolved_name = if prelude.api_version >= 13 {
-            topic_response.topic_id = topic.topic_id;
-            cluster.topic_name_by_id(topic.topic_id)
-        } else {
-            topic_response.topic = topic.topic.clone();
-            Some(topic.topic.to_string())
-        };
-        // An id this broker never issued has its own error (100); a name
-        // it does not host stays UNKNOWN_TOPIC_OR_PARTITION, matching what
-        // real brokers answer on each addressing path.
-        let unknown = if prelude.api_version >= 13 {
-            ResponseError::UnknownTopicId
-        } else {
-            ResponseError::UnknownTopicOrPartition
-        };
-        for partition in &topic.partitions {
-            topic_response.partitions.push(one_partition(
-                cluster,
-                resolved_name.as_deref(),
-                unknown,
-                partition.partition,
-                partition.fetch_offset,
-            ));
-        }
-        response.responses.push(topic_response);
-    }
+    let outcomes: Vec<TopicOutcome> = request
+        .topics
+        .iter()
+        .map(|topic| one_topic(cluster, topic, version))
+        .collect();
+
+    let response = FetchResponse {
+        topics: outcomes
+            .iter()
+            .map(|t| FetchResponseTopic {
+                name: t.name.as_deref(),
+                topic_id: t.topic_id,
+                partitions: t
+                    .partitions
+                    .iter()
+                    .map(|p| FetchResponsePartition {
+                        index: p.index,
+                        error_code: p.error_code,
+                        high_watermark: p.high_watermark,
+                        last_stable_offset: p.last_stable_offset,
+                        log_start_offset: p.log_start_offset,
+                        records: Some(&p.records),
+                    })
+                    .collect(),
+            })
+            .collect(),
+    };
 
     let mut out = Vec::new();
-    if encode_response_header(
-        &mut out,
-        ApiKey::Fetch,
-        prelude.api_version,
-        prelude.correlation_id,
-    )
-    .is_err()
-        || response.encode(&mut out, prelude.api_version).is_err()
-    {
+    if encode_response_header(&mut out, ApiKey::Fetch, version, prelude.correlation_id).is_err() {
         return HandlerResponse::Close;
     }
+    // Sessions declined: id 0 tells the client to keep full-fetching
+    // (`encode_response` writes it).
+    oqueue_codec::fetch::encode_response(&mut out, version, &response);
     HandlerResponse::Reply(out)
 }
 
+/// One topic's outcome: resolve its addressing, then every partition.
+fn one_topic(
+    cluster: &StubCluster,
+    topic: &oqueue_codec::fetch::FetchTopic<'_>,
+    version: i16,
+) -> TopicOutcome {
+    // From v13 the wire addresses topics by id — same split as produce:
+    // echo what this version carries, resolve the rest.
+    let (name, resolved_name) = if version >= 13 {
+        (
+            None,
+            cluster.topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id)),
+        )
+    } else {
+        (topic.name.map(str::to_owned), topic.name.map(str::to_owned))
+    };
+    // An id this broker never issued has its own error (100); a name it
+    // does not host stays UNKNOWN_TOPIC_OR_PARTITION, matching what real
+    // brokers answer on each addressing path.
+    let unknown = if version >= 13 {
+        error_codes::UNKNOWN_TOPIC_ID
+    } else {
+        error_codes::UNKNOWN_TOPIC_OR_PARTITION
+    };
+    let partitions = topic
+        .partitions
+        .iter()
+        .map(|p| {
+            one_partition(
+                cluster,
+                resolved_name.as_deref(),
+                unknown,
+                p.index,
+                p.fetch_offset,
+            )
+        })
+        .collect();
+    TopicOutcome {
+        name,
+        topic_id: topic.topic_id,
+        partitions,
+    }
+}
+
 /// One partition's answer: every batch and the watermark, or a refusal.
+///
+/// ⚠️ **The unset-offset sentinel is `-1`, not `0`** — the protocol's own
+/// convention (`kafka-protocol`'s generated `PartitionData::default()`
+/// agrees), and every refusal path below leaves `last_stable_offset` and
+/// `log_start_offset` there rather than guessing a real value for a
+/// partition that was never read. `high_watermark` is the one field a
+/// refusal may still answer honestly (`OFFSET_OUT_OF_RANGE` reports the
+/// real watermark the client overshot); the other two refusals report a
+/// partition this broker never touched, so `0` would be as much a fiction
+/// as `-1` is a confession.
 fn one_partition(
     cluster: &StubCluster,
     topic: Option<&str>,
-    unknown: ResponseError,
+    unknown: i16,
     index: i32,
     fetch_offset: i64,
-) -> PartitionData {
-    let mut p = PartitionData::default();
-    p.partition_index = index;
+) -> PartitionOutcome {
+    const OFFSET_UNSET: i64 = -1;
+    let refused = |error_code: i16, high_watermark: i64| PartitionOutcome {
+        index,
+        error_code,
+        high_watermark,
+        last_stable_offset: OFFSET_UNSET,
+        log_start_offset: OFFSET_UNSET,
+        records: Vec::new(),
+    };
 
     let Some(topic) = topic else {
-        p.error_code = unknown.code();
-        return p;
+        return refused(unknown, 0);
     };
     let read = usize::try_from(index)
         .ok()
         .and_then(|partition| cluster.read(topic, partition, fetch_offset));
     let Some((batches, high)) = read else {
-        p.error_code = ResponseError::UnknownTopicOrPartition.code();
-        return p;
+        return refused(error_codes::UNKNOWN_TOPIC_OR_PARTITION, 0);
     };
     if fetch_offset < 0 || fetch_offset > high {
         // The watermark is real even though the read below is not
         // filtered by it: past-the-end is the client's bug to hear about.
-        p.error_code = ResponseError::OffsetOutOfRange.code();
-        p.high_watermark = high;
-        return p;
+        return refused(error_codes::OFFSET_OUT_OF_RANGE, high);
     }
 
-    p.high_watermark = high;
-    // No transactions yet, so the stable offset IS the watermark and no
-    // aborted-transaction list rides along.
-    p.last_stable_offset = high;
-    p.log_start_offset = 0;
     // The idle-poll case the module doc promises: a consumer already at
-    // the watermark gets empty records, not the whole log again.
-    let records: Vec<u8> = if fetch_offset == high {
+    // the watermark gets empty records, not the whole log again. No
+    // transactions yet, so the stable offset IS the watermark.
+    let records = if fetch_offset == high {
         Vec::new()
     } else {
         batches.concat()
     };
-    p.records = Some(bytes::Bytes::from(records));
-    p
+    PartitionOutcome {
+        index,
+        error_code: error_codes::NONE,
+        high_watermark: high,
+        last_stable_offset: high,
+        log_start_offset: 0,
+        records,
+    }
 }
 
 #[cfg(test)]
@@ -281,6 +348,12 @@ mod tests {
                 response.responses[0].partitions[0].error_code,
                 expected.code()
             );
+            let p = &response.responses[0].partitions[0];
+            assert_eq!(p.high_watermark, 0, "no partition was ever read");
+            assert_eq!(
+                p.last_stable_offset, -1,
+                "-1 is the protocol's unset sentinel, never guessed"
+            );
         }
     }
 
@@ -292,9 +365,18 @@ mod tests {
             panic!("replies");
         };
         let past = decode(&out, 12);
+        let past_partition = &past.responses[0].partitions[0];
         assert_eq!(
-            past.responses[0].partitions[0].error_code,
+            past_partition.error_code,
             kafka_protocol::error::ResponseError::OffsetOutOfRange.code()
+        );
+        assert_eq!(
+            past_partition.high_watermark, 2,
+            "the watermark is reported honestly even on refusal"
+        );
+        assert_eq!(
+            past_partition.last_stable_offset, -1,
+            "unlike the watermark, the stable offset is not guessed on refusal"
         );
 
         let body = fetch_body(12, by_name("t"), 2, 0);

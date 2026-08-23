@@ -13,10 +13,14 @@ Because *almost* everything else in this workspace is sans-I/O — ⚠️ **"by 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
 - `oqueue-codec` — the protocol surface: frames, headers, batches.
 - `oqueue-checksum` — the CRC-32C half of the ingest rule produce verifies batches with.
-- `kafka-protocol` — the generated message layer the dispatcher builds responses from (`ADR-0017`'s status note admits this crate to the surface).
-- `tokio` — the runtime this I/O shell is written against (feature-minimal: io, sync, rt; `net` waits for `bin/oqueue`).
-- `uuid` — topic ids, which the modern wire addresses topics by (already in the tree via `kafka-protocol`).
-- `bytes` — the records type the generated messages carry (likewise already in the tree).
+- `tokio` — the runtime this I/O shell is written against (feature-minimal: io, sync, rt, time, macros — the last for `connection.rs`'s `select!`; `net` waits for `bin/oqueue`).
+- `uuid` — the type this crate converts `oqueue-codec`'s `[u8; 16]` topic ids to and from at the seam.
+
+⚠️ **`kafka-protocol` is a `dev-dependency` now, not runtime (`ADR-0019`).**
+`ADR-0017` had it as the dispatcher's generated message layer; `M2.31`-`M2.34`
+hand-rolled every message this broker answers, and `kafka-protocol` is now
+only what this crate's own tests use to build request bytes and decode
+responses — so it is not in `## Upstream`.
 
 ## Downstream
 

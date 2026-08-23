@@ -17,10 +17,21 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 oqueue-codec = { path = "..", features = ["gzip", "snappy"] }
+# The `request` target drives the broker's whole dispatch path -- header,
+# per-API body decoders, handlers -- the way a socket would (M2.34, closing
+# the M2.26/M2.27 DoS: no runtime kafka-protocol left to allocate from).
+oqueue-broker = { path = "../../oqueue-broker" }
 
 [[bin]]
 name = "frame"
 path = "fuzz_targets/frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request"
+path = "fuzz_targets/request.rs"
 test = false
 doc = false
 bench = false

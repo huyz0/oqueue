@@ -31,6 +31,7 @@ pub mod batch;
 pub mod compress;
 pub mod emit;
 pub mod error_codes;
+pub mod fetch;
 pub mod flex;
 pub mod frame;
 pub mod metadata;

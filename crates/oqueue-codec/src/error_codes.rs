@@ -9,6 +9,8 @@
 
 /// No error.
 pub const NONE: i16 = 0;
+/// The requested fetch offset is outside the partition's valid range (1).
+pub const OFFSET_OUT_OF_RANGE: i16 = 1;
 /// A record batch failed its CRC check or was otherwise unreadable (2).
 pub const CORRUPT_MESSAGE: i16 = 2;
 /// The topic or partition does not exist on this broker (3).
@@ -41,6 +43,10 @@ mod tests {
         assert_eq!(
             super::UNKNOWN_TOPIC_OR_PARTITION,
             ResponseError::UnknownTopicOrPartition.code()
+        );
+        assert_eq!(
+            super::OFFSET_OUT_OF_RANGE,
+            ResponseError::OffsetOutOfRange.code()
         );
         assert_eq!(super::CORRUPT_MESSAGE, ResponseError::CorruptMessage.code());
         assert_eq!(

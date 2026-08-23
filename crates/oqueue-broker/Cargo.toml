@@ -17,21 +17,25 @@ oqueue-checksum = { path = "../oqueue-checksum" }
 # The runtime this shell is written against (ADR-0008 already chose the
 # ecosystem; doc 05 §3 the crate). Feature-minimal: the connection task
 # needs io + sync + rt; `net` stays out until bin/oqueue binds a listener.
-tokio = { version = "1", features = ["io-util", "sync", "rt", "time"] }
-
-# The dispatcher builds responses from the generated message layer -- the
-# same single-surface rule as oqueue-codec's (ADR-0017): only these two
-# crates touch it.
-kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker"] }
-# Topic ids on the modern wire (Produce v13, Fetch v13+, Metadata v10+).
-# Already in the tree via kafka-protocol; no C toolchain.
+# ⚠️ `macros` is load-bearing in the LIB (connection.rs's `select!`), not a
+# test convenience -- workspace feature-unification with dev-deps hid its
+# absence until the out-of-workspace fuzz build (`M2.34`) compiled this
+# crate alone.
+tokio = { version = "1", features = ["io-util", "sync", "rt", "time", "macros"] }
+# Topic ids on the modern wire (Produce v13, Fetch v13+, Metadata v10+) --
+# oqueue-codec deals in `[u8; 16]`; this crate is where they meet `Uuid`.
 uuid = { version = "1", default-features = false }
-# The generated messages carry records as Bytes; also in the tree already.
-bytes = "1"
 
+# ⚠️ **Test-only now (`ADR-0019`).** `ADR-0017` had this as the dispatcher's
+# generated message layer; `M2.31`-`M2.34` hand-rolled every message this
+# broker answers, so no runtime code here imports it. It stays as the
+# differential oracle the codec's own tests are checked against, and as
+# what this crate's own tests use to build request bytes and decode
+# responses -- `client` is added for that.
 [dev-dependencies]
-# Tests act as the client and decode responses, which needs the client half.
 kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker", "client"] }
+# Test fixtures hand the dependency's request types their batch bytes.
+bytes = "1"
 # duplex-driven T1 tests: no real socket below bin/oqueue.
 tokio = { version = "1", features = ["io-util", "sync", "rt", "rt-multi-thread", "macros", "time", "test-util"] }
 

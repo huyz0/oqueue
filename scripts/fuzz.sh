@@ -70,10 +70,26 @@ declare -A NOT_A_PARSER=(
   [wire]="Cursor primitives -- every target drives them transitively"
   [versions]="a static advertised-versions table; parses nothing"
   [attributes]="a bitfield over an i16 the batch decoder already produced"
+  [apikey]="an i16-to-enum lookup over a value frame.rs's decoder already extracted, not its own byte stream"
+  [emit]="the byte writers wire.rs re-exports; nothing here reads untrusted input"
+  [error_codes]="protocol constants; parses nothing"
+  [apiversions]="encode-only by design -- the ApiVersions request body is informational and never decoded (see the module doc)"
+)
+# ⚠️ Message-body decoders exercised through the `request` target's full
+# dispatch path (header, `supports()` gate, this decoder, the handler) rather
+# than a same-named standalone target — `request` is what found the M2.26 DoS
+# in the first place, by driving exactly this path. Named individually, not a
+# blanket exemption, so a new message module still fails closed until it is
+# added here or grows its own target.
+declare -A COVERED_BY_REQUEST=(
+  [metadata]="request"
+  [produce]="request"
+  [fetch]="request"
 )
 for src in "$REPO_ROOT"/crates/oqueue-codec/src/*.rs; do
   module="$(basename "$src" .rs)"
   [[ -n "${NOT_A_PARSER[$module]:-}" ]] && continue
+  [[ -n "${COVERED_BY_REQUEST[$module]:-}" ]] && continue
   found=0
   for t in "${targets[@]}"; do [[ "$t" == "$module" ]] && found=1; done
   if (( ! found )); then
