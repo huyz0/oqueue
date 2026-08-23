@@ -50,7 +50,7 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 | Must stay true | Held by |
 |---|---|
 | Nothing sized by a client-supplied length is allocated unbounded | review; `security.md` |
-| Every decoder has a fuzz target | ⚠️ **no gate today** — `scripts/fuzz.sh` is named by `security.md` rule 5 and deferred into `M2` |
+| Every decoder has a fuzz target | `scripts/fuzz.sh` (`security.md` rule 5, `testing.md` rule 24) — one target per decoder module plus `request` for the full dispatch path, run nightly by `.github/workflows/fuzz.yml` (`M2.26`, `M2.34`) |
 
 ## Notes for whoever touches this
 

@@ -21,7 +21,7 @@
 //! the frame and `RecordBatch` paths; the milestone reversed that after a
 //! fuzz-found allocation `DoS`, so [`wire`] and [`flex`] hold the bounded
 //! primitives, [`apikey`]/[`frame`] the headers, and the per-message modules
-//! ([`apiversions`], with Metadata/Produce/Fetch following) the bodies —
+//! ([`apiversions`], [`metadata`], [`produce`], [`fetch`]) the bodies —
 //! every one byte-differentialed against `kafka-protocol`, now a test oracle.
 
 pub mod apikey;

@@ -11,6 +11,16 @@ Verified against real clients by `scripts/kafka-client-harness.sh`:
 librdkafka 2.15.0 and the Java client (kafka-clients 3.9.1) both complete
 produce and fetch round trips.
 
+⚠️ **The whole codec is `oqueue`'s own** (`ADR-0019`, `M2.28`-`M2.34`):
+`kafka-protocol` answered every request through `M2.26`, then its
+generated decoder's unbounded allocation from an untrusted array count
+became a real single-packet DoS (a 64-byte Fetch frame demanding ~30 GB),
+and `M2`'s milestone review ranked that blocking. Every request decoder
+and response encoder below is hand-rolled in `oqueue-codec`, bounding
+every count and length against the input before allocating anything;
+`kafka-protocol` is now a `dev-dependency` differential oracle only, in
+no runtime path anywhere in the workspace.
+
 | API | Key | Versions | Notes |
 |---|---|---|---|
 | Produce | 0 | 3–13 | v0–2 removed by KIP-896. Exactly one RecordBatch (v2 magic) per partition; CRC-32C verified on ingest; base offset assigned by header rewrite. v13 addresses topics by id. |

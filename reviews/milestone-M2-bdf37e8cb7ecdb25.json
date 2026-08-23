@@ -1,0 +1,24 @@
+{
+  "commits": [
+    "cc5e298f6328a25e0cbd96916af093fbdbef2d64",
+    "36cf0a951f65f00fa35d95918464a458d09fde95",
+    "76e122042ab57a7c1a700875c0aafe4441cd2464",
+    "e0f823f62e2dbdabb8d00edfd61584fd323b414e",
+    "ecf2bffff219af66df22051f5e87a604f5e63f3b",
+    "dd457920f3666a13627484fe319758e641f2f996",
+    "e5a36413ab5a9c2731bcdf27dd0e730fd92d1d64"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/backlog.md line 59 (`grep -n \"^| M2\\.\" docs/internal/product/backlog.md`) reads `| M2.28 | ADR-0019 + re-plan: ... | ... | todo |` while M2.29-M2.34 immediately below it all read `done`; `git log --oneline -- docs/internal/product/backlog.md` shows the row was written `todo` by cc5e298 (M2.28's own commit) and never revisited by any of the following six commits. Compare against sdd.md's 'A row is terse, and a `done` row is frozen' and next-task/SKILL.md's 'take the top unblocked task'.",
+      "id": "f6d93488a523",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "Backlog row M2.28 is still marked `todo` although its commit (cc5e298) is on main, ADR-0019 is accepted, and all six downstream tasks that build on it (M2.29-M2.34) already read `done` -- violating the file's own 'a `done` row is frozen'/'rows reflect reality' convention and leaving a `next-task` read of the top-unblocked-task pointing at already-finished work. Resolved directly in this commit: M2.28's row is flipped to `done` (all downstream work was already done; the row itself was the only stale artifact)."
+    }
+  ],
+  "milestone": "M2",
+  "recorded_at": "2026-08-23T01:05:28Z",
+  "reviewer": "Claude Sonnet 5 (milestone-reviewer)",
+  "verdict": "changes-requested"
+}
