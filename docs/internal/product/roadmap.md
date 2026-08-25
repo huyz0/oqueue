@@ -215,10 +215,10 @@ from a decision nobody made. Each must appear in the receiving milestone's plan.
 
 ## The decisions that gate this plan
 
-⚠️ **Eleven decisions were unmade** when this table was written; **two are now
-resolved** — #9 without an ADR (doc 12 §4.4 already answers it) and #1 by
-`ADR-0020` — and the rest still block the milestone that first depends on
-them. The first five
+⚠️ **Eleven decisions were unmade** when this table was written; **three are
+now resolved** — #9 without an ADR (doc 12 §4.4 already answers it), #1 by
+`ADR-0020`, and #11 by `ADR-0021` — and the rest still block the milestone
+that first depends on them. The first five
 are architecture; the rest are constants and strategies that are no less
 blocking for being smaller. They are listed here because a plan that hides
 them reads as more settled than it is. Each becomes an ADR task inside its
@@ -235,7 +235,7 @@ pre-existing gap this edit does not attempt to close.
 | 12 | Materialized-state engine (SQLite / redb / RocksDB / fjall / SlateDB) | M6 | doc 13 §6 |
 | 14 | The enumeration fork: recovery scanner vs `PREPARED`→`COMMITTED` | M6 | doc 13 §7 |
 | 9 | ~~Metadata distribution: push tail deltas vs pull per fetch~~ | M3 | **resolved — doc 12 §4.4's own answer, no ADR needed; `M3.9`** |
-| 11 | The bounded-staleness limit | M3 (set), M5 (consumed) | doc 12 §4.6 — it is the floor for M5's deletion delay |
+| 11 | ~~The bounded-staleness limit~~ | M3 (set), M5 (consumed) | **resolved 2026-08-23, `ADR-0021`: 5 s** — sets the floor for M5's deletion delay |
 | 5 | Idempotency strategy | M11 | doc 06 §6 — ⚠️ also decides how much of FR-15 stays reachable post-v1 |
 | 15 | Target RTOs | M6 | doc 13 §2 — hot-standby and cold rebuild are separate numbers |
 | 18 | Compaction cadence at high partition counts | M5 | doc 14 §7 — ~$720/day at 60 s vs ~$24/day at 30 min, at 100k partitions |
