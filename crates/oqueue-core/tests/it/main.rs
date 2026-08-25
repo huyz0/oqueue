@@ -12,6 +12,7 @@ mod key_layout;
 mod materialized_index;
 mod metadata_log;
 mod multipart;
+mod object_ref;
 mod op_counts;
 mod precondition;
 mod rate_governor;

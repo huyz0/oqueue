@@ -11,8 +11,8 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    CommitVersion, CommittedSpan, FakeMaterializedIndex, MaterializedIndex, MetadataEntry,
-    MetadataRecord, ObjectKey, Offset, PartitionId, TopicId,
+    ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, MaterializedIndex,
+    MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId, TopicId,
 };
 use oqueue_index::MemoryIndex;
 
@@ -38,7 +38,12 @@ fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataEntry
         CommitVersion::new(version),
         MetadataRecord::BatchCommitted {
             object: ObjectKey::new(format!("obj-{version}")).expect("a valid key"),
-            spans: vec![CommittedSpan::new(topic(name), partition(part), records)],
+            spans: vec![CommittedSpan::new(
+                topic(name),
+                partition(part),
+                records,
+                ByteRange::Full,
+            )],
         },
     )
 }
@@ -95,14 +100,27 @@ mod contract {
 
     /// One object spanning many partitions is one entry — FR-32's whole point.
     pub(super) fn one_entry_can_span_many_partitions<I: MaterializedIndex>(index: &I) {
-        use oqueue_core::{CommittedSpan, ObjectKey};
+        use oqueue_core::{ByteRange, CommittedSpan, ObjectKey};
         let entry = MetadataEntry::new(
             CommitVersion::new(1),
             MetadataRecord::BatchCommitted {
                 object: ObjectKey::new("bundle".to_owned()).expect("a valid key"),
+                // ⚠️ Distinct bounded regions, not two `Full`s. Two spans of
+                // one object that both claim all of it are not two regions,
+                // and asserting that shape here would bless it.
                 spans: vec![
-                    CommittedSpan::new(topic("orders"), partition(0), 2),
-                    CommittedSpan::new(topic("payments"), partition(0), 3),
+                    CommittedSpan::new(
+                        topic("orders"),
+                        partition(0),
+                        2,
+                        ByteRange::bounded(0, 64).expect("a valid region"),
+                    ),
+                    CommittedSpan::new(
+                        topic("payments"),
+                        partition(0),
+                        3,
+                        ByteRange::bounded(64, 96).expect("a valid region"),
+                    ),
                 ],
             },
         );

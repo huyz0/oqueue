@@ -17,8 +17,8 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    CommitVersion, CommittedSpan, FakeMetadataLog, MetadataEntry, MetadataLog, MetadataRecord,
-    ObjectKey, PartitionId, TopicId,
+    ByteRange, CommitVersion, CommittedSpan, FakeMetadataLog, MetadataEntry, MetadataLog,
+    MetadataRecord, ObjectKey, PartitionId, TopicId,
 };
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
@@ -40,6 +40,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
         TopicId::new("orders").expect("a valid topic"),
         PartitionId::new(0).expect("a valid partition"),
         records,
+        ByteRange::Full,
     );
     MetadataEntry::new(
         CommitVersion::new(version),

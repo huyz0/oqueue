@@ -12,8 +12,9 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    CommitVersion, CommittedSpan, CoordinatorEpoch, Error, FakeMaterializedIndex, IndexState,
-    MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId, TopicId,
+    ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, FakeMaterializedIndex,
+    IndexState, MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,
+    TAIL_WINDOW_ENTRIES, TopicId,
 };
 
 fn topic(name: &str) -> TopicId {
@@ -33,7 +34,12 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
         CommitVersion::new(version),
         MetadataRecord::BatchCommitted {
             object: ObjectKey::new(format!("obj-{version}")).expect("a valid key"),
-            spans: vec![CommittedSpan::new(topic("orders"), partition(0), records)],
+            spans: vec![CommittedSpan::new(
+                topic("orders"),
+                partition(0),
+                records,
+                ByteRange::Full,
+            )],
         },
     )
 }
@@ -143,6 +149,104 @@ fn clear_resets_both_the_offsets_and_the_version() {
         .apply(&[commit(1, 3)])
         .expect("a cleared index accepts v1 again");
     assert_eq!(state.end_offset(&topic("orders"), partition(0)), offset(3));
+}
+
+/// ⚠️ **The carried assertion `M3.5`'s review asked for.** A partition
+/// appearing twice in one batch must accumulate from the *staged* running
+/// offset, not restart from the committed one — `M3.8` commits every N≥1,000
+/// entries, which makes one batch repeating a partition its normal case.
+/// Without pinning an absolute value here, last-write-wins passes.
+#[test]
+fn a_partition_repeated_in_one_batch_accumulates() {
+    let mut state = IndexState::new();
+    state.apply(&[commit(1, 3)]).expect("applied");
+
+    // Two more commits for the same partition, in a single batch.
+    state.apply(&[commit(2, 4), commit(3, 5)]).expect("applied");
+
+    assert_eq!(
+        state.end_offset(&topic("orders"), partition(0)),
+        offset(12),
+        "3 + 4 + 5 — a fold that restarted from the committed base would say 8"
+    );
+}
+
+/// ⚠️ The two tiers, and the demotion between them. The tail carries inline
+/// byte ranges so a read of one is a single GET; everything past the window
+/// keeps only the ~40-byte ref, whose range a reader resolves from the
+/// object's own footer. Doc 14 §3 is why the second tier has to exist.
+#[test]
+fn entries_past_the_tail_window_demote_to_history() {
+    let mut state = IndexState::new();
+    let t = topic("orders");
+
+    let window = u64::try_from(TAIL_WINDOW_ENTRIES).expect("the window fits a u64");
+    for version in 1..=window {
+        state.apply(&[commit(version, 1)]).expect("applied");
+    }
+    assert_eq!(state.tail(&t, partition(0)).len(), TAIL_WINDOW_ENTRIES);
+    assert_eq!(
+        state.history_len(&t, partition(0)),
+        0,
+        "nothing demoted yet"
+    );
+
+    state.apply(&[commit(window + 1, 1)]).expect("applied");
+
+    assert_eq!(
+        state.tail(&t, partition(0)).len(),
+        TAIL_WINDOW_ENTRIES,
+        "the window is bounded"
+    );
+    assert_eq!(
+        state.history_len(&t, partition(0)),
+        1,
+        "the oldest entry demoted rather than being dropped"
+    );
+    // ⚠️ Demotion loses the range, never the records: the fold is unaffected.
+    assert_eq!(
+        state.end_offset(&t, partition(0)),
+        offset(i64::try_from(TAIL_WINDOW_ENTRIES).expect("the window fits an i64") + 1)
+    );
+}
+
+/// A tail entry carries the offsets its object contributed, so a fetch can
+/// pick the right one without reading anything.
+#[test]
+fn tail_entries_carry_the_offsets_their_object_contributed() {
+    let mut state = IndexState::new();
+    state.apply(&[commit(1, 3), commit(2, 4)]).expect("applied");
+
+    let tail = state.tail(&topic("orders"), partition(0));
+    assert_eq!(tail.len(), 2);
+
+    assert_eq!(tail[0].reference().base_offset(), Offset::ZERO);
+    assert_eq!(tail[0].reference().record_count(), 3);
+    assert_eq!(tail[1].reference().base_offset(), offset(3));
+    assert_eq!(tail[1].reference().record_count(), 4);
+
+    // The two together cover 0..7 with no gap and no overlap.
+    assert_eq!(
+        tail[0].reference().end_offset().expect("in range"),
+        offset(3)
+    );
+    assert_eq!(
+        tail[1].reference().end_offset().expect("in range"),
+        offset(7)
+    );
+}
+
+/// `clear` drops both tiers, not just the offsets.
+#[test]
+fn clear_drops_both_tiers() {
+    let mut state = IndexState::new();
+    state.apply(&[commit(1, 3)]).expect("applied");
+    assert_eq!(state.tail(&topic("orders"), partition(0)).len(), 1);
+
+    state.clear();
+
+    assert!(state.tail(&topic("orders"), partition(0)).is_empty());
+    assert_eq!(state.history_len(&topic("orders"), partition(0)), 0);
 }
 
 /// The fake delegates every method to the fold rather than reimplementing it.

@@ -1,6 +1,6 @@
 //! What one entry in the metadata log is.
 
-use crate::{CoordinatorEpoch, ObjectKey, PartitionId, TopicId};
+use crate::{ByteRange, CoordinatorEpoch, ObjectKey, PartitionId, TopicId};
 
 /// One `(topic, partition)`'s share of a committed object.
 ///
@@ -14,16 +14,23 @@ pub struct CommittedSpan {
     topic: TopicId,
     partition: PartitionId,
     record_count: u32,
+    bytes: ByteRange,
 }
 
 impl CommittedSpan {
     /// Builds a span.
     #[must_use]
-    pub const fn new(topic: TopicId, partition: PartitionId, record_count: u32) -> Self {
+    pub const fn new(
+        topic: TopicId,
+        partition: PartitionId,
+        record_count: u32,
+        bytes: ByteRange,
+    ) -> Self {
         Self {
             topic,
             partition,
             record_count,
+            bytes,
         }
     }
 
@@ -43,6 +50,26 @@ impl CommittedSpan {
     #[must_use]
     pub const fn record_count(&self) -> u32 {
         self.record_count
+    }
+
+    /// Where inside the object this partition's records live.
+    ///
+    /// ⚠️ **Still a delta, not a position.** This is an offset *within the
+    /// object*, fixed at the moment the object was written, and it says
+    /// nothing about where in the partition's log the records landed — that
+    /// is derived by folding [`record_count`](Self::record_count). One object
+    /// bundles many partitions (FR-32), and this is each one's region of it.
+    ///
+    /// ⚠️ **[`ByteRange::Full`] is only correct for an object holding exactly
+    /// one span.** Two spans of one bundled object that both claim the whole
+    /// object are not two regions, and a reader honouring them would GET the
+    /// entire bundle and decode another topic's records as its own. Nothing
+    /// here can reject it — `Full` is a legal `ByteRange` — so it is `M3.13`,
+    /// which writes bundled objects, that owns emitting real bounded regions,
+    /// and `M3.8`'s read path that would be the victim of its not doing so.
+    #[must_use]
+    pub const fn bytes(&self) -> ByteRange {
+        self.bytes
     }
 }
 

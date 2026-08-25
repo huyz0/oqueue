@@ -57,6 +57,7 @@ mod metadata_record;
 mod multipart;
 mod object_key;
 mod object_meta;
+mod object_ref;
 mod offset;
 mod op_counts;
 mod partition;
@@ -79,13 +80,16 @@ pub use error::{Error, Result};
 pub use fault::{FaultConfig, StormKind};
 pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use key_layout::KeyLayout;
-pub use materialized_index::{FakeMaterializedIndex, IndexState, MaterializedIndex};
+pub use materialized_index::{
+    FakeMaterializedIndex, IndexState, MaterializedIndex, TAIL_WINDOW_ENTRIES,
+};
 pub use merge::MergingObjectStore;
 pub use metadata_log::{FakeMetadataLog, MetadataEntry, MetadataLog};
 pub use metadata_record::{CommittedSpan, MetadataRecord};
 pub use multipart::{MultipartLimits, MultipartSession};
 pub use object_key::ObjectKey;
 pub use object_meta::{ObjectMeta, PreconditionToken};
+pub use object_ref::{ObjectRef, TailEntry};
 pub use offset::Offset;
 pub use op_counts::{CountingObjectStore, OpCounts, Operation};
 pub use partition::PartitionId;

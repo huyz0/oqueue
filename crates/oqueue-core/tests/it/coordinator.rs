@@ -17,8 +17,8 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    CommitVersion, CommittedSpan, CoordinatorEpoch, Error, MetadataRecord, ObjectKey, PartitionId,
-    ReadMode, TopicId,
+    ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, MetadataRecord, ObjectKey,
+    PartitionId, ReadMode, TopicId,
 };
 use proptest::prelude::*;
 
@@ -113,7 +113,7 @@ proptest! {
     ) {
         let spans: Vec<CommittedSpan> = counts
             .iter()
-            .map(|&c| CommittedSpan::new(a_topic(), a_partition(), c))
+            .map(|&c| CommittedSpan::new(a_topic(), a_partition(), c, ByteRange::Full))
             .collect();
 
         let mut bases = Vec::with_capacity(spans.len());
@@ -138,8 +138,8 @@ proptest! {
     fn spans_differing_only_in_count_are_different_records(a in any::<u32>(), b in any::<u32>()) {
         prop_assume!(a != b);
         prop_assert_ne!(
-            CommittedSpan::new(a_topic(), a_partition(), a),
-            CommittedSpan::new(a_topic(), a_partition(), b)
+            CommittedSpan::new(a_topic(), a_partition(), a, ByteRange::Full),
+            CommittedSpan::new(a_topic(), a_partition(), b, ByteRange::Full)
         );
     }
 
@@ -185,7 +185,12 @@ fn advance_pins_its_boundaries() {
 fn a_commit_record_carries_spans_and_the_object_it_came_from() {
     let record = MetadataRecord::BatchCommitted {
         object: an_object(),
-        spans: vec![CommittedSpan::new(a_topic(), a_partition(), 3)],
+        spans: vec![CommittedSpan::new(
+            a_topic(),
+            a_partition(),
+            3,
+            ByteRange::Full,
+        )],
     };
     match record {
         MetadataRecord::BatchCommitted { object, spans } => {
