@@ -215,9 +215,10 @@ from a decision nobody made. Each must appear in the receiving milestone's plan.
 
 ## The decisions that gate this plan
 
-⚠️ **Eleven decisions were unmade** when this table was written; **one is now
-resolved without an ADR** (struck below — doc 12 §4.4 already answers it) and
-the rest still block the milestone that first depends on them. The first five
+⚠️ **Eleven decisions were unmade** when this table was written; **two are now
+resolved** — #9 without an ADR (doc 12 §4.4 already answers it) and #1 by
+`ADR-0020` — and the rest still block the milestone that first depends on
+them. The first five
 are architecture; the rest are constants and strategies that are no less
 blocking for being smaller. They are listed here because a plan that hides
 them reads as more settled than it is. Each becomes an ADR task inside its
@@ -230,7 +231,7 @@ pre-existing gap this edit does not attempt to close.
 |---|---|---|---|
 | 3 | `object_store` vs `opendal` vs provider SDKs | M1 | doc 05 §1 |
 | 4 | Hand-roll `oqueue-codec` vs wrap `kafka-protocol` | M2 | doc 02 §6.4, doc 05 §2 |
-| 1 | Offset sequencing: external store vs object-storage CAS vs local consensus | M3 | doc 06 §1 |
+| 1 | ~~Offset sequencing: external store vs object-storage CAS vs local consensus~~ | M3 | **resolved 2026-08-23, `ADR-0020`** |
 | 12 | Materialized-state engine (SQLite / redb / RocksDB / fjall / SlateDB) | M6 | doc 13 §6 |
 | 14 | The enumeration fork: recovery scanner vs `PREPARED`→`COMMITTED` | M6 | doc 13 §7 |
 | 9 | ~~Metadata distribution: push tail deltas vs pull per fetch~~ | M3 | **resolved — doc 12 §4.4's own answer, no ADR needed; `M3.9`** |
@@ -249,9 +250,15 @@ resolved. Treat it as **decided**, build M3 to doc 15 §7, and fix doc 10's list
 Re-opening it would need an argument against the state arithmetic, not a fresh
 survey of doc 12 §6.3.
 
-⚠️ **#1 and #14 are coupled**, and #7 (the low-latency tier) couples to both:
-adopting ack-before-sequencing *requires* the recovery scanner. Deciding them
-independently is how a project acquires an architecture nobody chose.
+⚠️ **#1 and #14 were coupled**, and #7 (the low-latency tier) couples to both:
+adopting ack-before-sequencing *requires* the recovery scanner. `ADR-0020`
+resolves #1 without tripping this coupling — it keeps the ordinary
+assign-journal-ack sequence (`M3.7`: no offset is externally visible before
+its log record commits), not WarpStream's Lightning-Topics-style
+ack-before-sequencing, so #14 stays open and un-forced, M6's to decide when it
+exists. Deciding #1 and #14 independently *would* be how a project acquires an
+architecture nobody chose; deciding #1 in a way that does not need #14 is not
+the same hazard.
 
 ## The numbers that do not exist yet
 
