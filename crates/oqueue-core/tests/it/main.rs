@@ -9,6 +9,7 @@ mod fault;
 mod invariants;
 mod key;
 mod key_layout;
+mod metadata_log;
 mod multipart;
 mod op_counts;
 mod precondition;

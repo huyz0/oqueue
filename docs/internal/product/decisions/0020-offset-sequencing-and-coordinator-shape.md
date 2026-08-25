@@ -1,6 +1,16 @@
 # 0020. Offset sequencing and coordinator shape
 
-Status: accepted
+Status: accepted; 2026-08-23 (`M3.4`): point 5's seam is now built —
+`MetadataLog` in `oqueue-core` (`append`, `read_from`, `last_version`) with
+`FakeMetadataLog` beside it and a conformance suite any later engine inherits.
+⚠️ Two guarantees the method names do not carry, recorded here because an
+engine must not discover them late: versions are **strictly** increasing both
+within a batch and across batches, so a repeat is as much a violation as a
+decrease — which is the cell an ack-lost retry re-offering its last version
+lands in first; and **a refused append stores nothing**, not even the entries
+before the offending one, or a caller retrying after a rejection replays onto
+a log already holding part of that batch and the offset fold double-counts in
+silence. The engine itself (doc 10 #12) stays open, as point 5 leaves it.
 Date: 2026-08-23
 Requirements: FR-10, FR-11, FR-12, FR-13, FR-32, NFR-1, NFR-2, NFR-3, NFR-21
 

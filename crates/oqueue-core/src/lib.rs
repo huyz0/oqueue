@@ -29,7 +29,9 @@
 //! that knows what correctness it needs; and [`MetadataRecord`] with its
 //! [`CommittedSpan`], the log entry shaped as an **event** rather than a
 //! key-value pair — a delta a snapshot can fold, not a state a compaction
-//! would have to arbitrate.
+//! would have to arbitrate. [`MetadataLog`] is the seam those records are
+//! appended to, with [`FakeMetadataLog`] beside it; the durable engine behind
+//! it is deliberately still open (`ADR-0020` point 5, doc 10 #12).
 //!
 //! # The property every identifier here shares
 //!
@@ -49,6 +51,7 @@ mod fault;
 mod key;
 mod key_layout;
 mod merge;
+mod metadata_log;
 mod metadata_record;
 mod multipart;
 mod object_key;
@@ -76,6 +79,7 @@ pub use fault::{FaultConfig, StormKind};
 pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use key_layout::KeyLayout;
 pub use merge::MergingObjectStore;
+pub use metadata_log::{FakeMetadataLog, MetadataEntry, MetadataLog};
 pub use metadata_record::{CommittedSpan, MetadataRecord};
 pub use multipart::{MultipartLimits, MultipartSession};
 pub use object_key::ObjectKey;

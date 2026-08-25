@@ -66,6 +66,21 @@ pub enum Error {
         got: i64,
     },
 
+    /// A metadata-log append was not strictly increasing.
+    ///
+    /// ⚠️ The log is the serialization point `ADR-0020` puts offset
+    /// assignment on, so an out-of-order entry is not a late arrival to be
+    /// sorted — it is a second writer, or an allocator that lost its place.
+    /// Either way the fold that derives offsets would be wrong, so the append
+    /// is refused and the log left unchanged (`M3.md` task 14).
+    #[error("commit version {got} does not follow {expected_above}")]
+    NonMonotonicCommitVersion {
+        /// The highest version already accounted for.
+        expected_above: u64,
+        /// The version offered next.
+        got: u64,
+    },
+
     /// Commit-version arithmetic would have exceeded the `u64` range.
     ///
     /// ⚠️ Sibling of [`Error::OffsetOverflow`] and there for the same reason:

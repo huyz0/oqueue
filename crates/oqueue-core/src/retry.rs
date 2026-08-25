@@ -64,6 +64,7 @@ impl Error {
             | Self::NegativeOffsetDelta { .. }
             | Self::OffsetOverflow { .. }
             | Self::CommitVersionOverflow { .. }
+            | Self::NonMonotonicCommitVersion { .. }
             | Self::NegativeTimestamp { .. }
             | Self::NegativeClockAdvance { .. }
             | Self::TimestampOverflow { .. }
