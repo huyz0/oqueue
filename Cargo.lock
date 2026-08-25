@@ -1021,6 +1021,9 @@ name = "oqueue-coordinator"
 version = "0.0.0"
 dependencies = [
  "oqueue-core",
+ "proptest",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

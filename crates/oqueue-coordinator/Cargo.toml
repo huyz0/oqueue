@@ -10,6 +10,27 @@ license.workspace = true
 # topology, enforced by `check-layering.sh`. A dependency on a sibling crate is a layering violation, not a shortcut.
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
+# `error-handling.md` rule 3: this crate classifies its own failures rather than
+# re-throwing `oqueue-core`'s unchanged (rule 10).
+thiserror.workspace = true
+# ⚠️ `sync` only, and that is the whole dependency: `ADR-0020` makes the log
+# append the serialization point, and `async-concurrency.md` rule 8 says a lock
+# taken to sequence "step A then step B" across tasks is a sequencing problem
+# wearing a locking primitive. The sequencer is therefore a channel into a task
+# that owns the allocator — `mpsc` and `oneshot`, no runtime, no I/O.
+tokio = { version = "1", default-features = false, features = ["sync"] }
+
+[dev-dependencies]
+# `testing.md` rule 20 and doc 18 §5.6: the FR-11 gap-free property is stated,
+# not exemplified.
+proptest.workspace = true
+# The concurrent-producer property needs producers that are actually
+# concurrent, so the test binary — and only the test binary — takes a runtime.
+tokio = { version = "1", default-features = false, features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+] }
 
 [lints]
 workspace = true

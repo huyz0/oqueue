@@ -11,6 +11,8 @@ Because offsets must be totally ordered per partition and object storage offers 
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `thiserror` — this crate classifies its own failures (`CoordinatorError`) rather than re-throwing `oqueue-core`'s unchanged.
+- `tokio` — `sync` only. `ADR-0020` makes the log append the serialization point, and the sequencer that expresses it is a channel into the task that owns the allocator, never a lock held across an `.await`.
 
 ## Downstream
 
@@ -25,6 +27,8 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 | Must stay true | Held by |
 |---|---|
 | Offsets are totally ordered per partition | `M3`'s tests; `Offset::add` refuses to wrap |
+| A position is journaled before it is acknowledged | `tests/it/sequencing.rs`; the allocator applies a staged commit only after `append` resolves `Ok` |
+| No error path reports offset `0` | `UNASSIGNED_OFFSET`, and the test that pins it at `-1` |
 | Metadata cost is proportional to partitions active on this node | no gate — doc 15, doc 16 |
 
 ## Notes for whoever touches this
