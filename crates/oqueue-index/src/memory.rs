@@ -1,8 +1,8 @@
 //! The in-memory materialization of the offset→object index.
 
 use oqueue_core::{
-    CommitVersion, IndexState, MaterializedIndex, MetadataEntry, Offset, PartitionId, Result,
-    TopicId,
+    CommitVersion, IndexState, IndexedBatch, MaterializedIndex, MetadataEntry, Offset, PartitionId,
+    Result, TopicId,
 };
 use std::sync::Mutex;
 
@@ -67,6 +67,16 @@ impl MaterializedIndex for MemoryIndex {
 
     fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset {
         self.lock().end_offset(topic, partition)
+    }
+
+    fn find_batches(
+        &self,
+        topic: &TopicId,
+        partition: PartitionId,
+        start: Offset,
+        max_bytes: u64,
+    ) -> Result<Vec<IndexedBatch>> {
+        self.lock().find_batches(topic, partition, start, max_bytes)
     }
 
     fn clear(&self) {

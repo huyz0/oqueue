@@ -2,8 +2,6 @@
 
 use crate::allocator::Allocator;
 use crate::commit::CommitAck;
-#[cfg(doc)]
-use crate::commit::UNASSIGNED_OFFSET;
 use crate::error::CoordinatorError;
 use oqueue_core::{CommittedSpan, CoordinatorEpoch, MetadataLog, ObjectKey};
 use std::sync::Arc;

@@ -120,3 +120,55 @@ impl TailEntry {
         self.reference
     }
 }
+
+/// One object a fetch must read, and how much the index already knows about
+/// where inside it to read.
+///
+/// ⚠️ **The tier crosses the seam on purpose** (`ADR-0022`). `M3.6` built the
+/// tail window precisely so a tail read costs one GET; a result type that
+/// erased the inline range would hand the caller no way to spend that, and it
+/// would resolve a footer for a region the index was already holding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IndexedBatch {
+    /// Tail tier: the region is inline, so reading it is a single GET.
+    Inline(TailEntry),
+    /// History tier: the region comes from the object's own footer, at 1-3
+    /// GETs (doc 12 §6.3).
+    Footer(ObjectRef),
+}
+
+impl IndexedBatch {
+    /// The underlying reference, whichever tier this came from.
+    #[must_use]
+    pub const fn reference(&self) -> &ObjectRef {
+        match self {
+            Self::Inline(entry) => entry.reference(),
+            Self::Footer(reference) => reference,
+        }
+    }
+
+    /// Where inside the object to read, if the index knows.
+    #[must_use]
+    pub const fn bytes(&self) -> Option<ByteRange> {
+        match self {
+            Self::Inline(entry) => Some(entry.bytes()),
+            Self::Footer(_) => None,
+        }
+    }
+
+    /// How many bytes reading this will cost, if that is knowable without
+    /// consulting the store.
+    ///
+    /// ⚠️ **`None` for a [`ByteRange::Full`] inline entry as much as for a
+    /// footer-resolved one.** `Full` names the whole object, whose size only
+    /// the store knows. `ADR-0022` writes the paging rule on this method
+    /// rather than on the variant so the page stays correct however the tiers
+    /// change.
+    #[must_use]
+    pub const fn known_len(&self) -> Option<u64> {
+        match self.bytes() {
+            Some(ByteRange::Bounded(bounded)) => Some(bounded.length()),
+            Some(ByteRange::Full) | None => None,
+        }
+    }
+}

@@ -169,11 +169,10 @@ impl CommitAck {
     /// the same answer an error path gives, and deliberately so: "there is no
     /// offset for you" has one representation, not two.
     ///
-    /// ⚠️ A linear scan, unlike the map
-    /// [`Allocator`](crate::CommitAck)'s staging uses, because this walks the
-    /// list once per *call* rather than once per span, and the caller that has
-    /// many partitions to answer for reads [`assignments`](Self::assignments)
-    /// in one pass instead.
+    /// ⚠️ A linear scan, unlike the borrowed-key map the allocator's staging
+    /// uses, because this walks the list once per *call* rather than once per
+    /// span — and the caller that has many partitions to answer for reads
+    /// [`assignments`](Self::assignments) in one pass instead.
     #[must_use]
     pub fn base_offset(&self, topic: &TopicId, partition: PartitionId) -> i64 {
         self.assignments

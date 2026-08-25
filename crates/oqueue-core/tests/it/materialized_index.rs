@@ -13,8 +13,8 @@
 
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, FakeMaterializedIndex,
-    IndexState, MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,
-    TAIL_WINDOW_ENTRIES, TopicId,
+    IndexState, MAX_BATCHES_PER_PAGE, MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey,
+    Offset, PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
 };
 
 fn topic(name: &str) -> TopicId {
@@ -286,4 +286,211 @@ fn the_fake_reports_its_progress_without_listing_topics() {
         "rendered: {rendered}"
     );
     assert!(rendered.contains('1'), "rendered: {rendered}");
+}
+
+/// A commit whose span names a real bounded region, so the byte budget has a
+/// length to charge against.
+fn sized(version: u64, records: u32, bytes: u64) -> MetadataEntry {
+    MetadataEntry::new(
+        CommitVersion::new(version),
+        MetadataRecord::BatchCommitted {
+            object: ObjectKey::new(format!("obj-{version}")).expect("a valid key"),
+            spans: vec![CommittedSpan::new(
+                topic("orders"),
+                partition(0),
+                records,
+                ByteRange::bounded(0, bytes).expect("a non-empty range"),
+            )],
+        },
+    )
+}
+
+fn page(state: &IndexState, start: i64, max_bytes: u64) -> Vec<i64> {
+    state
+        .find_batches(&topic("orders"), partition(0), offset(start), max_bytes)
+        .expect("a page")
+        .iter()
+        .map(|batch| batch.reference().base_offset().get())
+        .collect()
+}
+
+/// ⚠️ The boundary that decides whether a consumer at the high watermark reads
+/// anything: an object is in the page when it still holds records **at or
+/// after** `start`, so one ending exactly at `start` is not.
+#[test]
+fn a_page_starts_at_the_object_still_holding_start() {
+    let mut state = IndexState::new();
+    state
+        .apply(&[sized(1, 2, 10), sized(2, 2, 10), sized(3, 2, 10)])
+        .expect("applied");
+
+    assert_eq!(page(&state, 0, u64::MAX), vec![0, 2, 4]);
+    assert_eq!(
+        page(&state, 1, u64::MAX),
+        vec![0, 2, 4],
+        "1 is inside [0, 2)"
+    );
+    assert_eq!(page(&state, 2, u64::MAX), vec![2, 4], "[0, 2) is behind it");
+    assert_eq!(page(&state, 5, u64::MAX), vec![4]);
+    assert_eq!(page(&state, 6, u64::MAX), Vec::<i64>::new(), "at the end");
+}
+
+/// The budget admits a batch that exactly fills it and refuses the one that
+/// would exceed it.
+#[test]
+fn the_budget_is_inclusive_at_its_own_edge() {
+    let mut state = IndexState::new();
+    state
+        .apply(&[sized(1, 1, 10), sized(2, 1, 10), sized(3, 1, 10)])
+        .expect("applied");
+
+    assert_eq!(page(&state, 0, 20), vec![0, 1], "10 + 10 is exactly 20");
+    assert_eq!(page(&state, 0, 19), vec![0], "one byte short of the second");
+    assert_eq!(page(&state, 0, 0), vec![0], "and one is always returned");
+}
+
+/// ⚠️ The same `start` boundary as above, but in the **history** tier — the
+/// two tiers are filtered by separate loops, so a comparison correct in one
+/// says nothing about the other.
+#[test]
+fn the_history_tier_honours_the_same_start_boundary() {
+    let mut state = IndexState::new();
+    for version in 1..=(TAIL_WINDOW_ENTRIES + 3) {
+        state
+            .apply(&[sized(version as u64, 1, 10)])
+            .expect("applied");
+    }
+    assert_eq!(state.history_len(&topic("orders"), partition(0)), 3);
+
+    // History holds objects at offsets 0, 1, 2. Starting at 1 must drop the
+    // first and keep the second, whose records are [1, 2).
+    let from_one = page(&state, 1, u64::MAX);
+    assert_eq!(
+        from_one[0], 1,
+        "the object ending exactly at 1 is behind it"
+    );
+
+    let from_three = page(&state, 3, u64::MAX);
+    assert_eq!(
+        from_three[0], 3,
+        "past the whole history tier, the page starts in the tail"
+    );
+}
+
+/// History is older than the tail, so a page that spans both is in offset
+/// order only if history comes first.
+#[test]
+fn a_page_spanning_both_tiers_stays_in_offset_order() {
+    let mut state = IndexState::new();
+    let total = TAIL_WINDOW_ENTRIES + 3;
+    for version in 1..=total {
+        state
+            .apply(&[sized(version as u64, 1, 10)])
+            .expect("applied");
+    }
+    assert_eq!(
+        state.history_len(&topic("orders"), partition(0)),
+        3,
+        "three entries fell out of the window"
+    );
+
+    let bases = page(&state, 0, u64::MAX);
+    assert_eq!(
+        bases.len(),
+        MAX_BATCHES_PER_PAGE,
+        "the count bound closes a page that spans both tiers"
+    );
+    assert!(
+        bases.windows(2).all(|pair| pair[0] < pair[1]),
+        "ascending: {bases:?}"
+    );
+    assert_eq!(bases[0], 0, "the oldest history entry leads");
+
+    // And the page starting inside the tail is all tail, still ascending.
+    let tail_only = page(
+        &state,
+        i64::try_from(total - 2).expect("a count that fits"),
+        u64::MAX,
+    );
+    assert_eq!(tail_only.len(), 2);
+}
+
+/// A batch whose length the index cannot price charges nothing against the
+/// byte budget — it is unpriceable, not free, and the count is what bounds it.
+#[test]
+fn an_unknown_length_charges_nothing_against_the_budget() {
+    let mut state = IndexState::new();
+    // `commit` builds a `ByteRange::Full` span, whose length only the store
+    // knows.
+    state
+        .apply(&[sized(1, 1, 10), commit(2, 1), commit(3, 1), sized(4, 1, 10)])
+        .expect("applied");
+
+    assert_eq!(
+        page(&state, 0, 20),
+        vec![0, 1, 2, 3],
+        "two sized batches spend the whole budget and the unpriceable ones \
+         pass through it"
+    );
+    assert_eq!(
+        page(&state, 0, 5),
+        vec![0, 1, 2],
+        "the second sized batch is refused; the ones before it are not"
+    );
+}
+
+/// The fake delegates its read side to the fold as well as its write side.
+///
+/// ⚠️ Here rather than only in `oqueue-index`'s contract suite: mutation
+/// testing narrows to one crate and runs only that crate's tests, so a fake
+/// whose `find_batches` returned an empty page would survive every mutant
+/// unless this crate's own suite looked at it.
+#[test]
+fn the_fake_delegates_its_read_side_too() {
+    let index = FakeMaterializedIndex::new();
+    index
+        .apply(&[sized(1, 2, 10), sized(2, 2, 10)])
+        .expect("applied");
+
+    let page = index
+        .find_batches(&topic("orders"), partition(0), Offset::ZERO, u64::MAX)
+        .expect("a page");
+    assert_eq!(page.len(), 2);
+    assert_eq!(page[0].reference().base_offset(), Offset::ZERO);
+    assert_eq!(page[1].reference().base_offset(), offset(2));
+    assert_eq!(page[1].known_len(), Some(10));
+}
+
+/// A partition the fold has never seen has no batches, and is not an error.
+#[test]
+fn an_unfolded_partition_yields_an_empty_page() {
+    let state = IndexState::new();
+    assert_eq!(page(&state, 0, u64::MAX), Vec::<i64>::new());
+}
+
+/// The tail tier answers with its inline region; the history tier does not
+/// have one to answer with. ⚠️ This is the whole point of two tiers: a tail
+/// read is one GET because the range came back with the reference.
+#[test]
+fn only_the_tail_tier_answers_with_a_region() {
+    let mut state = IndexState::new();
+    for version in 1..=(TAIL_WINDOW_ENTRIES + 1) {
+        state
+            .apply(&[sized(version as u64, 1, 10)])
+            .expect("applied");
+    }
+    let batches = state
+        .find_batches(&topic("orders"), partition(0), Offset::ZERO, u64::MAX)
+        .expect("a page");
+
+    assert_eq!(
+        batches[0].bytes(),
+        None,
+        "demoted: resolved from the footer"
+    );
+    assert_eq!(
+        batches[1].bytes(),
+        Some(ByteRange::bounded(0, 10).expect("a non-empty range")),
+        "in the window: the region is inline"
+    );
 }

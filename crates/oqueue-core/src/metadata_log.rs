@@ -62,6 +62,15 @@ impl MetadataEntry {
 ///    fold that derives offsets would double-count silently.
 /// 4. **`read_from` is inclusive and ordered**, returns at most
 ///    `max_entries`, and is empty rather than an error past the end.
+/// 5. ⚠️ **A short page means the log has no more**, and is never a partial
+///    answer an implementation returned for its own convenience — a block
+///    boundary, a page split, an internal limit. A reader is entitled to stop
+///    on one: `oqueue-index`'s applier does, which is what saves it a round
+///    trip per catch-up. An engine that answered `400` of a requested `1,000`
+///    with `5,000` still available would leave that applier believing it had
+///    caught up, with the index behind the log and **no error anywhere** —
+///    the silent-staleness class `M3.md`'s Risks section is about. Return
+///    fewer only when there are fewer.
 ///
 /// ⚠️ **Ordering is per log, and a log is per metadata shard** (`ADR-0020`).
 /// Versions from two logs are not comparable; the shard identifier that would

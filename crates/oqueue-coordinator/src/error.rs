@@ -64,9 +64,13 @@ pub enum CoordinatorError {
     /// coordinator opened over a non-empty log would restart both its version
     /// line and every partition's offset line at zero, which the log's
     /// monotonicity check would catch and a partition's offsets would not —
-    /// the second is silent duplication. `M3.8` is the row that replays a log
-    /// into the allocator; until it lands, this is a refusal at startup rather
-    /// than wrong offsets at run time.
+    /// the second is silent duplication. ⚠️ **`M6` is what lifts this**, per
+    /// `ADR-0020` point 6 and `M6.md` tasks 8-9 (cold start from a snapshot
+    /// plus a bounded replay tail; warm restart replaying only
+    /// `committed − applied_upto`) — **not `M3.8`**, whose replay is the
+    /// *index*'s and leaves the allocator's offset lines untouched. Until M6
+    /// lands, this is a refusal at startup rather than wrong offsets at run
+    /// time.
     #[error(
         "the metadata log already holds entries up to version {last_version}; \
          replay is required before positions can be assigned"

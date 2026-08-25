@@ -9,8 +9,15 @@
 //! metadata log that a fetch queries. ⚠️ It is a **cache** — droppable at any
 //! moment, refillable by replaying the log — and the contract it is held to is
 //! [`MaterializedIndex`](oqueue_core::MaterializedIndex) in `oqueue-core`.
+//!
+//! `M3.8` adds what fills it: [`LogApplier`], which folds the metadata log in
+//! batches of [`APPLY_BATCH_ENTRIES`] and keeps no bookmark of its own —
+//! where to resume is read back out of the index, which advances it inside the
+//! same all-or-nothing apply as the entries it covers.
 #![forbid(unsafe_code)]
 
+mod applier;
 mod memory;
 
+pub use applier::{APPLY_BATCH_ENTRIES, CatchUp, LogApplier};
 pub use memory::MemoryIndex;
