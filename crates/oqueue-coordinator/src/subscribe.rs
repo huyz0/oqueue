@@ -1,0 +1,153 @@
+//! Push for the tail: what a reader follows instead of polling.
+
+use oqueue_core::{CommitVersion, MetadataEntry};
+use tokio::sync::{broadcast, watch};
+
+/// How many committed entries a subscription buffers before a slow subscriber
+/// falls behind.
+///
+/// ⚠️ **A lag is designed for, not prevented.** Doc 12 §4.4's answer is push
+/// for the tail and *pull* for history, and this constant is where the one
+/// becomes the other: a subscriber that cannot keep up is told so
+/// ([`DeltaLag::Lagged`]) and re-bootstraps from the log, which is a bounded
+/// paged read rather than an unbounded buffer growing behind it. Sizing this
+/// larger would trade memory for a boundary that has to exist anyway.
+///
+/// ⚠️ **UNDERIVED.** A placeholder with the right shape, like
+/// `TAIL_WINDOW_ENTRIES` beside the index; `M14` measures what it should be.
+/// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
+///
+/// ⚠️ **It must stay a power of two, and the reason is not this crate's.**
+/// `tokio::sync::broadcast` rounds a channel's capacity **up** to the next
+/// power of two, so a value of, say, 1,500 would buffer 2,048 and this
+/// constant would stop describing what it names — a per-shard memory figure
+/// derived from it under NFR-11 would be out by up to 2×, and the lag test
+/// below would stop overrunning the buffer it exists to overrun. Whoever
+/// replaces the placeholder inherits that constraint.
+pub const DELTA_BUFFER_ENTRIES: usize = 1_024;
+
+/// Why a [`DeltaStream`] stopped delivering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum DeltaLag {
+    /// The subscriber fell behind and entries it never saw were dropped.
+    ///
+    /// ⚠️ **Not an error to retry — an instruction to re-bootstrap.** The
+    /// stream is still live and the *next* `recv` resumes from the oldest
+    /// entry still buffered, but the gap in between is real, and folding what
+    /// comes next onto an index missing the middle is the double-counting
+    /// [`Error::NonMonotonicCommitVersion`](oqueue_core::Error::NonMonotonicCommitVersion)
+    /// exists to refuse. Pull the delta from the log first — doc 12 §4.4's
+    /// history half — and then follow again.
+    #[error("the subscription fell behind by {missed} entries; re-bootstrap from the log")]
+    Lagged {
+        /// How many entries were dropped.
+        missed: u64,
+    },
+
+    /// Every publisher is gone. Nothing further will arrive.
+    ///
+    /// ⚠️ **Not the same event as the loop stopping**, and the asymmetry with
+    /// [`IndexWatch::wait_for`] is real rather than an oversight to read past.
+    /// The watch's sender lives only in the loop, so a stopped loop makes
+    /// `wait_for` return `false` at once. This stream's sender is cloned into
+    /// every [`Coordinator`](crate::Coordinator) handle, so a loop that
+    /// stopped while a handle is still held leaves this parked with no error
+    /// — the follower's materialization silently freezes at the last entry.
+    /// ⚠️ A follower must therefore carry its own deadline, exactly as a fetch
+    /// does, and never treat `recv` as the only thing that can end its wait.
+    /// `M3.14` is the first caller with a deadline to give it.
+    #[error("the coordinator is no longer publishing")]
+    Closed,
+}
+
+/// A subscription to the tail of one metadata shard's log.
+///
+/// ⚠️ **Deltas, not state.** What arrives is the same event-shaped
+/// [`MetadataEntry`] the log holds, so a follower's index is the identical
+/// fold whether it was pushed or pulled — which is what makes a re-bootstrap
+/// after [`DeltaLag::Lagged`] converge rather than merely resynchronize.
+#[derive(Debug)]
+pub struct DeltaStream {
+    deltas: broadcast::Receiver<MetadataEntry>,
+}
+
+impl DeltaStream {
+    pub(crate) const fn new(deltas: broadcast::Receiver<MetadataEntry>) -> Self {
+        Self { deltas }
+    }
+
+    /// The next committed entry.
+    ///
+    /// ⚠️ **Cancellation-safe**, unlike
+    /// [`Coordinator::commit`](crate::Coordinator::commit): dropping this
+    /// future loses nothing, because the entry stays in the buffer until this
+    /// receiver takes it. That is what lets a fetch `select!` it against a
+    /// deadline, which is the whole of `M3.md` task 17.
+    ///
+    /// # Errors
+    ///
+    /// [`DeltaLag::Lagged`] if entries were dropped — re-bootstrap.
+    /// [`DeltaLag::Closed`] if the coordinator has stopped.
+    pub async fn recv(&mut self) -> Result<MetadataEntry, DeltaLag> {
+        match self.deltas.recv().await {
+            Ok(entry) => Ok(entry),
+            Err(broadcast::error::RecvError::Lagged(missed)) => Err(DeltaLag::Lagged { missed }),
+            Err(broadcast::error::RecvError::Closed) => Err(DeltaLag::Closed),
+        }
+    }
+}
+
+/// How far the coordinator's own index has been folded.
+///
+/// ⚠️ **The index's version, not the log's**, and the difference is the whole
+/// point. A reader parked for its own write needs the position to be
+/// *queryable*, not merely durable; waking it when the log had the entry and
+/// the index did not would answer a fetch from an index that has not folded
+/// the record the fetch is waiting for — hazard H2 restored with an extra step.
+#[derive(Debug, Clone)]
+pub struct IndexWatch {
+    applied: watch::Receiver<Option<CommitVersion>>,
+}
+
+impl IndexWatch {
+    pub(crate) const fn new(applied: watch::Receiver<Option<CommitVersion>>) -> Self {
+        Self { applied }
+    }
+
+    /// The highest version the coordinator's index holds, or `None`.
+    #[must_use]
+    pub fn applied(&self) -> Option<CommitVersion> {
+        *self.applied.borrow()
+    }
+
+    /// Waits until the index holds `version`, and says whether it does.
+    ///
+    /// Returns `true` immediately if it already does. `M3.md` task 17: a fetch
+    /// parks on this and on its own `fetch.max.wait.ms` deadline, so freshness
+    /// costs a wakeup rather than a poll interval, and **no new semantics** —
+    /// the deadline is the caller's, because the timer is the caller's.
+    ///
+    /// ⚠️ **Cancellation-safe.** Dropping it changes nothing; the watch is
+    /// level-triggered, so a later wait sees the same state rather than
+    /// missing an edge.
+    ///
+    /// ⚠️ **`false` means the coordinator stopped**, not that the version will
+    /// never arrive by some other route. It returns rather than parking on so
+    /// that a fetch answers from what the index already has instead of waiting
+    /// out a deadline nothing can now satisfy — and it is a `bool` rather than
+    /// a bare resolve so that "I waited" and "it arrived" cannot be confused,
+    /// which for an `AtLeast(v)` read is the difference between an answer and
+    /// hazard H2.
+    pub async fn wait_for(&mut self, version: CommitVersion) -> bool {
+        // ⚠️ `wait_for` on the receiver, not a `changed()` loop: it evaluates
+        // the predicate against the *current* value first, so a version
+        // already applied returns without waiting for a further change that
+        // may never come. The borrow it hands back is dropped at the end of
+        // this statement — holding it across an await would make this future
+        // `!Send`, and every caller is a spawned fetch.
+        self.applied
+            .wait_for(|applied| applied.is_some_and(|applied| applied >= version))
+            .await
+            .is_ok()
+    }
+}

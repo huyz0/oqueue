@@ -3,9 +3,13 @@
 use crate::allocator::Allocator;
 use crate::commit::CommitAck;
 use crate::error::CoordinatorError;
-use oqueue_core::{CommittedSpan, CoordinatorEpoch, MetadataLog, ObjectKey};
+use crate::subscribe::{DELTA_BUFFER_ENTRIES, DeltaStream, IndexWatch};
+use oqueue_core::{
+    CommitVersion, CommittedSpan, CoordinatorEpoch, MaterializedIndex, MetadataEntry, MetadataLog,
+    ObjectKey,
+};
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 
 /// How many commits may be queued before a producer waits.
 ///
@@ -17,6 +21,14 @@ use tokio::sync::{mpsc, oneshot};
 /// the in-flight flush count a broker node holds and below anything that would
 /// matter for memory. `M14` measures what it should be.
 pub const COMMIT_QUEUE_DEPTH: usize = 1024;
+
+/// How many entries one page of a rebuild reads.
+///
+/// ⚠️ A rebuild is not the apply *rate* `oqueue-index`'s `APPLY_BATCH_ENTRIES`
+/// bounds — it happens when a cache was dropped, not on every commit — so this
+/// is sized to bound the memory one page costs and nothing else. It is a
+/// constant rather than a knob, per `AGENTS.md` non-negotiable 2.
+pub const REBUILD_PAGE_ENTRIES: usize = 1024;
 
 /// One producer's commit, and where to send its answer.
 #[derive(Debug)]
@@ -34,6 +46,8 @@ struct CommitRequest {
 #[derive(Debug, Clone)]
 pub struct Coordinator {
     commits: mpsc::Sender<CommitRequest>,
+    deltas: broadcast::Sender<MetadataEntry>,
+    applied: watch::Receiver<Option<CommitVersion>>,
 }
 
 impl Coordinator {
@@ -45,6 +59,34 @@ impl Coordinator {
     /// and its panic, and this crate does not know who that is. The caller
     /// spawns [`CoordinatorLoop::run`] and holds its handle.
     ///
+    /// # ⚠️ The coordinator is the sole writer of `index`, and the only party
+    /// # that may clear it
+    ///
+    /// **Decided here** (`M3.9`), because `oqueue-index`'s `LogApplier` folds
+    /// the same log into the same kind of index and something had to say which
+    /// of them owns a given one. The rule is doc 12 §4.4's own model: every
+    /// agent keeps *its own* materialization. A coordinator maintains the one
+    /// it is given; a follower elsewhere keeps a different one and fills it
+    /// with `LogApplier` from [`subscribe`](Self::subscribe) and the log.
+    ///
+    /// Handing one index to both is a defect and nothing detects it. The two
+    /// interleavings are: the applier folding first, so every later commit
+    /// finds the index ahead of it and pays a **full log replay inside the
+    /// ack path**; and the coordinator folding between the applier's read and
+    /// its apply, so the applier is refused with
+    /// [`NonMonotonicCommitVersion`](oqueue_core::Error::NonMonotonicCommitVersion)
+    /// — an error that says the log lost ordering when nothing is wrong with
+    /// it.
+    ///
+    /// ⚠️ **"Only party that may clear it" is the other half**, and it is not
+    /// pedantry: `apply` checks version order and *not* contiguity, so a
+    /// `clear` landing between this loop's own check and its fold would be
+    /// accepted and would re-base every partition at [`Offset::ZERO`]. Whoever
+    /// wants the cache dropped — `M3.11`'s quota is the row that will — asks
+    /// the coordinator, and does not reach for the handle.
+    ///
+    /// [`Offset::ZERO`]: oqueue_core::Offset::ZERO
+    ///
     /// # Errors
     ///
     /// [`CoordinatorError::ReplayRequired`] if `log` already holds entries —
@@ -52,6 +94,7 @@ impl Coordinator {
     /// [`CoordinatorError::Journal`] if the log cannot be read at all.
     pub async fn open(
         log: Arc<dyn MetadataLog>,
+        index: Arc<dyn MaterializedIndex>,
         epoch: CoordinatorEpoch,
     ) -> Result<(Self, CoordinatorLoop), CoordinatorError> {
         if let Some(last) = log
@@ -63,16 +106,76 @@ impl Coordinator {
                 last_version: last.get(),
             });
         }
+        // ⚠️ **Cleared, not trusted.** The log has just been checked empty, so
+        // an index arriving with a version folded into it holds one from some
+        // *other* line — a rotated log, a re-shard, or doc 10 #12's disk
+        // engine outliving the process. Seeding the watch from it would have
+        // `IndexWatch` answer `true` at once for every `AtLeast(v)` below that
+        // version and serve a reader offsets from a different line believing
+        // they are fresh, which is hazard H2 through the mechanism built to
+        // prevent it. Clearing is the operation this seam guarantees is always
+        // safe, and it makes the invariant true by construction rather than by
+        // a check that has to be remembered.
+        index.clear();
         let (commits, requests) = mpsc::channel(COMMIT_QUEUE_DEPTH);
+        let (deltas, _) = broadcast::channel(DELTA_BUFFER_ENTRIES);
+        let (published, applied) = watch::channel(None);
         Ok((
-            Self { commits },
+            Self {
+                commits,
+                deltas: deltas.clone(),
+                applied,
+            },
             CoordinatorLoop {
                 log,
+                index,
                 epoch,
                 allocator: Allocator::new(),
                 requests,
+                deltas,
+                published,
             },
         ))
+    }
+
+    /// Follows the tail of this shard's log.
+    ///
+    /// Doc 12 §4.4's push half, and `M3.md` task 15. A subscriber that falls
+    /// behind is told to re-bootstrap from the log rather than silently
+    /// skipping — see [`DeltaLag`](crate::DeltaLag).
+    ///
+    /// ⚠️ **It begins at the *next* commit, not at the beginning.** A fresh
+    /// follower subscribes first and folds the log second, so the two overlap
+    /// rather than leaving a gap — a gap is unrecoverable and an overlap is
+    /// not.
+    ///
+    /// ⚠️ **The follower has to strip the overlap itself**, and an earlier
+    /// version of this paragraph said the fold would do it. It will not: an
+    /// [`apply`](oqueue_core::MaterializedIndex::apply) is all-or-nothing, so
+    /// a batch whose *first* entry is one already folded is refused **whole**,
+    /// taking the new entries after it down with the duplicate. Drop every
+    /// pushed entry at or below
+    /// [`applied_upto`](oqueue_core::MaterializedIndex::applied_upto) before
+    /// folding, and fold what is left.
+    ///
+    /// ⚠️ **Bootstrap here is a full log replay, not a snapshot**, and doc 12
+    /// §4.4's snapshot half is `M6`'s (`M6.md` tasks 8 and 15: a
+    /// `SnapshotCommitted` record, one GET, then replay of the tail only).
+    /// Until it exists, N agents restarting together produce N full replays —
+    /// the thundering herd doc 12 §4.4 introduces snapshots to avoid — which
+    /// is a real cost and is recorded in `roadmap.md`'s deferral table rather
+    /// than implied by this paragraph's silence.
+    #[must_use]
+    pub fn subscribe(&self) -> DeltaStream {
+        DeltaStream::new(self.deltas.subscribe())
+    }
+
+    /// Watches how far the coordinator's own index has folded.
+    ///
+    /// What a parked fetch waits on, per `M3.md` task 17.
+    #[must_use]
+    pub fn watch(&self) -> IndexWatch {
+        IndexWatch::new(self.applied.clone())
     }
 
     /// Commits an object's position, and answers with the offsets it took.
@@ -135,9 +238,12 @@ impl Coordinator {
 #[derive(Debug)]
 pub struct CoordinatorLoop {
     log: Arc<dyn MetadataLog>,
+    index: Arc<dyn MaterializedIndex>,
     epoch: CoordinatorEpoch,
     allocator: Allocator,
     requests: mpsc::Receiver<CommitRequest>,
+    deltas: broadcast::Sender<MetadataEntry>,
+    published: watch::Sender<Option<CommitVersion>>,
 }
 
 impl CoordinatorLoop {
@@ -175,7 +281,117 @@ impl CoordinatorLoop {
             .append(core::slice::from_ref(staged.entry()))
             .await
             .map_err(CoordinatorError::Journal)?;
+        let entry = staged.entry().clone();
         let (version, assignments) = self.allocator.apply(staged);
+        self.publish(entry).await;
         Ok(CommitAck::new(version, self.epoch, assignments))
+    }
+
+    /// Folds the committed entry into the local index, then tells everyone.
+    ///
+    /// ⚠️ **Before the ack returns**, which is what makes read-your-writes
+    /// (hazard H2) hold locally by construction: a producer holding a
+    /// [`CommitAck`] can fetch at its version and the index already has it,
+    /// with no window in which the position is durable and unqueryable.
+    ///
+    /// ⚠️ **Nothing here can fail the commit.** The position is durable in the
+    /// log whatever happens to the cache, so refusing the ack would deny a
+    /// producer an offset that exists.
+    async fn publish(&self, entry: MetadataEntry) {
+        if self.index_precedes(entry.version()) {
+            if self.index.apply(core::slice::from_ref(&entry)).is_err() {
+                // A fold refused by an index the coordinator *knows* the
+                // position of is a defect, not a dropped cache. Empty is the
+                // one state that cannot be wrong, and `publish_applied` then
+                // reports `None` rather than a version nothing holds.
+                self.index.clear();
+            }
+        } else {
+            // ⚠️ **The index is a cache anyone may drop**, and the seam says so
+            // in as many words — under memory pressure, on a restart, when
+            // `M3.11`'s quota trips. Folding one entry onto a dropped index
+            // does not merely lose the old records: `IndexState` bases a
+            // partition it has forgotten at `Offset::ZERO`, so the fold would
+            // place these records at 0 while the log, the allocator and the
+            // ack already given to the producer place them at the true offset.
+            // An index that is *wrong* is worse than one that is empty.
+            //
+            // ⚠️ The rebuild covers **this** entry too, because the journal
+            // step above already put it in the log. Folding it again
+            // afterwards is the replay the fold refuses, by design.
+            self.rebuild().await;
+        }
+        self.publish_applied();
+        // ⚠️ Ignored on purpose: no subscribers is the ordinary case, not a
+        // failure. A *lagging* subscriber is a different thing and is told so
+        // on its own `recv`.
+        drop(self.deltas.send(entry));
+    }
+
+    /// Whether the index sits exactly one version below `version`.
+    ///
+    /// ⚠️ **Exactly, not "at least".** A gap means entries are missing and the
+    /// fold would mis-base; being *ahead* means something else is writing to
+    /// this index, which is the same problem from the other side. Both are
+    /// answered by rebuilding, because both mean the coordinator does not know
+    /// what the index holds.
+    fn index_precedes(&self, version: CommitVersion) -> bool {
+        self.index
+            .applied_upto()
+            .map_or(version == CommitVersion::ZERO, |applied| {
+                applied.advance(1).is_ok_and(|next| next == version)
+            })
+    }
+
+    /// Re-derives the whole index from the log.
+    ///
+    /// ⚠️ **Deliberately not `oqueue-index`'s `LogApplier`**, which does the
+    /// same fold: `architecture.md`'s star topology means this crate depends on
+    /// `oqueue-core` and nothing else in the workspace, and the two are not the
+    /// same operation anyway — that one resumes from a bookmark and this one
+    /// starts from nothing, because the bookmark is exactly what was lost.
+    ///
+    /// ⚠️ **A failure here leaves the index empty rather than partial.** An
+    /// empty cache is answered by a reader waiting out its deadline; a partial
+    /// one is answered with wrong offsets.
+    ///
+    /// ⚠️ **It reads until a page comes back empty**, and deliberately does
+    /// *not* stop early on a short one the way `oqueue-index`'s `catch_up`
+    /// does. That saves a round trip per call and is worth it there, where a
+    /// catch-up happens constantly; here it would buy one read on an operation
+    /// that only runs when a cache was dropped, in exchange for a branch no
+    /// test can distinguish from its own mutation.
+    async fn rebuild(&self) {
+        self.index.clear();
+        let mut start = CommitVersion::ZERO;
+        loop {
+            let Ok(page) = self.log.read_from(start, REBUILD_PAGE_ENTRIES).await else {
+                self.index.clear();
+                return;
+            };
+            let Some(last) = page.last().map(MetadataEntry::version) else {
+                return;
+            };
+            if self.index.apply(&page).is_err() {
+                self.index.clear();
+                return;
+            }
+            let Ok(next) = last.advance(1) else {
+                return;
+            };
+            start = next;
+        }
+    }
+
+    /// Publishes what the index **actually** holds.
+    ///
+    /// ⚠️ **Read back from the index, never remembered separately.** The watch
+    /// is level-triggered, so a version published above what the index holds
+    /// wakes every reader waiting at or below it *immediately*, onto an index
+    /// that cannot answer them — hazard H2 arriving through the very mechanism
+    /// built to prevent it. A second copy of this fact is a second thing to be
+    /// wrong.
+    fn publish_applied(&self) {
+        self.published.send_replace(self.index.applied_upto());
     }
 }

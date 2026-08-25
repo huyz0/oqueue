@@ -28,10 +28,20 @@ use std::sync::Mutex;
 ///
 /// Unlike [`ObjectStore`](crate::ObjectStore), which is a network seam, every
 /// implementation of this is a local fold — memory today, and doc 10 #12's
-/// engine choice (`SQLite`, `redb`, `RocksDB`, `fjall`, `SlateDB`) later. The
-/// read side is on the Fetch hot path that NFR-2 and NFR-3 bound, and a boxed
-/// future per lookup is the per-call allocation `ADR-0004` rejected on
-/// [`Clock`](crate::Clock) by name.
+/// engine choice (`SQLite`, `redb`, `RocksDB`, `fjall`, `SlateDB`) later. An
+/// async read here would put object-storage reads *inside* the index, which is
+/// the layering this seam exists to prevent: the index says which objects to
+/// read, and the reader reads them.
+///
+/// ⚠️ **The allocation argument that used to stand here does not survive
+/// `find_batches`** (`ADR-0022`), and is corrected rather than deleted because
+/// `ADR-0020`'s `M3.5` note still records it. It ran: a boxed future per lookup
+/// is the per-call allocation `ADR-0004` rejected on [`Clock`](crate::Clock) by
+/// name. True of a lookup returning a scalar; not true of one returning a
+/// `Vec` of entries each cloning an [`ObjectKey`](crate::ObjectKey), which is a
+/// `String` — a full page costs on the order of 65 allocations against the one
+/// a future would have. Being synchronous is still right; making the read side
+/// allocation-free is a change to what `find_batches` returns.
 ///
 /// ⚠️ **This is the seam's open question, not a settled one.** A disk-backed
 /// engine may want an async read, and if it does, that is a contract change

@@ -6,11 +6,16 @@ use std::sync::Arc;
 /// The most log entries one apply covers.
 ///
 /// ⚠️ **A ceiling on the transaction, which is what bounds the transaction
-/// *rate*** (`M3.md` task 10). Doc 13 §6 is explicit that individual commits do
-/// not meet the required apply rate on any of doc 10 #12's candidate engines —
-/// `SQLite`, `redb`, `RocksDB`, `fjall`, `SlateDB` — because each pays a
-/// durable-commit cost per transaction that a batch amortizes and a single
-/// entry cannot. Capping entries per transaction at N caps transactions at
+/// *rate*** (`M3.md` task 10). ⚠️ Doc 13 §6 makes the measured claim for
+/// **`SQLite`** — ~142 individual commits/s, which "would not meet our rate,
+/// so batching is mandatory, not optional" — and for the other four of doc 10
+/// #12's candidates it publishes no individual-commit figure at all; of `redb`
+/// it records the opposite direction, that it "wins single-record commits by
+/// 2× and loses batched commits by 4.5×". The engine benchmark doc 13 §6 asks
+/// for is still unrun and doc 10 #12 still open, so the general reason is the
+/// mechanism rather than the measurement: every candidate pays a durable-commit
+/// cost per *transaction* that a batch amortizes and a single entry cannot.
+/// Capping entries per transaction at N caps transactions at
 /// `arrival rate ÷ N`: doc 14 §3's ~4M entries/s becomes ~4,000 commits/s
 /// rather than ~4M, and that division is the whole of what task 10 buys.
 ///
@@ -113,14 +118,18 @@ impl LogApplier {
     ///
     /// Returns how many were folded — `0` when the index has caught up.
     ///
-    /// ⚠️ **One applier per index at a time.** This reads the bookmark, awaits
-    /// the log, and then folds, so two callers sharing one applier would read
-    /// the same `start`, fetch the same page, and the loser's fold would be
-    /// refused as
+    /// ⚠️ **One writer per index, and this is it.** The method reads the
+    /// bookmark, awaits the log, and then folds, so a second writer landing in
+    /// between makes the loser's fold refused as
     /// [`NonMonotonicCommitVersion`](oqueue_core::Error::NonMonotonicCommitVersion)
     /// — an error that says the log lost ordering when nothing is wrong with
-    /// it. Nothing enforces this yet; `M3.9` is the row that gains a second
-    /// caller and owns choosing between a single owning task and a permit.
+    /// it. That means two appliers over one index, and it equally means an
+    /// applier over an index a `Coordinator` was opened with: **`M3.9` decided
+    /// that the coordinator is the sole writer of its own index**, so a
+    /// follower keeps a different one and fills it from here. Doc 12 §4.4's
+    /// model, where every agent has its own materialization, is what makes
+    /// that the natural rule rather than a restriction. Nothing detects a
+    /// violation; `M3.14` is the first composer that could commit one.
     ///
     /// # Errors
     ///

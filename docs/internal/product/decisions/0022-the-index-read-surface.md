@@ -153,12 +153,16 @@ enforced against an invented size is a bound in appearance only. An honest
 "one object of overshoot" beats a precise-looking figure with no derivation.
 
 **Make `find_batches` async so it could resolve footers itself and honour
-`max_bytes` exactly.** Rejected, and for the reason `ADR-0020`'s `M3.5` note
-already gives this seam: every implementation is a local fold, the read side is
-on the Fetch path NFR-2 and NFR-3 bound, and a boxed future per lookup is the
-per-call allocation `ADR-0004` rejected on `Clock` by name. It would also put
-object-storage reads inside the index, which is the layering the seam exists to
-prevent — the reader resolves footers, the index says which objects to read.
+`max_bytes` exactly.** Rejected on **layering**: it would put object-storage
+reads inside the index, which is what the seam exists to prevent — the reader
+resolves footers, the index says which objects to read. ⚠️ **Not on
+allocation**, which is the reason `ADR-0020`'s `M3.5` note gives for the seam
+being synchronous at all and which does *not* survive this signature: a
+`Result<Vec<IndexedBatch>>` heap-allocates the vector and clones an
+`ObjectKey` — a `String` — per entry, so a full page is on the order of 65
+allocations against the one boxed future async would have cost. The
+synchronous read side is still right; a future row that wants it allocation-free
+has to change what `find_batches` returns, not whether it is async.
 
 ## Consequences
 
@@ -168,8 +172,12 @@ answer. The engine question (doc 10 #12) stays behind the seam, since the whole
 read path is expressed in trait terms.
 
 **Makes hard:** a caller cannot rely on `max_bytes` being an upper bound on
-bytes actually fetched — it is a bound plus at most one object. Every caller
-has to be written knowing that, and `M3.14`'s Fetch handler is the first.
+bytes actually fetched. ⚠️ **The overshoot is bounded by
+`MAX_BATCHES_PER_PAGE` objects, not by one** — every history batch is
+unpriceable, so a page that begins in history can be 64 entries none of which
+were charged. Every caller has to be written knowing that, and `M3.14`'s Fetch
+handler is the first: it learns each object's size as it reads and stops when
+its own budget fills, which is where the real bound is.
 
 **Forecloses:** an exact byte budget over history batches, unless `ObjectRef`
 grows a size field (rejected above) or the footer is consulted (rejected

@@ -26,10 +26,19 @@ tokio = { version = "1", default-features = false, features = ["sync"] }
 proptest.workspace = true
 # The concurrent-producer property needs producers that are actually
 # concurrent, so the test binary — and only the test binary — takes a runtime.
+# ⚠️ `time` and `test-util` are not conveniences. A test that parks on
+# `IndexWatch::wait_for` and is never woken would **hang** rather than fail,
+# which `testing.md` rule 15's mutation gate turns from a nuisance into a
+# stalled run — `oqueue-core`'s own `test_executor` exists for the same reason
+# and says so. Every park below is bounded by a `timeout` under a **paused**
+# clock, so the bound costs no wall-clock time and fires deterministically the
+# moment nothing can make progress.
 tokio = { version = "1", default-features = false, features = [
     "rt",
     "rt-multi-thread",
     "macros",
+    "time",
+    "test-util",
 ] }
 
 [lints]

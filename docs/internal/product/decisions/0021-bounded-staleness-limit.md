@@ -1,6 +1,27 @@
 # 0021. Bounded staleness limit
 
-Status: accepted
+Status: accepted; 2026-08-25 (`M3.9`): the healthy-path propagation latency is
+now **measured** rather than synthesized. Doc 12 §4.5's ~1 ms is `[Synthesis]`,
+sourced as "one network RTT"; over 2,000 commit-to-visible round trips through
+`Coordinator::watch` on a four-worker runtime the observed figures are
+**p50 41 µs, p99 67 µs, max 275 µs**. ⚠️ **No committed test produces those
+numbers and none should be read as re-deriving them**: every wakeup test in
+`oqueue-coordinator` runs under `start_paused`, where the clock moves only when
+the runtime idles, precisely so a missed wakeup fails instead of hanging — a
+suite that measured wall-clock latency would be asserting on duration, which
+`testing.md` rule 11 forbids. The figures come from a throwaway harness run
+once against this commit and removed: 2,000 iterations of `tokio::join!` over
+`Coordinator::commit` and `IndexWatch::wait_for`, timed with `Instant`, on a
+`multi_thread` runtime with four workers. Re-deriving them needs that harness
+rebuilt, and `M14` is the milestone that gives this path a benchmark rather
+than a one-off. They are in-process, so no network RTT is in
+them, which is why they are an order of magnitude under the synthesized number
+rather than a correction to it. ⚠️ **This is not grounds to shrink
+`max_metadata_staleness`, and the number is recorded here so that nobody reads
+it as such.** 5 s is sized against the abnormal cases — a GC pause, a
+partition, a coordinator restart — and a healthy-path measurement bounds none
+of them. Shrinking the limit is a tightening no gate would object to and the
+argument below is what it would have to beat.
 Date: 2026-08-23
 Requirements: FR-12, FR-13, NFR-2, NFR-3, NFR-21
 
