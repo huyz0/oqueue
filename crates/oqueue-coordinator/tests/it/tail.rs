@@ -12,8 +12,9 @@
 use crate::support::{RefusableLog, object, offset, parked, partition, span, start_indexed, topic};
 use oqueue_coordinator::{Coordinator, REBUILD_PAGE_ENTRIES};
 use oqueue_core::{
-    CommitVersion, CoordinatorEpoch, FakeMaterializedIndex, FakeMetadataLog, MaterializedIndex,
-    MetadataEntry, MetadataLog, MetadataRecord, Offset,
+    CacheState, CommitVersion, CoordinatorEpoch, FakeMaterializedIndex, FakeMetadataLog,
+    MAX_METADATA_STALENESS_MS, MaterializedIndex, MetadataEntry, MetadataLog, MetadataRecord,
+    Offset, ReadMode, RefreshReason,
 };
 use std::sync::Arc;
 
@@ -256,6 +257,52 @@ async fn an_ordinary_commit_never_reads_the_log_back() {
     driver.await.expect("the loop ends");
 }
 
+/// ⚠️ **A rebuild that fails leaves the index empty *and the watch silent*.**
+/// This is the one case where what the index holds and the version just
+/// committed differ, so it is the only case that can tell a watch reading back
+/// from the index from one remembering the entry's own version — and the
+/// difference is a reader woken instantly onto an index that cannot answer it.
+#[tokio::test(start_paused = true)]
+async fn a_failed_rebuild_leaves_the_index_empty_and_says_so() {
+    let log = Arc::new(RefusableLog::new());
+    let index: Arc<dyn MaterializedIndex> = Arc::new(FakeMaterializedIndex::new());
+    let (coordinator, driver) = Coordinator::open(
+        Arc::clone(&log) as Arc<dyn MetadataLog>,
+        Arc::clone(&index),
+        CoordinatorEpoch::ZERO,
+    )
+    .await
+    .expect("a fresh log opens");
+    let driver = tokio::spawn(driver.run());
+    let watch = coordinator.watch();
+
+    coordinator
+        .commit(object(0), vec![span(3)])
+        .await
+        .expect("the commit lands");
+    assert_eq!(watch.applied(), Some(CommitVersion::ZERO));
+
+    // The cache is dropped and the log will not give it back.
+    index.clear();
+    log.refuse_reads(true);
+    coordinator
+        .commit(object(1), vec![span(3)])
+        .await
+        .expect("the position is durable whatever happens to the cache");
+
+    assert_eq!(index.applied_upto(), None, "empty rather than partial");
+    assert_eq!(
+        watch.applied(),
+        None,
+        "and the watch says so — a version published here would wake every \
+         reader at or below it onto an index holding nothing"
+    );
+    assert_eq!(index.end_offset(&topic(), partition()), Offset::ZERO);
+
+    drop(coordinator);
+    driver.await.expect("the loop ends");
+}
+
 /// A rebuild larger than one page reads every page, not just the first.
 #[tokio::test(start_paused = true)]
 async fn a_rebuild_spanning_more_than_one_page_reads_all_of_them() {
@@ -317,6 +364,50 @@ async fn an_index_carrying_another_line_s_version_is_cleared_at_open() {
         "and the watch never claimed it"
     );
     assert_eq!(index.end_offset(&topic(), partition()), Offset::ZERO);
+
+    drop(coordinator);
+    driver.await.expect("the loop ends");
+}
+
+/// ⚠️ **What a session carries is the pair, not the number** (`ADR-0023`).
+/// A reader that remembered only the version and met a coordinator from
+/// another incarnation would compare across two independent counters, and the
+/// half of that mistake which feels safe is the half that answers it with data
+/// missing its own write.
+#[tokio::test(start_paused = true)]
+async fn an_ack_hands_back_a_watermark_the_cache_can_be_asked_about() {
+    let (coordinator, index, driver) = start_indexed().await;
+
+    let ack = coordinator
+        .commit(object(0), vec![span(2)])
+        .await
+        .expect("the commit lands");
+    let watermark = ack.watermark();
+    assert_eq!(watermark.epoch(), coordinator.epoch());
+    assert_eq!(watermark.version(), ack.version());
+
+    // The coordinator's own index has already folded it, so read-your-writes
+    // is admitted with no round trip at all.
+    let cache = CacheState::new(coordinator.epoch(), index.applied_upto(), 0);
+    assert_eq!(
+        cache.admits(ReadMode::AtLeast(watermark), coordinator.epoch()),
+        Ok(())
+    );
+
+    // A cache that has heard nothing for longer than the limit is refused
+    // whatever its version says — the breaker is not a freshness clause.
+    let silent = CacheState::new(
+        coordinator.epoch(),
+        index.applied_upto(),
+        MAX_METADATA_STALENESS_MS + 1,
+    );
+    assert_eq!(
+        silent.admits(ReadMode::AtLeast(watermark), coordinator.epoch()),
+        Err(RefreshReason::PushStreamSilent {
+            silent_for_ms: MAX_METADATA_STALENESS_MS + 1,
+            limit_ms: MAX_METADATA_STALENESS_MS,
+        })
+    );
 
     drop(coordinator);
     driver.await.expect("the loop ends");

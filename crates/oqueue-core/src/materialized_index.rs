@@ -86,9 +86,18 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
     /// enters this index before its metadata record commits, so "the end of
     /// the committed log" and "where the next record lands" are one number.
     /// A second name for it would be the first opportunity for the two to
-    /// disagree, which is the bug task 13 is about. ⚠️ `M3.10`'s last stable
-    /// offset is a genuinely different number — never *ahead* of this one —
-    /// and does need its own accessor when transactions exist to part them.
+    /// disagree, which is the bug task 13 is about.
+    ///
+    /// ⚠️ **The last stable offset is derived the same way and is never ahead
+    /// of this one** (hazard H3, `M3.10`). Today it *is* this number: an LSO
+    /// is the offset below which no transaction is still open, and until
+    /// `M11` builds idempotent producers there are no transactions, so
+    /// nothing can be open. It gets its own accessor when `M11` gives the two
+    /// something to differ by — and when it does, the rule that survives is
+    /// that it is **derived**, from the same fold, with no setter, exactly as
+    /// this one is. An LSO that could be set is an LSO that can be set above
+    /// the high watermark, which tells a client that records it cannot read
+    /// are committed.
     fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset;
 
     /// The objects a fetch from `start` must read, in ascending offset order.
@@ -133,8 +142,18 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
 
     /// Discards everything, returning it to its fresh state.
     ///
-    /// ⚠️ Safe by construction, and the reason this trait exists: a caller may
-    /// do this whenever it likes, because the log can refill it.
+    /// ⚠️ Safe **for the writer of this index**, and the reason this trait
+    /// exists: nothing here is unrecoverable, because the log can refill it.
+    ///
+    /// ⚠️ **It is not safe for anyone else, and an earlier version of this
+    /// sentence said it was.** [`apply`](Self::apply) checks version *order*
+    /// and not contiguity, so an index cleared between its writer's own
+    /// "is this current" check and its fold accepts the next entry and bases
+    /// every partition at [`Offset::ZERO`] — an index that is **wrong**, not
+    /// one that is empty, and nothing detects it. An index therefore has one
+    /// writer, and clearing it is that writer's to do: for the one an
+    /// `oqueue-coordinator::Coordinator` was opened with, ask the
+    /// coordinator (`M3.9`, and `M3.11`'s quota is the row that will).
     fn clear(&self);
 }
 

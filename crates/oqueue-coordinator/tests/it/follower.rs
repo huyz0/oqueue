@@ -9,7 +9,7 @@
 #![allow(clippy::expect_used)]
 
 use crate::support::{object, offset, parked, partition, span, start_indexed, topic};
-use oqueue_coordinator::{Coordinator, DeltaLag};
+use oqueue_coordinator::{Coordinator, CoordinatorError, DeltaLag};
 use oqueue_core::{
     CommitVersion, CoordinatorEpoch, FakeMaterializedIndex, FakeMetadataLog, MaterializedIndex,
     MetadataEntry, MetadataLog, MetadataRecord, Offset,
@@ -81,6 +81,45 @@ async fn a_follower_bootstraps_by_stripping_the_overlap_it_asked_for() {
 
     drop(coordinator);
     driver.await.expect("the loop ends");
+}
+
+/// ⚠️ **A live handle must not keep a dead loop's stream open.** `broadcast`
+/// reports `Closed` only once every *sender* is gone, so a handle that held
+/// one would park a follower forever against a loop that had already stopped —
+/// and `IndexWatch` would already be reporting `false` for the same event,
+/// which is the asymmetry that hides it.
+#[tokio::test(start_paused = true)]
+async fn a_follower_is_told_it_is_over_even_while_a_handle_is_still_held() {
+    let (coordinator, driver) = Coordinator::open(
+        Arc::new(FakeMetadataLog::new()),
+        Arc::new(FakeMaterializedIndex::new()),
+        CoordinatorEpoch::ZERO,
+    )
+    .await
+    .expect("a fresh log opens");
+    let mut stream = coordinator.subscribe();
+    let mut watch = coordinator.watch();
+
+    // ⚠️ The loop is gone while a handle is very much alive — never spawned
+    // here; a task that panicked or was cancelled at shutdown in production.
+    // Dropping the *last handle* is the orderly stop and is a different event;
+    // this is the one a follower must not park through.
+    drop(driver);
+
+    assert!(
+        !parked(watch.wait_for(CommitVersion::ZERO)).await,
+        "the watch reports the stop"
+    );
+    assert_eq!(
+        parked(stream.recv()).await,
+        Err(DeltaLag::Closed),
+        "and so does the stream, with a handle still alive"
+    );
+    assert_eq!(
+        coordinator.commit(object(0), vec![span(1)]).await.err(),
+        Some(CoordinatorError::Unavailable),
+        "all three paths agree that it is over"
+    );
 }
 
 /// ⚠️ A stopped coordinator with no handles left is a **terminal** condition,

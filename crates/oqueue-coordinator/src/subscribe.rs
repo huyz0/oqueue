@@ -46,16 +46,13 @@ pub enum DeltaLag {
 
     /// Every publisher is gone. Nothing further will arrive.
     ///
-    /// ⚠️ **Not the same event as the loop stopping**, and the asymmetry with
-    /// [`IndexWatch::wait_for`] is real rather than an oversight to read past.
-    /// The watch's sender lives only in the loop, so a stopped loop makes
-    /// `wait_for` return `false` at once. This stream's sender is cloned into
-    /// every [`Coordinator`](crate::Coordinator) handle, so a loop that
-    /// stopped while a handle is still held leaves this parked with no error
-    /// — the follower's materialization silently freezes at the last entry.
-    /// ⚠️ A follower must therefore carry its own deadline, exactly as a fetch
-    /// does, and never treat `recv` as the only thing that can end its wait.
-    /// `M3.14` is the first caller with a deadline to give it.
+    /// ⚠️ **It fires whether or not a handle is still held**, and that took a
+    /// deliberate choice: `broadcast` reports this only once every *sender* is
+    /// gone, so a [`Coordinator`](crate::Coordinator) that kept one would park
+    /// a follower forever against a loop that had already stopped. The loop
+    /// owns the only sender — exactly as it owns the only
+    /// [`IndexWatch`] sender — so a stopped loop is reported the same way by
+    /// both, and a handle in some connection task cannot mask it.
     #[error("the coordinator is no longer publishing")]
     Closed,
 }

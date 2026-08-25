@@ -67,6 +67,7 @@ mod rate_governor;
 mod read_mode;
 mod redacted;
 mod retry;
+mod staleness;
 mod store;
 #[cfg(test)]
 mod test_executor;
@@ -98,5 +99,6 @@ pub use rate_governor::{OpClass, RateDecision, RateGovernor, RateLimitPolicy};
 pub use read_mode::ReadMode;
 pub use redacted::Redacted;
 pub use retry::{RetryClass, RetryDecision, RetryPolicy};
+pub use staleness::{CacheState, MAX_METADATA_STALENESS_MS, RefreshReason, SessionWatermark};
 pub use store::{BoxFuture, FakeObjectStore, ObjectStore};
 pub use topic::TopicId;

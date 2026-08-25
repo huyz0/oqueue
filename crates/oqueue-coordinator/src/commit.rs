@@ -6,7 +6,9 @@
 // comments, so the lint that disagrees is the one allowed.
 #![allow(clippy::redundant_pub_crate)]
 
-use oqueue_core::{CommitVersion, CoordinatorEpoch, Offset, PartitionId, TopicId};
+use oqueue_core::{
+    CommitVersion, CoordinatorEpoch, Offset, PartitionId, SessionWatermark, TopicId,
+};
 
 /// The offset a partition reports when it has none.
 ///
@@ -118,10 +120,13 @@ impl CommitAck {
 
     /// The position in the metadata log this commit occupies.
     ///
-    /// ⚠️ A session carries this as its read-your-writes watermark —
-    /// [`ReadMode::AtLeast`](oqueue_core::ReadMode::AtLeast), hazard H2, which
-    /// `M3.10` wires. It is comparable only against versions from the same
-    /// metadata shard (`ADR-0020` point 1).
+    /// ⚠️ **Not the thing to carry across requests** — use
+    /// [`watermark`](Self::watermark). This number is comparable only against
+    /// versions from the same coordinator incarnation *and* the same metadata
+    /// shard (`ADR-0020` point 1, `ADR-0023`), and a session that remembers it
+    /// alone has kept the half of the pair that cannot be checked. It is here
+    /// for a caller comparing against the log it just wrote to, in one
+    /// exchange, where the other half is not in doubt.
     #[must_use]
     pub const fn version(&self) -> CommitVersion {
         self.version
@@ -131,6 +136,19 @@ impl CommitAck {
     #[must_use]
     pub const fn epoch(&self) -> CoordinatorEpoch {
         self.epoch
+    }
+
+    /// The pair a session carries for read-your-writes.
+    ///
+    /// ⚠️ **Carry this, not [`version`](Self::version).** `ADR-0023`: a
+    /// version compared against another incarnation's line is not stale or
+    /// fresh but meaningless, and the half of that mistake which feels safe is
+    /// the half that answers a reader with data missing its own write. The
+    /// Consequences section of that ADR names an API returning a bare version
+    /// for a caller to remember as the trap this method exists to close.
+    #[must_use]
+    pub const fn watermark(&self) -> SessionWatermark {
+        SessionWatermark::new(self.epoch, self.version)
     }
 
     /// One assignment per span the commit was given, **in the order they were

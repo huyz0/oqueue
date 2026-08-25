@@ -41,13 +41,36 @@ struct CommitRequest {
 /// A handle on the coordinator for one metadata shard.
 ///
 /// Cheap to clone, and every clone reaches the same allocator — which is the
-/// point. `ADR-0020`: the log append is the only serialization point in the
+/// point. ⚠️ `Clone` is written by hand rather than derived: a
+/// `broadcast::Receiver` has no `Clone`, and the resubscribe this uses instead
+/// is exactly the right thing — a fresh handle follows the tail from *now*,
+/// which is what [`subscribe`](Self::subscribe) promises anyway. `ADR-0020`: the log append is the only serialization point in the
 /// produce path, so producers may PUT concurrently and then queue here.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Coordinator {
+    epoch: CoordinatorEpoch,
     commits: mpsc::Sender<CommitRequest>,
-    deltas: broadcast::Sender<MetadataEntry>,
+    /// ⚠️ **A receiver, not the sender**, and that is what makes
+    /// [`DeltaLag::Closed`](crate::DeltaLag::Closed) mean what its message
+    /// says. `broadcast` reports `Closed` only once every *sender* is gone, so
+    /// a handle holding one would keep a follower parked forever against a
+    /// loop that had already stopped — the loop owns the only sender, exactly
+    /// as it owns the only [`watch`] sender, and the two now fail alike.
+    /// `resubscribe` gives the same subscribe-from-the-tail semantics
+    /// `subscribe` did.
+    deltas: broadcast::Receiver<MetadataEntry>,
     applied: watch::Receiver<Option<CommitVersion>>,
+}
+
+impl Clone for Coordinator {
+    fn clone(&self) -> Self {
+        Self {
+            epoch: self.epoch,
+            commits: self.commits.clone(),
+            deltas: self.deltas.resubscribe(),
+            applied: self.applied.clone(),
+        }
+    }
 }
 
 impl Coordinator {
@@ -118,12 +141,13 @@ impl Coordinator {
         // a check that has to be remembered.
         index.clear();
         let (commits, requests) = mpsc::channel(COMMIT_QUEUE_DEPTH);
-        let (deltas, _) = broadcast::channel(DELTA_BUFFER_ENTRIES);
+        let (deltas, listener) = broadcast::channel(DELTA_BUFFER_ENTRIES);
         let (published, applied) = watch::channel(None);
         Ok((
             Self {
+                epoch,
                 commits,
-                deltas: deltas.clone(),
+                deltas: listener,
                 applied,
             },
             CoordinatorLoop {
@@ -167,7 +191,26 @@ impl Coordinator {
     /// than implied by this paragraph's silence.
     #[must_use]
     pub fn subscribe(&self) -> DeltaStream {
-        DeltaStream::new(self.deltas.subscribe())
+        DeltaStream::new(self.deltas.resubscribe())
+    }
+
+    /// Which incarnation this coordinator is.
+    ///
+    /// ⚠️ What a reader compares its cache against — [`CacheState::admits`]
+    /// takes it, and hazard H5 is the whole reason: a cache from an
+    /// incarnation that is gone holds positions on a line a failover may have
+    /// rewound, so it can be arbitrarily far ahead by version and must still
+    /// not answer.
+    ///
+    /// ⚠️ **M3 builds one incarnation and never bumps this** — `ADR-0020`
+    /// point 6 puts failover in `M6`. The fence is here so the reader side is
+    /// already written against it rather than retrofitted onto readers that
+    /// learned to trust a cache unconditionally.
+    ///
+    /// [`CacheState::admits`]: oqueue_core::CacheState::admits
+    #[must_use]
+    pub const fn epoch(&self) -> CoordinatorEpoch {
+        self.epoch
     }
 
     /// Watches how far the coordinator's own index has folded.

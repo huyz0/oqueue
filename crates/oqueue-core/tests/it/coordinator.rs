@@ -17,8 +17,9 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, MetadataRecord, ObjectKey,
-    PartitionId, ReadMode, TopicId,
+    ByteRange, CacheState, CommitVersion, CommittedSpan, CoordinatorEpoch, Error,
+    MAX_METADATA_STALENESS_MS, MetadataRecord, ObjectKey, PartitionId, ReadMode, RefreshReason,
+    SessionWatermark, TopicId,
 };
 use proptest::prelude::*;
 
@@ -68,34 +69,138 @@ proptest! {
         prop_assert_eq!(CommitVersion::new(a) == CommitVersion::new(b), a == b);
     }
 
-    /// `Stale` is satisfied by any cached version — it is the Fetch path, and
-    /// it never forces a round trip.
+    /// `Stale` is admitted by any cached version — it is the Fetch path, and
+    /// the version question never forces a round trip on it. ⚠️ The silence
+    /// breaker still can, which is why `silent_for_ms` is `0` here and has a
+    /// case of its own below.
     #[test]
-    fn stale_reads_are_satisfied_by_any_cached_version(cached in any::<u64>()) {
-        prop_assert!(ReadMode::Stale.satisfiable_from_cache(CommitVersion::new(cached)));
+    fn stale_reads_are_admitted_at_any_cached_version(cached in any::<u64>()) {
+        let cache = CacheState::new(
+            CoordinatorEpoch::ZERO,
+            Some(CommitVersion::new(cached)),
+            0,
+        );
+        prop_assert_eq!(cache.admits(ReadMode::Stale, CoordinatorEpoch::ZERO), Ok(()));
     }
 
     /// `AtLeast(v)` is exactly the read-your-writes rule: a cache at or past
     /// the produce response's version answers; a cache behind it must not.
     #[test]
-    fn at_least_is_satisfied_only_at_or_past_its_version(
+    fn at_least_is_admitted_only_at_or_past_its_version(
         want in any::<u64>(),
         cached in any::<u64>(),
     ) {
-        let mode = ReadMode::AtLeast(CommitVersion::new(want));
+        let epoch = CoordinatorEpoch::ZERO;
+        let mode = ReadMode::AtLeast(SessionWatermark::new(epoch, CommitVersion::new(want)));
+        let cache = CacheState::new(epoch, Some(CommitVersion::new(cached)), 0);
         prop_assert_eq!(
-            mode.satisfiable_from_cache(CommitVersion::new(cached)),
-            cached >= want
+            cache.admits(mode, epoch),
+            if cached >= want {
+                Ok(())
+            } else {
+                Err(RefreshReason::NotYetVisible { wanted: want, applied: Some(cached) })
+            }
         );
     }
 
-    /// ⚠️ `Linearizable` is never satisfiable from cache, however fresh the
-    /// cache is. This is hazard H1: `ListOffsets` served from a stale cache
-    /// reports a log-end-offset below truth and produces negative consumer
-    /// lag, so the mode exists to route to the coordinator unconditionally.
+    /// ⚠️ `Linearizable` is never admitted from cache, however fresh. Hazard
+    /// H1: `ListOffsets` served from a stale cache reports a log-end-offset
+    /// below truth and produces negative consumer lag, so the mode exists to
+    /// route to the coordinator unconditionally.
     #[test]
-    fn linearizable_reads_are_never_satisfiable_from_cache(cached in any::<u64>()) {
-        prop_assert!(!ReadMode::Linearizable.satisfiable_from_cache(CommitVersion::new(cached)));
+    fn linearizable_reads_are_never_admitted_from_cache(cached in any::<u64>()) {
+        let cache = CacheState::new(
+            CoordinatorEpoch::ZERO,
+            Some(CommitVersion::new(cached)),
+            0,
+        );
+        prop_assert_eq!(
+            cache.admits(ReadMode::Linearizable, CoordinatorEpoch::ZERO),
+            Err(RefreshReason::Authoritative)
+        );
+    }
+
+    /// ⚠️ Hazard H4's breaker, and it is in front of **every** mode. A cache
+    /// that is current and one whose push stream died hold the same version;
+    /// only elapsed silence tells them apart, so no version comparison can do
+    /// this and `Stale` is not exempt from it.
+    #[test]
+    fn silence_past_the_limit_refuses_every_mode(
+        silent in (MAX_METADATA_STALENESS_MS + 1)..=u64::MAX,
+        cached in any::<u64>(),
+    ) {
+        let epoch = CoordinatorEpoch::ZERO;
+        let cache = CacheState::new(epoch, Some(CommitVersion::new(cached)), silent);
+        for mode in [
+            ReadMode::Stale,
+            ReadMode::AtLeast(SessionWatermark::new(epoch, CommitVersion::ZERO)),
+            ReadMode::Linearizable,
+        ] {
+            prop_assert_eq!(
+                cache.admits(mode, epoch),
+                Err(RefreshReason::PushStreamSilent {
+                    silent_for_ms: silent,
+                    limit_ms: MAX_METADATA_STALENESS_MS,
+                })
+            );
+        }
+    }
+
+    /// ⚠️ **The breaker's own edge**, which the limit's source states exactly:
+    /// doc 12 §4.6 says an agent stops serving when
+    /// `now - last_delta_received > staleness_limit`, so silence *equal* to
+    /// the limit still serves. One millisecond either way is the difference
+    /// between a bound and an off-by-one nobody would see.
+    #[test]
+    fn silence_exactly_at_the_limit_still_serves(cached in any::<u64>()) {
+        let epoch = CoordinatorEpoch::ZERO;
+        let cache = CacheState::new(
+            epoch,
+            Some(CommitVersion::new(cached)),
+            MAX_METADATA_STALENESS_MS,
+        );
+        prop_assert_eq!(cache.admits(ReadMode::Stale, epoch), Ok(()));
+    }
+
+    /// ⚠️ Hazard H5, and it comes **first**. A cache from an incarnation that
+    /// is gone holds positions on a line a failover may have rewound, so it
+    /// can be arbitrarily far ahead by version and must still not answer —
+    /// which is why the epoch fence is not one more freshness clause.
+    #[test]
+    fn a_cache_from_a_departed_incarnation_never_answers(
+        cached in any::<u64>(),
+        silent in 0..=MAX_METADATA_STALENESS_MS,
+    ) {
+        let cache = CacheState::new(
+            CoordinatorEpoch::new(1),
+            Some(CommitVersion::new(cached)),
+            silent,
+        );
+        prop_assert_eq!(
+            cache.admits(ReadMode::Stale, CoordinatorEpoch::new(2)),
+            Err(RefreshReason::CacheFromAnotherEpoch { cache: 1, current: 2 })
+        );
+    }
+
+    /// ⚠️ `ADR-0023`: a watermark carried across a rebalance is **not
+    /// behind** — it is incomparable, and answering it from a version compare
+    /// is the half of that mistake that serves a reader data missing its own
+    /// write.
+    #[test]
+    fn a_watermark_from_another_line_is_incomparable_not_behind(cached in any::<u64>()) {
+        let cache = CacheState::new(
+            CoordinatorEpoch::new(2),
+            Some(CommitVersion::new(cached)),
+            0,
+        );
+        let carried = SessionWatermark::new(CoordinatorEpoch::new(1), CommitVersion::ZERO);
+        prop_assert_eq!(
+            cache.admits(ReadMode::AtLeast(carried), CoordinatorEpoch::new(2)),
+            Err(RefreshReason::WatermarkFromAnotherEpoch { watermark: 1, cache: 2 }),
+            "the cache is current and correct; it is the watermark that cannot \
+             be compared against it, and discarding a good cache per session \
+             is the cost of confusing the two"
+        );
     }
 
     /// ⚠️ The delta-shape assertion, and the point of `M3.md` task 2.
