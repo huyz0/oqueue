@@ -63,6 +63,7 @@ impl Error {
             | Self::NegativeOffset { .. }
             | Self::NegativeOffsetDelta { .. }
             | Self::OffsetOverflow { .. }
+            | Self::CommitVersionOverflow { .. }
             | Self::NegativeTimestamp { .. }
             | Self::NegativeClockAdvance { .. }
             | Self::TimestampOverflow { .. }

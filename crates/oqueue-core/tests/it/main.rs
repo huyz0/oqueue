@@ -4,6 +4,7 @@
 //! is otherwise its own crate, its own link, and its own copy of the debuginfo.
 
 mod clock;
+mod coordinator;
 mod fault;
 mod invariants;
 mod key;

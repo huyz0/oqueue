@@ -1,0 +1,95 @@
+//! What one entry in the metadata log is.
+
+use crate::{CoordinatorEpoch, ObjectKey, PartitionId, TopicId};
+
+/// One `(topic, partition)`'s share of a committed object.
+///
+/// ⚠️ **A count, never a position.** This is the delta shape `M3.md` task 2
+/// requires: the span says how many records the object added to a partition,
+/// not where they landed. Where they landed is *derived* by applying the log
+/// in order, which is what makes the offsets gap-free by construction rather
+/// than by an allocator remembering to be careful.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommittedSpan {
+    topic: TopicId,
+    partition: PartitionId,
+    record_count: u32,
+}
+
+impl CommittedSpan {
+    /// Builds a span.
+    #[must_use]
+    pub const fn new(topic: TopicId, partition: PartitionId, record_count: u32) -> Self {
+        Self {
+            topic,
+            partition,
+            record_count,
+        }
+    }
+
+    /// The topic this share belongs to.
+    #[must_use]
+    pub const fn topic(&self) -> &TopicId {
+        &self.topic
+    }
+
+    /// The partition this share belongs to.
+    #[must_use]
+    pub const fn partition(&self) -> PartitionId {
+        self.partition
+    }
+
+    /// How many records the object added to that partition.
+    #[must_use]
+    pub const fn record_count(&self) -> u32 {
+        self.record_count
+    }
+}
+
+/// One durable entry in a metadata log.
+///
+/// # Why an event, and not a key-value pair
+///
+/// ⚠️ `M3.md` task 2, and the decision that is expensive to reverse. A
+/// key-value record — *"partition p is now at offset n"* — is a statement of
+/// **state**, and a log of those is only correct if every entry is applied
+/// exactly once, in order, with nothing lost. An event record — *"this object
+/// added n records to partition p"* — is a **delta**, and a log of deltas can
+/// be snapshotted at any point by materializing it, because the snapshot is a
+/// fold over the events rather than a copy of the last one.
+///
+/// `M3.md` task 2 states the consequence directly: this shape is **what makes
+/// snapshotting right and compaction wrong later** (`M6`). A snapshot is a
+/// fold over events and is always well defined; a compaction that rewrites
+/// *state* records has to decide which one wins, and there is no answer that
+/// is right for a reader mid-replay.
+///
+/// ⚠️ **Deliberately not `#[non_exhaustive]`**, for the reason
+/// [`Error`](crate::Error) is not: a new variant here is a new event every
+/// applier must be made to consider, and a `_ =>` arm absorbing it silently is
+/// exactly the bug that would not surface until a replay produced the wrong
+/// offsets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetadataRecord {
+    /// An object landed in storage and now occupies a position in the log.
+    ///
+    /// This is the offset-assignment event: `ADR-0020` assigns at commit time,
+    /// so the record is written by the coordinator once the PUT is durable,
+    /// and the offsets it implies become visible only when it commits.
+    BatchCommitted {
+        /// The object the records are in.
+        object: ObjectKey,
+        /// What it added, per `(topic, partition)`. One object bundles many,
+        /// which is what makes FR-32's one-PUT-across-N-topics flush possible.
+        spans: Vec<CommittedSpan>,
+    },
+    /// The log passed to a new coordinator incarnation.
+    ///
+    /// A reader that sees this knows the log it was following may have been
+    /// rewound and that index state from the older epoch must be discarded
+    /// rather than merged (`M3.md` task 3).
+    EpochChanged {
+        /// The incarnation now holding the log.
+        epoch: CoordinatorEpoch,
+    },
+}

@@ -66,6 +66,20 @@ pub enum Error {
         got: i64,
     },
 
+    /// Commit-version arithmetic would have exceeded the `u64` range.
+    ///
+    /// ⚠️ Sibling of [`Error::OffsetOverflow`] and there for the same reason:
+    /// the alternative to this error is a version *smaller* than the one it
+    /// advanced from, which breaks the ordering `ADR-0020` makes every
+    /// staleness comparison rest on, without failing anything.
+    #[error("commit version {base} + {delta} overflows u64")]
+    CommitVersionOverflow {
+        /// The version being advanced.
+        base: u64,
+        /// How far it was asked to advance.
+        delta: u64,
+    },
+
     /// Offset arithmetic would have exceeded the protocol's `int64` range.
     ///
     /// Returned instead of wrapping. M3's offset sequencing rests on
