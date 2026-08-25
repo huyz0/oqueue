@@ -11,6 +11,15 @@ lands in first; and **a refused append stores nothing**, not even the entries
 before the offending one, or a caller retrying after a rejection replays onto
 a log already holding part of that batch and the offset fold double-counts in
 silence. The engine itself (doc 10 #12) stays open, as point 5 leaves it.
+2026-08-23 (`M3.5`): point 5's other seam is built too — `MaterializedIndex`
+in `oqueue-core`, with `FakeMaterializedIndex` beside it and `MemoryIndex` in
+`oqueue-index`, both held to one conformance suite. ⚠️ It is deliberately
+**not async**, unlike `ObjectStore`: every implementation is a local fold, and
+the read side sits on the Fetch path NFR-2/NFR-3 bound, where a boxed future
+per lookup is the per-call allocation `ADR-0004` rejected on `Clock` by name.
+That is `M3`'s answer for an in-memory fold, not the project's: a disk-backed
+engine (doc 10 #12, `M6`) may want an async read, and if it does that is a
+contract change with its own ADR rather than something this note settles.
 Date: 2026-08-23
 Requirements: FR-10, FR-11, FR-12, FR-13, FR-32, NFR-1, NFR-2, NFR-3, NFR-21
 
