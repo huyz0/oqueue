@@ -29,7 +29,10 @@ the entire system be tested with no network, no credentials and no container.
 
 - `oqueue-core` — the seams and the types.
 - `oqueue-crypto` — `NoOpKeyProvider`, the default when no KMS is configured.
-- `oqueue-broker` — the I/O shell `serve` composes: connection task, dispatcher, stub cluster (`M2.25`).
+- `oqueue-broker` — the I/O shell `serve` composes: connection task, dispatcher, cluster (`M2.25`, pointed at the real write and read paths by `M3.14`).
+- `oqueue-coordinator` — the offset sequencer `serve` opens and whose loop it spawns. ⚠️ The loop is spawned *here* because `async-concurrency.md` rule 13 wants an owner that can observe a task, and the process is that owner.
+- `oqueue-index` — `MemoryIndex`, the materialization chosen here. ⚠️ `M3`'s answer, not the project's: doc 10 #12's disk engine is open, and choosing in a composition root is what makes swapping it one line.
+- `oqueue-store` — `S3Store` and `GcsStore`, selected by `OQUEUE_STORE`. ⚠️ **Unset means an in-memory store, which is not durable** — the banner names it and `serve` warns that every acknowledged record is lost at exit. ⚠️ **A value that is neither `s3` nor `gcs` is refused**, not defaulted: `OQUEUE_STORE=S3` is a typo, and a typo must not start a broker that loses records.
 - `tokio` — the runtime under `serve`'s listener; `net` arrived exactly when this binary bound one.
 - `mimalloc` — the global allocator. ⚠️ C, compiled by `cc` at build time;
   within NFR-42 ("cargo and a C compiler") and recorded in ADR-0007.
@@ -60,8 +63,13 @@ Nothing. It is the top of the graph.
 ## Notes for whoever touches this
 
 - **With no arguments it prints a version and exits;** `oqueue serve
-  <host:port> [advertise]` binds a listener and serves the M2 wire protocol
-  over a stub partition (`M2.25`) — real durability is `M3`'s. `advertise`
+  <host:port> [advertise]` binds a listener and serves the wire protocol
+  (`M2.25`) over the real write and read paths (`M3.14`): a produce seals one
+  bundle, PUTs it once and commits its spans; a fetch resolves offset→object
+  through the index. ⚠️ **`OQUEUE_STORE` picks the backend** — `s3`, `gcs`, or
+  unset for an in-memory store — and ⚠️ **the metadata log is in memory
+  regardless**, so offsets do not survive a restart (`M6`, `roadmap.md`'s
+  deferral table). `advertise`
   overrides the identity `Metadata` hands out (doc 02 §7.2: identity is a
   decision); the harness's capture proxy relies on it.
 - ⚠️ **`cargo build` links this on x86_64 only.** aarch64 stays at `cargo check`

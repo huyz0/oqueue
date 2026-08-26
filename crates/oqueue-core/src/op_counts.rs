@@ -109,6 +109,14 @@ impl<S> CountingObjectStore<S> {
     }
 }
 
+impl<S> CountingObjectStore<S> {
+    /// The store underneath, so a caller that wrapped one to count it can
+    /// still reach what it wrapped.
+    pub const fn inner(&self) -> &S {
+        &self.inner
+    }
+}
+
 impl<S: ObjectStore> ObjectStore for CountingObjectStore<S> {
     fn get<'a>(
         &'a self,

@@ -21,6 +21,15 @@ oqueue-codec = { path = "..", features = ["gzip", "snappy"] }
 # per-API body decoders, handlers -- the way a socket would (M2.34, closing
 # the M2.26/M2.27 DoS: no runtime kafka-protocol left to allocate from).
 oqueue-broker = { path = "../../oqueue-broker" }
+# ⚠️ **`M3.14` made the dispatch path real, so the target has to compose one.**
+# A `Dispatcher` now needs a `Coordinator`, an index and an object store, and
+# its handlers await — so a single `poll` no longer runs the path and a runtime
+# is what drives it. This is also the reason this manifest must be built by
+# `scripts/fuzz.sh`: it is its own workspace, so `cargo test --workspace` does
+# not compile it, and `M3.14`'s review found it broken for exactly that reason.
+oqueue-coordinator = { path = "../../oqueue-coordinator" }
+oqueue-core = { path = "../../oqueue-core" }
+tokio = { version = "1", features = ["rt", "macros"] }
 
 [[bin]]
 name = "frame"

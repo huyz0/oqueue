@@ -204,6 +204,16 @@ impl FakeObjectStore {
     /// A separate lock from `slots` — fault bookkeeping is orthogonal to the
     /// data it affects, and sharing one lock would make every fault-off call
     /// (the common case) contend on state it never touches.
+    /// Replaces the fault configuration on a fake already in use.
+    ///
+    /// ⚠️ **Because a read path cannot be broken from the start.** Testing what
+    /// a fetch does when an object read fails needs an object first, so the
+    /// store has to work and then stop working. [`with_faults`](Self::with_faults)
+    /// covers the write path, where nothing needs to have succeeded yet.
+    pub fn set_faults(&self, faults: FaultConfig) {
+        *self.faults() = faults;
+    }
+
     fn faults(&self) -> std::sync::MutexGuard<'_, FaultConfig> {
         self.faults
             .lock()

@@ -283,6 +283,18 @@ pub enum Error {
     #[error("a bundled object must hold at least one region")]
     EmptyBundle,
 
+    /// An object does not hold what the index said it holds.
+    ///
+    /// ⚠️ **Not a client's error and not a transient one.** The index named a
+    /// batch, the object came back, and the two disagree — no region for that
+    /// partition, two of them, or bytes too short to be a record batch. Every
+    /// one of those means the index and object storage have diverged, which a
+    /// retry cannot mend and a client cannot fix. It is the loud failure doc 12
+    /// §4.6 asks for in place of the silent one: answering an empty partition
+    /// here is how a successful poll returns no records.
+    #[error("the index named a batch this object does not hold")]
+    IndexObjectMismatch,
+
     /// A ranged `get` asked for bytes past the object's actual size.
     ///
     /// ⚠️ **Not `ObjectNotFound`.** The object exists; the requested range

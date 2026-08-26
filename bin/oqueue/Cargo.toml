@@ -14,8 +14,20 @@ license.workspace = true
 oqueue-core = { path = "../../crates/oqueue-core" }
 oqueue-crypto = { path = "../../crates/oqueue-crypto" }
 # `serve` composes the I/O shell (M2.25): the connection task, the
-# dispatcher and the stub cluster all live there.
+# dispatcher and the cluster all live there.
 oqueue-broker = { path = "../../crates/oqueue-broker" }
+# M3.14: the concrete choices `serve` now has to make. The coordinator's loop
+# is spawned here because `async-concurrency.md` rule 13 says a spawned task
+# needs an owner, and this is the only place that knows who that is; the
+# materialized index is a *choice* between implementations (doc 10 #12), which
+# is what a composition root is for.
+oqueue-coordinator = { path = "../../crates/oqueue-coordinator" }
+oqueue-index = { path = "../../crates/oqueue-index" }
+# ⚠️ **The dependency `M1.39` said adding would be a deliberate act.** It is
+# that act: `M3` is the milestone where a record is acknowledged only after it
+# is in object storage, so this is the first time the binary must *hand* an
+# `ObjectStore` to something.
+oqueue-store = { path = "../../crates/oqueue-store" }
 # The listener itself -- `net` arrives exactly when the composition root
 # binds one, as oqueue-broker's manifest promised.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time"] }

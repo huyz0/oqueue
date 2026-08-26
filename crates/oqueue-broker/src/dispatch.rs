@@ -21,35 +21,40 @@ use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header, read_request_prelude};
 use oqueue_codec::versions::supports;
 
-/// Routes decoded frames to API handlers over the stub cluster. `M2.21`
-/// built the frame walk and `ApiVersions`; `M2.22` added `Metadata`;
-/// `M2.23`/`M2.24` plug produce and fetch in beside them.
+/// Routes decoded frames to API handlers over the cluster.
+///
+/// `M2.21` built the frame walk and `ApiVersions`; `M2.22` added `Metadata`;
+/// `M2.23`/`M2.24` plugged produce and fetch in beside them; `M3.14` pointed
+/// those two at the real coordinator, index and object store.
 #[derive(Debug)]
 pub struct Dispatcher {
-    cluster: std::sync::Arc<crate::stub::StubCluster>,
+    cluster: std::sync::Arc<crate::cluster::Cluster>,
 }
 
 impl Dispatcher {
     /// A dispatcher over `cluster`.
     #[must_use]
-    pub const fn new(cluster: std::sync::Arc<crate::stub::StubCluster>) -> Self {
+    pub const fn new(cluster: std::sync::Arc<crate::cluster::Cluster>) -> Self {
         Self { cluster }
     }
 }
 
 impl crate::Handler for Dispatcher {
     fn handle(&self, request: Vec<u8>) -> impl Future<Output = HandlerResponse> + Send {
-        // Nothing here awaits yet (`M2.23`'s produce path will); a ready
-        // future keeps the seam's Send bound without an async block clippy
-        // would rather see as `async fn`.
-        core::future::ready(self.dispatch(&request))
+        self.dispatch(request)
     }
 }
 
 impl Dispatcher {
-    /// The synchronous body — the seam is async for the APIs that will
-    /// await (a durable produce path, `M3`).
-    pub(crate) fn dispatch(&self, request: &[u8]) -> HandlerResponse {
+    /// The body. ⚠️ **Async because produce and fetch now do I/O**: a produce
+    /// PUTs an object and waits for its commit, and a fetch reads objects the
+    /// index named. `M2`'s version of this was synchronous with a `ready`
+    /// future, and the seam was async for exactly this milestone.
+    ///
+    /// ⚠️ **It takes the frame by value**, because the future it returns
+    /// outlives this call and the connection task owns the buffer.
+    pub(crate) async fn dispatch(&self, frame: Vec<u8>) -> HandlerResponse {
+        let request: &[u8] = &frame;
         let Ok(prelude) = read_request_prelude(request) else {
             return HandlerResponse::Close;
         };
@@ -75,8 +80,8 @@ impl Dispatcher {
         };
         match api_key {
             ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body),
-            ApiKey::Produce => crate::produce::handle(&self.cluster, prelude, body),
-            ApiKey::Fetch => crate::fetch::handle(&self.cluster, prelude, body),
+            ApiKey::Produce => crate::produce::handle(&self.cluster, prelude, body).await,
+            ApiKey::Fetch => crate::fetch::handle(&self.cluster, prelude, body).await,
             // Answered above by the early return; named rather than a
             // wildcard so a fifth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
@@ -120,16 +125,21 @@ mod tests {
 
     use super::Dispatcher;
     use crate::connection::HandlerResponse;
-    use crate::stub::StubCluster;
+    use crate::testing::{Fixture, fixture};
     use std::sync::Arc;
 
-    fn dispatcher() -> Dispatcher {
-        Dispatcher::new(Arc::new(StubCluster::new("localhost", 9092)))
+    /// ⚠️ The fixture is returned alongside, and holding it is not a
+    /// formality: dropping it aborts the coordinator loop, and a dispatcher
+    /// over a dead coordinator answers every produce with a refusal.
+    async fn dispatcher() -> (Dispatcher, Fixture) {
+        let fixture = fixture(&[]).await;
+        let dispatcher = Dispatcher::new(Arc::clone(&fixture.cluster));
+        (dispatcher, fixture)
     }
 
     /// The reply's bytes, or a panic naming the other verdict.
-    fn replied(dispatcher: &Dispatcher, request: &[u8]) -> Vec<u8> {
-        match dispatcher.dispatch(request) {
+    async fn replied(dispatcher: &Dispatcher, request: Vec<u8>) -> Vec<u8> {
+        match dispatcher.dispatch(request).await {
             HandlerResponse::Reply(out) => out,
             other => panic!("expected a reply, got {other:?}"),
         }
@@ -163,9 +173,10 @@ mod tests {
         (correlation, response)
     }
 
-    #[test]
-    fn a_supported_version_is_answered_at_that_version() {
-        let out = replied(&dispatcher(), &api_versions_request(3, 77));
+    #[tokio::test]
+    async fn a_supported_version_is_answered_at_that_version() {
+        let (dispatcher, _fixture) = dispatcher().await;
+        let out = replied(&dispatcher, api_versions_request(3, 77)).await;
         let (correlation, response) = decode_response(&out, 3);
         assert_eq!(correlation, 77);
         assert_eq!(response.error_code, 0);
@@ -177,9 +188,10 @@ mod tests {
         assert_eq!((produce.min_version, produce.max_version), (3, 13));
     }
 
-    #[test]
-    fn an_unsupported_version_gets_the_v0_bodied_fallback() {
-        let out = replied(&dispatcher(), &api_versions_request(99, 5));
+    #[tokio::test]
+    async fn an_unsupported_version_gets_the_v0_bodied_fallback() {
+        let (dispatcher, _fixture) = dispatcher().await;
+        let out = replied(&dispatcher, api_versions_request(99, 5)).await;
         let (correlation, response) = decode_response(&out, 0);
         assert_eq!(correlation, 5);
         assert_eq!(
@@ -192,23 +204,25 @@ mod tests {
         );
     }
 
-    #[test]
-    fn an_unknown_api_key_closes_the_connection() {
+    #[tokio::test]
+    async fn an_unknown_api_key_closes_the_connection() {
         let mut body = Vec::new();
         put_i16(&mut body, 0x7F00);
         put_i16(&mut body, 0);
         put_i32(&mut body, 1);
-        assert_eq!(dispatcher().dispatch(&body), HandlerResponse::Close);
+        let (dispatcher, _fixture) = dispatcher().await;
+        assert_eq!(dispatcher.dispatch(body).await, HandlerResponse::Close);
     }
 
-    #[test]
-    fn an_advertised_api_at_an_unadvertised_version_closes() {
+    #[tokio::test]
+    async fn an_advertised_api_at_an_unadvertised_version_closes() {
         let mut body = Vec::new();
         put_i16(&mut body, 0); // Produce
         put_i16(&mut body, 2); // removed by KIP-896, below the floor
         put_i32(&mut body, 1);
+        let (dispatcher, _fixture) = dispatcher().await;
         assert_eq!(
-            dispatcher().dispatch(&body),
+            dispatcher.dispatch(body).await,
             HandlerResponse::Close,
             "outside ApiVersions' fallback there is nothing parsable to say"
         );
@@ -226,9 +240,10 @@ mod tests {
             max_in_flight: 4,
             idle_timeout: std::time::Duration::from_hours(1),
         };
+        let (dispatcher, _fixture) = dispatcher().await;
         let conn = tokio::spawn(crate::serve_connection(
             server,
-            Arc::new(dispatcher()),
+            Arc::new(dispatcher),
             limits,
         ));
 
@@ -264,9 +279,10 @@ mod tests {
             max_in_flight: 4,
             idle_timeout: std::time::Duration::from_hours(1),
         };
+        let (dispatcher, _fixture) = dispatcher().await;
         let conn = tokio::spawn(crate::serve_connection(
             server,
-            Arc::new(dispatcher()),
+            Arc::new(dispatcher),
             limits,
         ));
 

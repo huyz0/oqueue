@@ -8,13 +8,14 @@
 
 #![allow(clippy::expect_used)]
 
+use crate::support::broker;
 use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
 use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
 use kafka_protocol::messages::{
     ApiVersionsRequest, FetchRequest, MetadataRequest, ProduceRequest, RequestHeader, TopicName,
 };
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
-use oqueue_broker::{Dispatcher, Handler, HandlerResponse, StubCluster};
+use oqueue_broker::{Cluster, Dispatcher, Handler, HandlerResponse};
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::versions::ADVERTISED;
 use std::sync::Arc;
@@ -35,7 +36,7 @@ fn framed(api_key: ApiKey, version: i16, body: &[u8]) -> Vec<u8> {
 
 /// The smallest valid body for `api_key` at `version`, against a cluster
 /// that has topic `"t"` — enough for a real answer, not an error dance.
-fn minimal_body(api_key: ApiKey, version: i16, cluster: &StubCluster) -> Vec<u8> {
+fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
     let mut body = Vec::new();
     match api_key {
         ApiKey::ApiVersions => {
@@ -129,8 +130,8 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
 
 #[tokio::test]
 async fn every_advertised_version_is_served() {
-    let cluster = Arc::new(StubCluster::new("h", 1));
-    cluster.ensure_topic("t");
+    let broker = broker(&["t"]).await;
+    let cluster = Arc::clone(&broker.cluster);
     let dispatcher = Dispatcher::new(Arc::clone(&cluster));
 
     for advertised in ADVERTISED {

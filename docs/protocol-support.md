@@ -39,14 +39,27 @@ unadvertised version has no response the client would parse, and outside
   do). This is the explicit decision `M2.md`'s risk list demanded.
 - **No consumer groups.** `FindCoordinator`/`JoinGroup` et al. are not
   advertised; consumers must `assign()` rather than `subscribe()`.
-- **Storage is a stub** — an in-memory single-node partition map. Durable
-  object-storage-backed logs are M3's; offsets reset with the process.
+- ⚠️ ~~**Storage is a stub**~~ — **no longer** (`M3.14`). A produce seals one
+  bundled object, writes it once, and is acknowledged only after its position
+  is committed; a fetch resolves offset→object through the index. ⚠️ **The
+  metadata log is still in memory**, so offsets do not survive a restart —
+  `M6` owns the durable one (`roadmap.md`'s deferral table).
+- **Compressed record batches are refused** — `UNSUPPORTED_COMPRESSION_TYPE`
+  (76). ⚠️ Not a capability gap being papered over: a batch's `record_count` is
+  what offsets are allocated from, and it cannot be checked against the records
+  a batch actually holds when those records are behind a codec this broker does
+  not implement. Believing it would let a client claim a thousand records in a
+  batch holding one and leave a permanent hole in the log. `M8` decompresses.
+  Both librdkafka and the Java client default to `compression.type=none`.
 - **Message format v0/v1 is refused, not converted** —
   `UNSUPPORTED_FOR_MESSAGE_FORMAT`, KIP-110's own precedent, and an error
   that names the format rather than steering clients at a compression
   setting.
 - **No long-polling.** `max_wait_ms`/`min_bytes` are parsed and ignored;
-  empty fetches return immediately.
+  empty fetches return immediately. `M3.20` wires the park.
+- **`max_bytes` is not honoured.** Both the request-level and per-partition
+  fields are parsed and discarded; a fetch is bounded by a per-partition
+  constant instead. `M3.22` owns the reader's byte budget.
 - **Unknown topic ids answer `UNKNOWN_TOPIC_ID` (100)**; unknown names
   answer `UNKNOWN_TOPIC_OR_PARTITION` (3) — one refusal per addressing
   path, as real brokers do.

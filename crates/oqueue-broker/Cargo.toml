@@ -14,6 +14,15 @@ oqueue-core = { path = "../oqueue-core" }
 # ingest rule composes with it (M2.19's one-liner, wired at M2.23).
 oqueue-codec = { path = "../oqueue-codec" }
 oqueue-checksum = { path = "../oqueue-checksum" }
+# M3.14: the handlers stop serving a stub. The coordinator sequences offsets
+# and journals them; the index resolves offset->object. ⚠️ No `oqueue-index`
+# and no `oqueue-store`: the concrete materialization and the concrete backend
+# are the composition root's to choose (FR-50), and this crate is written
+# against `oqueue-core`'s seams for both.
+oqueue-coordinator = { path = "../oqueue-coordinator" }
+# `error-handling.md` rule 3: a public error is a `thiserror` type a caller can
+# match and render, not a bare enum.
+thiserror.workspace = true
 # The runtime this shell is written against (ADR-0008 already chose the
 # ecosystem; doc 05 §3 the crate). Feature-minimal: the connection task
 # needs io + sync + rt; `net` stays out until bin/oqueue binds a listener.

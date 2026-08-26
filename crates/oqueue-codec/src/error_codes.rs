@@ -28,6 +28,30 @@ pub const UNSUPPORTED_FOR_MESSAGE_FORMAT: i16 = 43;
 pub const INVALID_RECORD: i16 = 87;
 /// The topic id does not exist on this broker (100).
 pub const UNKNOWN_TOPIC_ID: i16 = 100;
+/// A write could not be made durable (19).
+///
+/// ⚠️ **Not a lie about replicas.** There are none here — durability is object
+/// storage's, `ADR-0020` — but this is the code the protocol reserves for "the
+/// write did not achieve its durability requirement", and every Kafka client
+/// already retries it. A code meaning something else would be understood as
+/// something else.
+pub const NOT_ENOUGH_REPLICAS: i16 = 19;
+/// This broker cannot serve the partition right now (5).
+///
+/// Here, a write that landed in object storage whose position could not be
+/// journalled. It sends the client to `Metadata` and back, which is the right
+/// response to a coordinator that is not answering.
+pub const LEADER_NOT_AVAILABLE: i16 = 5;
+/// The broker hit a condition it has no better code for (-1).
+pub const UNKNOWN_SERVER_ERROR: i16 = -1;
+/// The batch's compression codec is one this broker does not accept (76).
+///
+/// ⚠️ **Refused rather than trusted.** A compressed batch's records are behind
+/// a codec nothing here implements, so the record count it declares cannot be
+/// checked against the records it holds — and that count is what offsets are
+/// allocated from. Decompression is `M8`'s, alongside the region header's
+/// `alg` field (doc 10 #40).
+pub const UNSUPPORTED_COMPRESSION_TYPE: i16 = 76;
 
 #[cfg(test)]
 mod tests {
@@ -58,6 +82,22 @@ mod tests {
             ResponseError::UnsupportedForMessageFormat.code()
         );
         assert_eq!(super::INVALID_RECORD, ResponseError::InvalidRecord.code());
+        assert_eq!(
+            super::NOT_ENOUGH_REPLICAS,
+            ResponseError::NotEnoughReplicas.code()
+        );
+        assert_eq!(
+            super::LEADER_NOT_AVAILABLE,
+            ResponseError::LeaderNotAvailable.code()
+        );
+        assert_eq!(
+            super::UNKNOWN_SERVER_ERROR,
+            ResponseError::UnknownServerError.code()
+        );
+        assert_eq!(
+            super::UNSUPPORTED_COMPRESSION_TYPE,
+            ResponseError::UnsupportedCompressionType.code()
+        );
         assert_eq!(
             super::UNKNOWN_TOPIC_ID,
             ResponseError::UnknownTopicId.code()

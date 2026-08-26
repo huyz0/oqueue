@@ -959,8 +959,11 @@ version = "0.0.0"
 dependencies = [
  "mimalloc",
  "oqueue-broker",
+ "oqueue-coordinator",
  "oqueue-core",
  "oqueue-crypto",
+ "oqueue-index",
+ "oqueue-store",
  "tikv-jemallocator",
  "tokio",
 ]
@@ -973,7 +976,9 @@ dependencies = [
  "kafka-protocol",
  "oqueue-checksum",
  "oqueue-codec",
+ "oqueue-coordinator",
  "oqueue-core",
+ "thiserror",
  "tokio",
  "uuid",
 ]

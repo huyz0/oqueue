@@ -19,7 +19,10 @@ fn it_prints_a_version_line_and_exits_zero() {
     // not refuse — ADR-0006's plaintext-DEK outcome.
     assert_eq!(
         String::from_utf8_lossy(&output.stdout),
-        format!("oqueue {} (NoOpKeyProvider)\n", env!("CARGO_PKG_VERSION"))
+        format!(
+            "oqueue {} (NoOpKeyProvider, FakeObjectStore)\n",
+            env!("CARGO_PKG_VERSION")
+        )
     );
     assert_eq!(
         String::from_utf8_lossy(&output.stderr),

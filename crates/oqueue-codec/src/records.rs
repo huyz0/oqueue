@@ -2,9 +2,17 @@
 //!
 //! ⚠️ **Opt-in per code path, never on produce or fetch** (doc 18 §4.4):
 //! the broker's hot paths move a batch's records blob as opaque bytes, and
-//! this module exists for the paths that genuinely need record contents —
-//! `M2.25`'s corpus assertions today, compaction later. Nothing here is
+//! [`RecordIter`] exists for the paths that genuinely need record *contents* —
+//! `M2.25`'s corpus assertions today, compaction later. Nothing there is
 //! reachable from the batch-header layer by accident.
+//!
+//! ⚠️ **[`count_records`] is the exception, and it is on the produce path
+//! deliberately** (`M3.14`). It decodes no record: it reads each record's
+//! varint length and skips that many bytes, so it touches a few bytes per
+//! record where `RecordIter` materializes every field. The reason it must run
+//! there is that `record_count` is a *claim* inside the CRC-covered region and
+//! offsets are allocated from it — see its own doc. The sentence above still
+//! holds for what it was written about, which is record contents.
 //!
 //! ## The compression seam, and where the codecs come from
 //!
@@ -30,6 +38,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use crate::attributes::Compression;
+use crate::batch::{BATCH_HEADER_LEN, BatchError, CRC_COVERAGE_START, crc_coverage};
 use crate::varint::{read_varint, read_varlong};
 use crate::wire::{Cursor, DecodeError};
 
@@ -216,6 +225,68 @@ fn read_sized<'a>(cur: &mut Cursor<'a>) -> Result<Option<&'a [u8]>, RecordsError
     Ok(Some(cur.take(len)?))
 }
 
+/// Counts the records a batch actually holds, by walking them.
+///
+/// ⚠️ **Because `record_count` is a *claim*, and offsets are allocated from
+/// it.** The field is inside the CRC-covered region, so a client can declare a
+/// thousand records in a batch holding one and have it verify; a broker that
+/// believed it would advance the partition's end offset by a thousand and
+/// index a range no record occupies. Counting is the only answer that does not
+/// rest on the sender.
+///
+/// The walk is cheap: each v2 record is length-prefixed with a varint, so this
+/// reads a length and skips it, never decoding a key, value or header.
+///
+/// ⚠️ **Uncompressed batches only.** A compressed batch's records are behind a
+/// codec this crate does not implement, so counting them is impossible here —
+/// the caller decides what to do about that, and refusing is the only answer
+/// that does not amount to trusting the field again.
+///
+/// # Errors
+/// [`BatchError::Decode`] if a record's declared length runs past the batch, if
+/// the record array is short of `record_count` entries, or if bytes remain
+/// after the last one — each of which means the blob and its header disagree.
+/// As [`decode_batch_header`](crate::batch::decode_batch_header) for the
+/// header itself.
+pub fn count_records(batch: &[u8]) -> Result<u32, BatchError> {
+    // ⚠️ Through `crc_coverage`, which is what bounds `batchLength` against the
+    // buffer — so the slice below cannot run past what the sender actually
+    // sent, whatever the header claims.
+    let records = crc_coverage(batch)?
+        .get(BATCH_HEADER_LEN - CRC_COVERAGE_START..)
+        .ok_or(BatchError::Decode(DecodeError::UnexpectedEof {
+            needed: BATCH_HEADER_LEN,
+            remaining: batch.len(),
+            at: BATCH_HEADER_LEN,
+        }))?;
+    // ⚠️ Not `record_count` as a loop bound — that is the value being checked.
+    // The array's own end is what stops this, and a declared count that does
+    // not match what was walked is the caller's to refuse.
+    let mut cur = Cursor::new(records);
+    // ⚠️ `usize`, not `u32`: every iteration consumes at least the varint it
+    // read, so this cannot exceed `records.len()` and needs no overflow guard
+    // of its own. The narrowing at the end is where a count too large to be a
+    // `record_count` becomes an error.
+    let mut counted: usize = 0;
+    while cur.remaining() > 0 {
+        let length = read_varint(&mut cur)?;
+        let length = usize::try_from(length).map_err(|_| DecodeError::LengthOutOfBounds {
+            length: length.unsigned_abs().into(),
+            max: u64::try_from(records.len()).unwrap_or(u64::MAX),
+            at: BATCH_HEADER_LEN,
+        })?;
+        cur.take(length)?;
+        counted += 1;
+    }
+    u32::try_from(counted).map_err(|_| {
+        BatchError::Decode(DecodeError::LengthOutOfBounds {
+            length: u64::try_from(counted).unwrap_or(u64::MAX),
+            max: u64::from(u32::MAX),
+            at: BATCH_HEADER_LEN,
+        })
+    })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     #![allow(clippy::expect_used)]
@@ -223,6 +294,78 @@ pub(crate) mod tests {
     use super::{RecordsError, iter_records};
     use crate::attributes::Compression;
     use crate::batch::{BATCH_HEADER_LEN, decode_batch_header};
+
+    /// ⚠️ **Counted, against the same authority that wrote them.** The count is
+    /// what a broker allocates offsets from, so agreeing with the declared
+    /// `record_count` for a batch the dependency encoded is the whole claim.
+    #[test]
+    fn the_records_a_batch_holds_are_counted_by_walking_them() {
+        let buf = crate::batch::tests::encoded_two_record_batch();
+        assert_eq!(super::count_records(&buf), Ok(2));
+        assert_eq!(
+            decode_batch_header(&buf).map(|h| h.record_count),
+            Ok(2),
+            "and the header's claim happens to be honest here"
+        );
+    }
+
+    /// ⚠️ **A count is not the header's word for it.** These are batches whose
+    /// declared count is a lie, with the CRC recomputed exactly as a hostile
+    /// producer would — the walk must report what is there, not what is said.
+    #[test]
+    fn a_declared_count_does_not_change_what_is_counted() {
+        for declared in [0_i32, 1, 3, 1000, -1] {
+            let mut buf = crate::batch::tests::encoded_two_record_batch();
+            buf[57..61].copy_from_slice(&declared.to_be_bytes());
+            let crc = crc32c_stand_in(&buf[21..]);
+            buf[17..21].copy_from_slice(&crc.to_be_bytes());
+            assert_eq!(
+                super::count_records(&buf),
+                Ok(2),
+                "declared {declared}, holds two either way"
+            );
+        }
+    }
+
+    /// A CRC this crate can compute without depending on `oqueue-checksum`,
+    /// which `check-layering.sh` keeps out of it at runtime.
+    /// ⚠️ Only used to keep a *tampered* fixture self-consistent; nothing here
+    /// verifies a checksum.
+    fn crc32c_stand_in(bytes: &[u8]) -> u32 {
+        let mut crc = !0_u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                let mask = (crc & 1).wrapping_neg();
+                crc = (crc >> 1) ^ (0x82F6_3B78 & mask);
+            }
+        }
+        !crc
+    }
+
+    /// ⚠️ **A record whose declared length runs past the batch is refused, not
+    /// counted.** These bytes came off a socket, so the walk must fail rather
+    /// than read past what was sent (`security.md` rule 3).
+    #[test]
+    fn a_record_length_past_the_end_is_refused_rather_than_walked() {
+        let mut buf = crate::batch::tests::encoded_two_record_batch();
+        // The first record's varint length is the byte right after the header.
+        buf[BATCH_HEADER_LEN] = 0xFE;
+        assert!(super::count_records(&buf).is_err());
+    }
+
+    /// ⚠️ **An empty record array counts zero and does not loop.** The `while`
+    /// is bounded by the array's own end, not by the declared count.
+    #[test]
+    fn a_batch_with_no_records_counts_none() {
+        let mut buf = crate::batch::tests::encoded_two_record_batch();
+        let had = buf.len() - BATCH_HEADER_LEN;
+        buf.truncate(BATCH_HEADER_LEN);
+        let shorter = i32::try_from(buf.len() - 12).expect("small");
+        buf[8..12].copy_from_slice(&shorter.to_be_bytes());
+        assert_eq!(super::count_records(&buf), Ok(0));
+        assert!(had > 0, "the fixture did have records to remove");
+    }
 
     /// The records section of the golden dependency-encoded batch —
     /// `batch::tests` builds it; this reuses the same authority.

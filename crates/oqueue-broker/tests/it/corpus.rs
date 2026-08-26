@@ -97,9 +97,8 @@ fn librdkafka_fetch_reencodes_byte_exactly() {
 #[tokio::test]
 async fn every_corpus_frame_is_answered_not_closed() {
     use oqueue_broker::Handler;
-    let cluster = std::sync::Arc::new(oqueue_broker::StubCluster::new("h", 1));
-    cluster.ensure_topic("harness");
-    let dispatcher = oqueue_broker::Dispatcher::new(cluster);
+    let broker = crate::support::broker(&["harness"]).await;
+    let dispatcher = oqueue_broker::Dispatcher::new(std::sync::Arc::clone(&broker.cluster));
     for name in ["apiversions-v3", "metadata-v13", "produce-v10", "fetch-v16"] {
         let frame = fixture(name);
         assert!(

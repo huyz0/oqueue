@@ -216,3 +216,30 @@ fn racing_conditional_puts_leave_exactly_one_winner() {
         "the stored payload must be exactly the winning racer's whole payload, got {winner:?}"
     );
 }
+
+/// ⚠️ **A store already in use can be broken**, which is not the same knob as
+/// [`FakeObjectStore::with_faults`]. Testing what a *read* path does when an
+/// object read fails needs an object first, so the store has to work and then
+/// stop working — a store broken from construction has nothing to read.
+#[test]
+fn faults_can_be_set_on_a_store_that_has_already_succeeded() {
+    let store = FakeObjectStore::new();
+    let key = ObjectKey::new("k".to_owned()).expect("a valid key");
+    block_on(store.put(&key, vec![1, 2, 3], None)).expect("a healthy store writes");
+
+    store.set_faults(FaultConfig {
+        storm: Some((StormKind::Transient, 1)),
+        ..FaultConfig::default()
+    });
+
+    assert_eq!(
+        block_on(store.get(&key, ByteRange::Full)),
+        Err(Error::Transient),
+        "the storm applies to the very next call"
+    );
+    assert_eq!(
+        block_on(store.get(&key, ByteRange::Full)),
+        Ok(vec![1, 2, 3]),
+        "and only for as many calls as it was given"
+    );
+}

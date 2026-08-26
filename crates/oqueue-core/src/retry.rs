@@ -79,6 +79,7 @@ impl Error {
             | Self::UnknownBundleFormat { .. }
             | Self::MalformedBundleFooter { .. }
             | Self::EmptyBundle
+            | Self::IndexObjectMismatch
             | Self::EmptyRegion
             | Self::UnboundedRegion
             | Self::BundleTooLarge

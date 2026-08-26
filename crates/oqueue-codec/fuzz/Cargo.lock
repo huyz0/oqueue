@@ -164,7 +164,9 @@ version = "0.0.0"
 dependencies = [
  "oqueue-checksum",
  "oqueue-codec",
+ "oqueue-coordinator",
  "oqueue-core",
+ "thiserror",
  "tokio",
  "uuid",
 ]
@@ -195,6 +197,18 @@ dependencies = [
  "libfuzzer-sys",
  "oqueue-broker",
  "oqueue-codec",
+ "oqueue-coordinator",
+ "oqueue-core",
+ "tokio",
+]
+
+[[package]]
+name = "oqueue-coordinator"
+version = "0.0.0"
+dependencies = [
+ "oqueue-core",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]

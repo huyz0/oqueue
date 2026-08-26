@@ -15,15 +15,31 @@
 //! framed reads, pipelined handlers, in-order writes — generic over the
 //! stream so every test drives a `tokio::io::duplex` and no real socket
 //! exists below `bin/oqueue`.
+//!
+//! ⚠️ **`M3.14` replaced the stub it served against.** [`Cluster`] composes a
+//! real `Coordinator`, a read-only index and an `ObjectStore`: a produce seals
+//! one bundle, PUTs it once and commits its spans, and a fetch resolves
+//! offset→object through the index. What is still a stand-in is *below* the
+//! seams — M3 builds no durable metadata log (`M6`), so a restart re-bases at
+//! `Offset::ZERO` over objects that already hold those offsets. That is
+//! recorded in `M3.md`'s goal and `roadmap.md`'s deferral table rather than
+//! left for an operator to discover.
 #![forbid(unsafe_code)]
 
+pub mod cluster;
 pub mod connection;
 pub mod dispatch;
 pub mod fetch;
+mod flush;
+mod ingest;
 pub mod metadata;
 pub mod produce;
-pub mod stub;
+mod read;
+#[cfg(test)]
+mod testing;
+mod writer_id;
 
+pub use cluster::{Cluster, FlushError, Sequencing};
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, serve_connection};
 pub use dispatch::Dispatcher;
-pub use stub::StubCluster;
+pub use writer_id::WriterId;
