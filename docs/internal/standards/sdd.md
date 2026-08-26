@@ -136,6 +136,30 @@ command can derive is written into prose. M1 is the measured argument: rows
 grew to hundreds of words duplicating commit messages, and keeping the copies
 consistent cost more review rounds than the code did.
 
+⚠️ **One exception to the freeze, and M3 is why it exists.** An acceptance
+criterion the code does **not** meet is corrected in place, in the commit that
+corrects it, which names itself in the cell. Everything else about a `done` row
+stays frozen. Without it two rules that are each right cannot both hold: the
+freeze says a correction goes in the correcting commit's message, and `M3.19`
+established that the backlog is the artifact a correction must land in, because
+that is where `next-task`, the completion gate and every later task actually
+read. M3's checkpoint review found a `done` row whose criterion its own code
+inverts, and under the unamended rule there was no legal move. ⚠️ **An
+acceptance criterion is a claim about the code, not a record of what someone
+intended** — that is the asymmetry that makes this one case different from
+every other edit the freeze forbids.
+
+⚠️ **And it names its direction, because without one the cheaper repair is
+always legal.** Correcting a criterion means one of two things and they are not
+interchangeable: making the code meet it, or striking a claim the code will
+never meet. Striking one is permitted **only if the correcting commit names
+where the obligation went** — a row, or a `roadmap.md` deferral entry with a
+receiving milestone. ⚠️ **A plan file is not a receiver**: this standard says a
+plan is a working hypothesis, expected to change and silently, so an obligation
+that lands only there has been downgraded rather than moved. Non-negotiable 2
+states the same discipline for thresholds and names the weakening direction;
+this is that rule for claims.
+
 **A sweep is one row carrying several small fixes that share a theme** — a
 review's unowned minors, a batch of stale claims — one commit, one review
 (ADR-0016). It exists so small debt stops carrying full row ceremony each; it

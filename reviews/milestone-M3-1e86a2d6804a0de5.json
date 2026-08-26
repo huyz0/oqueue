@@ -1,0 +1,84 @@
+{
+  "commits": [
+    "31ced0bbba0873f22f08b81e505635936fc2776d",
+    "f6e942ad5a43a158925c3daede91d4de6c9f55ea",
+    "b9281db0a6dcbb61cf60a73a759e092de7f78cc9",
+    "0e268a08f8c2fdb298cb152f7f341e9c0a72a143",
+    "0e3513db3d1edc63ec69aba52e3fd5f87174370b",
+    "71980e403275a6ea904e53c0d87b74ea5edc5530",
+    "bbd1f651dc92986447be89d8be8afdcfd19004ca",
+    "e451bc15e236375957d913b9c02d0afb7e6fda4b",
+    "99587c2fff0e72e586b14b78762c9565a29f10b3",
+    "0c1256ce8897dc685a9ddc59542896c9cea46108",
+    "3e58335a25c0dbd75ba7b44bef63aa529da56277"
+  ],
+  "findings": [
+    {
+      "evidence": "backlog.md: M1 59 rows at ~365 words each (pre-ADR), M2 36 rows at ~55, M3 25 rows at ~214 with M3.18 at 1257. `git show 99587c2 -- docs/internal/product/backlog.md` and the same for e451bc1, 0c1256c, 3e58335 each add hundreds of words to their own Acceptance cell at close. sdd.md:128-137 says closing a row edits its state cell and nothing else. Prose added at close is prose the per-commit reviewer sees only as an addition to the row it is judging, which is how finding 2 happened.",
+      "id": "4924bc04332d",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "ADR-0016's terse-row rule was adopted at M2.1, held through M2, and abandoned in M3: every M3 closing commit rewrites its own acceptance cell into narrative.",
+      "task_id": "M3.37"
+    },
+    {
+      "evidence": "backlog.md's M3.22 acceptance cell claims a failed read is charged its whole allowance and that the refresh is one retry; fetch/partition.rs's `refused` sets cost 0 on every error arm and read.rs's read_or_refresh is a bare passthrough, with reap.rs asserting exactly one GET. protocol-support.md:91 says the same false thing to client authors, and MAX_FAILED_FETCHES_PER_REQUEST appears in neither.",
+      "id": "7be311507399",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "M3.22's `done` row and protocol-support.md both state a charging model the code inverts, and neither mentions the mechanism that actually bounds failures.",
+      "task_id": "M3.38"
+    },
+    {
+      "evidence": "Three rows are excused by 'M2 has not landed' against roadmap.md:69 marking M2 complete; three more by 'M3 has not landed' / 'no produce path exists yet' / 'no fetch path exists yet' against M3.8's find_batches and M3.14's produce and fetch. performance.md rule 19 claims the list cannot silently rot; the script's staleness check only fires once someone does the work the entry excuses. Compounding: crates/*/benches is empty and no benchmark dependency exists, so five of these rows are a harness bootstrap, not a benchmark.",
+      "id": "2b2fc35a683a",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-hot-path-bench.sh exits 0 with six of eight allowlist excuses already false, and cannot fail on an expired one.",
+      "task_id": "M3.35"
+    },
+    {
+      "evidence": "Zero LIST: ObjectStore is get/put/delete and Operation has no List variant, so no code path can issue one and no counter can count one -- ADR-0009 section 2 already said the verification method does not exist. One PUT for N topics: roundtrip.rs counts Operation::Put at the trait seam, while s3.rs's put_strategy_for switches to multipart above a threshold, where one trait call is many billed PUTs. FR-10: M3.19 scoped the ack to durable-in-object-storage, so 'loses no acknowledged record' holds vacuously; the sentence in roadmap.md reads as crash survival.",
+      "id": "02a4ab300b07",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "Two of M3's five completion-condition legs are unfalsifiable as written, and a third reads as a crash-survival claim the milestone deliberately does not make.",
+      "task_id": "M3.16"
+    },
+    {
+      "evidence": "listoffsets.rs:103-113 closes the connection and writes out the reason -- the field is nullable on the request wire and not on the response wire. fetch/mod.rs:198-202 and oqueue-codec/src/fetch.rs:274 do exactly what that comment forbids: TopicOutcome.name is topic.name.map(str::to_owned) and the encoder writes put_nullable_string.",
+      "id": "954fd6c1326b",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "Two handlers, one wire hazard, opposite policies: ListOffsets refuses a null topic name and Fetch below v13 frames the unparsable reply.",
+      "task_id": "M3.29"
+    },
+    {
+      "evidence": "fetch/mod.rs:125-130 constructs Budget and FetchedObjects inside read_all; fetch/park.rs:105 calls read_all in a loop bounded by MAX_READS_PER_REQUEST = 4, so each pass starts fresh. read.rs's `Err(error) => return Err(error)` discards the local `fetched`, and `failed` increments only on a store error, so a successful GET whose slice_region fails is charged zero bytes and counts as no failure.",
+      "id": "a76d60b23962",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "The request's byte budget and failure cap are per read pass, and one frame makes up to four; and a read that fetched then failed to parse escapes both.",
+      "task_id": "M3.26"
+    },
+    {
+      "evidence": "MAX_READS_PER_REQUEST, MAX_FAILED_FETCHES_PER_REQUEST, READ_BUDGET_BYTES, MAX_PARK_MS, MAX_BATCHES_PER_PAGE, TAIL_WINDOW_ENTRIES, COMMIT_QUEUE_DEPTH, MAX_METADATA_STALENESS_MS. check-drift.sh catches only an environment read on the same line, and m0-complete.sh's NFR_CONSTANTS resolves a shell NAME= assignment a Rust pub const can never match. tests/it/reads.rs asserts spent <= MAX_FAILED_FETCHES_PER_REQUEST, so raising the constant keeps the suite green.",
+      "id": "e23121d92201",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "M3 added eight bounds and none is pinned by value; one test asserts against the very constant it exists to pin.",
+      "task_id": "M3.36"
+    },
+    {
+      "evidence": "sdd.md:128-132 freezes a done row and says a correction goes in the correcting commit's message, never back into the row. M3.19 decided the backlog is the artifact a correction must land in, because that is where next-task and every gate read. backlog.md's M3.22 cell is a done row whose acceptance criterion the code contradicts. This is a decision rather than a task, per the milestone-review skill.",
+      "id": "0503718c1131",
+      "kind": "spec-wrong",
+      "severity": "blocking",
+      "summary": "sdd.md's frozen-row rule and M3.19's binding-artifact rule cannot both hold, and M3.22's row is where they collide: there is no legal move."
+    }
+  ],
+  "milestone": "M3",
+  "recorded_at": "2026-08-26T19:11:35Z",
+  "reviewer": "claude-opus-5 (milestone-reviewer)",
+  "verdict": "changes-requested"
+}
