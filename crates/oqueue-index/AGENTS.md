@@ -10,12 +10,23 @@ what is specific to *changing* it.
 
 ## Easy to get wrong here
 
-1. **Search is on the cached tail-read path** (NFR-2), where the entire budget is CPU. `performance.md` rule 18 gives index lookup a benchmark obligation.
+1. **Search is on the cached tail-read path** (NFR-2), where the entire budget is CPU. `performance.md` rule 18 gives index lookup a benchmark obligation — ⚠️ **and the lookup is `oqueue-core::IndexState::find_batches`, not code in this crate.** Writing the benchmark here would benchmark a `Mutex` and a delegation. `M3.18` owns it.
+2. ⚠️ **One writer per index.** `LogApplier` reads the bookmark, awaits the log and then folds, so a second writer makes the loser's fold refused as `NonMonotonicCommitVersion` — an error saying the log lost ordering when nothing is wrong with it. That equally means an applier over an index a `Coordinator` was opened with: `M3.9` decided the coordinator is the sole writer of its own index, and `M3.23` makes it type-checked.
 
 ## What is here
 
 `M3.5` gave this crate its first code: [`MemoryIndex`](src/memory.rs), the
-in-memory fold of the metadata log a fetch queries.
+materialization a broker serves reads from. `M3.8` added
+[`LogApplier`](src/applier.rs), which fills it from the log in bounded batches
+and keeps no bookmark of its own.
+
+⚠️ **`MemoryIndex` is byte-identical to `oqueue-core`'s `FakeMaterializedIndex`
+today**, and M3's checkpoint review found the documents claiming otherwise
+(`M3.24`). Both are thin `Mutex<IndexState>` wrappers, so the conformance suite
+below proves the contract **once**, not twice — `contracts.md` rule 3 is
+satisfied by doc 10 #12's engine, which is foreseeable rather than present, and
+`M3.11` is where this type first has what a test double must not: a quota and an
+eviction policy. Until then, do not read the two types as independent evidence.
 
 ⚠️ **Extend it rather than starting beside it.** The fold itself —
 order-checking, all-or-nothing application, non-wrapping addition — lives in

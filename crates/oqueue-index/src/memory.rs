@@ -9,6 +9,15 @@ use std::sync::Mutex;
 /// The index the broker holds: the metadata log, folded into what a fetch can
 /// query.
 ///
+/// ⚠️ **Identical to [`FakeMaterializedIndex`](oqueue_core::FakeMaterializedIndex)
+/// today, and that is a fact about now rather than a design.** Both are thin
+/// `Mutex<IndexState>` wrappers over the one fold in `oqueue-core`, so the
+/// conformance suite runs one implementation twice — M3's checkpoint review
+/// found the documents claiming otherwise (`M3.24`). What separates them is
+/// coming and is not cosmetic: this is a broker's working set and gets
+/// `M3.11`'s quota and eviction; the fake is a downstream crate's test double
+/// and must stay simple enough to be obviously right.
+///
 /// ⚠️ **A cache, and droppable at any moment.** Everything here is derivable
 /// from the log by replay, which is what lets `M3.11`'s degraded mode discard
 /// it under quota pressure rather than fail. See

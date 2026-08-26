@@ -1,10 +1,19 @@
 //! The `MaterializedIndex` contract, run against every implementation of it.
 //!
-//! ⚠️ **One suite, two implementors**, the shape `oqueue-store`'s backend suite
-//! uses. `FakeMaterializedIndex` lives beside the trait in `oqueue-core` so
+//! ⚠️ **One suite, two implementors — and today that is one fold twice.**
+//! `FakeMaterializedIndex` lives beside the trait in `oqueue-core` so
 //! downstream crates can test against it without depending on this one
-//! (`contracts.md` rules 9 and 11); [`MemoryIndex`] here is the real fold. A
-//! contract asserted only against the fake is a contract only the fake has.
+//! (`contracts.md` rules 9 and 11), and [`MemoryIndex`] here is the one a
+//! broker serves from. Both wrap the same `IndexState`, so running the suite
+//! against both currently buys **one** implementation's worth of assurance,
+//! not two — M3's checkpoint review found this file claiming otherwise
+//! (`M3.24`), and the sentence it claimed it with ("a contract asserted only
+//! against the fake is a contract only the fake has") stays true as a *reason
+//! to keep the suite*, which is why it is corrected rather than deleted.
+//!
+//! ⚠️ The suite earns its shape the moment the two diverge: `M3.11` gives
+//! `MemoryIndex` a quota, and doc 10 #12's engine is the implementation
+//! `contracts.md` rule 3 is actually satisfied by.
 
 // Every `expect` is on a value the suite itself built from a literal it
 // controls, so a panic means the suite is wrong, not the code under test.

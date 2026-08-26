@@ -1,6 +1,19 @@
 # 0022. The index read surface: `find_batches`, and what a high watermark is
 
-Status: accepted
+Status: accepted; 2026-08-25 (`M3.24`, from M3's checkpoint milestone review):
+⚠️ **decision 1's rule-3 argument named the wrong second implementation.** It
+said "two implementations exist today", meaning `MemoryIndex` and
+`FakeMaterializedIndex` — and those two are byte-identical once doc comments
+are stripped, because both are thin `Mutex<IndexState>` wrappers over the one
+fold in `oqueue-core`. Running one fold through two wrappers is **one**
+implementation's worth of assurance presented as two, and the conformance suite
+in `oqueue-index` proves the contract once. The rule-3 test is still met, and
+by the thing that always met it: doc 10 #12's engine — `SQLite`, `redb`,
+`RocksDB`, `fjall`, `SlateDB` — is the foreseeable second implementation, which
+is why the read side is on the trait at all. `M3.11` is where `MemoryIndex`
+stops being the fake with another name, because a quota and an eviction policy
+are what a broker's materialization has and a downstream crate's test double
+must not.
 Date: 2026-08-25
 Requirements: FR-12, FR-13, NFR-2, NFR-3, NFR-30
 

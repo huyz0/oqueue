@@ -1,6 +1,6 @@
 [package]
 name = "oqueue-index"
-description = "The offset→object index and its search: given an offset, which object holds it and where inside it."
+description = "The materialization a broker serves reads from, and what fills it."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

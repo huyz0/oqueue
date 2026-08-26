@@ -49,7 +49,7 @@ which is what makes a shared testkit usable at all.
 | `oqueue-buf` | Buffer primitives, refcounted slices, pooling | **allowed** |
 | `oqueue-codec` | Kafka wire protocol, RecordBatch encode/decode | **allowed** |
 | `oqueue-checksum` | CRC-32C | **allowed** |
-| `oqueue-index` | Offset→object index and its search | forbid |
+| `oqueue-index` | The materialization a broker serves reads from, and what fills it | forbid |
 | `oqueue-store` | `ObjectStore` implementations: S3, GCS (⚠️ **not** in-memory — that is `oqueue-core`'s `FakeObjectStore`; `M1.37`) | forbid |
 | `oqueue-coordinator` | Metadata, offset sequencing, recovery | forbid |
 | `oqueue-crypto` | AEAD, envelope encryption, DEK cache, nonce construction | forbid |
