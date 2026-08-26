@@ -23,9 +23,9 @@ use std::sync::Arc;
 #[tokio::test(start_paused = true)]
 async fn a_follower_bootstraps_by_stripping_the_overlap_it_asked_for() {
     let log: Arc<dyn MetadataLog> = Arc::new(FakeMetadataLog::new());
-    let (coordinator, driver) = Coordinator::open(
+    let (coordinator, driver, _view) = Coordinator::open(
         Arc::clone(&log),
-        Arc::new(FakeMaterializedIndex::new()),
+        Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
     )
     .await
@@ -90,9 +90,9 @@ async fn a_follower_bootstraps_by_stripping_the_overlap_it_asked_for() {
 /// which is the asymmetry that hides it.
 #[tokio::test(start_paused = true)]
 async fn a_follower_is_told_it_is_over_even_while_a_handle_is_still_held() {
-    let (coordinator, driver) = Coordinator::open(
+    let (coordinator, driver, _view) = Coordinator::open(
         Arc::new(FakeMetadataLog::new()),
-        Arc::new(FakeMaterializedIndex::new()),
+        Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
     )
     .await
@@ -177,9 +177,9 @@ async fn a_follower_receives_the_committed_entries_in_order() {
 #[tokio::test(start_paused = true)]
 async fn a_follower_that_falls_behind_is_told_to_re_bootstrap() {
     let log: Arc<dyn MetadataLog> = Arc::new(FakeMetadataLog::new());
-    let (coordinator, driver) = Coordinator::open(
+    let (coordinator, driver, _view) = Coordinator::open(
         Arc::clone(&log),
-        Arc::new(FakeMaterializedIndex::new()),
+        Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
     )
     .await

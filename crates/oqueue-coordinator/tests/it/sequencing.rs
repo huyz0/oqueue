@@ -146,9 +146,9 @@ async fn a_partition_no_ack_covers_reports_the_unset_sentinel() {
 #[tokio::test]
 async fn a_coordinator_that_has_stopped_refuses_rather_than_answering() {
     let log = Arc::new(FakeMetadataLog::new());
-    let (coordinator, driver) = Coordinator::open(
+    let (coordinator, driver, _view) = Coordinator::open(
         log,
-        Arc::new(FakeMaterializedIndex::new()),
+        Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
     )
     .await
@@ -179,7 +179,7 @@ async fn opening_over_a_log_that_already_holds_entries_refuses() {
     assert_eq!(
         Coordinator::open(
             log,
-            Arc::new(FakeMaterializedIndex::new()),
+            Box::new(FakeMaterializedIndex::new()),
             CoordinatorEpoch::ZERO
         )
         .await

@@ -29,6 +29,8 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 | Offsets are totally ordered per partition | `M3`'s tests; `Offset::add` refuses to wrap |
 | A position is journaled before it is acknowledged | `tests/it/sequencing.rs`; the allocator applies a staged commit only after `append` resolves `Ok` |
 | No error path reports offset `0` | `UNASSIGNED_OFFSET`, and the test that pins it at `-1` |
+| One writer per materialized index | `ADR-0024` — `open` takes a `Box` and returns an `IndexReader`, so a caller is not handed the ability to write |
+| A clear is serialized against the folds it must not interleave with | `Coordinator::drop_cache` queues it; nothing a caller was *handed* reaches `clear` — a delegating newtype it wrote itself still would, per `ADR-0024` |
 | Metadata cost is proportional to partitions active on this node | no gate — doc 15, doc 16 |
 
 ## Notes for whoever touches this

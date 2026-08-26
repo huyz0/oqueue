@@ -16,8 +16,8 @@
 use oqueue_coordinator::Coordinator;
 use oqueue_core::{
     BoxFuture, ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error,
-    FakeMaterializedIndex, FakeMetadataLog, MaterializedIndex, MetadataEntry, MetadataLog,
-    ObjectKey, Offset, PartitionId, Result, TopicId,
+    FakeMaterializedIndex, FakeMetadataLog, IndexReader, MaterializedIndex, MetadataEntry,
+    MetadataLog, ObjectKey, Offset, PartitionId, Result, TopicId,
 };
 use std::future::Future;
 use std::sync::Arc;
@@ -119,15 +119,19 @@ impl MetadataLog for RefusableLog {
 /// Opens a coordinator over `log` and spawns its serializing loop, returning
 /// the handle and the loop's join handle.
 pub(crate) async fn start(log: Arc<dyn MetadataLog>) -> (Coordinator, tokio::task::JoinHandle<()>) {
-    start_with(log, Arc::new(FakeMaterializedIndex::new())).await
+    start_with(log, Box::new(FakeMaterializedIndex::new())).await
 }
 
-/// Opens over a caller-supplied index, for the tests that look at it.
+/// Opens over a caller-supplied index and discards the reader.
+///
+/// ⚠️ A test that needs to *look* at the index calls `start_indexed`, or
+/// `Coordinator::open` directly — `ADR-0024` means the index is reachable only
+/// through the `IndexReader` this helper drops.
 pub(crate) async fn start_with(
     log: Arc<dyn MetadataLog>,
-    index: Arc<dyn MaterializedIndex>,
+    index: Box<dyn MaterializedIndex>,
 ) -> (Coordinator, tokio::task::JoinHandle<()>) {
-    let (coordinator, driver) = Coordinator::open(log, index, CoordinatorEpoch::ZERO)
+    let (coordinator, driver, _index) = Coordinator::open(log, index, CoordinatorEpoch::ZERO)
         .await
         .expect("a fresh log opens");
     (coordinator, tokio::spawn(driver.run()))
@@ -155,15 +159,14 @@ pub(crate) async fn parked<F: Future>(future: F) -> F::Output {
 
 /// A coordinator over a fresh log, with its index returned so a test can look
 /// at what a parked reader would query.
-pub(crate) async fn start_indexed() -> (
-    Coordinator,
-    Arc<dyn MaterializedIndex>,
-    tokio::task::JoinHandle<()>,
-) {
+pub(crate) async fn start_indexed() -> (Coordinator, IndexReader, tokio::task::JoinHandle<()>) {
     let log: Arc<dyn MetadataLog> = Arc::new(FakeMetadataLog::new());
-    let index: Arc<dyn MaterializedIndex> = Arc::new(FakeMaterializedIndex::new());
-    let (coordinator, driver) = Coordinator::open(log, Arc::clone(&index), CoordinatorEpoch::ZERO)
-        .await
-        .expect("a fresh log opens");
+    let (coordinator, driver, index) = Coordinator::open(
+        log,
+        Box::new(FakeMaterializedIndex::new()),
+        CoordinatorEpoch::ZERO,
+    )
+    .await
+    .expect("a fresh log opens");
     (coordinator, index, tokio::spawn(driver.run()))
 }

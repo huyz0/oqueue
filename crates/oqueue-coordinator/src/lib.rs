@@ -51,9 +51,11 @@ mod allocator;
 mod commit;
 mod coordinator;
 mod error;
+mod serve;
 mod subscribe;
 
 pub use commit::{Assignment, CommitAck, UNASSIGNED_OFFSET};
-pub use coordinator::{COMMIT_QUEUE_DEPTH, Coordinator, CoordinatorLoop, REBUILD_PAGE_ENTRIES};
+pub use coordinator::{COMMIT_QUEUE_DEPTH, Coordinator};
 pub use error::CoordinatorError;
+pub use serve::{CoordinatorLoop, REBUILD_PAGE_ENTRIES};
 pub use subscribe::{DELTA_BUFFER_ENTRIES, DeltaLag, DeltaStream, IndexWatch};

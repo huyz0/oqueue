@@ -1,6 +1,6 @@
 //! Pumping the metadata log into the index, a bounded batch at a time.
 
-use oqueue_core::{CommitVersion, MaterializedIndex, MetadataLog, Result};
+use oqueue_core::{CommitVersion, IndexReader, MaterializedIndex, MetadataLog, Result};
 use std::sync::Arc;
 
 /// The most log entries one apply covers.
@@ -77,9 +77,11 @@ pub struct CatchUp {
 /// interrupted folded nothing.
 /// ⚠️ **Both sides behind `Arc<dyn …>`**, for the two reasons that also put
 /// `ObjectStore` behind one: doc 10 #12's engine is chosen at startup rather
-/// than at compile time, and the index folded here is the same object the
-/// Fetch path queries — `M3.14` holds a second handle on it, which a generic
-/// owned by value could not give it.
+/// than at compile time, and the index folded here is the same object a Fetch
+/// path queries. ⚠️ **That second handle is an
+/// [`IndexReader`](Self::index), not another `Arc`** (`ADR-0024`): this
+/// applier is the index's sole writer, and a reader that could also write is
+/// the wrong-offsets race rather than a convenience.
 #[derive(Debug)]
 pub struct LogApplier {
     log: Arc<dyn MetadataLog>,
@@ -88,15 +90,53 @@ pub struct LogApplier {
 
 impl LogApplier {
     /// Pairs a log with the index folding it.
+    ///
+    /// ⚠️ **An `Arc`, unlike `Coordinator::open`'s `Box`, and the asymmetry is
+    /// deliberate** (`ADR-0024` decision 2). Taking a `Box` would make this
+    /// applier the index's only owner, and the one thing an applier has to be
+    /// able to express is an index that **outlives** it — a warm restart is a
+    /// new applier over the state that survived, which is exactly what
+    /// `tests/it/applier.rs`'s restart case exercises.
+    ///
+    /// ⚠️ So the sole-writer rule is *not* type-checked on this side. What
+    /// changed is the need: [`index`](Self::index) answers every read, so a
+    /// caller keeping the `Arc` is doing something deliberate rather than
+    /// taking the path the API offered. A coordinator's caller had no such
+    /// choice, which is why that half moved to a `Box`.
     #[must_use]
     pub const fn new(log: Arc<dyn MetadataLog>, index: Arc<dyn MaterializedIndex>) -> Self {
         Self { log, index }
     }
 
-    /// The index being folded into.
+    /// A read-only handle on the index being folded into.
+    ///
+    /// ⚠️ **A reader, not the `Arc`** — `ADR-0024`. This applier is the sole
+    /// writer of that index, and handing out something carrying `apply` and
+    /// `clear` would make every caller a candidate second writer: a clear
+    /// landing between [`resume_from`](Self::resume_from) and the fold is
+    /// *accepted*, because an emptied index has no `applied_upto` to refuse
+    /// against, and every forgotten partition re-bases at
+    /// [`Offset::ZERO`](oqueue_core::Offset::ZERO) while the log holds those
+    /// records far higher.
     #[must_use]
-    pub fn index(&self) -> &Arc<dyn MaterializedIndex> {
-        &self.index
+    pub fn index(&self) -> IndexReader {
+        IndexReader::new(Arc::clone(&self.index))
+    }
+
+    /// Discards the materialization, which the log can refill.
+    ///
+    /// ⚠️ **The writer's own door** — `ADR-0024`. The index is not reachable as
+    /// something clearable through [`index`](Self::index), so dropping the
+    /// cache is asked of whoever writes it; here that is this applier, and for
+    /// a coordinator's index it is `Coordinator::drop_cache`. A clear that took
+    /// any other route could land between
+    /// [`resume_from`](Self::resume_from) and the fold, where it is *accepted*
+    /// and re-bases every forgotten partition at zero.
+    ///
+    /// The next [`catch_up`](Self::catch_up) refills from the log, starting
+    /// over because the bookmark went with the cache.
+    pub fn drop_cache(&self) {
+        self.index.clear();
     }
 
     /// The version the next batch will start reading at.
@@ -118,18 +158,15 @@ impl LogApplier {
     ///
     /// Returns how many were folded — `0` when the index has caught up.
     ///
-    /// ⚠️ **One writer per index, and this is it.** The method reads the
-    /// bookmark, awaits the log, and then folds, so a second writer landing in
-    /// between makes the loser's fold refused as
-    /// [`NonMonotonicCommitVersion`](oqueue_core::Error::NonMonotonicCommitVersion)
-    /// — an error that says the log lost ordering when nothing is wrong with
-    /// it. That means two appliers over one index, and it equally means an
-    /// applier over an index a `Coordinator` was opened with: **`M3.9` decided
-    /// that the coordinator is the sole writer of its own index**, so a
-    /// follower keeps a different one and fills it from here. Doc 12 §4.4's
-    /// model, where every agent has its own materialization, is what makes
-    /// that the natural rule rather than a restriction. Nothing detects a
-    /// violation; `M3.14` is the first composer that could commit one.
+    /// ⚠️ **One writer per index, and this is it** — `ADR-0024`. The method
+    /// reads the bookmark, awaits the log, and then folds, so a second writer
+    /// landing in between makes the loser's fold refused as
+    /// [`NonMonotonicCommitVersion`](oqueue_core::Error::NonMonotonicCommitVersion),
+    /// an error saying the log lost ordering when nothing is wrong with it.
+    /// A `Coordinator`'s index is now unreachable as an
+    /// [`Arc<dyn MaterializedIndex>`](oqueue_core::MaterializedIndex), so
+    /// pointing an applier at one is no longer expressible; two *appliers*
+    /// over one index still is, and is the case this warning is left for.
     ///
     /// # Errors
     ///

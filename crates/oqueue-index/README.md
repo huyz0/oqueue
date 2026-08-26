@@ -47,4 +47,4 @@ has behaviour a test double must not have: a quota, and an eviction policy.
 ## Notes for whoever touches this
 
 - **Search is on the cached tail-read path** (NFR-2), where the entire budget is CPU. `performance.md` rule 18 gives index lookup a benchmark obligation — ⚠️ **against `oqueue-core::IndexState::find_batches`, which is where the lookup is**, not against this crate. `M3.18` owns writing it.
-- ⚠️ **`LogApplier` is the one writer of an index it holds.** So is a `Coordinator` of the index it was opened with, and they must not be the same index — `M3.9` decided that, `M3.23` makes it type-checked.
+- ⚠️ **`LogApplier` is the one writer of an index it holds** — `ADR-0024`. A `Coordinator`'s index is no longer reachable as an `Arc<dyn MaterializedIndex>`, so pointing an applier at one does not compile; two appliers over one index still would.

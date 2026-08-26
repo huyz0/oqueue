@@ -3,10 +3,13 @@
 use crate::allocator::Allocator;
 use crate::commit::CommitAck;
 use crate::error::CoordinatorError;
+#[cfg(doc)]
+use crate::serve::REBUILD_PAGE_ENTRIES;
+use crate::serve::{CommitRequest, CoordinatorLoop, Request};
 use crate::subscribe::{DELTA_BUFFER_ENTRIES, DeltaStream, IndexWatch};
 use oqueue_core::{
-    CommitVersion, CommittedSpan, CoordinatorEpoch, MaterializedIndex, MetadataEntry, MetadataLog,
-    ObjectKey,
+    CommitVersion, CommittedSpan, CoordinatorEpoch, IndexReader, MaterializedIndex, MetadataEntry,
+    MetadataLog, ObjectKey,
 };
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -22,22 +25,6 @@ use tokio::sync::{broadcast, mpsc, oneshot, watch};
 /// matter for memory. `M14` measures what it should be.
 pub const COMMIT_QUEUE_DEPTH: usize = 1024;
 
-/// How many entries one page of a rebuild reads.
-///
-/// ⚠️ A rebuild is not the apply *rate* `oqueue-index`'s `APPLY_BATCH_ENTRIES`
-/// bounds — it happens when a cache was dropped, not on every commit — so this
-/// is sized to bound the memory one page costs and nothing else. It is a
-/// constant rather than a knob, per `AGENTS.md` non-negotiable 2.
-pub const REBUILD_PAGE_ENTRIES: usize = 1024;
-
-/// One producer's commit, and where to send its answer.
-#[derive(Debug)]
-struct CommitRequest {
-    object: ObjectKey,
-    spans: Vec<CommittedSpan>,
-    reply: oneshot::Sender<Result<CommitAck, CoordinatorError>>,
-}
-
 /// A handle on the coordinator for one metadata shard.
 ///
 /// Cheap to clone, and every clone reaches the same allocator — which is the
@@ -49,7 +36,7 @@ struct CommitRequest {
 #[derive(Debug)]
 pub struct Coordinator {
     epoch: CoordinatorEpoch,
-    commits: mpsc::Sender<CommitRequest>,
+    commits: mpsc::Sender<Request>,
     /// ⚠️ **A receiver, not the sender**, and that is what makes
     /// [`DeltaLag::Closed`](crate::DeltaLag::Closed) mean what its message
     /// says. `broadcast` reports `Closed` only once every *sender* is gone, so
@@ -82,33 +69,17 @@ impl Coordinator {
     /// and its panic, and this crate does not know who that is. The caller
     /// spawns [`CoordinatorLoop::run`] and holds its handle.
     ///
-    /// # ⚠️ The coordinator is the sole writer of `index`, and the only party
-    /// # that may clear it
+    /// # ⚠️ The coordinator owns `index`, and that is why it arrives as a `Box`
     ///
-    /// **Decided here** (`M3.9`), because `oqueue-index`'s `LogApplier` folds
-    /// the same log into the same kind of index and something had to say which
-    /// of them owns a given one. The rule is doc 12 §4.4's own model: every
-    /// agent keeps *its own* materialization. A coordinator maintains the one
-    /// it is given; a follower elsewhere keeps a different one and fills it
-    /// with `LogApplier` from [`subscribe`](Self::subscribe) and the log.
+    /// `ADR-0024`, which carries the reasoning. A caller that constructed an
+    /// `Arc` would keep one, and an `Arc<dyn MaterializedIndex>` carries
+    /// `apply` and `clear`; moving a `Box` in leaves the caller nothing to
+    /// write through. What comes back is an [`IndexReader`] — every read a
+    /// fetch needs, with the write side simply absent.
     ///
-    /// Handing one index to both is a defect and nothing detects it. The two
-    /// interleavings are: the applier folding first, so every later commit
-    /// finds the index ahead of it and pays a **full log replay inside the
-    /// ack path**; and the coordinator folding between the applier's read and
-    /// its apply, so the applier is refused with
-    /// [`NonMonotonicCommitVersion`](oqueue_core::Error::NonMonotonicCommitVersion)
-    /// — an error that says the log lost ordering when nothing is wrong with
-    /// it.
-    ///
-    /// ⚠️ **"Only party that may clear it" is the other half**, and it is not
-    /// pedantry: `apply` checks version order and *not* contiguity, so a
-    /// `clear` landing between this loop's own check and its fold would be
-    /// accepted and would re-base every partition at [`Offset::ZERO`]. Whoever
-    /// wants the cache dropped — `M3.11`'s quota is the row that will — asks
-    /// the coordinator, and does not reach for the handle.
-    ///
-    /// [`Offset::ZERO`]: oqueue_core::Offset::ZERO
+    /// Dropping the cache stays available and goes through
+    /// [`drop_cache`](Self::drop_cache), which queues it behind the folds it
+    /// must not interleave with.
     ///
     /// # Errors
     ///
@@ -117,9 +88,9 @@ impl Coordinator {
     /// [`CoordinatorError::Journal`] if the log cannot be read at all.
     pub async fn open(
         log: Arc<dyn MetadataLog>,
-        index: Arc<dyn MaterializedIndex>,
+        index: Box<dyn MaterializedIndex>,
         epoch: CoordinatorEpoch,
-    ) -> Result<(Self, CoordinatorLoop), CoordinatorError> {
+    ) -> Result<(Self, CoordinatorLoop, IndexReader), CoordinatorError> {
         if let Some(last) = log
             .last_version()
             .await
@@ -140,6 +111,12 @@ impl Coordinator {
         // safe, and it makes the invariant true by construction rather than by
         // a check that has to be remembered.
         index.clear();
+        // ⚠️ The `Box` becomes an `Arc` **here**, inside the seam — `ADR-0024`.
+        // A caller that had constructed the `Arc` would have kept one, and an
+        // `Arc<dyn MaterializedIndex>` carries `apply` and `clear`. Moving a
+        // `Box` in is what makes "the coordinator is the sole writer" a thing
+        // the type system holds rather than a thing four rustdocs ask for.
+        let index: Arc<dyn MaterializedIndex> = Arc::from(index);
         let (commits, requests) = mpsc::channel(COMMIT_QUEUE_DEPTH);
         let (deltas, listener) = broadcast::channel(DELTA_BUFFER_ENTRIES);
         let (published, applied) = watch::channel(None);
@@ -152,13 +129,14 @@ impl Coordinator {
             },
             CoordinatorLoop {
                 log,
-                index,
+                index: Arc::clone(&index),
                 epoch,
                 allocator: Allocator::new(),
                 requests,
                 deltas,
                 published,
             },
+            IndexReader::new(index),
         ))
     }
 
@@ -259,182 +237,61 @@ impl Coordinator {
     ) -> Result<CommitAck, CoordinatorError> {
         let (reply, answer) = oneshot::channel();
         self.commits
-            .send(CommitRequest {
+            .send(Request::Commit(CommitRequest {
                 object,
                 spans,
                 reply,
-            })
+            }))
             .await
             .map_err(|_| CoordinatorError::Unavailable)?;
         answer.await.map_err(|_| CoordinatorError::Unavailable)?
     }
-}
 
-/// The task that owns the allocator and the log.
-///
-/// ⚠️ **A single owner rather than a shared lock**, per
-/// `async-concurrency.md` rules 7 and 8. Serializing "assign, then append" is a
-/// sequencing problem: a mutex expressing it would have to be held across the
-/// append's `.await`, which rule 6 forbids outright, and releasing it in
-/// between would let two commits reach the log out of version order — which the
-/// log refuses, correctly, leaving a hole in a line that must not have one.
-#[derive(Debug)]
-pub struct CoordinatorLoop {
-    log: Arc<dyn MetadataLog>,
-    index: Arc<dyn MaterializedIndex>,
-    epoch: CoordinatorEpoch,
-    allocator: Allocator,
-    requests: mpsc::Receiver<CommitRequest>,
-    deltas: broadcast::Sender<MetadataEntry>,
-    published: watch::Sender<Option<CommitVersion>>,
-}
-
-impl CoordinatorLoop {
-    /// Serves commits until every [`Coordinator`] handle has been dropped.
+    /// Discards the materialization, which the log can refill.
     ///
-    /// ⚠️ **That is the shutdown signal** (`async-concurrency.md` rule 14):
-    /// the last handle going away closes the queue, `recv` answers `None`, and
-    /// this returns rather than being killed mid-append by the process exiting.
-    /// Commits already queued are served first, because `recv` drains before it
-    /// reports the close.
-    pub async fn run(mut self) {
-        while let Some(request) = self.requests.recv().await {
-            let outcome = self.serve(request.object, request.spans).await;
-            // ⚠️ Ignored on purpose: a caller that stopped waiting is the
-            // cancellation case `Coordinator::commit` documents, and the commit
-            // has already happened either way.
-            drop(request.reply.send(outcome));
-        }
-    }
-
-    /// Assign → journal → ack, in that order and no other.
-    async fn serve(
-        &mut self,
-        object: ObjectKey,
-        spans: Vec<CommittedSpan>,
-    ) -> Result<CommitAck, CoordinatorError> {
-        let staged = self
-            .allocator
-            .stage(object, spans)
-            .map_err(CoordinatorError::Unassignable)?;
-        // ⚠️ Journaled before the allocator takes the position, so a refusal
-        // leaves the line exactly where it was. The reverse order would leave a
-        // gap that nothing later could fill.
-        self.log
-            .append(core::slice::from_ref(staged.entry()))
+    /// ⚠️ **The one door the API offers, and it is queued** (`ADR-0024`). An
+    /// [`IndexReader`] does not expose `clear`, so nothing a caller was *handed*
+    /// can reach it — a delegating newtype it wrote itself still could, which
+    /// the ADR states plainly. Two
+    /// writers on one index is not a race that loses a write but one that
+    /// produces *wrong offsets*, since `apply` checks version order and not
+    /// contiguity. Routing the drop through this queue puts it in the same
+    /// serial order as the folds it must not interleave with.
+    ///
+    /// Resolves once the cache is gone. The next commit rebuilds from the log,
+    /// and a reader parked on [`watch`](Self::watch) waits out its own deadline
+    /// in the meantime rather than being woken onto an empty index.
+    ///
+    /// ⚠️ **That rebuild is where the cost lands, and it is on the ack path.**
+    /// The next commit replays the whole log,
+    /// [`REBUILD_PAGE_ENTRIES`] at a time, with every queued producer waiting
+    /// behind it — so this is cheap to *ask* and expensive to have asked.
+    /// `M3.18` owns moving that replay off the ack path.
+    ///
+    /// ⚠️ **`M3.11` is the row that decides *when*** — an enforced, alarmed
+    /// quota with a degraded mode. This is only the mechanism it will call.
+    ///
+    /// ⚠️ **Not cancellation-safe** (`async-concurrency.md` rule 10), the same
+    /// way [`commit`](Self::commit) is not: dropping this future after the
+    /// request is queued does not un-queue it, so a caller whose deadline fired
+    /// may conclude the drop did not happen while the loop performs it anyway.
+    /// A quota that then retries pays a second rebuild.
+    ///
+    /// ⚠️ **It shares the commit queue**, so it waits behind whatever is in it —
+    /// up to [`COMMIT_QUEUE_DEPTH`] durable appends, each of which folds more
+    /// into the index the drop was called to shrink. A second channel selected
+    /// in the loop would serialize against the fold just as well; the shared
+    /// queue is a choice, and this is its cost.
+    ///
+    /// # Errors
+    ///
+    /// [`CoordinatorError::Unavailable`] if the loop has stopped.
+    pub async fn drop_cache(&self) -> Result<(), CoordinatorError> {
+        let (reply, answer) = oneshot::channel();
+        self.commits
+            .send(Request::DropCache(reply))
             .await
-            .map_err(CoordinatorError::Journal)?;
-        let entry = staged.entry().clone();
-        let (version, assignments) = self.allocator.apply(staged);
-        self.publish(entry).await;
-        Ok(CommitAck::new(version, self.epoch, assignments))
-    }
-
-    /// Folds the committed entry into the local index, then tells everyone.
-    ///
-    /// ⚠️ **Before the ack returns**, which is what makes read-your-writes
-    /// (hazard H2) hold locally by construction: a producer holding a
-    /// [`CommitAck`] can fetch at its version and the index already has it,
-    /// with no window in which the position is durable and unqueryable.
-    ///
-    /// ⚠️ **Nothing here can fail the commit.** The position is durable in the
-    /// log whatever happens to the cache, so refusing the ack would deny a
-    /// producer an offset that exists.
-    async fn publish(&self, entry: MetadataEntry) {
-        if self.index_precedes(entry.version()) {
-            if self.index.apply(core::slice::from_ref(&entry)).is_err() {
-                // A fold refused by an index the coordinator *knows* the
-                // position of is a defect, not a dropped cache. Empty is the
-                // one state that cannot be wrong, and `publish_applied` then
-                // reports `None` rather than a version nothing holds.
-                self.index.clear();
-            }
-        } else {
-            // ⚠️ **The index is a cache anyone may drop**, and the seam says so
-            // in as many words — under memory pressure, on a restart, when
-            // `M3.11`'s quota trips. Folding one entry onto a dropped index
-            // does not merely lose the old records: `IndexState` bases a
-            // partition it has forgotten at `Offset::ZERO`, so the fold would
-            // place these records at 0 while the log, the allocator and the
-            // ack already given to the producer place them at the true offset.
-            // An index that is *wrong* is worse than one that is empty.
-            //
-            // ⚠️ The rebuild covers **this** entry too, because the journal
-            // step above already put it in the log. Folding it again
-            // afterwards is the replay the fold refuses, by design.
-            self.rebuild().await;
-        }
-        self.publish_applied();
-        // ⚠️ Ignored on purpose: no subscribers is the ordinary case, not a
-        // failure. A *lagging* subscriber is a different thing and is told so
-        // on its own `recv`.
-        drop(self.deltas.send(entry));
-    }
-
-    /// Whether the index sits exactly one version below `version`.
-    ///
-    /// ⚠️ **Exactly, not "at least".** A gap means entries are missing and the
-    /// fold would mis-base; being *ahead* means something else is writing to
-    /// this index, which is the same problem from the other side. Both are
-    /// answered by rebuilding, because both mean the coordinator does not know
-    /// what the index holds.
-    fn index_precedes(&self, version: CommitVersion) -> bool {
-        self.index
-            .applied_upto()
-            .map_or(version == CommitVersion::ZERO, |applied| {
-                applied.advance(1).is_ok_and(|next| next == version)
-            })
-    }
-
-    /// Re-derives the whole index from the log.
-    ///
-    /// ⚠️ **Deliberately not `oqueue-index`'s `LogApplier`**, which does the
-    /// same fold: `architecture.md`'s star topology means this crate depends on
-    /// `oqueue-core` and nothing else in the workspace, and the two are not the
-    /// same operation anyway — that one resumes from a bookmark and this one
-    /// starts from nothing, because the bookmark is exactly what was lost.
-    ///
-    /// ⚠️ **A failure here leaves the index empty rather than partial.** An
-    /// empty cache is answered by a reader waiting out its deadline; a partial
-    /// one is answered with wrong offsets.
-    ///
-    /// ⚠️ **It reads until a page comes back empty**, and deliberately does
-    /// *not* stop early on a short one the way `oqueue-index`'s `catch_up`
-    /// does. That saves a round trip per call and is worth it there, where a
-    /// catch-up happens constantly; here it would buy one read on an operation
-    /// that only runs when a cache was dropped, in exchange for a branch no
-    /// test can distinguish from its own mutation.
-    async fn rebuild(&self) {
-        self.index.clear();
-        let mut start = CommitVersion::ZERO;
-        loop {
-            let Ok(page) = self.log.read_from(start, REBUILD_PAGE_ENTRIES).await else {
-                self.index.clear();
-                return;
-            };
-            let Some(last) = page.last().map(MetadataEntry::version) else {
-                return;
-            };
-            if self.index.apply(&page).is_err() {
-                self.index.clear();
-                return;
-            }
-            let Ok(next) = last.advance(1) else {
-                return;
-            };
-            start = next;
-        }
-    }
-
-    /// Publishes what the index **actually** holds.
-    ///
-    /// ⚠️ **Read back from the index, never remembered separately.** The watch
-    /// is level-triggered, so a version published above what the index holds
-    /// wakes every reader waiting at or below it *immediately*, onto an index
-    /// that cannot answer them — hazard H2 arriving through the very mechanism
-    /// built to prevent it. A second copy of this fact is a second thing to be
-    /// wrong.
-    fn publish_applied(&self) {
-        self.published.send_replace(self.index.applied_upto());
+            .map_err(|_| CoordinatorError::Unavailable)?;
+        answer.await.map_err(|_| CoordinatorError::Unavailable)
     }
 }

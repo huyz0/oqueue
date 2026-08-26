@@ -28,6 +28,15 @@ journal → ack** is the correctness argument, not an implementation order.
    forbids holding a lock across the append's `.await`, and releasing it in
    between would let two commits reach the log out of version order. Rule 8
    names this shape directly.
-5. ⚠️ **`-1`, never `0`, when there is no offset** — `UNASSIGNED_OFFSET`. Doc 13
+5. ⚠️ **The coordinator owns its index, and `ADR-0024` is why it takes a
+   `Box`.** A caller handed an `Arc<dyn MaterializedIndex>` keeps one, and that
+   carries `apply` and `clear`; two writers is not a race that loses a write
+   but one that produces *wrong offsets*, since `apply` checks version order
+   and not contiguity. Dropping the cache goes through `drop_cache`, which
+   queues it. ⚠️ Do not add an accessor handing out the `Arc`, and do not add
+   an `open` variant taking one — a standby wanting to pre-warm a cache builds
+   its own with `oqueue-index`'s `LogApplier` and `subscribe`, which is doc 12
+   §4.4's model.
+6. ⚠️ **`-1`, never `0`, when there is no offset** — `UNASSIGNED_OFFSET`. Doc 13
    §8: a plausible-looking offset on an error path turns an availability bug
    into a safety bug.

@@ -6,6 +6,7 @@
 mod clock;
 mod coordinator;
 mod fault;
+mod index_reader;
 mod invariants;
 mod key;
 mod key_layout;

@@ -145,15 +145,12 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
     /// ⚠️ Safe **for the writer of this index**, and the reason this trait
     /// exists: nothing here is unrecoverable, because the log can refill it.
     ///
-    /// ⚠️ **It is not safe for anyone else, and an earlier version of this
-    /// sentence said it was.** [`apply`](Self::apply) checks version *order*
-    /// and not contiguity, so an index cleared between its writer's own
-    /// "is this current" check and its fold accepts the next entry and bases
-    /// every partition at [`Offset::ZERO`] — an index that is **wrong**, not
-    /// one that is empty, and nothing detects it. An index therefore has one
-    /// writer, and clearing it is that writer's to do: for the one an
-    /// `oqueue-coordinator::Coordinator` was opened with, ask the
-    /// coordinator (`M3.9`, and `M3.11`'s quota is the row that will).
+    /// ⚠️ **It is not safe for anyone else**, and an index therefore has one
+    /// writer — `ADR-0024`, which is where the reasoning lives rather than
+    /// repeated here. In short: [`apply`](Self::apply) checks version *order*
+    /// and not contiguity, so a clear landing between a writer's own "is this
+    /// current" check and its fold is accepted, and every forgotten partition
+    /// re-bases at [`Offset::ZERO`].
     fn clear(&self);
 }
 

@@ -218,7 +218,7 @@ fn a_dropped_index_is_refilled_from_the_log() {
     block_on(applier.catch_up()).expect("caught up");
     let before = applier.index().end_offset(&topic(), partition());
 
-    applier.index().clear();
+    applier.drop_cache();
     assert_eq!(applier.index().applied_upto(), None);
     assert_eq!(
         applier.resume_from().expect("a version"),
