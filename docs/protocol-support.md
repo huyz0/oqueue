@@ -24,7 +24,7 @@ no runtime path anywhere in the workspace.
 | API | Key | Versions | Notes |
 |---|---|---|---|
 | Produce | 0 | 3–13 | v0–2 removed by KIP-896. Exactly one RecordBatch (v2 magic) per partition; CRC-32C verified on ingest; base offset assigned by header rewrite. v13 addresses topics by id. |
-| Fetch | 1 | 4–17 | Returns whole batches from the log start for any in-range offset (consumers skip records below their fetch offset). Fetch sessions declined (`session_id` 0 → clients full-fetch). v13+ addresses topics by id. |
+| Fetch | 1 | 4–17 | Returns whole batches from the offset asked for, resolved through the index — ⚠️ **not from the log start**, which is what `M2`'s stub had to do and what this row said until `M3.14`. Long-polls on `max_wait_ms`/`min_bytes` (`M3.20`). Fetch sessions declined (`session_id` 0 → clients full-fetch). v13+ addresses topics by id. |
 | Metadata | 3 | 0–13 | `allow_auto_topic_creation` honoured from v4 (historical always-create below). Topic ids from v10. Single node, single partition per topic. |
 | ApiVersions | 18 | 0–3 | Answered before anything else; unsupported versions get the v0-bodied `UNSUPPORTED_VERSION` fallback with the table populated. |
 
@@ -55,8 +55,24 @@ unadvertised version has no response the client would parse, and outside
   `UNSUPPORTED_FOR_MESSAGE_FORMAT`, KIP-110's own precedent, and an error
   that names the format rather than steering clients at a compression
   setting.
-- **No long-polling.** `max_wait_ms`/`min_bytes` are parsed and ignored;
-  empty fetches return immediately. `M3.20` wires the park.
+- ⚠️ ~~**No long-polling.**~~ — **`M3.20` wired it.** A fetch with nothing to
+  return parks on the coordinator's index until a commit wakes it or the
+  client's own `max_wait_ms` expires, and `min_bytes` is met by the whole
+  response rather than per partition. ⚠️ **`fetch.min.bytes=0` answers
+  immediately, empty included**, as a real broker does; a `min_bytes` larger
+  than one response can hold is clamped to that, so it bounds the wait rather
+  than guaranteeing it. ⚠️ **A wakeup for another partition costs no read**:
+  the handler compares watermarks first and re-reads only when a partition
+  this request asked about has actually moved. ⚠️ **And one request reads at
+  most four times**: `min_bytes` is not always reachable — a page is capped at
+  64 batches — so an unbounded park would let *producers* decide how much
+  object storage one consumer's request costs. The cost of the cap is a
+  response below `min_bytes` before the deadline, which every client already
+  handles. ⚠️ **A `Fetch` naming no partitions is answered at once**, as a real
+  broker does. ⚠️ **A refusal is never parked on**: an
+  error a client can act on is not worth holding for half a second. ⚠️ **The
+  park is capped at 60 s** whatever the client asks for — `max_wait_ms` is an
+  `i32`, and a connection held for twenty-four days outlives the topic.
 - **`max_bytes` is not honoured.** Both the request-level and per-partition
   fields are parsed and discarded; a fetch is bounded by a per-partition
   constant instead. `M3.22` owns the reader's byte budget.

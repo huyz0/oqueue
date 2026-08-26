@@ -26,10 +26,21 @@ use crate::wire::{Cursor, DecodeError, put_i16, put_i32, put_i64};
 /// The fields of a `Fetch` request this broker acts on.
 ///
 /// The isolation level and the per-topic, per-partition offsets requested.
-/// `max_wait_ms` and `min_bytes` are decoded past but not kept — the stub
-/// answers immediately.
+/// ⚠️ ~~`max_wait_ms` and `min_bytes` are decoded past but not kept~~ — **kept
+/// since `M3.20`**, the commit that gave the broker something to wait *on*.
+/// They were skipped while nothing could park, which is a different thing from
+/// their not being on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FetchRequest<'a> {
+    /// How long the broker may hold this request waiting for records, in
+    /// milliseconds. ⚠️ **The client's number, and the broker's whole timer.**
+    /// `M3.20` wires it to a park on the coordinator's index; a broker that
+    /// substituted a poll interval of its own would turn one wakeup into a
+    /// choice between latency and wasted work.
+    pub max_wait_ms: i32,
+    /// How many bytes must accumulate before the broker answers early. A fetch
+    /// holds until this is met or `max_wait_ms` expires, whichever is first.
+    pub min_bytes: i32,
     /// `0` = read uncommitted, `1` = read committed.
     pub isolation_level: i8,
     /// The topics fetched from.
@@ -72,8 +83,8 @@ pub fn decode_request(body: &[u8], version: i16) -> Result<FetchRequest<'_>, Dec
     if version <= 14 {
         let _replica_id = cur.read_i32()?;
     }
-    let _max_wait_ms = cur.read_i32()?;
-    let _min_bytes = cur.read_i32()?;
+    let max_wait_ms = cur.read_i32()?;
+    let min_bytes = cur.read_i32()?;
     let _max_bytes = cur.read_i32()?;
     let isolation_level = cur.read_i8()?;
     if version >= 7 {
@@ -101,6 +112,8 @@ pub fn decode_request(body: &[u8], version: i16) -> Result<FetchRequest<'_>, Dec
     }
 
     Ok(FetchRequest {
+        max_wait_ms,
+        min_bytes,
         isolation_level,
         topics,
     })

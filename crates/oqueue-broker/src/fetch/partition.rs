@@ -26,7 +26,7 @@ use oqueue_core::{Offset, PartitionId, TopicId};
 ///
 /// ⚠️ It bounds what `find_batches` can **price**, not what this handler will
 /// spend — `ADR-0022`. The reader's own budget is the other half of `M3.22`.
-const READ_BUDGET_BYTES: u64 = 1024 * 1024;
+pub(crate) const READ_BUDGET_BYTES: u64 = 1024 * 1024;
 
 /// One partition's outcome, owned so the borrowed [`FetchResponsePartition`]
 /// can point into the concatenated batch bytes.
@@ -144,7 +144,7 @@ mod tests {
         produce_one(&fixture, "t", golden_batch()).await;
         fixture.break_store(4);
 
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(hosted(&fixture)), 0, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 0, 0)).await;
 
         let p = &response.responses[0].partitions[0];
         assert_eq!(
@@ -198,7 +198,7 @@ mod tests {
         let fixture = produced().await;
         let before = fixture.store.counts().count(Operation::Get);
 
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(hosted(&fixture)), 2, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 2, 0)).await;
 
         let p = &response.responses[0].partitions[0];
         assert_eq!(p.error_code, 0);

@@ -73,6 +73,26 @@ impl Fixture {
     ///
     /// ⚠️ **Nothing lands.** The call fails before the write — which is what
     /// [`lose_the_next_ack`](Self::lose_the_next_ack) is the other half of.
+    /// Makes every store call pend `polls` times before resolving.
+    ///
+    /// ⚠️ **A read that takes real time, deterministically.** `read_all` awaits
+    /// object-storage GETs, so a commit can land *during* it — and whether the
+    /// handler notices depends on sampling its baseline before the read rather
+    /// than after. Nothing else in the suite can hold a read open long enough
+    /// for that window to exist. The fake self-wakes on each `Pending`, so this
+    /// costs polls rather than wall-clock.
+    pub(crate) fn slow_store(&self, polls: u32) {
+        self.store.inner().set_faults(FaultConfig {
+            latency_polls: polls,
+            ..FaultConfig::default()
+        });
+    }
+
+    /// Puts the store back to answering immediately.
+    pub(crate) fn heal_store(&self) {
+        self.store.inner().set_faults(FaultConfig::default());
+    }
+
     pub(crate) fn break_store(&self, calls: u32) {
         self.store.inner().set_faults(FaultConfig {
             storm: Some((StormKind::Transient, calls)),

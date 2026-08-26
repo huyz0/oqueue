@@ -184,3 +184,86 @@ async fn an_ack_hands_back_a_watermark_the_cache_can_be_asked_about() {
     drop(coordinator);
     driver.await.expect("the loop ends");
 }
+
+/// ⚠️ **What a long-poll fetch waits on**, and it is a different question from
+/// [`IndexWatch::wait_for`]'s. A fetch at the high watermark cannot name the
+/// version it is waiting for — it wants whatever comes next — so `wait_past`
+/// takes what the caller has already seen and resolves on anything beyond it.
+#[tokio::test(start_paused = true)]
+async fn a_wait_past_resolves_on_the_next_commit_whatever_it_turns_out_to_be() {
+    let (coordinator, _index, driver) = start_indexed().await;
+    let mut watch = coordinator.watch();
+    assert_eq!(watch.applied(), None, "nothing folded yet");
+
+    let waiter = {
+        let mut watch = coordinator.watch();
+        tokio::spawn(async move { watch.wait_past(None).await })
+    };
+    tokio::task::yield_now().await;
+    assert!(!waiter.is_finished(), "nothing has been committed yet");
+
+    coordinator
+        .commit(object(0), vec![span(1)])
+        .await
+        .expect("the commit lands");
+
+    assert!(
+        waiter.await.expect("the waiter joins"),
+        "woken by the commit"
+    );
+    assert!(parked(watch.wait_past(None)).await);
+    assert_eq!(watch.applied(), Some(CommitVersion::ZERO));
+
+    drop(coordinator);
+    driver.await.expect("the loop ends");
+}
+
+/// ⚠️ **Strictly past, not "at least".** A caller hands in what it has already
+/// seen; resolving on that same version would wake a fetch that has nothing
+/// new to read, and a handler that re-parked immediately would spin.
+#[tokio::test(start_paused = true)]
+async fn a_wait_past_the_version_already_seen_does_not_resolve_on_it() {
+    let (coordinator, _index, driver) = start_indexed().await;
+    coordinator
+        .commit(object(0), vec![span(1)])
+        .await
+        .expect("the first commit lands");
+    let watch = coordinator.watch();
+    let seen = watch.applied().expect("something was folded");
+
+    let waiter = {
+        let mut watch = coordinator.watch();
+        tokio::spawn(async move { watch.wait_past(Some(seen)).await })
+    };
+    tokio::task::yield_now().await;
+    assert!(
+        !waiter.is_finished(),
+        "the version it has already seen must not wake it"
+    );
+
+    coordinator
+        .commit(object(1), vec![span(1)])
+        .await
+        .expect("the second commit lands");
+
+    assert!(parked(waiter).await.expect("the waiter joins"));
+    assert_eq!(watch.applied(), Some(CommitVersion::new(1)));
+
+    drop(coordinator);
+    driver.await.expect("the loop ends");
+}
+
+/// ⚠️ **A dead coordinator answers `false` rather than parking forever**, the
+/// same way [`IndexWatch::wait_for`] does and for the same reason: a fetch
+/// answers from what the index already holds rather than waiting out a
+/// deadline nothing can satisfy.
+#[tokio::test(start_paused = true)]
+async fn a_wait_past_a_stopped_coordinator_reports_that_nothing_arrived() {
+    let (coordinator, _index, driver) = start_indexed().await;
+    let mut watch = coordinator.watch();
+    drop(coordinator);
+    driver.await.expect("the loop ends");
+
+    assert!(!parked(watch.wait_past(None)).await);
+    assert!(!parked(watch.wait_past(Some(CommitVersion::ZERO))).await);
+}

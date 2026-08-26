@@ -147,4 +147,40 @@ impl IndexWatch {
             .await
             .is_ok()
     }
+
+    /// Waits until the index has folded anything at all past `applied`.
+    ///
+    /// ⚠️ **What a long-poll fetch waits on, and it is not
+    /// [`wait_for`](Self::wait_for).** A fetch at the high watermark is not
+    /// waiting for a version it can name — it is waiting for the *next* one,
+    /// whatever that turns out to be, and a client's `fetch.max.wait.ms` is
+    /// the only bound on how long. `M3.md` task 17: the wakeup costs about a
+    /// millisecond and introduces no new semantics, because the deadline stays
+    /// the caller's.
+    ///
+    /// ⚠️ **It may wake for a partition the caller does not care about.** One
+    /// index serves every partition on a shard, so a delta for any of them
+    /// resolves this; the caller re-reads, finds nothing, and parks again
+    /// against its own remaining deadline. That is a wasted wakeup, never a
+    /// wrong answer — and it is what a per-partition condition would trade for
+    /// a watch per partition.
+    ///
+    /// ⚠️ **Cancellation-safe**, for the same reason
+    /// [`wait_for`](Self::wait_for) is: the watch is level-triggered, so a
+    /// dropped wait loses no edge.
+    ///
+    /// Returns `false` if the coordinator stopped, so a parked fetch answers
+    /// from what the index already holds rather than waiting out a deadline
+    /// nothing can satisfy.
+    pub async fn wait_past(&mut self, applied: Option<CommitVersion>) -> bool {
+        self.applied
+            .wait_for(|current| match (current, applied) {
+                // Anything at all is past "nothing folded yet".
+                (Some(_), None) => true,
+                (Some(current), Some(applied)) => *current > applied,
+                (None, _) => false,
+            })
+            .await
+            .is_ok()
+    }
 }

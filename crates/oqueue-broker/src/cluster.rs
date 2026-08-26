@@ -197,6 +197,18 @@ impl Cluster {
         true
     }
 
+    /// How far this shard's index has folded, and a way to park until it
+    /// folds further.
+    ///
+    /// ⚠️ **What a long-poll fetch waits on** (`M3.20`, `M3.md` task 17). One
+    /// watch serves every partition, so a wakeup is "something committed", not
+    /// "your partition committed" — the caller re-reads and parks again if it
+    /// was not theirs.
+    #[must_use]
+    pub fn watch(&self) -> oqueue_coordinator::IndexWatch {
+        self.coordinator.watch()
+    }
+
     /// Where the next record for this partition lands — its high watermark,
     /// derived from the index and settable by nobody (`M3.md` task 13).
     #[must_use]

@@ -29,7 +29,14 @@ oqueue-broker = { path = "../../oqueue-broker" }
 # not compile it, and `M3.14`'s review found it broken for exactly that reason.
 oqueue-coordinator = { path = "../../oqueue-coordinator" }
 oqueue-core = { path = "../../oqueue-core" }
-tokio = { version = "1", features = ["rt", "macros"] }
+# ⚠️ `time` because the fetch handler parks (`M3.20`): `sleep_until` panics on
+# a runtime without timers, which this target found the moment the park landed.
+# ⚠️ And `test-util` for `start_paused`, because the park's *duration* is
+# input-controlled: a fuzzer generating `max_wait_ms = 60000` would sleep a real
+# minute per input and never finish a run. Paused time makes the deadline fire
+# as soon as nothing else can progress, which for a target with no concurrent
+# producer is immediately -- so the park is exercised rather than waited out.
+tokio = { version = "1", features = ["rt", "macros", "time", "test-util"] }
 
 [[bin]]
 name = "frame"

@@ -41,6 +41,11 @@ pub struct ConnectionLimits {
     /// The longest any single peer-facing wait may take — between frames,
     /// mid-frame, or writing a response. Kafka's own
     /// `connections.max.idle.ms` shape; a slowloris peer ends here.
+    /// ⚠️ **Must exceed [`MAX_PARK_MS`](crate::MAX_PARK_MS).** A client that
+    /// sends one `Fetch` and waits for the answer sends nothing while the
+    /// broker parks it, so the connection looks idle for the whole park. A
+    /// shorter timeout here tears it down mid-poll: the reply is still
+    /// written, and then the peer is disconnected after every long poll.
     pub idle_timeout: std::time::Duration,
 }
 

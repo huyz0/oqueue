@@ -18,13 +18,17 @@
 //! Sessions (KIP-227) are declined, which a broker may always do: every
 //! response carries `session_id` 0, so clients fall back to full fetches.
 //!
-//! ⚠️ **`max_wait_ms` and `min_bytes` are still parsed and ignored**, and that
-//! is `M3.20`'s row rather than an oversight: `Coordinator::watch` is the park
-//! to `select!` against, and wiring it is a change to this handler's control
-//! flow that its own row owns. Until then a fetch answers immediately, empty
-//! or not — a poll loop that spins where it should park, never a wrong answer.
+//! ⚠️ ~~**`max_wait_ms` and `min_bytes` are still parsed and ignored**~~ —
+//! **wired at `M3.20`** (`M3.md` task 17). A fetch with nothing to return
+//! parks on the coordinator's index rather than answering empty, so a consumer
+//! polling an idle partition costs one wakeup instead of a request per
+//! interval, and a fetch racing a concurrent produce sees it. ⚠️ **No new
+//! semantics**: the deadline is the client's `max_wait_ms` and the timer is
+//! the client's too — the broker contributes a wakeup, not a poll interval.
 
+mod park;
 mod partition;
+mod target;
 
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
@@ -34,6 +38,8 @@ use oqueue_codec::fetch::{
     FetchResponse, FetchResponsePartition, FetchResponseTopic, decode_request,
 };
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
+pub use park::MAX_PARK_MS;
+use park::read_or_park;
 use partition::{PartitionOutcome, one_partition};
 
 /// One topic's response, owned so the borrowed [`FetchResponseTopic`] can
@@ -63,10 +69,7 @@ pub(crate) async fn handle(
         return HandlerResponse::Close;
     }
 
-    let mut outcomes: Vec<TopicOutcome> = Vec::with_capacity(request.topics.len());
-    for topic in &request.topics {
-        outcomes.push(one_topic(cluster, topic, version).await);
-    }
+    let outcomes = read_or_park(cluster, &request, version).await;
 
     let response = FetchResponse {
         topics: outcomes
@@ -100,6 +103,22 @@ pub(crate) async fn handle(
     HandlerResponse::Reply(out)
 }
 
+/// The topic this entry names, whichever way this version addresses topics.
+///
+/// From v13 the wire carries an id and this resolves it against the registry;
+/// below that it carries the name itself.
+fn resolved_name(
+    cluster: &Cluster,
+    topic: &oqueue_codec::fetch::FetchTopic<'_>,
+    version: i16,
+) -> Option<String> {
+    if version >= 13 {
+        cluster.topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id))
+    } else {
+        topic.name.map(str::to_owned)
+    }
+}
+
 /// One topic's outcome: resolve its addressing, then every partition.
 async fn one_topic(
     cluster: &Cluster,
@@ -108,14 +127,14 @@ async fn one_topic(
 ) -> TopicOutcome {
     // From v13 the wire addresses topics by id — same split as produce:
     // echo what this version carries, resolve the rest.
-    let (name, resolved_name) = if version >= 13 {
-        (
-            None,
-            cluster.topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id)),
-        )
+    // ⚠️ At v13 the wire carries no name to echo, so the response repeats the
+    // id and the name is resolved only to find the partition.
+    let name = if version >= 13 {
+        None
     } else {
-        (topic.name.map(str::to_owned), topic.name.map(str::to_owned))
+        topic.name.map(str::to_owned)
     };
+    let resolved_name = resolved_name(cluster, topic, version);
     // An id this broker never issued has its own error (100); a name it
     // does not host stays UNKNOWN_TOPIC_OR_PARTITION, matching what real
     // brokers answer on each addressing path.
@@ -157,14 +176,69 @@ pub(crate) mod tests {
     use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
     use oqueue_codec::frame::RequestPrelude;
 
+    /// ⚠️ **`max_wait_ms` of zero**, so every case using this asserts the
+    /// *immediate* answer and none of them sleeps. The park has its own tests
+    /// under `start_paused`; a suite where each fetch case waited half a second
+    /// would be one nobody runs (`testing.md`'s budget).
     pub(crate) fn fetch_body(
         version: i16,
         t: FetchTopic,
         fetch_offset: i64,
         isolation: i8,
     ) -> Vec<u8> {
+        hungry_fetch_body(
+            version,
+            t,
+            fetch_offset,
+            isolation,
+            Poll {
+                max_wait_ms: 0,
+                min_bytes: 1,
+            },
+        )
+    }
+
+    /// The same, with the client's `max_wait_ms` chosen and `min_bytes` at
+    /// **1** — every real client's default, and the value that makes a park
+    /// happen at all. ⚠️ `min_bytes = 0` means "answer now, empty is fine",
+    /// which `hungry_fetch_body` and its own test cover.
+    pub(crate) fn waiting_fetch_body(
+        version: i16,
+        t: FetchTopic,
+        fetch_offset: i64,
+        isolation: i8,
+        max_wait_ms: i32,
+    ) -> Vec<u8> {
+        hungry_fetch_body(
+            version,
+            t,
+            fetch_offset,
+            isolation,
+            Poll {
+                max_wait_ms,
+                min_bytes: 1,
+            },
+        )
+    }
+
+    /// What a client asks the broker to wait for.
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) struct Poll {
+        pub(crate) max_wait_ms: i32,
+        pub(crate) min_bytes: i32,
+    }
+
+    /// The same again, with the whole long-poll shape chosen.
+    pub(crate) fn hungry_fetch_body(
+        version: i16,
+        t: FetchTopic,
+        fetch_offset: i64,
+        isolation: i8,
+        poll: Poll,
+    ) -> Vec<u8> {
         let mut request = FetchRequest::default();
-        request.max_wait_ms = 500;
+        request.max_wait_ms = poll.max_wait_ms;
+        request.min_bytes = poll.min_bytes;
         request.isolation_level = isolation;
         let mut t = t;
         let mut p = FetchPartition::default();
@@ -184,13 +258,18 @@ pub(crate) mod tests {
         t
     }
 
-    pub(crate) fn by_id(id: uuid::Uuid) -> FetchTopic {
+    /// The topic this fixture hosts, addressed by id.
+    pub(crate) fn by_id(fixture: &Fixture) -> FetchTopic {
+        by_id_of(hosted(fixture))
+    }
+
+    pub(crate) fn by_id_of(id: uuid::Uuid) -> FetchTopic {
         let mut t = FetchTopic::default();
         t.topic_id = id;
         t
     }
 
-    fn prelude(version: i16) -> RequestPrelude {
+    pub(crate) fn prelude(version: i16) -> RequestPrelude {
         RequestPrelude {
             api_key: 1,
             api_version: version,
@@ -198,7 +277,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn decode(bytes: &[u8], version: i16) -> FetchResponse {
+    pub(crate) fn decode(bytes: &[u8], version: i16) -> FetchResponse {
         // Fetch goes flexible (tagged response header) at v12.
         let header_len = if version >= 12 { 5 } else { 4 };
         let mut rest = &bytes[header_len..];
@@ -233,7 +312,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_fetch_from_zero_returns_the_batch_and_the_derived_watermark() {
         let fixture = produced().await;
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(hosted(&fixture)), 0, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 0, 0)).await;
         let p = &response.responses[0].partitions[0];
         assert_eq!(p.error_code, 0);
         assert_eq!(p.high_watermark, 2, "two records were produced");
@@ -255,7 +334,7 @@ pub(crate) mod tests {
         produce_one(&fixture, "t", golden_batch()).await;
         produce_one(&fixture, "t", golden_batch()).await;
 
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(hosted(&fixture)), 2, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 2, 0)).await;
 
         let records = response.responses[0].partitions[0]
             .records
@@ -274,12 +353,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn an_offset_past_the_watermark_is_out_of_range_with_the_real_watermark() {
         let fixture = produced().await;
-        let response = replied(
-            &fixture,
-            13,
-            &fetch_body(13, by_id(hosted(&fixture)), 99, 0),
-        )
-        .await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 99, 0)).await;
         let p = &response.responses[0].partitions[0];
         assert_eq!(
             p.error_code,
@@ -297,7 +371,7 @@ pub(crate) mod tests {
             kafka_protocol::error::ResponseError::UnknownTopicOrPartition.code()
         );
         let ghost = uuid::Uuid::from_u128(0xBEEF);
-        let by_id_response = replied(&fixture, 13, &fetch_body(13, by_id(ghost), 0, 0)).await;
+        let by_id_response = replied(&fixture, 13, &fetch_body(13, by_id_of(ghost), 0, 0)).await;
         assert_eq!(
             by_id_response.responses[0].partitions[0].error_code,
             kafka_protocol::error::ResponseError::UnknownTopicId.code(),
@@ -312,7 +386,7 @@ pub(crate) mod tests {
             handle(
                 &fixture.cluster,
                 prelude(13),
-                &fetch_body(13, by_id(hosted(&fixture)), 0, 7)
+                &fetch_body(13, by_id(&fixture), 0, 7)
             )
             .await,
             HandlerResponse::Close

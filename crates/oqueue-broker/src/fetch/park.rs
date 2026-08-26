@@ -1,0 +1,495 @@
+//! The park: how long a `Fetch` waits, and what makes it worth answering.
+//!
+//! ⚠️ **Its own module because waiting is a different question from
+//! answering.** `mod.rs` walks a request and shapes a response; everything
+//! here is about *when* — the client's deadline, the byte target it named, and
+//! the one wakeup the broker contributes instead of a poll interval of its own
+//! (`M3.md` task 17).
+//!
+//! ⚠️ **The cost argument lives here too.** One watch serves every partition
+//! on a shard, so most wakeups belong to somebody else's commit — and a
+//! handler that re-read on every one of them would turn a single parked fetch
+//! into an object-storage read per shard commit, each of which can be a
+//! whole-object GET on the history tier. A client's own request rate would
+//! stop bounding the broker's read volume. Watermarks are checked first
+//! because they are index lookups.
+
+// ⚠️ `pub(crate)` inside a private module: `unreachable_pub` denies the `pub`
+// clippy's `redundant_pub_crate` asks for.
+#![allow(clippy::redundant_pub_crate)]
+
+use super::target::{MAX_READS_PER_REQUEST, satisfiable_min_bytes, worth_answering};
+use super::{TopicOutcome, one_topic, resolved_name};
+use crate::cluster::Cluster;
+use oqueue_core::{PartitionId, TopicId};
+use std::time::Duration;
+use tokio::time::Instant;
+
+/// Reads every requested partition, parking until the request is worth
+/// answering or its own deadline expires.
+///
+/// ⚠️ **The deadline is the client's and so is the clock.** `M3.md` task 17
+/// asks for the wakeup to cost about a millisecond and to introduce no new
+/// semantics; a poll interval of the broker's own would be a new semantic and
+/// a worse one, so what this waits on is the coordinator's index advancing.
+///
+/// ⚠️ **Re-read after every wakeup, never patched.** One index serves every
+/// partition on a shard, so a wakeup may be for a partition this request never
+/// asked about — the only way to know is to look again, and looking again is
+/// cheap precisely because a fetch at the watermark issues no GETs.
+///
+/// ⚠️ **`min_bytes` is met by the *whole response*, not per partition** —
+/// which is what the protocol says and what a client sizing one round trip
+/// expects. A refusal counts as worth answering however few bytes it carries:
+/// holding an `UNKNOWN_TOPIC_ID` for half a second would delay the error a
+/// client needs to act on.
+pub(crate) async fn read_or_park(
+    cluster: &Cluster,
+    request: &oqueue_codec::fetch::FetchRequest<'_>,
+    version: i16,
+) -> Vec<TopicOutcome> {
+    // ⚠️ **A request naming nothing is answered, not parked on.** There is no
+    // partition whose commit could satisfy it, so waiting is waiting for
+    // something that cannot happen — Kafka's own broker short-circuits the
+    // same case.
+    if request
+        .topics
+        .iter()
+        .all(|topic| topic.partitions.is_empty())
+    {
+        return Vec::new();
+    }
+    let mut watch = cluster.watch();
+    let deadline = Instant::now() + Duration::from_millis(park_ms(request.max_wait_ms));
+    let target = satisfiable_min_bytes(request.min_bytes);
+    // ⚠️ Counted up rather than down from a decremented ceiling: the bound is
+    // "this many reads", and the test below pins that number exactly.
+    let mut reads: u32 = 0;
+    loop {
+        // ⚠️ **Both samples come *before* the read, and that ordering is the
+        // whole correctness of the park.** `read_all` awaits object-storage
+        // GETs, so it can take tens of milliseconds; a commit landing during
+        // it would, if the baseline were taken afterwards, already be *in* the
+        // baseline — no watermark difference to notice and no version left for
+        // `wait_past` to resolve on. The fetch would park on outcomes read
+        // before the commit and answer empty at its deadline, for a record
+        // that was in the index the whole time.
+        let before = watermarks(cluster, request, version);
+        let mut applied = watch.applied();
+        let outcomes = read_all(cluster, request, version).await;
+        reads += 1;
+        if worth_answering(&outcomes, target)
+            || reads >= MAX_READS_PER_REQUEST
+            || Instant::now() >= deadline
+        {
+            return outcomes;
+        }
+        // ⚠️ **Park until a partition *this request named* moves.** One watch
+        // serves every partition on a shard, so most wakeups are somebody
+        // else's commit, and re-reading on those would turn one parked fetch
+        // into an object-storage read per shard commit. A watermark is an
+        // index lookup and touches no store.
+        loop {
+            // ⚠️ `select!`, so the deadline is honoured whatever the index
+            // does — and `false` from the watch means the coordinator stopped,
+            // which is answered from what the index already holds rather than
+            // waited out.
+            let alive = tokio::select! {
+                () = tokio::time::sleep_until(deadline) => false,
+                alive = watch.wait_past(applied) => alive,
+            };
+            if !alive {
+                return outcomes;
+            }
+            applied = watch.applied();
+            if watermarks(cluster, request, version) != before {
+                break;
+            }
+        }
+    }
+}
+
+/// Every requested partition, read once.
+async fn read_all(
+    cluster: &Cluster,
+    request: &oqueue_codec::fetch::FetchRequest<'_>,
+    version: i16,
+) -> Vec<TopicOutcome> {
+    let mut outcomes: Vec<TopicOutcome> = Vec::with_capacity(request.topics.len());
+    for topic in &request.topics {
+        outcomes.push(one_topic(cluster, topic, version).await);
+    }
+    outcomes
+}
+
+/// Where each requested partition's log currently ends.
+///
+/// ⚠️ **The cheap half of a re-read.** Every entry here is an index lookup, so
+/// asking after every wakeup costs nothing an idle shard would notice — which
+/// is what lets the expensive half happen only when something moved.
+fn watermarks(
+    cluster: &Cluster,
+    request: &oqueue_codec::fetch::FetchRequest<'_>,
+    version: i16,
+) -> Vec<i64> {
+    let mut ends = Vec::new();
+    for topic in &request.topics {
+        let name = resolved_name(cluster, topic, version);
+        for partition in &topic.partitions {
+            // ⚠️ **Unresolvable entries are skipped, not given a sentinel.** A
+            // topic this broker does not host is a refusal, and a refusal is
+            // answered rather than parked on — so nothing here can be waiting
+            // on one, and a sentinel would only be a value nothing compares.
+            // Skipping is stable across a park because topics are never
+            // removed, so the two vectors line up.
+            if let Some(pair) = name
+                .as_deref()
+                .and_then(|name| TopicId::new(name.to_owned()).ok())
+                .zip(PartitionId::new(partition.index).ok())
+            {
+                ends.push(cluster.high_watermark(&pair.0, pair.1).get());
+            }
+        }
+    }
+    ends
+}
+
+/// How long to park, from what the client asked for.
+///
+/// ⚠️ **Clamped at both ends.** A negative `max_wait_ms` is a client bug and
+/// becomes no park at all rather than an arithmetic surprise; anything above
+/// [`MAX_PARK_MS`] becomes that ceiling.
+fn park_ms(max_wait_ms: i32) -> u64 {
+    u64::from(max_wait_ms.clamp(0, MAX_PARK_MS).unsigned_abs())
+}
+
+/// The longest a fetch may be parked, whatever the client asks for.
+///
+/// ⚠️ **A ceiling on a client's number, which is the one place a broker gets
+/// to disagree with it.** `max_wait_ms` is an `i32`, so a client may name
+/// twenty-four days; a connection held that long survives the topic it was
+/// reading. Kafka's own default is 500 ms and librdkafka's is 100 ms, so a
+/// minute is far above anything a real client asks for and far below anything
+/// that looks like a leak.
+///
+/// ⚠️ **It must stay below whatever [`ConnectionLimits::idle_timeout`] a
+/// composer chooses**, and that is a real constraint rather than a
+/// preference: a client that sends one `Fetch` and waits for the answer sends
+/// nothing while it is parked, so the connection looks idle for the whole
+/// park. A shorter idle timeout tears the connection down mid-poll — the
+/// answer is still written, and then the peer is disconnected after every long
+/// poll. `bin/oqueue` picks 120 s against this 60 s, and its own test says so.
+///
+/// [`ConnectionLimits::idle_timeout`]: crate::ConnectionLimits::idle_timeout
+pub const MAX_PARK_MS: i32 = 60_000;
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::MAX_READS_PER_REQUEST;
+    use crate::connection::HandlerResponse;
+    use crate::fetch::handle;
+    use crate::fetch::tests::{
+        Poll, by_id, by_id_of, decode, hungry_fetch_body, prelude, produced, replied,
+        waiting_fetch_body,
+    };
+    use crate::testing::{Fixture, fixture, golden_batch, produce_one};
+    use oqueue_core::Operation;
+
+    /// A `Fetch` in flight on its own task, so the test can commit underneath
+    /// it.
+    ///
+    /// ⚠️ **The `Arc` is why this exists**: the handler borrows the cluster for
+    /// as long as it is parked, so a spawned reader needs a share of it, and
+    /// three tests were repeating the same six lines to get one.
+    fn parked_reader(
+        fixture: &std::sync::Arc<Fixture>,
+        body: Vec<u8>,
+    ) -> tokio::task::JoinHandle<kafka_protocol::messages::FetchResponse> {
+        let fixture = std::sync::Arc::clone(fixture);
+        tokio::spawn(async move {
+            let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude(13), &body).await
+            else {
+                panic!("a fetch replies");
+            };
+            decode(&out, 13)
+        })
+    }
+
+    /// ⚠️ **FR-12 and NFR-2: a fetch with nothing to return parks, and a
+    /// produce wakes it.** This is the end-to-end case `M3.9` built
+    /// `IndexWatch` for and could not write for want of a composer. Under
+    /// `start_paused` the fetch cannot succeed by luck: nothing advances the
+    /// clock but the runtime, and the only thing that resolves the park is the
+    /// commit.
+    #[tokio::test(start_paused = true)]
+    async fn a_parked_fetch_is_woken_by_a_concurrent_produce() {
+        let fixture = std::sync::Arc::new(fixture(&["t"]).await);
+        let id = fixture.cluster.topic_id("t").expect("the fixture's topic");
+        let body = waiting_fetch_body(13, by_id_of(id), 0, 0, 30_000);
+        let started = tokio::time::Instant::now();
+
+        let reader = parked_reader(&fixture, body);
+
+        // ⚠️ Let the fetch reach its park before producing, so this asserts the
+        // wakeup rather than a race the reader happened to win.
+        tokio::task::yield_now().await;
+        assert!(
+            !reader.is_finished(),
+            "the fetch must be parked, not answered"
+        );
+        produce_one(&fixture, "t", golden_batch()).await;
+
+        let response = reader.await.expect("the reader task joins");
+        // ⚠️ **Before the deadline, and that is a separate claim.** Under
+        // paused time a fetch that woke, decided its records were not worth
+        // answering, and parked again would still return — thirty seconds
+        // later, with the same bytes. Only the elapsed time separates "woken
+        // by the produce" from "waited the client out and happened to have
+        // records by then".
+        assert!(
+            tokio::time::Instant::now() - started < std::time::Duration::from_secs(30),
+            "it must have answered on the wakeup, not on the deadline"
+        );
+        let p = &response.responses[0].partitions[0];
+        assert_eq!(p.error_code, 0);
+        assert_eq!(p.high_watermark, 2, "the produce it was woken by");
+        assert!(
+            p.records.as_ref().is_some_and(|r| !r.is_empty()),
+            "woken, and with the records — not woken and empty"
+        );
+    }
+
+    /// ⚠️ **A parked fetch does not re-read when somebody else commits.**
+    /// One watch serves every partition on a shard, so most wakeups are for
+    /// another partition — and re-reading on those would turn one parked fetch
+    /// into an object-storage read per shard commit, each of which can cost a
+    /// whole-object GET. A watermark is an index lookup; the read is what must
+    /// not happen.
+    ///
+    /// ⚠️ **The parked partition holds records on purpose.** A fetch parked at
+    /// an *empty* partition reads nothing whatever the gate does (FR-12's
+    /// zero-GET claim), so the assertion below would hold with the gate
+    /// deleted — a regression test that cannot fail. Producing first, and
+    /// asking for more bytes than are there, makes every read cost a GET, so
+    /// a re-read is visible.
+    #[tokio::test(start_paused = true)]
+    async fn a_park_woken_by_another_partitions_commit_does_not_re_read() {
+        let fixture = std::sync::Arc::new(fixture(&["mine", "theirs"]).await);
+        produce_one(&fixture, "mine", golden_batch()).await;
+        let id = fixture.cluster.topic_id("mine").expect("a hosted topic");
+        let body = hungry_fetch_body(
+            13,
+            by_id_of(id),
+            0,
+            0,
+            Poll {
+                max_wait_ms: 30_000,
+                // Far more than one batch, so the read costs a GET and still
+                // leaves the request parked.
+                min_bytes: 64 * 1024,
+            },
+        );
+        let reader = parked_reader(&fixture, body);
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        assert!(!reader.is_finished(), "parked, short of its minimum");
+        let quiet = fixture.store.counts().count(Operation::Get);
+        assert!(
+            quiet > 0,
+            "the first read must have cost a GET to be evidence"
+        );
+
+        for _ in 0..5 {
+            produce_one(&fixture, "theirs", golden_batch()).await;
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+
+        assert!(
+            !reader.is_finished(),
+            "another topic's records are not this one's"
+        );
+        assert_eq!(
+            fixture.store.counts().count(Operation::Get),
+            quiet,
+            "five wakeups for another partition must cost this fetch no reads"
+        );
+
+        // And its own commit does re-read: the gate is a filter, not a wall.
+        produce_one(&fixture, "mine", golden_batch()).await;
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        assert!(
+            fixture.store.counts().count(Operation::Get) > quiet,
+            "a commit to the fetched partition must be read"
+        );
+
+        let response = reader.await.expect("the reader joins");
+        assert_eq!(response.responses[0].partitions[0].error_code, 0);
+    }
+
+    /// ⚠️ **A commit landing *during* the read is not lost.** `read_all` awaits
+    /// object-storage GETs, so it takes real time, and a produce can commit
+    /// while it runs. If the handler sampled its watermark baseline and its
+    /// watch version *after* the read, that commit would already be in the
+    /// baseline: no watermark difference to notice, and no version left for
+    /// `wait_past` to resolve on. The fetch would park on outcomes read before
+    /// the commit and answer at its deadline missing a record that was in the
+    /// index the whole time.
+    #[tokio::test(start_paused = true)]
+    async fn a_commit_that_lands_during_the_read_is_not_folded_into_the_baseline() {
+        let fixture = std::sync::Arc::new(fixture(&["t"]).await);
+        produce_one(&fixture, "t", golden_batch()).await;
+        let id = fixture.cluster.topic_id("t").expect("a hosted topic");
+        let body = hungry_fetch_body(
+            13,
+            by_id_of(id),
+            0,
+            0,
+            Poll {
+                max_wait_ms: 30_000,
+                // Above one batch, so the first read leaves the fetch parked.
+                min_bytes: 64 * 1024,
+            },
+        );
+        // ⚠️ Enough polls that the read is still open across everything the
+        // produce below awaits — the window this test exists to put a commit
+        // inside.
+        fixture.slow_store(5_000);
+        let reader = parked_reader(&fixture, body);
+        tokio::task::yield_now().await;
+        assert!(
+            fixture.store.counts().count(Operation::Get) > 0,
+            "the reader must be inside its read for this to be the window"
+        );
+        // ⚠️ **Healed *before* the produce, and the order is the whole
+        // fixture.** The pending GET keeps the poll count it was created with,
+        // so it stays open; the produce below runs at full speed and commits
+        // while it is still open. Healing afterwards instead would slow the
+        // produce down too, and the commit would land after the read finished
+        // — which is the ordinary case this test is not about.
+        fixture.heal_store();
+
+        produce_one(&fixture, "t", golden_batch()).await;
+
+        // ⚠️ **The answer still comes at the deadline, and that is correct**:
+        // `min_bytes` is never met, so the fetch waits its full `max_wait_ms`
+        // either way. What the commit must change is the *content* — which is
+        // why the assertions below are about what came back and not about
+        // when.
+
+        let response = reader.await.expect("the reader joins");
+        let p = &response.responses[0].partitions[0];
+        assert_eq!(p.error_code, 0);
+        assert_eq!(
+            p.high_watermark, 4,
+            "both produces are in the index by the time it answers"
+        );
+        let records = p.records.as_ref().expect("records");
+        let first = oqueue_codec::batch::decode_batch_header(records).expect("a batch");
+        let len = usize::try_from(first.batch_length).expect("small") + 12;
+        assert!(
+            records.len() > len,
+            "the second batch must be in the answer, not only the first"
+        );
+    }
+
+    /// ⚠️ **One request cannot be turned into unbounded reads by somebody
+    /// else's writes.** A `min_bytes` a page can never reach leaves the fetch
+    /// parked, and every commit to its own partition is a legitimate wakeup —
+    /// so without a cap the read count is set by the producer's rate rather
+    /// than by the consumer that asked. `MAX_READS_PER_REQUEST` is the cap.
+    #[tokio::test(start_paused = true)]
+    async fn a_request_reads_a_bounded_number_of_times_however_much_is_committed() {
+        let fixture = std::sync::Arc::new(fixture(&["t"]).await);
+        produce_one(&fixture, "t", golden_batch()).await;
+        let id = fixture.cluster.topic_id("t").expect("a hosted topic");
+        let body = hungry_fetch_body(
+            13,
+            by_id_of(id),
+            0,
+            0,
+            Poll {
+                max_wait_ms: 30_000,
+                min_bytes: i32::MAX,
+            },
+        );
+        let reader = parked_reader(&fixture, body);
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+
+        // Twenty commits to the very partition being fetched: every one is a
+        // real wakeup with real new records, and the cap is what stops them
+        // becoming twenty reads.
+        for _ in 0..20 {
+            produce_one(&fixture, "t", golden_batch()).await;
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+
+        let response = reader.await.expect("the reader joins");
+        assert_eq!(response.responses[0].partitions[0].error_code, 0);
+        // ⚠️ **An exact count, not a bound.** Every batch is in the tail tier,
+        // so a read costs one GET per batch it names, and the reads happen at
+        // one, two, three and four batches — 1+2+3+4. A cap one higher would
+        // read a fifth time and cost 15; one lower would cost 6. A `<=` here
+        // would let the ceiling drift upward unnoticed, which is the whole
+        // thing this constant is for.
+        let expected: u64 = u64::from((1..=MAX_READS_PER_REQUEST).sum::<u32>());
+        assert_eq!(
+            fixture.store.counts().count(Operation::Get),
+            expected,
+            "exactly MAX_READS_PER_REQUEST reads, whatever the producer does"
+        );
+    }
+
+    /// ⚠️ **And the deadline is honoured when nothing comes.** A park that
+    /// outlived `max_wait_ms` would hold a connection for as long as the
+    /// partition stayed idle, which is a broker that never answers rather than
+    /// one that answers empty.
+    #[tokio::test(start_paused = true)]
+    async fn a_park_that_nothing_wakes_ends_at_the_clients_deadline() {
+        let fixture = produced().await;
+        let started = tokio::time::Instant::now();
+
+        let response = replied(
+            &fixture,
+            13,
+            &waiting_fetch_body(13, by_id(&fixture), 2, 0, 250),
+        )
+        .await;
+
+        let waited = tokio::time::Instant::now() - started;
+        assert!(
+            waited >= std::time::Duration::from_millis(250),
+            "it must actually have waited: {waited:?}"
+        );
+        let p = &response.responses[0].partitions[0];
+        assert_eq!(p.error_code, 0, "a deadline is not an error");
+        assert!(p.records.as_ref().is_none_or(bytes::Bytes::is_empty));
+    }
+
+    /// ⚠️ **A refusal is not parked on.** Holding an `UNKNOWN_TOPIC_ID` for the
+    /// client's whole deadline would delay an error it can act on immediately,
+    /// and no amount of waiting was ever going to turn it into records.
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_is_answered_at_once_however_long_the_client_would_wait() {
+        let fixture = fixture(&[]).await;
+        let ghost = uuid::Uuid::from_u128(0xBEEF);
+        let started = tokio::time::Instant::now();
+
+        let response = replied(
+            &fixture,
+            13,
+            &waiting_fetch_body(13, by_id_of(ghost), 0, 0, 30_000),
+        )
+        .await;
+
+        assert_eq!(
+            tokio::time::Instant::now() - started,
+            std::time::Duration::ZERO,
+            "an error must not be held"
+        );
+        assert_eq!(
+            response.responses[0].partitions[0].error_code,
+            kafka_protocol::error::ResponseError::UnknownTopicId.code()
+        );
+    }
+}

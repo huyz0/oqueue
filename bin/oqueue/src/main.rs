@@ -49,8 +49,11 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+mod serve;
+
 use oqueue_core::{KeyProvider, ObjectStore};
 use oqueue_crypto::NoOpKeyProvider;
+use serve::serve;
 use std::sync::Arc;
 
 /// The concrete choices this deployment runs with.
@@ -203,184 +206,6 @@ fn main() {
     }
 }
 
-/// Binds `addr` and serves the M2 protocol until killed.
-///
-/// ⚠️ The advertised identity is the bound address, verbatim — doc 02 §7.2's
-/// trap says identity must be decided, and for a single local stub the bound
-/// address is the honest choice: it is the one address a client can reach.
-fn serve(addr: &str, advertise: Option<&str>, wiring: &Wiring) {
-    // Sized for the harness, not for production: librdkafka's default
-    // `message.max.bytes` is 1 MiB, so 16 MiB clears every test frame;
-    // 64 in-flight matches its default per-connection pipelining ceiling;
-    // and 120 s outlives any harness pause without holding dead peers.
-    let limits = oqueue_broker::ConnectionLimits {
-        max_frame: 16 * 1024 * 1024,
-        max_in_flight: 64,
-        idle_timeout: std::time::Duration::from_mins(2),
-    };
-    let runtime = match tokio::runtime::Runtime::new() {
-        Ok(runtime) => runtime,
-        Err(error) => {
-            eprintln!("oqueue: runtime failed to start: {error}");
-            std::process::exit(1);
-        }
-    };
-    let result: std::io::Result<()> = runtime.block_on(async {
-        let listener = tokio::net::TcpListener::bind(addr).await?;
-        let local = listener.local_addr()?;
-        let (advertised_host, advertised_port) = advertised_identity(advertise, local)?;
-        let (cluster, serving) =
-            build_cluster(advertised_host, advertised_port, Arc::clone(&wiring.store)).await?;
-        if let Some(warning) = durability_warning(wiring.store_name) {
-            eprintln!("{warning}");
-        }
-        // ⚠️ Spawned *here*, where something watches it — see `build_cluster`.
-        let serving = tokio::spawn(serving.run());
-        let dispatcher = Arc::new(oqueue_broker::Dispatcher::new(Arc::new(cluster)));
-        println!(
-            "oqueue {} ({:?}, {})",
-            env!("CARGO_PKG_VERSION"),
-            wiring.keys(),
-            wiring.store_name
-        );
-        // ⚠️ The line the harness parses; the port is real, not the `:0`
-        // the caller may have passed.
-        println!("listening on {local}");
-        accept_loop(listener, dispatcher, serving, limits).await
-    });
-    if let Err(error) = result {
-        eprintln!("oqueue: serve failed: {error}");
-        std::process::exit(1);
-    }
-}
-
-/// What an operator must hear about the store this process chose, if anything.
-///
-/// ⚠️ **Its own function because the condition is the thing worth testing.**
-/// Inverted, it warns on the durable backends and stays silent on the one that
-/// loses every record at exit — which is the failure this warning exists to
-/// prevent, and which nothing inside `serve` can assert.
-fn durability_warning(store_name: &str) -> Option<&'static str> {
-    (store_name == "FakeObjectStore").then_some(
-        "oqueue: WARNING -- OQUEUE_STORE is unset, so records are held in memory \
-         and every acknowledged record is lost when this process exits. Set \
-         OQUEUE_STORE=s3 or =gcs for a durable one.",
-    )
-}
-
-/// Accepts connections until the listener or the coordinator's loop gives out.
-///
-/// ⚠️ **Its own function so `serve` stays inside `code-structure.md`'s fifty
-/// lines**, and because the race it runs is the interesting part rather than a
-/// detail of binding a port.
-async fn accept_loop(
-    listener: tokio::net::TcpListener,
-    dispatcher: Arc<oqueue_broker::Dispatcher>,
-    mut serving: tokio::task::JoinHandle<()>,
-    limits: oqueue_broker::ConnectionLimits,
-) -> std::io::Result<()> {
-    loop {
-        // A connection's ending is that connection's news alone, and so
-        // is a failed accept: ECONNABORTED and EMFILE are transient, and
-        // a broker that dies on either takes every healthy client with
-        // it. The pause keeps an out-of-descriptors condition from
-        // becoming a hot loop.
-        // ⚠️ **The coordinator's loop is one of the two things raced.** If
-        // it ever finishes — a panic, or its queue closing — this broker
-        // can commit nothing, and a process that kept accepting
-        // connections would answer every produce `LEADER_NOT_AVAILABLE`
-        // forever while looking healthy to a supervisor. `async-concurrency.md`
-        // rule 13: observe the task, do not merely start it.
-        tokio::select! {
-            joined = &mut serving => {
-                return Err(std::io::Error::other(match joined {
-                    Ok(()) => "the coordinator loop stopped".to_owned(),
-                    Err(error) => format!("the coordinator loop failed: {error}"),
-                }));
-            }
-            accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => {
-                    let handler = Arc::clone(&dispatcher);
-                    tokio::spawn(oqueue_broker::serve_connection(stream, handler, limits));
-                }
-                Err(error) => {
-                    eprintln!("oqueue: accept failed: {error}");
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-            },
-        }
-    }
-}
-
-/// Composes the broker: a coordinator over a metadata log, a materialized
-/// index, and the chosen object store.
-///
-/// ⚠️ **The one place the concrete materialization is chosen** (FR-50).
-/// `oqueue-index`'s `MemoryIndex` is `M3`'s answer and not the project's — doc
-/// 10 #12's disk engine is open — and it is picked here rather than defaulted
-/// inside a library, so swapping it is one line in a composition root.
-///
-/// ⚠️ **`FakeMetadataLog` is the only `MetadataLog` `M3` builds**
-/// (`ADR-0020` point 5, doc 10 #12, `M3.md`'s goal note), so this broker's
-/// offsets do not survive its process: a restart re-bases at `Offset::ZERO`
-/// over objects that already hold those offsets. `roadmap.md`'s deferral table
-/// gives the durable engine to `M6`. The warning below is so an operator hears
-/// it from the broker rather than from a consumer.
-///
-/// ⚠️ **The coordinator's loop is returned, not spawned here.** It is spawned
-/// by `serve`, which watches its handle — `async-concurrency.md` rule 13 wants
-/// an owner that can *observe* the task, and a `JoinHandle` dropped on the
-/// floor observes nothing. A loop that panicked would otherwise leave a process
-/// that stays up, accepts connections, and answers every produce
-/// `LEADER_NOT_AVAILABLE` forever while no supervisor restarts it, because it
-/// never exits and says nothing.
-async fn build_cluster(
-    host: String,
-    port: i32,
-    store: Arc<dyn ObjectStore>,
-) -> std::io::Result<(oqueue_broker::Cluster, oqueue_coordinator::CoordinatorLoop)> {
-    let log = Arc::new(oqueue_core::FakeMetadataLog::new());
-    let index = Box::new(oqueue_index::MemoryIndex::new());
-    let epoch = oqueue_core::CoordinatorEpoch::new(1);
-    let (coordinator, serving, reader) = oqueue_coordinator::Coordinator::open(log, index, epoch)
-        .await
-        .map_err(|error| {
-            std::io::Error::other(format!("the coordinator would not open: {error}"))
-        })?;
-    eprintln!(
-        "oqueue: WARNING -- the metadata log is in memory (M6 owns the durable one). \
-         Offsets do not survive a restart."
-    );
-    let cluster = oqueue_broker::Cluster::new(
-        host,
-        port,
-        oqueue_broker::Sequencing::new(coordinator, reader),
-        store,
-        &oqueue_broker::WriterId::mint(),
-    )
-    .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?;
-    Ok((cluster, serving))
-}
-
-/// The advertised identity: the override when given, else the bound
-/// address — the one address a client can reach a local stub at.
-fn advertised_identity(
-    advertise: Option<&str>,
-    local: std::net::SocketAddr,
-) -> std::io::Result<(String, i32)> {
-    let Some(spec) = advertise else {
-        return Ok((local.ip().to_string(), i32::from(local.port())));
-    };
-    spec.rsplit_once(':')
-        .and_then(|(host, port)| Some((host.to_owned(), port.parse::<i32>().ok()?)))
-        .ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "advertise must be host:port",
-            )
-        })
-}
-
 /// The no-argument behaviour: the banner, and nothing else.
 ///
 /// ⚠️ ~~There is no broker.~~ — `serve` above runs one (`M2.25`). This stays
@@ -455,17 +280,6 @@ mod tests {
                 "{typo:?} must not resolve to any store at all"
             );
         }
-    }
-
-    /// ⚠️ **The in-memory store is the one that gets a warning, and it is the
-    /// only one.** Inverted, this would stay silent on the configuration that
-    /// loses every acknowledged record and shout at the two that do not.
-    #[test]
-    fn only_the_in_memory_store_warns_about_durability() {
-        let warning = super::durability_warning("FakeObjectStore").expect("it must warn");
-        assert!(warning.contains("lost when this process exits"));
-        assert_eq!(super::durability_warning("S3Store"), None);
-        assert_eq!(super::durability_warning("GcsStore"), None);
     }
 
     /// ⚠️ And *no* selection is the honest default: nobody asked for a

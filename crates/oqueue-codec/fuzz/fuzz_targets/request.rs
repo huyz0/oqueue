@@ -24,6 +24,17 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_current_thread()
+            // ⚠️ **Timers, because a fetch parks** (`M3.20`). Without this
+            // `sleep_until` panics, which this target reported as a crash the
+            // first time the park existed — a harness fault rather than a
+            // broker one, and exactly the sort a fuzz target is for.
+            .enable_time()
+            // ⚠️ **Paused, because `max_wait_ms` is fuzzer-controlled.** A
+            // `Fetch` naming the maximum park would otherwise sleep a real
+            // minute per input. Under paused time the deadline fires as soon
+            // as nothing else can progress, so the park is *exercised* rather
+            // than waited out.
+            .start_paused(true)
             .build()
             .expect("a current-thread runtime")
     })
