@@ -11,6 +11,12 @@
 //! one PUT for N topics, and FR-12's zero GETs at the high watermark.
 
 #![allow(clippy::expect_used)]
+// ⚠️ `pub` here is `pub(crate)` in effect — `main.rs` is the only root of this
+// test binary. `unreachable_pub` and `redundant_pub_crate` each refuse what the
+// other asks for, and neither can tell a test binary's shared module from a
+// library's.
+#![allow(unreachable_pub)]
+#![allow(clippy::redundant_pub_crate)]
 
 use crate::support::{Broker, broker, golden_batch};
 use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
@@ -25,10 +31,10 @@ use oqueue_core::Operation;
 use std::sync::Arc;
 
 const PRODUCE_VERSION: i16 = 13;
-const FETCH_VERSION: i16 = 13;
+pub(crate) const FETCH_VERSION: i16 = 13;
 
 /// A full request frame: header at the API's header version, then `body`.
-fn framed(api_key: ApiKey, version: i16, body: &[u8]) -> Vec<u8> {
+pub(crate) fn framed(api_key: ApiKey, version: i16, body: &[u8]) -> Vec<u8> {
     let mut frame = Vec::new();
     let mut header = RequestHeader::default();
     header.request_api_key = api_key.as_i16();
@@ -42,11 +48,11 @@ fn framed(api_key: ApiKey, version: i16, body: &[u8]) -> Vec<u8> {
 }
 
 /// The response body, with the header skipped.
-fn body_of(reply: &[u8], flexible: bool) -> &[u8] {
+pub(crate) fn body_of(reply: &[u8], flexible: bool) -> &[u8] {
     &reply[if flexible { 5 } else { 4 }..]
 }
 
-async fn ask(dispatcher: &Dispatcher, frame: Vec<u8>) -> Vec<u8> {
+pub(crate) async fn ask(dispatcher: &Dispatcher, frame: Vec<u8>) -> Vec<u8> {
     match dispatcher.handle(frame).await {
         HandlerResponse::Reply(out) => out,
         other => panic!("expected a reply, got {other:?}"),
@@ -59,7 +65,7 @@ async fn ask(dispatcher: &Dispatcher, frame: Vec<u8>) -> Vec<u8> {
 /// topic's bytes in one payload, so records that were identical across topics
 /// would let a read that resolved the *wrong* region still look right. The
 /// name rides in the payload so that mistake is visible.
-async fn produce(
+pub(crate) async fn produce(
     dispatcher: &Dispatcher,
     broker: &Broker,
     topics: &[&'static str],
@@ -97,7 +103,7 @@ async fn fetch(
 }
 
 /// A `Fetch` that will not wait: one look, one answer.
-async fn fetch_now(
+pub(crate) async fn fetch_now(
     dispatcher: &Dispatcher,
     broker: &Broker,
     topic: &str,
@@ -260,43 +266,6 @@ async fn a_fetch_at_the_high_watermark_issues_no_gets() {
         before,
         "the idle poll must not touch object storage"
     );
-}
-
-/// ⚠️ **The read budget is a megabyte, and a fetch spends it.** `find_batches`
-/// prices what it names against `READ_BUDGET_BYTES`, so a budget that was
-/// accidentally kilobytes would silently cut a fetch short — the client would
-/// see fewer records and no error, and conclude nothing more had been written
-/// until it polled again. Thirty batches is comfortably more than a couple of
-/// kilobytes and comfortably less than a megabyte, so this fails on a wrong
-/// budget in either direction.
-#[tokio::test]
-async fn one_fetch_returns_every_tail_batch_within_the_read_budget() {
-    let broker = broker(&["orders"]).await;
-    let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
-    let batches = 60;
-    for _ in 0..batches {
-        produce(&dispatcher, &broker, &["orders"]).await;
-    }
-
-    let response = fetch(&dispatcher, &broker, "orders", 0).await;
-
-    let p = &response.responses[0].partitions[0];
-    assert_eq!(p.error_code, 0);
-    let records = p.records.as_ref().expect("records came back");
-    assert!(
-        records.len() > 4 * 1024,
-        "the fixture must exceed a small-kilobyte budget to be evidence: {}",
-        records.len()
-    );
-    let mut at = 0;
-    let mut seen = 0;
-    while at < records.len() {
-        let header = oqueue_codec::batch::decode_batch_header(&records[at..]).expect("a batch");
-        assert_eq!(header.base_offset, i64::from(seen) * 2);
-        at += usize::try_from(header.batch_length).expect("small") + 12;
-        seen += 1;
-    }
-    assert_eq!(seen, batches, "one fetch, every batch");
 }
 
 /// ⚠️ **Past the tail window, a read still works** — and costs the footer

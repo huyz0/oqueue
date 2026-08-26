@@ -41,6 +41,14 @@ pub struct FetchRequest<'a> {
     /// How many bytes must accumulate before the broker answers early. A fetch
     /// holds until this is met or `max_wait_ms` expires, whichever is first.
     pub min_bytes: i32,
+    /// The most bytes the whole response may carry (v3+; absent below).
+    ///
+    /// ⚠️ **Per *request*, and that is the point of keeping it** (`M3.22`). A
+    /// `Fetch` may name many partitions, so a per-partition bound multiplied
+    /// by a client-chosen count is not a bound at all — one frame becomes
+    /// partitions × budget bytes of object-storage reads, all concatenated in
+    /// memory before the response is framed.
+    pub max_bytes: i32,
     /// `0` = read uncommitted, `1` = read committed.
     pub isolation_level: i8,
     /// The topics fetched from.
@@ -65,6 +73,12 @@ pub struct FetchPartition {
     pub index: i32,
     /// The offset to fetch from.
     pub fetch_offset: i64,
+    /// The most bytes this partition may contribute to the response.
+    ///
+    /// ⚠️ **A per-partition share of the request's own bound, not a second
+    /// bound.** Kafka's own broker treats it that way, and a reader that
+    /// honoured only this one would be back to partitions × budget.
+    pub partition_max_bytes: i32,
 }
 
 /// Decodes a `Fetch` request.
@@ -85,7 +99,12 @@ pub fn decode_request(body: &[u8], version: i16) -> Result<FetchRequest<'_>, Dec
     }
     let max_wait_ms = cur.read_i32()?;
     let min_bytes = cur.read_i32()?;
-    let _max_bytes = cur.read_i32()?;
+    // ⚠️ **Unconditional, and the version gate is in `ADVERTISED` instead.**
+    // The field arrives at v3 and this broker's Fetch floor is v4, so there is
+    // no version reaching here without it — a `version >= 3` guard would be a
+    // branch nothing can take, which is worse than no guard: it reads as a
+    // case that has been handled.
+    let max_bytes = cur.read_i32()?;
     let isolation_level = cur.read_i8()?;
     if version >= 7 {
         let _session_id = cur.read_i32()?;
@@ -114,6 +133,7 @@ pub fn decode_request(body: &[u8], version: i16) -> Result<FetchRequest<'_>, Dec
     Ok(FetchRequest {
         max_wait_ms,
         min_bytes,
+        max_bytes,
         isolation_level,
         topics,
     })
@@ -149,13 +169,14 @@ fn read_fetch_topic<'a>(
         if version >= 5 {
             let _log_start_offset = cur.read_i64()?;
         }
-        let _partition_max_bytes = cur.read_i32()?;
+        let partition_max_bytes = cur.read_i32()?;
         if flexible {
             let _: TaggedFields = read_tagged_fields(cur)?;
         }
         partitions.push(FetchPartition {
             index,
             fetch_offset,
+            partition_max_bytes,
         });
     }
     if flexible {
@@ -349,6 +370,7 @@ mod tests {
             let part = &ours.topics[0].partitions[0];
             assert_eq!(part.index, 3, "v{version}");
             assert_eq!(part.fetch_offset, 100, "v{version}");
+            assert_eq!(part.partition_max_bytes, 1 << 20, "v{version}");
             if version >= 13 {
                 assert_eq!(
                     ours.topics[0].topic_id,
@@ -438,6 +460,35 @@ mod tests {
             assert_eq!(part.high_watermark, 42, "v{version}");
             assert_eq!(part.last_stable_offset, 42, "v{version}");
             assert_eq!(part.records.as_deref(), Some(&records[..]), "v{version}");
+        }
+    }
+
+    /// ⚠️ **The request's own `max_bytes` is read at every advertised version**,
+    /// and the assertion that matters is the *second* one: a decoder that got
+    /// this field's position wrong would still return a plausible number here
+    /// and mis-frame the isolation level after it.
+    #[test]
+    fn the_request_max_bytes_is_read_and_leaves_the_next_field_framed() {
+        use kafka_protocol::messages::FetchRequest as KpRequest;
+        use kafka_protocol::protocol::Encodable;
+
+        for version in VERSIONS {
+            let mut kp = KpRequest::default();
+            if version <= 14 {
+                kp.replica_id = kafka_protocol::messages::BrokerId(-1);
+            }
+            kp.isolation_level = i8::from(version >= 4);
+            kp.max_bytes = 4_096;
+            let mut bytes = Vec::new();
+            kp.encode(&mut bytes, version).expect("dependency encodes");
+
+            let ours = decode_request(&bytes, version).expect("ours decodes");
+            assert_eq!(ours.max_bytes, 4_096, "v{version}");
+            assert_eq!(
+                ours.isolation_level,
+                i8::from(version >= 4),
+                "v{version}: the field after it is still framed right"
+            );
         }
     }
 }

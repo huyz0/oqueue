@@ -13,25 +13,36 @@
 
 use super::{TopicOutcome, resolved_name};
 use crate::cluster::Cluster;
+use crate::read::Spend;
 use oqueue_codec::error_codes;
-use oqueue_core::{Offset, PartitionId, TopicId};
+use oqueue_core::{Error, Offset, PartitionId, TopicId};
 
 /// What one partition's read may price itself against.
 ///
-/// ⚠️ **A constant because the request's own number is not available here**,
-/// and that is `M3.22`'s row rather than a shortcut: `oqueue-codec`'s `Fetch`
-/// decoder reads and discards both `max_bytes` fields (`fetch.rs`'s
-/// `_max_bytes`), so plumbing the client's budget through is a codec change
-/// and a handler change together. One MiB is librdkafka's default
-/// `message.max.bytes`, so it is the number a default client already expects.
+/// ⚠️ ~~**A constant because the request's own number is not available
+/// here**~~ — **the client's number is decoded now** (`M3.22`), and this is
+/// what it is *clamped to*. `max_bytes` is an `i32`, so a client may name two
+/// gigabytes; a broker that obliged would let one frame decide how much memory
+/// it uses. One MiB is librdkafka's default `message.max.bytes`, so it is the
+/// number a default client already expects to be able to receive.
 ///
-/// ⚠️ It bounds what `find_batches` can **price**, not what this handler will
-/// spend — `ADR-0022`. The reader's own budget is the other half of `M3.22`.
+/// ⚠️ **Do not remove the clamp on the grounds that the client's number is
+/// available.** Its being available is exactly why a ceiling is needed.
 pub(crate) const READ_BUDGET_BYTES: u64 = 1024 * 1024;
 
 /// One partition's outcome, owned so the borrowed [`FetchResponsePartition`]
 /// can point into the concatenated batch bytes.
 pub(crate) struct PartitionOutcome {
+    /// What this partition cost the request's budget.
+    ///
+    /// ⚠️ **Not the same as the bytes returned, and that difference is a
+    /// bound.** A read that *failed* returns nothing but has already paid a
+    /// GET — two on the 404 path — so charging only the bytes would let a
+    /// client repeat a failing partition for free and turn one frame into as
+    /// many object-storage reads as it has entries. A refusal decided *before*
+    /// a read costs nothing: it touched no store, and charging it would let one
+    /// unknown topic starve the partitions behind it.
+    pub(crate) cost: u64,
     pub(crate) index: i32,
     pub(crate) error_code: i16,
     pub(crate) high_watermark: i64,
@@ -101,6 +112,7 @@ pub(crate) fn refused(
             cluster.high_watermark(&topic, partition).get()
         });
     PartitionOutcome {
+        cost: 0,
         index,
         error_code,
         high_watermark: high,
@@ -108,6 +120,54 @@ pub(crate) fn refused(
         log_start_offset: -1,
         records: Vec::new(),
     }
+}
+
+/// Where this partition is, and whether `fetch_offset` is in range.
+///
+/// ⚠️ **Split out so `one_partition` stays inside `code-structure.md`'s fifty
+/// lines**, and because "does this partition exist, and is that offset in
+/// range" is a different question from "what does reading it return".
+///
+/// # Errors
+///
+/// The Kafka error code to refuse with, and the watermark to report beside it
+/// — ⚠️ **the real one wherever this broker knows it**: a client that overshot
+/// needs to hear where the log actually ends, and the `0` on the paths that
+/// never reached a partition is a confession rather than a guess.
+fn resolve(
+    cluster: &Cluster,
+    topic: Option<&str>,
+    unknown: i16,
+    index: i32,
+    fetch_offset: i64,
+) -> Result<(TopicId, PartitionId, i64, Offset), (i16, i64)> {
+    let Some(name) = topic else {
+        return Err((unknown, 0));
+    };
+    let hosted = usize::try_from(index)
+        .ok()
+        .zip(cluster.partition_count(name))
+        .is_some_and(|(index, count)| index < count);
+    let Some((topic_id, partition)) = hosted
+        .then(|| {
+            TopicId::new(name.to_owned())
+                .ok()
+                .zip(PartitionId::new(index).ok())
+        })
+        .flatten()
+    else {
+        return Err((error_codes::UNKNOWN_TOPIC_OR_PARTITION, 0));
+    };
+    let high = cluster.high_watermark(&topic_id, partition).get();
+    let Ok(start) = Offset::new(fetch_offset) else {
+        // Negative: the client's bug, and the watermark is honest about where
+        // the partition actually is.
+        return Err((error_codes::OFFSET_OUT_OF_RANGE, high));
+    };
+    if fetch_offset > high {
+        return Err((error_codes::OFFSET_OUT_OF_RANGE, high));
+    }
+    Ok((topic_id, partition, high, start))
 }
 
 /// One partition's answer: every batch and the watermark, or a refusal.
@@ -125,11 +185,16 @@ pub(crate) async fn one_partition(
     cluster: &Cluster,
     topic: Option<&str>,
     unknown: i16,
-    index: i32,
-    fetch_offset: i64,
+    asked: &oqueue_codec::fetch::FetchPartition,
+    spend: &mut Spend<'_>,
 ) -> PartitionOutcome {
     const OFFSET_UNSET: i64 = -1;
+    let index = asked.index;
+    let fetch_offset = asked.fetch_offset;
+    // ⚠️ `cost: 0` — every refusal this closure names is decided *before* a
+    // read, so none of them touched object storage.
     let refused = |error_code: i16, high_watermark: i64| PartitionOutcome {
+        cost: 0,
         index,
         error_code,
         high_watermark,
@@ -138,59 +203,68 @@ pub(crate) async fn one_partition(
         records: Vec::new(),
     };
 
-    let Some(name) = topic else {
-        return refused(unknown, 0);
-    };
-    let hosted = usize::try_from(index)
-        .ok()
-        .zip(cluster.partition_count(name))
-        .is_some_and(|(index, count)| index < count);
-    let Some((topic_id, partition)) = hosted
-        .then(|| {
-            TopicId::new(name.to_owned())
-                .ok()
-                .zip(PartitionId::new(index).ok())
-        })
-        .flatten()
-    else {
-        return refused(error_codes::UNKNOWN_TOPIC_OR_PARTITION, 0);
-    };
-    let high = cluster.high_watermark(&topic_id, partition).get();
-    let Ok(start) = Offset::new(fetch_offset) else {
-        // Negative: the client's bug, and the watermark is honest about where
-        // the partition actually is.
-        return refused(error_codes::OFFSET_OUT_OF_RANGE, high);
-    };
-    if fetch_offset > high {
-        return refused(error_codes::OFFSET_OUT_OF_RANGE, high);
-    }
+    let (topic_id, partition, high, start) =
+        match resolve(cluster, topic, unknown, index, fetch_offset) {
+            Ok(resolved) => resolved,
+            Err((code, high)) => return refused(code, high),
+        };
 
     // ⚠️ The idle-poll case, and FR-12's zero-GET claim: at the watermark the
-    // index names no batch, so `read` returns empty without touching object
+    // index names no batch, so the read returns empty without touching object
     // storage. Asserted in this crate's suite through a counting store rather
     // than argued here.
-    cluster
-        .read(&topic_id, partition, start, READ_BUDGET_BYTES)
+    // ⚠️ **A partition with nothing left to spend touches no store**, and the
+    // check for that is inside `read` rather than here: its first iteration
+    // stops before the GET when the allowance is zero and the one-batch
+    // exemption is spent. A guard here as well would be a branch nothing can
+    // take, which reads as a case that has been handled.
+    match cluster
+        .read_or_refresh(&topic_id, partition, start, spend)
         .await
-        .map_or_else(
-            // ⚠️ **Never an empty partition.** A read that failed is a fault, and
-            // doc 12 §4.6 names silent wrongness — a successful poll returning no
-            // records — as the failure mode this whole milestone is written
-            // against. `LEADER_NOT_AVAILABLE` sends the client to `Metadata` and
-            // back rather than letting it conclude it is caught up.
-            |_| refused(error_codes::LEADER_NOT_AVAILABLE, high),
-            |records| PartitionOutcome {
-                index,
-                error_code: error_codes::NONE,
-                high_watermark: high,
-                // No transactions yet, so the stable offset IS the watermark —
-                // and `ADR-0021`'s hazard H3 is that it must never be *ahead* of
-                // it, which equality satisfies by construction.
-                last_stable_offset: high,
-                log_start_offset: 0,
-                records,
-            },
-        )
+    {
+        Ok(read) => PartitionOutcome {
+            // ⚠️ **What was fetched, not what is returned.** A history read
+            // pulls whole bundles and hands back one partition's slice; a
+            // budget charged the slice would let sixty-four bundles come off
+            // the store for a megabyte of records.
+            cost: read.fetched.max(read.records.len() as u64),
+            index,
+            error_code: error_codes::NONE,
+            high_watermark: high,
+            // No transactions yet, so the stable offset IS the watermark — and
+            // `ADR-0021`'s hazard H3 is that it must never be *ahead* of it,
+            // which equality satisfies by construction.
+            last_stable_offset: high,
+            log_start_offset: 0,
+            records: read.records,
+        },
+        // ⚠️ **A confirmed reap is `OFFSET_OUT_OF_RANGE`.** Hazard H4: object
+        // ids are never reused, so a missing object means those offsets were
+        // deleted, not that they have not been written. ⚠️ **What makes it
+        // *confirmed* here is that there is nothing to refresh** — the index
+        // this read consulted is the coordinator's own, in this process, and
+        // nothing in `M3` removes an entry from it. `M7`'s follower reads a
+        // cache instead, and `read_or_refresh` is where its round trip goes;
+        // until then a second read would pay a GET to be told the same thing. The
+        // client's own `auto.offset.reset` is what decides where it goes next,
+        // which is the point of telling it the truth rather than an empty
+        // partition.
+        // ⚠️ **A failed read costs no *budget*, and does not need to.** What
+        // stops a client repeating a failing partition is the object cache,
+        // which remembers the failure: the second entry issues no GET. Charging
+        // the allowance instead would let one transient fault spend a whole
+        // request's budget on bytes nobody fetched, and answer every healthy
+        // partition behind it with `NONE` and no records — a successful poll
+        // returning nothing, from the mechanism written to prevent exactly that.
+        Err(Error::ObjectNotFound { .. }) => refused(error_codes::OFFSET_OUT_OF_RANGE, high),
+        // ⚠️ **Never an empty partition.** Any other failed read is a fault,
+        // and doc 12 §4.6 names silent wrongness — a successful poll returning
+        // no records — as the failure mode this whole milestone is written
+        // against. `OFFSET_NOT_AVAILABLE` is in the Java consumer's enumerated
+        // fetch-error set and retried; it does not let a client conclude it is
+        // caught up.
+        Err(_) => refused(error_codes::OFFSET_NOT_AVAILABLE, high),
+    }
 }
 
 #[cfg(test)]
@@ -220,8 +294,14 @@ mod tests {
         let p = &response.responses[0].partitions[0];
         assert_eq!(
             p.error_code,
-            kafka_protocol::error::ResponseError::LeaderNotAvailable.code(),
+            kafka_protocol::error::ResponseError::OffsetNotAvailable.code(),
             "a fault must not look like the end of the log"
+        );
+        assert_ne!(
+            p.error_code,
+            kafka_protocol::error::ResponseError::LeaderNotAvailable.code(),
+            "and it must be a code the Java consumer's fetch dispatch knows: \
+             code 5 falls through to an IllegalStateException out of poll()"
         );
         assert!(p.records.as_ref().is_none_or(bytes::Bytes::is_empty));
         assert_eq!(

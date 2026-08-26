@@ -19,6 +19,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use super::partition;
+use super::target::Budget;
 use super::target::{MAX_READS_PER_REQUEST, satisfiable_min_bytes, worth_answering};
 use super::{TopicOutcome, read_all, watermarks};
 use crate::cluster::Cluster;
@@ -83,7 +84,10 @@ pub(crate) async fn read_or_park(
     if session.catch_up(cluster, &mut watch).await.is_err() {
         return partition::refuse_all(cluster, request, version, error_codes::OFFSET_NOT_AVAILABLE);
     }
-    let target = satisfiable_min_bytes(request.min_bytes);
+    // ⚠️ Clamped against what a response can hold, which is the request's own
+    // `max_bytes`: a `min_bytes` above it is never reachable, and a park
+    // waiting for it would run to the deadline on a full log.
+    let target = satisfiable_min_bytes(request.min_bytes, &Budget::new(request.max_bytes));
     // ⚠️ Counted up rather than down from a decremented ceiling: the bound is
     // "this many reads", and the test below pins that number exactly.
     let mut reads: u32 = 0;

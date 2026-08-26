@@ -74,9 +74,32 @@ unadvertised version has no response the client would parse, and outside
   error a client can act on is not worth holding for half a second. ⚠️ **The
   park is capped at 60 s** whatever the client asks for — `max_wait_ms` is an
   `i32`, and a connection held for twenty-four days outlives the topic.
-- **`max_bytes` is not honoured.** Both the request-level and per-partition
-  fields are parsed and discarded; a fetch is bounded by a per-partition
-  constant instead. `M3.22` owns the reader's byte budget.
+- ⚠️ ~~**`max_bytes` is not honoured.**~~ — **honoured since `M3.22`.** Both
+  the request-level and per-partition fields are decoded, and the request's is
+  a single allowance spent across every partition it names: a per-partition
+  ceiling multiplied by a client-chosen count is not a ceiling. ⚠️ **Clamped at
+  1 MiB** whatever a client asks for — `max_bytes` is an `i32`, and a broker
+  that obliged a two-gigabyte request would let one frame decide how much
+  memory it uses. ⚠️ **The first batch of a partition is served regardless**,
+  as Kafka's own broker does: a partition whose first batch exceeds the
+  allowance must stay readable, or a consumer parks at that offset forever —
+  ⚠️ **once per *response***, not once per partition, or a request naming one
+  partition two hundred times would collect two hundred whole batches.
+  ⚠️ **The budget counts bytes *fetched*, not bytes returned**: a history batch
+  lives inside a bundle covering every partition one flush wrote, so charging
+  only the slice would let a read pull sixty-four whole bundles off the store
+  to answer with a megabyte. ⚠️ **A partition whose read *fails* is charged
+  too** — it spent the request — or the same partition could be repeated for
+  free. ⚠️ **And `fetch.min.bytes` is clamped to what the response can hold**,
+  so a client naming a minimum above its own `max_bytes` does not park to its
+  deadline on every poll of a full log.
+- **A 404 from object storage is never "end of log".** Object ids are never
+  reused, so an object the index named and the store does not have was
+  **reaped**: the index is behind a deletion and those offsets are gone. The
+  read answers `OFFSET_OUT_OF_RANGE` — never an empty partition, which is what a consumer
+  reads as "I am caught up" while records it had not read are being deleted
+  underneath it. ⚠️ **It is counted**: a nonzero rate means `M5`'s deletion
+  delay is too short.
 - **Read-your-writes is per connection.** A produce's ack carries a commit
   watermark, the connection remembers it, and the next fetch on that connection
   waits for the index to fold that far before it answers (hazard H2,

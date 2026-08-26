@@ -24,14 +24,21 @@ use oqueue_codec::error_codes;
 /// [`MAX_READS_PER_REQUEST`] is for — this clamp alone would leave the park
 /// bounded in time and unbounded in reads.
 ///
-/// `M3.22` replaces the constant with the client's own `max_bytes`, and this
-/// clamp is what stops the two disagreeing silently.
-pub(crate) fn satisfiable_min_bytes(min_bytes: i32) -> u64 {
+/// ⚠️ **Clamped against the *request's* ceiling since `M3.22`**, not against
+/// the constant alone. A client may name `fetch.max.bytes = 65536` and
+/// `fetch.min.bytes = 1048576` — both legal, and neither client validates one
+/// against the other — and a response that can hold 64 KiB will never reach a
+/// megabyte. Left unclamped, every poll on a *full* log would park to its
+/// deadline and pay `MAX_READS_PER_REQUEST` reads instead of one, forever.
+pub(crate) fn satisfiable_min_bytes(min_bytes: i32, budget: &Budget) -> u64 {
     // ⚠️ `try_from` and `min`, not comparisons: a negative `min_bytes` is a
     // client bug meaning "no minimum", which is exactly what a failed
-    // conversion falls back to, and the ceiling is a `min` rather than an `if`
+    // conversion falls back to, and the ceilings are `min`s rather than `if`s
     // so there is no boundary to get wrong at exactly the budget.
-    u64::try_from(min_bytes).unwrap_or(0).min(READ_BUDGET_BYTES)
+    u64::try_from(min_bytes)
+        .unwrap_or(0)
+        .min(READ_BUDGET_BYTES)
+        .min(budget.total())
 }
 
 /// How many times one `Fetch` may read before it must answer.
@@ -50,6 +57,116 @@ pub(crate) fn satisfiable_min_bytes(min_bytes: i32) -> u64 {
 /// `docs/protocol-support.md` records. The alternative is a client's read
 /// volume being set by somebody else's write rate.
 pub(crate) const MAX_READS_PER_REQUEST: u32 = 4;
+
+/// What one partition's read may spend.
+#[derive(Debug, Clone, Copy)]
+pub struct Allowance {
+    /// The bytes this read is bounded by.
+    pub bytes: u64,
+    /// Whether this read may return one batch past that bound.
+    ///
+    /// ⚠️ **True for at most one read per *response*.** A partition whose very
+    /// first batch exceeds the allowance must still be readable or its
+    /// consumer parks at that offset forever; granting that per *partition*
+    /// would let a client naming one partition two hundred times collect two
+    /// hundred whole batches for a `max_bytes` of one.
+    pub may_overshoot: bool,
+}
+
+/// What is left of one request's byte allowance.
+///
+/// ⚠️ **Per request, not per partition, and that is the whole point.** A
+/// `Fetch` may name any number of partitions, so a per-partition bound
+/// multiplied by a client-chosen count is not a bound: one 16 MiB frame
+/// becomes partitions × budget bytes of object-storage reads, concatenated in
+/// memory before the response is framed, with `max_in_flight` such requests in
+/// flight per connection. `M3.14`'s review found exactly that.
+///
+/// ⚠️ **Both of the client's numbers bind, and the smaller wins.** It names a
+/// ceiling for the response and one for each partition; honouring only the
+/// second is the failure above, and honouring only the first would let one
+/// greedy partition take the whole response.
+#[derive(Debug)]
+pub(crate) struct Budget {
+    total: u64,
+    left: u64,
+    returned_anything: bool,
+}
+
+impl Budget {
+    /// A budget from the client's request-level `max_bytes`.
+    ///
+    /// ⚠️ Clamped to [`READ_BUDGET_BYTES`], which is what this broker will
+    /// spend on one response whatever a client asks for: `max_bytes` is an
+    /// `i32`, so a client may name two gigabytes, and a broker that obliged
+    /// would let one frame decide how much memory it uses. A negative value is
+    /// a client bug and buys nothing beyond the first-batch exception every
+    /// read keeps.
+    pub(crate) fn new(max_bytes: i32) -> Self {
+        let total = u64::try_from(max_bytes).unwrap_or(0).min(READ_BUDGET_BYTES);
+        Self {
+            total,
+            left: total,
+            returned_anything: false,
+        }
+    }
+
+    /// Whether a partition may still be served one batch over its share.
+    ///
+    /// ⚠️ **Once per *response*, not once per partition**, and the difference
+    /// is whether the budget is a bound at all. Per partition, a client that
+    /// names the same partition two hundred times in one frame gets two
+    /// hundred whole batches for a `max_bytes` of one — measured, not argued.
+    /// `ADR-0022` states the exemption as a property of *a fetch*, and Kafka's
+    /// own `readFromLocalLog` clears `minOneMessage` after the first non-empty
+    /// partition for the same reason.
+    ///
+    /// ⚠️ **Nothing starves.** A partition that comes back empty under an
+    /// exhausted budget is served on the client's next fetch, and both the
+    /// Java consumer and librdkafka rotate their fetchable-partition order
+    /// precisely so that a bounded response cannot always favour the same
+    /// partitions.
+    pub(crate) const fn may_overshoot(&self) -> bool {
+        !self.returned_anything
+    }
+
+    /// The whole allowance this request started with — what a response could
+    /// hold at most, which is the ceiling a `min_bytes` has to be reachable
+    /// under.
+    pub(crate) const fn total(&self) -> u64 {
+        self.total
+    }
+
+    /// What one partition may spend: the smaller of what it asked for and what
+    /// the request has left.
+    pub(crate) fn share(&self, partition_max_bytes: i32) -> u64 {
+        u64::try_from(partition_max_bytes)
+            .unwrap_or(0)
+            .min(self.left)
+    }
+
+    /// Everything a read needs to know about what it may spend.
+    ///
+    /// ⚠️ **The two travel together because they are one decision**: how many
+    /// bytes, and whether this read is the one allowed to cross the line by a
+    /// batch. Passed apart, a caller can hand a partition its share and the
+    /// *response*'s overshoot without noticing they came from different
+    /// questions — which is the shape the per-partition exemption had.
+    pub(crate) fn allowance(&self, partition_max_bytes: i32) -> Allowance {
+        Allowance {
+            bytes: self.share(partition_max_bytes),
+            may_overshoot: self.may_overshoot(),
+        }
+    }
+
+    /// Records what a partition actually returned.
+    pub(crate) const fn spend(&mut self, cost: u64) {
+        self.left = self.left.saturating_sub(cost);
+        if cost > 0 {
+            self.returned_anything = true;
+        }
+    }
+}
 
 /// Whether this response is worth sending now rather than parking on.
 pub(crate) fn worth_answering(outcomes: &[TopicOutcome], min_bytes: u64) -> bool {
@@ -78,6 +195,8 @@ pub(crate) fn worth_answering(outcomes: &[TopicOutcome], min_bytes: u64) -> bool
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
+
+    use super::{Budget, READ_BUDGET_BYTES, satisfiable_min_bytes};
 
     use crate::fetch::tests::{
         Poll, by_id, by_id_of, fetch_body, hungry_fetch_body, produced, replied,
@@ -220,30 +339,80 @@ mod tests {
         assert!(p.records.as_ref().is_none_or(bytes::Bytes::is_empty));
     }
 
+    /// ⚠️ **The budget is the request's, and both of the client's numbers
+    /// bind.** Honouring only `partition_max_bytes` is the defect `M3.14`'s
+    /// review found — partitions × budget, with nothing capping the product.
+    /// Honouring only `max_bytes` would let one greedy partition take the
+    /// whole response.
+    #[test]
+    fn a_budget_is_the_smaller_of_what_the_request_and_the_partition_asked_for() {
+        let budget = Budget::new(1_000);
+        assert_eq!(budget.share(400), 400, "the partition asked for less");
+        assert_eq!(budget.share(9_000), 1_000, "the request asked for less");
+    }
+
+    /// ⚠️ **Spending is cumulative across partitions**, which is the whole
+    /// difference between a per-request bound and a per-partition one.
+    #[test]
+    fn what_one_partition_spends_is_gone_from_the_next_partitions_share() {
+        let mut budget = Budget::new(1_000);
+        budget.spend(600);
+        assert_eq!(budget.share(9_000), 400);
+        budget.spend(400);
+        assert_eq!(budget.share(9_000), 0, "and it runs out");
+        budget.spend(50);
+        assert_eq!(budget.share(9_000), 0, "without going negative");
+    }
+
+    /// ⚠️ **A client cannot name a bigger allowance than this broker will
+    /// spend.** `max_bytes` is an `i32`, so a request may ask for two
+    /// gigabytes; obliging would let one frame decide how much memory the
+    /// process uses. A negative value is a client bug and buys nothing.
+    #[test]
+    fn a_clients_allowance_is_clamped_at_both_ends() {
+        assert_eq!(Budget::new(i32::MAX).share(i32::MAX), READ_BUDGET_BYTES);
+        assert_eq!(Budget::new(-5).share(i32::MAX), 0);
+    }
+
     /// ⚠️ **The clamp, on its own**, because the behaviour it buys is hard to
     /// see from outside: a client asking for more bytes than a response can
     /// ever hold would otherwise park until its deadline having already read
     /// everything, and re-read on every wakeup.
     #[test]
     fn a_minimum_larger_than_a_response_is_clamped_to_what_one_holds() {
-        assert_eq!(super::satisfiable_min_bytes(0), 0, "zero means answer now");
-        assert_eq!(super::satisfiable_min_bytes(1), 1);
         assert_eq!(
-            super::satisfiable_min_bytes(-7),
+            satisfiable_min_bytes(0, &Budget::new(i32::MAX)),
+            0,
+            "zero means answer now"
+        );
+        assert_eq!(satisfiable_min_bytes(1, &Budget::new(i32::MAX)), 1);
+        assert_eq!(
+            satisfiable_min_bytes(-7, &Budget::new(i32::MAX)),
             0,
             "a client bug is no minimum"
         );
         assert_eq!(
-            super::satisfiable_min_bytes(i32::MAX),
-            super::READ_BUDGET_BYTES,
+            satisfiable_min_bytes(i32::MAX, &Budget::new(i32::MAX)),
+            READ_BUDGET_BYTES,
             "the ceiling is what one read can price, not what was asked"
         );
         assert_eq!(
-            super::satisfiable_min_bytes(
-                i32::try_from(super::READ_BUDGET_BYTES).expect("a megabyte fits")
+            satisfiable_min_bytes(
+                i32::try_from(READ_BUDGET_BYTES).expect("a megabyte fits"),
+                &Budget::new(i32::MAX)
             ),
-            super::READ_BUDGET_BYTES,
+            READ_BUDGET_BYTES,
             "exactly the budget is still satisfiable"
+        );
+        // ⚠️ **And a minimum above what this *request* can hold is clamped to
+        // that.** A client naming `fetch.max.bytes = 4096` with
+        // `fetch.min.bytes = 65536` — both legal, and neither validates
+        // against the other — would otherwise park to its deadline on every
+        // poll of a full log, waiting for bytes its own response cannot carry.
+        assert_eq!(
+            satisfiable_min_bytes(65_536, &Budget::new(4_096)),
+            4_096,
+            "the request's own ceiling binds too"
         );
     }
 }

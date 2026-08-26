@@ -42,6 +42,7 @@ use oqueue_core::{
     PartitionId, TopicId,
 };
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
 
@@ -75,6 +76,7 @@ pub struct Cluster {
     index: IndexReader,
     store: Arc<dyn ObjectStore>,
     namer: Mutex<BundleNamer>,
+    reaped_reads: AtomicU64,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -149,6 +151,7 @@ impl Cluster {
             index: sequencing.index,
             store,
             namer: Mutex::new(BundleNamer::new(writer.as_str())?),
+            reaped_reads: AtomicU64::new(0),
         })
     }
 
@@ -256,6 +259,24 @@ impl Cluster {
     /// The object store this broker reads and writes through.
     pub(crate) fn store(&self) -> &Arc<dyn ObjectStore> {
         &self.store
+    }
+
+    /// How many reads have found an object the index named and the store did
+    /// not have.
+    ///
+    /// ⚠️ **A number that should stay zero, and an alarm when it does not.**
+    /// Object ids are never reused, so every one of these is a reaped object
+    /// the index is still pointing at — doc 12 §4.6 says a nonzero rate means
+    /// `M5`'s deletion delay is too short. It is a counter rather than a
+    /// metric because `M9` owns the metrics surface; what matters now is that
+    /// the number *exists* and something can read it.
+    #[must_use]
+    pub fn reaped_reads(&self) -> u64 {
+        self.reaped_reads.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn count_reaped_read(&self) {
+        self.reaped_reads.fetch_add(1, Ordering::Relaxed);
     }
 
     /// The namer minting this process's object keys.

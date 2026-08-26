@@ -176,6 +176,26 @@ impl FakeObjectStore {
         }
     }
 
+    /// Every key this fake currently holds.
+    ///
+    /// ⚠️ **So a test can delete behind the index's back**, which is what a
+    /// reaper racing a stale index looks like from a reader's side — hazard
+    /// H4, and the one shape a test cannot construct by going through the
+    /// broker, because the broker never deletes anything in `M3`.
+    /// ⚠️ **Keys with a payload only.** A deleted key keeps its slot here so the
+    /// fake can remember its generation, but a caller asking what the store
+    /// *holds* means what a `get` would return — and a list that included
+    /// tombstones would let a test "delete" an object that was already gone
+    /// and believe it had reaped something. Same rule as [`len`](Self::len).
+    #[must_use]
+    pub fn keys(&self) -> Vec<ObjectKey> {
+        self.lock()
+            .iter()
+            .filter(|(_, slot)| slot.payload.is_some())
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     /// How many objects currently have a payload — a key whose slot survives
     /// only to remember its generation, after a `delete`, does not count.
     #[must_use]

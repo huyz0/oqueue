@@ -36,6 +36,7 @@ mod target;
 
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
+use crate::read::{FetchedObjects, Spend};
 use crate::session::Session;
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
@@ -47,6 +48,8 @@ use oqueue_core::{PartitionId, TopicId};
 pub use park::MAX_PARK_MS;
 use park::read_or_park;
 use partition::{PartitionOutcome, one_partition};
+pub use target::Allowance;
+use target::Budget;
 
 /// One topic's response, owned so the borrowed [`FetchResponseTopic`] can
 /// point into its echoed name and its concatenated batch bytes.
@@ -116,9 +119,18 @@ pub(crate) async fn read_all(
     request: &oqueue_codec::fetch::FetchRequest<'_>,
     version: i16,
 ) -> Vec<TopicOutcome> {
+    // ⚠️ **One budget for the whole request**, threaded through every topic and
+    // every partition in turn — a fresh one per topic would be the
+    // per-partition bug with a different multiplier.
+    let mut budget = Budget::new(request.max_bytes);
+    // ⚠️ **One object cache for the whole request**, which is what actually
+    // bounds its GETs: nothing dedups a client's partition list, so the same
+    // partition named two hundred times — or four partitions that share a
+    // bundle — must cost the objects behind them once, not once per entry.
+    let mut objects = FetchedObjects::default();
     let mut outcomes: Vec<TopicOutcome> = Vec::with_capacity(request.topics.len());
     for topic in &request.topics {
-        outcomes.push(one_topic(cluster, topic, version).await);
+        outcomes.push(one_topic(cluster, topic, version, &mut budget, &mut objects).await);
     }
     outcomes
 }
@@ -176,6 +188,8 @@ async fn one_topic(
     cluster: &Cluster,
     topic: &oqueue_codec::fetch::FetchTopic<'_>,
     version: i16,
+    budget: &mut Budget,
+    objects: &mut FetchedObjects,
 ) -> TopicOutcome {
     // From v13 the wire addresses topics by id — same split as produce:
     // echo what this version carries, resolve the rest.
@@ -197,16 +211,24 @@ async fn one_topic(
     };
     let mut partitions = Vec::with_capacity(topic.partitions.len());
     for p in &topic.partitions {
-        partitions.push(
-            one_partition(
+        partitions.push({
+            // ⚠️ **The share this partition may spend, taken from the
+            // request's own remaining budget.** A partition naming a
+            // larger `partition_max_bytes` than the request has left gets
+            // what is left: the request's number bounds the response a
+            // client actually asked for.
+            let allowance = budget.allowance(p.partition_max_bytes);
+            let outcome = one_partition(
                 cluster,
                 resolved_name.as_deref(),
                 unknown,
-                p.index,
-                p.fetch_offset,
+                p,
+                &mut Spend { allowance, objects },
             )
-            .await,
-        );
+            .await;
+            budget.spend(outcome.cost);
+            outcome
+        });
     }
     TopicOutcome {
         name,

@@ -451,3 +451,32 @@ fn is_empty_tracks_whether_anything_is_stored() {
     block_on(store.put(&key("topics/acme/0/x.seg"), vec![1], None)).expect("put succeeds");
     assert!(!store.is_empty());
 }
+
+/// ⚠️ **What the fake holds, so a test can take it away.** A reader that finds
+/// an object the index named and the store does not have is hazard H4 — a
+/// reaped object, not an unwritten one — and the only way to construct that is
+/// to delete behind the index's back. Nothing in the broker deletes anything
+/// in `M3`, so without this the shape has no fixture at all.
+#[test]
+fn the_fake_reports_every_key_it_holds() {
+    let store = FakeObjectStore::new();
+    assert!(store.keys().is_empty(), "a fresh fake holds nothing");
+
+    let first = ObjectKey::new("bundles/w/one".to_owned()).expect("a valid key");
+    let second = ObjectKey::new("bundles/w/two".to_owned()).expect("a valid key");
+    block_on(store.put(&first, vec![1], None)).expect("the first lands");
+    block_on(store.put(&second, vec![2], None)).expect("the second lands");
+
+    let mut keys = store.keys();
+    keys.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    assert_eq!(keys, vec![first.clone(), second], "both, and only both");
+
+    // ⚠️ And a deleted key is gone from the list, not merely emptied — a test
+    // that deleted an object and still saw its key would not be modelling a
+    // reap at all.
+    block_on(store.delete(std::slice::from_ref(&first))).expect("the delete succeeds");
+    assert!(
+        !store.keys().contains(&first),
+        "a reaped object is not a key this fake still reports"
+    );
+}

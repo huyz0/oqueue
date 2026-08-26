@@ -102,6 +102,15 @@ async fn accept_loop(
     mut serving: tokio::task::JoinHandle<()>,
     limits: oqueue_broker::ConnectionLimits,
 ) -> std::io::Result<()> {
+    // ⚠️ **The one operator surface for `reaped_reads`**, and it exists because
+    // a counter nobody can read is a counter nobody will act on. Doc 12 §4.6:
+    // a nonzero rate means `M5`'s deletion delay is too short, and the symptom
+    // a client sees is `OFFSET_OUT_OF_RANGE` on a partition that was fine a
+    // moment ago. `M9` owns the metrics surface; until then this is a line on
+    // stderr, printed only when the number moves.
+    let mut reported_reaps = 0_u64;
+    let mut reap_tick = tokio::time::interval(std::time::Duration::from_mins(1));
+    reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         // A connection's ending is that connection's news alone, and so
         // is a failed accept: ECONNABORTED and EMFILE are transient, and
@@ -115,6 +124,19 @@ async fn accept_loop(
         // forever while looking healthy to a supervisor. `async-concurrency.md`
         // rule 13: observe the task, do not merely start it.
         tokio::select! {
+            _ = reap_tick.tick() => {
+                let reaped = cluster.reaped_reads();
+                if reaped > reported_reaps {
+                    eprintln!(
+                        "oqueue: WARNING -- {} read(s) found an object the index still \
+                         named and object storage had already reaped. A nonzero rate \
+                         means the deletion delay is too short; consumers see \
+                         OFFSET_OUT_OF_RANGE.",
+                        reaped - reported_reaps
+                    );
+                    reported_reaps = reaped;
+                }
+            }
             joined = &mut serving => {
                 return Err(std::io::Error::other(match joined {
                     Ok(()) => "the coordinator loop stopped".to_owned(),

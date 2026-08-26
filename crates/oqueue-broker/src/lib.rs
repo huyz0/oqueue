@@ -44,6 +44,7 @@ mod writer_id;
 pub use cluster::{Cluster, FlushError, Sequencing};
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, serve_connection};
 pub use dispatch::Dispatcher;
-pub use fetch::MAX_PARK_MS;
+pub use fetch::{Allowance, MAX_PARK_MS};
+pub use read::MAX_FAILED_FETCHES_PER_REQUEST;
 pub use session::Session;
 pub use writer_id::WriterId;

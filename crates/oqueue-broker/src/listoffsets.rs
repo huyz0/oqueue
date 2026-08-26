@@ -173,6 +173,12 @@ fn one_partition(
         // first offset still held is the first ever assigned; `M5`'s retention
         // is where a log start offset stops being a constant, and this is the
         // one place that has to change when it does.
+        //
+        // ⚠️ **A constant here becomes a livelock the day it is wrong.**
+        // `M3.22` made a reaped read answer `OFFSET_OUT_OF_RANGE`, and a
+        // consumer's escape from that is to ask for the earliest offset: told
+        // `0`, it seeks there and is refused again, spending a page of GETs
+        // per turn. `M5.md` carries it.
         EARLIEST_TIMESTAMP => 0,
         LATEST_TIMESTAMP => match authoritative_end_offset(cluster, topic_id, partition) {
             Ok(offset) => offset,
