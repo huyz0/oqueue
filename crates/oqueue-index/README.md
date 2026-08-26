@@ -34,8 +34,9 @@ M3's checkpoint review): `MemoryIndex` here and `FakeMaterializedIndex` in
 `oqueue-core` are byte-identical today once doc comments are stripped, so the
 conformance suite in `tests/` proves the contract **once**, not twice. The
 foreseeable second implementation — the one `contracts.md` rule 3 is actually
-satisfied by — is doc 10 #12's engine, and `M3.11` is where `MemoryIndex` first
-has behaviour a test double must not have: a quota, and an eviction policy.
+satisfied by — is doc 10 #12's engine. ⚠️ `M3.11` was to give `MemoryIndex`
+behaviour a test double must not have; a quota on this keying gives back range
+a rebuild cannot restore, so `roadmap.md` carries it to `M5`.
 
 ## Invariants
 

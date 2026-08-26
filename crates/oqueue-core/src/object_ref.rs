@@ -22,7 +22,9 @@ use crate::{ByteRange, ObjectKey, Offset, Result};
 /// 15 §7 resolves doc 10 #8 to is therefore **not built here** — this is the
 /// two-tier *shape*, with the cheap tier still at the expensive granularity.
 /// Closing that is a change to how entries are keyed, not to this struct, and
-/// it is what `M3.11`'s quota will otherwise spend its time tripping over.
+/// it is the cause `M3.11` found it could not manage the symptom of: a ceiling
+/// at this keying gives back range a rebuild cannot restore, so `roadmap.md`
+/// carries both the re-keying and the quota to `M5`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ObjectRef {
     object: ObjectKey,

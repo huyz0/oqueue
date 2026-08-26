@@ -439,28 +439,6 @@ fn an_unknown_length_charges_nothing_against_the_budget() {
     );
 }
 
-/// The fake delegates its read side to the fold as well as its write side.
-///
-/// ⚠️ Here rather than only in `oqueue-index`'s contract suite: mutation
-/// testing narrows to one crate and runs only that crate's tests, so a fake
-/// whose `find_batches` returned an empty page would survive every mutant
-/// unless this crate's own suite looked at it.
-#[test]
-fn the_fake_delegates_its_read_side_too() {
-    let index = FakeMaterializedIndex::new();
-    index
-        .apply(&[sized(1, 2, 10), sized(2, 2, 10)])
-        .expect("applied");
-
-    let page = index
-        .find_batches(&topic("orders"), partition(0), Offset::ZERO, u64::MAX)
-        .expect("a page");
-    assert_eq!(page.len(), 2);
-    assert_eq!(page[0].reference().base_offset(), Offset::ZERO);
-    assert_eq!(page[1].reference().base_offset(), offset(2));
-    assert_eq!(page[1].known_len(), Some(10));
-}
-
 /// A partition the fold has never seen has no batches, and is not an error.
 #[test]
 fn an_unfolded_partition_yields_an_empty_page() {

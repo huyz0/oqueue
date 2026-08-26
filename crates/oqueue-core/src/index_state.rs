@@ -26,7 +26,10 @@ use std::collections::{HashMap, VecDeque};
 /// ⚠️ **Bounded per partition, which is not bounded.** The window caps the
 /// expensive tier for one partition; the partition map itself has no cap, so
 /// steady-state cost still scales with partitions active on the node. That is
-/// NFR-11's concern, and `M3.11`'s quota is what has to face it.
+/// NFR-11's concern — **`M7`'s requirement**, and one M3 does not bound: a
+/// ceiling at this keying gives back range a rebuild cannot restore, so
+/// `roadmap.md` carries the enforcement to `M5` beside the coarse per-object
+/// keying that makes it feasible (`M3.11`).
 ///
 /// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
 pub const TAIL_WINDOW_ENTRIES: usize = 128;
@@ -89,6 +92,10 @@ impl Default for PartitionIndex {
 impl PartitionIndex {
     /// Pushes a newly committed object onto the tail, demoting whatever falls
     /// out of the window.
+    ///
+    /// ⚠️ **Demotion moves an entry between tiers and never removes one**,
+    /// which is what lets [`IndexState`] maintain its count by adding one per
+    /// span folded rather than recounting a map on every fold.
     /// ⚠️ `if`, not `while`: entries arrive one at a time, so at most one can
     /// fall out of the window per push. A loop here would be an unbounded one
     /// whose bound is a comparison — and a mutation flipping that comparison
@@ -121,6 +128,8 @@ impl PartitionIndex {
 pub struct IndexState {
     applied_upto: Option<CommitVersion>,
     partitions: HashMap<TopicId, HashMap<PartitionId, PartitionIndex>>,
+    /// How many entries the tiers hold in total — maintained, never counted.
+    entries: usize,
 }
 
 impl IndexState {
@@ -180,6 +189,7 @@ impl IndexState {
             slot.end_offset = end;
             for entry in entries {
                 slot.push(entry);
+                self.entries += 1;
             }
         }
         self.applied_upto = previous;
@@ -329,10 +339,33 @@ impl IndexState {
             .and_then(|parts| parts.get(&partition))
     }
 
+    /// How many entries this index holds, across every partition and both
+    /// tiers.
+    ///
+    /// ⚠️ **The number NFR-11 is about, and M3 only measures it** (`M3.11`).
+    /// A node's metadata cost has to be proportional to the partitions *active
+    /// on it*, and this index is keyed per `(object, partition)` — doc 14 §3's
+    /// ~4M entries/s row — so it grows with everything the node has ever seen.
+    /// Enforcing a ceiling on *this* keying cannot be made to work: eviction
+    /// gives back range a rebuild cannot restore, because replaying the log
+    /// reproduces the same count and sheds the same entries again. The coarse
+    /// per-object keying is what makes a bound feasible, and `roadmap.md`
+    /// defers it to `M5`, which receives the enforcement with it.
+    ///
+    /// ⚠️ **A running count, not a traversal.** It is read wherever growth is
+    /// watched, and a walk of the partition map is O(partitions) — on the
+    /// coordinator's ack path, that is the one task every producer on the
+    /// shard queues behind.
+    #[must_use]
+    pub const fn entries(&self) -> usize {
+        self.entries
+    }
+
     /// Returns it to its fresh state.
     pub fn clear(&mut self) {
         self.applied_upto = None;
         self.partitions.clear();
+        self.entries = 0;
     }
 }
 

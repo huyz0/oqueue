@@ -25,8 +25,10 @@ today**, and M3's checkpoint review found the documents claiming otherwise
 (`M3.24`). Both are thin `Mutex<IndexState>` wrappers, so the conformance suite
 below proves the contract **once**, not twice — `contracts.md` rule 3 is
 satisfied by doc 10 #12's engine, which is foreseeable rather than present, and
-`M3.11` is where this type first has what a test double must not: a quota and an
-eviction policy. Until then, do not read the two types as independent evidence.
+⚠️ `M3.11` was to end that with a quota and an eviction policy and could not —
+a ceiling on this index's keying gives back range a rebuild cannot restore — so
+`roadmap.md` carries the enforcement, and the divergence with it, to `M5`.
+Until then, do not read the two types as independent evidence.
 
 ⚠️ **Extend it rather than starting beside it.** The fold itself —
 order-checking, all-or-nothing application, non-wrapping addition — lives in

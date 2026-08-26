@@ -268,8 +268,9 @@ impl Coordinator {
     /// behind it — so this is cheap to *ask* and expensive to have asked.
     /// `M3.18` owns moving that replay off the ack path.
     ///
-    /// ⚠️ **`M3.11` is the row that decides *when*** — an enforced, alarmed
-    /// quota with a degraded mode. This is only the mechanism it will call.
+    /// ⚠️ **Nothing in M3 decides *when*.** `M3.11` set out to and found a
+    /// ceiling unachievable at this index's keying, so `roadmap.md` carries the
+    /// quota to `M5`. This is the mechanism whatever decides will call.
     ///
     /// ⚠️ **Not cancellation-safe** (`async-concurrency.md` rule 10), the same
     /// way [`commit`](Self::commit) is not: dropping this future after the

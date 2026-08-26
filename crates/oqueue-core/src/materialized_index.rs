@@ -12,7 +12,7 @@ use std::sync::Mutex;
 /// `M3.md` task 9. The metadata log ([`MetadataLog`](crate::MetadataLog)) is
 /// the source of truth; everything here is derivable from it by replay. So an
 /// implementation may be **dropped at any moment** — under memory pressure,
-/// on a restart, when `M3.11`'s quota trips its degraded mode — and refilling
+/// on a restart, when `M5`'s quota gives range back — and refilling
 /// it from the log must reproduce it exactly. Nothing may be stored here that
 /// the log cannot put back, and nothing may treat this as authoritative.
 ///
@@ -73,6 +73,22 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
 
     /// The highest version folded in, or `None` if nothing has been.
     fn applied_upto(&self) -> Option<CommitVersion>;
+
+    /// How many entries this index holds, across every partition and tier.
+    ///
+    /// `ADR-0025`. ⚠️ **It must be cheap**, because it is read on paths NFR-2
+    /// bounds and, once `M5`'s quota exists, once per fold. A maintained
+    /// counter, never a traversal of the partition map, and never a
+    /// `SELECT count(*)` for doc 10 #12's engine — an implementation that
+    /// cannot count exactly at that price may return an estimate, and what it
+    /// may not do is make the answer expensive.
+    ///
+    /// ⚠️ **It is a measurement, not a limit.** M3 bounds nothing: enforcing a
+    /// ceiling at this index's keying gives back range a rebuild cannot
+    /// restore, so `roadmap.md` carries the enforcement to `M5` beside the
+    /// coarse per-object keying that makes a bound feasible, and `M7` is where
+    /// NFR-11 is verified.
+    fn entries(&self) -> usize;
 
     /// The offset the next record for this partition will occupy — which is
     /// also its **high watermark**.
@@ -202,6 +218,10 @@ impl MaterializedIndex for FakeMaterializedIndex {
 
     fn applied_upto(&self) -> Option<CommitVersion> {
         self.lock().applied_upto()
+    }
+
+    fn entries(&self) -> usize {
+        self.lock().entries()
     }
 
     fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset {

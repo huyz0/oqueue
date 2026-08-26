@@ -21,8 +21,9 @@ use std::sync::Arc;
 ///
 /// ⚠️ **Dropping the cache stays available to the writer**, and for a
 /// coordinator's index that is `Coordinator::drop_cache`, which queues it
-/// behind the folds it must not interleave with. `M3.11`'s quota is the row
-/// that will want it.
+/// behind the folds it must not interleave with. `M5`'s quota is the row that
+/// will want it — `M3.11` found a ceiling unachievable at this index's keying,
+/// so `roadmap.md` carries the enforcement there with the re-keying.
 #[derive(Clone)]
 pub struct IndexReader {
     index: Arc<dyn MaterializedIndex>,
@@ -48,6 +49,18 @@ impl IndexReader {
     #[must_use]
     pub fn applied_upto(&self) -> Option<CommitVersion> {
         self.index.applied_upto()
+    }
+
+    /// How many entries the index holds, across every partition and tier.
+    ///
+    /// `ADR-0025`, and the reason it is on the *reader*: `ADR-0024` moved a
+    /// coordinator's index behind this handle, so without it the one
+    /// materialization that folds every partition on a shard is the one nobody
+    /// can measure. ⚠️ **A measurement, not a limit** — nothing in M3 bounds
+    /// it; `roadmap.md` carries the enforcement to `M5`.
+    #[must_use]
+    pub fn entries(&self) -> usize {
+        self.index.entries()
     }
 
     /// Where the next record for this partition lands — its high watermark.

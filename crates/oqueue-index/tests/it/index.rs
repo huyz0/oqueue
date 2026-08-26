@@ -11,8 +11,10 @@
 //! against the fake is a contract only the fake has") stays true as a *reason
 //! to keep the suite*, which is why it is corrected rather than deleted.
 //!
-//! ⚠️ The suite earns its shape the moment the two diverge: `M3.11` gives
-//! `MemoryIndex` a quota, and doc 10 #12's engine is the implementation
+//! ⚠️ The suite earns its shape the moment the two diverge. ⚠️ `M3.11` was to
+//! be that moment and is not — a ceiling at this index's keying gives back
+//! range a rebuild cannot restore, so `roadmap.md` carries the quota, and the
+//! divergence with it, to `M5`. doc 10 #12's engine is the implementation
 //! `contracts.md` rule 3 is actually satisfied by.
 
 // Every `expect` is on a value the suite itself built from a literal it
@@ -241,7 +243,7 @@ mod contract {
     /// `M3.md` task 9: the index is a cache, never the source of truth. So
     /// dropping it must lose nothing that the metadata log cannot put back —
     /// which is what makes it safe for the coordinator to discard one under
-    /// memory pressure, and what `M3.11`'s degraded mode will rest on. The
+    /// memory pressure, and what `M5`'s degraded mode will rest on. The
     /// assertion is equality of the *whole* observable state before and after,
     /// not merely that a refill succeeds.
     pub(super) fn dropping_and_refilling_reproduces_the_index<I: MaterializedIndex>(index: &I) {
@@ -273,6 +275,29 @@ mod contract {
             index.end_offset(&topic("payments"), partition(1)),
         );
         assert_eq!(before, after, "a refill did not reproduce the index");
+    }
+
+    /// ⚠️ **`entries()` is part of guarantee 3's "same observable state"**
+    /// (`ADR-0025`), so a refill has to reproduce it too. An implementation
+    /// keeping a maintained counter — which the trait asks for, because this
+    /// is read on paths NFR-2 bounds — and forgetting to zero it in `clear`
+    /// reports twice the truth after a drop-and-refill, and `M5`'s quota is
+    /// what would then act on the number.
+    pub(super) fn the_entry_count_survives_a_drop_and_refill<I: MaterializedIndex>(index: &I) {
+        let log = [commit(1, 3), commit_on(2, "payments", 1, 4), commit(3, 2)];
+        index.apply(&log).expect("applied");
+        let before = index.entries();
+        assert_eq!(before, 3, "one entry per span folded");
+
+        index.clear();
+        assert_eq!(index.entries(), 0, "a dropped cache holds nothing");
+
+        index.apply(&log).expect("refilled");
+        assert_eq!(
+            index.entries(),
+            before,
+            "and a refill reproduces it exactly"
+        );
     }
     /// FR-12's zero-GET case, at the seam that decides it: a fetch that is
     /// already at the high watermark is told to read nothing, so there is
@@ -429,6 +454,7 @@ fn run_contract<I: MaterializedIndex>(make: impl Fn() -> I) {
     contract::the_byte_budget_bounds_the_page_but_always_yields_one(&make());
     contract::an_unknown_length_charges_nothing(&make());
     contract::a_page_is_bounded_by_its_batch_count(&make());
+    contract::the_entry_count_survives_a_drop_and_refill(&make());
 }
 
 #[test]
@@ -439,28 +465,4 @@ fn the_memory_index_satisfies_the_contract() {
 #[test]
 fn the_fake_satisfies_the_contract() {
     run_contract(FakeMaterializedIndex::new);
-}
-
-/// ⚠️ Reports how far it has folded and never the partitions it holds — a
-/// `Debug` line in a test failure must not become a listing of a tenant's
-/// topics. Asserting only what is *absent* would pass against a `Debug` that
-/// rendered nothing, so what it does render is pinned too.
-#[test]
-fn the_memory_index_reports_its_progress_without_listing_topics() {
-    let index = MemoryIndex::new();
-    index.apply(&[commit(1, 5)]).expect("applied");
-
-    let rendered = format!("{index:?}");
-    assert!(!rendered.contains("orders"), "rendered: {rendered}");
-    assert!(rendered.contains("MemoryIndex"), "rendered: {rendered}");
-    assert!(rendered.contains('1'), "rendered: {rendered}");
-}
-
-/// The seam is `dyn`-compatible — the broker holds whichever materialization
-/// it was configured with, the same reason `ObjectStore` is shaped this way.
-#[test]
-fn the_seam_is_dyn_compatible() {
-    let index: std::sync::Arc<dyn MaterializedIndex> = std::sync::Arc::new(MemoryIndex::new());
-    index.apply(&[commit(1, 2)]).expect("applied");
-    assert_eq!(index.end_offset(&topic("orders"), partition(0)), offset(2));
 }

@@ -47,6 +47,7 @@ fn a_reader_answers_exactly_what_the_index_it_wraps_holds() {
     let reader = IndexReader::new(Arc::clone(&index) as Arc<dyn MaterializedIndex>);
 
     assert_eq!(reader.applied_upto(), None, "nothing folded yet");
+    assert_eq!(reader.entries(), 0);
     assert_eq!(
         reader.end_offset(&topic("secret-tenant-topic"), partition()),
         Offset::ZERO
@@ -68,6 +69,14 @@ fn a_reader_answers_exactly_what_the_index_it_wraps_holds() {
         .expect("the fold succeeds");
 
     assert_eq!(reader.applied_upto(), Some(CommitVersion::new(1)));
+    assert_eq!(
+        reader.entries(),
+        2,
+        "⚠️ `ADR-0025`, and the reason it is on the reader: `ADR-0024` moved a \
+         coordinator's index behind this handle, so without it the one \
+         materialization folding every partition on a shard is the one nobody \
+         can measure"
+    );
     assert_eq!(
         reader.end_offset(&topic("secret-tenant-topic"), partition()),
         Offset::new(5).expect("a valid offset")
@@ -108,4 +117,39 @@ fn formatting_a_reader_summarises_rather_than_lists() {
         rendered.contains("IndexReader") && rendered.contains("applied_upto"),
         "and must still say how far it has folded: {rendered}"
     );
+}
+
+/// The fake delegates its read side to the fold as well as its write side.
+///
+/// ⚠️ Here rather than only in `oqueue-index`'s contract suite: mutation
+/// testing narrows to one crate and runs only that crate's tests, so a fake
+/// whose `find_batches` returned an empty page would survive every mutant
+/// unless this crate's own suite looked at it.
+#[test]
+fn the_fake_delegates_its_read_side_too() {
+    let index = FakeMaterializedIndex::new();
+    index
+        .apply(&[commit(1, 2, 10), commit(2, 2, 10)])
+        .expect("applied");
+
+    let page = index
+        .find_batches(
+            &topic("secret-tenant-topic"),
+            partition(),
+            Offset::ZERO,
+            u64::MAX,
+        )
+        .expect("a page");
+    assert_eq!(page.len(), 2);
+    assert_eq!(
+        index.entries(),
+        2,
+        "the fake answers the growth question through the trait like any other"
+    );
+    assert_eq!(page[0].reference().base_offset(), Offset::ZERO);
+    assert_eq!(
+        page[1].reference().base_offset(),
+        Offset::new(2).expect("a valid offset")
+    );
+    assert_eq!(page[1].known_len(), Some(10));
 }

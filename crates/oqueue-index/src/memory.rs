@@ -14,13 +14,15 @@ use std::sync::Mutex;
 /// `Mutex<IndexState>` wrappers over the one fold in `oqueue-core`, so the
 /// conformance suite runs one implementation twice — M3's checkpoint review
 /// found the documents claiming otherwise (`M3.24`). What separates them is
-/// coming and is not cosmetic: this is a broker's working set and gets
-/// `M3.11`'s quota and eviction; the fake is a downstream crate's test double
-/// and must stay simple enough to be obviously right.
+/// coming and is not cosmetic — a broker's working set gets a quota and an
+/// eviction policy that a downstream crate's test double must not — but it is
+/// coming at `M5`, not at `M3.11`: enforcing a ceiling on this index's keying
+/// gives back range a rebuild cannot restore, so `roadmap.md` carries the
+/// enforcement to `M5` beside the coarse keying that makes it feasible.
 ///
 /// ⚠️ **A cache, and droppable at any moment.** Everything here is derivable
-/// from the log by replay, which is what lets `M3.11`'s degraded mode discard
-/// it under quota pressure rather than fail. See
+/// from the log by replay, which is what lets a writer discard it under
+/// pressure rather than fail. See
 /// [`MaterializedIndex`](oqueue_core::MaterializedIndex) for the contract this
 /// is held to; the conformance suite in `tests/it/index.rs` runs that contract
 /// against this type and against the fake beside the trait.
@@ -72,6 +74,10 @@ impl MaterializedIndex for MemoryIndex {
 
     fn applied_upto(&self) -> Option<CommitVersion> {
         self.lock().applied_upto()
+    }
+
+    fn entries(&self) -> usize {
+        self.lock().entries()
     }
 
     fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset {

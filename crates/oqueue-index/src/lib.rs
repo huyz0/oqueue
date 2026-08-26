@@ -10,8 +10,9 @@
 //! copies of a fold this subtle would drift into two meanings of one contract.
 //! `M3.24` records the consequence rather than leaving it to be discovered:
 //! [`MemoryIndex`] and that fake are byte-identical today, so the conformance
-//! suite proves the contract **once**. `M3.11` is where this crate's type first
-//! has what a test double must not — a quota, and an eviction policy.
+//! suite proves the contract **once**. ⚠️ `M3.11` was to end that with a quota
+//! and an eviction policy; it found neither achievable at this index's keying,
+//! so `roadmap.md` carries the enforcement — and the divergence — to `M5`.
 //!
 //! `M3.5` fills in the first of it: [`MemoryIndex`], the materialization a
 //! broker serves reads from. ⚠️ It is a **cache** — droppable at any

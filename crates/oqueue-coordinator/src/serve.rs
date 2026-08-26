@@ -148,7 +148,7 @@ impl CoordinatorLoop {
         } else {
             // ⚠️ **The index is a cache anyone may drop**, and the seam says so
             // in as many words — under memory pressure, on a restart, when
-            // `M3.11`'s quota trips. Folding one entry onto a dropped index
+            // `M5`'s quota trips. Folding one entry onto a dropped index
             // does not merely lose the old records: `IndexState` bases a
             // partition it has forgotten at `Offset::ZERO`, so the fold would
             // place these records at 0 while the log, the allocator and the

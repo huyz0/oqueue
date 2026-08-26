@@ -10,10 +10,16 @@ implementation's worth of assurance presented as two, and the conformance suite
 in `oqueue-index` proves the contract once. The rule-3 test is still met, and
 by the thing that always met it: doc 10 #12's engine — `SQLite`, `redb`,
 `RocksDB`, `fjall`, `SlateDB` — is the foreseeable second implementation, which
-is why the read side is on the trait at all. `M3.11` is where `MemoryIndex`
-stops being the fake with another name, because a quota and an eviction policy
-are what a broker's materialization has and a downstream crate's test double
-must not.
+is why the read side is on the trait at all. ~~`M3.11` is where `MemoryIndex` stops being the fake with another name,
+because a quota and an eviction policy are what a broker's materialization has
+and a downstream crate's test double must not.~~ ⚠️ **Corrected 2026-08-26
+(`M3.11`): it is not, and the divergence moves to `M5` with the enforcement.**
+A ceiling on this index's keying can only be met by evicting, and eviction
+gives back range a rebuild cannot restore — replaying the log reproduces the
+same count and sheds the same entries again. `roadmap.md`'s deferral table
+carries the enforcement to `M5`, beside the coarse per-object keying that makes
+it feasible. Until then the two remain one fold wrapped twice, exactly as
+`M3.24` recorded.
 Date: 2026-08-25
 Requirements: FR-12, FR-13, NFR-2, NFR-3, NFR-30
 

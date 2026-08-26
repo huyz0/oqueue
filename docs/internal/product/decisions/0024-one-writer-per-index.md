@@ -1,6 +1,14 @@
 # 0024. One writer per materialized index, and the seam that enforces it
 
-Status: accepted
+Status: accepted; 2026-08-26 (`M3.11`): ⚠️ **every mention of "`M3.11`'s
+quota" below should now be read as `M5`'s.** The body is left as accepted —
+the `adr` skill records divergence on this line and never by rewriting what
+was believed at decision time — and what changed is only where the quota
+lands: a ceiling at M3's index keying gives back range a rebuild cannot
+restore, so `roadmap.md`'s deferral table carries the enforcement to `M5`
+beside the coarse per-object re-keying, and `M5.md` task 8a receives it.
+Nothing about this ADR's own decision moves: the door a quota asks through is
+still `Coordinator::drop_cache`, and still queued.
 Date: 2026-08-25
 Requirements: FR-12, FR-13, NFR-2, NFR-11
 
