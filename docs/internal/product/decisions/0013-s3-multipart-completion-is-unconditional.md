@@ -1,6 +1,17 @@
 # 0013. S3 multipart completion is unconditional in `M1`; conditioning it is deferred to `M3`
 
-Status: accepted; 2026-08-23: `M2.3` decoupled the conditional-write
+Status: accepted; 2026-08-26 (`M3.12`, `ADR-0026`): point 2's deferral to `M3`
+is **discharged, and re-targeted to `M5`.** `M3` re-checked the upstream gap as
+this ADR asked — against the pinned 0.14.1's vendored source, not the issue
+tracker: `CompleteMultipartMode` is still `pub(crate)`, the public paths still
+pass `Overwrite` literally, and `PutMultipartOptions` still has no `PutMode`, so
+neither of the two live mechanisms became cheaper. What changed is the caller:
+`M3.13`'s flush accumulates in memory and its size is known when the write
+starts, and `ADR-0020` point 4 forbids a conditional write on the offset stream
+anyway — so M3 needs neither half of "streaming, sealed conditionally".
+`ADR-0026` re-targets it to `M5`'s compaction, whose merge output genuinely has
+an unknown final size. Neither mechanism here is chosen; both stay open.
+2026-08-23: `M2.3` decoupled the conditional-write
 ceiling from the part size — a precondition is now bounded by
 `MultipartLimits::max_single_put`, closing `M1.53`'s S3/GCS divergence;
 the decision here (completion itself is unconditional) stands
