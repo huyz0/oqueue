@@ -73,7 +73,7 @@ mod tests {
 
     use crate::produce::tests::{produce_body, replied, verdict};
     use crate::testing::golden_batch;
-    use crate::testing::{partition, topic, with_broken_store, with_dead_coordinator};
+    use crate::testing::{fixture, partition, topic, with_broken_store, with_dead_coordinator};
     use oqueue_core::Operation;
 
     /// ⚠️ **A produce whose object never landed is never acknowledged.** This
@@ -103,6 +103,61 @@ mod tests {
                 .get(),
             0,
             "nothing was committed either"
+        );
+    }
+
+    /// ⚠️ **FR-10, in the words `requirements.md` uses**: kill between PUT and
+    /// ack, and no acknowledged record is lost. The object *is* durable here —
+    /// `crash_after_put_before_ack` writes it and then loses the reply — so
+    /// this is the case where a broker is most tempted to acknowledge: the
+    /// bytes are in the bucket, and only the confirmation is missing.
+    ///
+    /// ⚠️ **It must not, and the reason is not caution.** Nothing committed,
+    /// so the object nobody references holds no offsets; acknowledging would
+    /// hand a client an offset that no metadata record backs and that a
+    /// restart would hand to somebody else. What is lost is an *object* —
+    /// garbage, which `M5`'s reaper collects — and never an acknowledged
+    /// record, which is exactly the property FR-10 asks for.
+    ///
+    /// ⚠️ **A different fault from the one above.** A storm fails the `put`
+    /// before the write; this one writes and then fails. A broker that
+    /// answered them alike would be right about one by luck — and the
+    /// assertion that separates them is the one reading the store's *contents*
+    /// rather than its call count, because a counter cannot tell a `put` that
+    /// failed early from one that failed late.
+    #[tokio::test]
+    async fn a_produce_whose_ack_was_lost_after_a_durable_write_is_still_refused() {
+        let fixture = fixture(&["t"]).await;
+        fixture.lose_the_next_ack();
+        let body = produce_body(9, "t", -1, golden_batch());
+
+        let response = replied(&fixture, 9, &body).await;
+
+        assert_eq!(
+            verdict(&response),
+            (
+                kafka_protocol::error::ResponseError::NotEnoughReplicas.code(),
+                -1
+            ),
+            "the bytes are durable and the ack is not — a client hears the ack"
+        );
+        assert_eq!(
+            fixture
+                .cluster
+                .high_watermark(&topic("t"), partition(0))
+                .get(),
+            0,
+            "no offset was committed, so none may be handed out"
+        );
+        // ⚠️ **The store's contents, not its call count.** `CountingObjectStore`
+        // counts on *invocation*, so a `put` that failed before writing counts
+        // the same as one that failed after — which would make this case a
+        // duplicate of the storm test above rather than the thing that
+        // separates them.
+        assert_eq!(
+            fixture.store.inner().len(),
+            1,
+            "the bytes are in the bucket; only the acknowledgement was lost"
         );
     }
 

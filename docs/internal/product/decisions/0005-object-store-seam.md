@@ -5,7 +5,17 @@ facts the tree has overtaken — "the conditional write this trait does not
 yet have" (it has: `Precondition` on `put` since `M1.5`/`M1.6`, so a
 conformance assertion presents `IfMatches` rather than quiescing writes),
 and the in-memory-backend split `M1.37` already annotated in the body. The
-durability-flag obligation guarantee 1 leaves is `M3`'s, via `M1.58`
+durability-flag obligation guarantee 1 leaves is `M3`'s, via `M1.58`;
+2026-08-26 (`M3.15`): that obligation is **half discharged and the half
+matters**. The flag exists — `Capabilities::injectable_ack_loss` — and the
+case gated on it, `a_failed_put_is_not_proof_of_absence`, is guarantee
+**2**'s: the fake runs it, `S3Store` declares the capability off and the
+suite names the skip in its report. ⚠️ Guarantee 1's *crash* clause is
+untouched and stays `M15`'s (`M1.44`): no single-process fake can show that
+`Ok` survives a process death, which this ADR's own Consequences say. So
+guarantee 1's annotation below is overtaken on "no flag about durability"
+and "no case exercises the crash clause" is overtaken only for the
+injectable half; the crash clause itself is still exercised by nothing
 Date: 2026-08-16
 Requirements: NFR-51
 

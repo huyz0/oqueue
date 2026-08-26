@@ -49,11 +49,30 @@ pub(crate) struct Fixture {
 }
 
 impl Fixture {
+    /// Makes the next `put` write the object durably and *then* fail.
+    ///
+    /// ⚠️ **Not the same fault as [`break_store`](Self::break_store), and the
+    /// difference is FR-10's whole subject.** A storm fails the call *before*
+    /// the write, so nothing lands; this lands the bytes and loses the
+    /// acknowledgement — `ADR-0005` guarantee 2's unknown state, and the
+    /// "kill between PUT and ack" that `requirements.md` names as FR-10's
+    /// verification method. A broker that treated the two alike would be right
+    /// about one of them by luck.
+    pub(crate) fn lose_the_next_ack(&self) {
+        self.store.inner().set_faults(FaultConfig {
+            crash_after_put_before_ack: 1,
+            ..FaultConfig::default()
+        });
+    }
+
     /// Makes the next `calls` store operations fail with a 503 storm.
     ///
     /// ⚠️ **After the fixture exists**, which `with_broken_store` cannot do:
     /// a read path needs something written before the store starts failing,
     /// and a store broken from the start has nothing to read.
+    ///
+    /// ⚠️ **Nothing lands.** The call fails before the write — which is what
+    /// [`lose_the_next_ack`](Self::lose_the_next_ack) is the other half of.
     pub(crate) fn break_store(&self, calls: u32) {
         self.store.inner().set_faults(FaultConfig {
             storm: Some((StormKind::Transient, calls)),

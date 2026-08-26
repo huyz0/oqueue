@@ -47,7 +47,9 @@
 // means the test environment is broken, not that this test should recover.
 #![allow(clippy::expect_used)]
 
-use crate::conformance::{Capabilities, record::record_backend_run, run_conformance_suite};
+use crate::conformance::{
+    Capabilities, Harness, record::record_backend_run, run_conformance_suite,
+};
 use oqueue_core::{ByteRange, Error, MultipartLimits, ObjectKey, ObjectStore, Precondition};
 use oqueue_store::S3Store;
 
@@ -58,13 +60,28 @@ async fn s3_backend_passes_the_full_conformance_suite_against_minio() {
         "AWS_* environment variables must describe a reachable MinIO endpoint \
          when this test is run with --ignored",
     );
-    let report = run_conformance_suite("s3", &store, Capabilities::FULL);
+    // ⚠️ **Not `FULL`, and the one it drops is the point** (`M3.15`). Nothing
+    // can *tell* S3 to lose an acknowledgement after a durable write, so the
+    // case that needs it is declared unsupported and **skipped and recorded**
+    // rather than passed without running — the explicit skip `M1.37` found was
+    // happening by omission instead.
+    //
+    // ⚠️ **Not a durability gap.** S3 is the backend that actually provides
+    // `ADR-0005` guarantee 1; what it lacks is a way to be told to misbehave,
+    // and the skipped case is guarantee 2's.
+    let capabilities = Capabilities {
+        injectable_ack_loss: false,
+        ..Capabilities::FULL
+    };
+    let harness = Harness::new(&store);
+    let report = run_conformance_suite("s3", &harness, capabilities);
 
     assert_eq!(report.backend_name, "s3");
-    assert!(
-        report.skipped.is_empty(),
-        "S3Store declares every capability, so nothing should be skipped: {:?}",
-        report.skipped
+    assert_eq!(
+        report.skipped,
+        vec!["a_failed_put_is_not_proof_of_absence"],
+        "S3Store declares every capability it can, and the one it cannot is \
+         named here rather than quietly absent"
     );
     assert!(
         !report.ran.is_empty(),
