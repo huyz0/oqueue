@@ -53,11 +53,12 @@ impl Cluster {
         partition: PartitionId,
         start: Offset,
         spend: &mut Spend<'_>,
-    ) -> Result<Read, Error> {
+    ) -> Result<Read, ReadFailure> {
         let allowance = spend.allowance;
         let page = self
             .index()
-            .find_batches(topic, partition, start, allowance.bytes)?;
+            .find_batches(topic, partition, start, allowance.bytes)
+            .map_err(|error| ReadFailure { error, fetched: 0 })?;
         let mut records: Vec<u8> = Vec::new();
         let mut fetched: u64 = 0;
         for batch in page {
@@ -100,20 +101,37 @@ impl Cluster {
             // broker had just read. Stopping here answers what is readable and
             // leaves the missing object to be the *first* batch of the next
             // fetch — where it is the honest out-of-range answer.
-            let (read, cost) = self.one_batch(&batch, topic, partition, spend).await;
-            fetched += cost;
-            let mut blob = match read {
+            let fetch = self.one_batch(&batch, topic, partition, spend).await;
+            fetched += fetch.cost;
+            let mut blob = match fetch.blob {
                 Ok(blob) => blob,
                 Err(_) if !records.is_empty() => break,
-                Err(error) => return Err(error),
+                // ⚠️ **The bytes go back with the error.** A read that pulled
+                // a whole bundle off the store and then could not parse it
+                // cost the request exactly what a successful one would have,
+                // and dropping `fetched` here is how a frame naming K
+                // partitions in K malformed bundles bought K whole-object GETs
+                // against a `max_bytes` of one — charged nothing, because the
+                // caller only ever saw an `Error`.
+                Err(error) => return Err(ReadFailure { error, fetched }),
             };
             // ⚠️ The stamp `cluster.rs`'s module doc explains: bytes in storage
             // carry whatever base offset the producer sent, because they were
             // written before anyone knew what order they landed in. A blob too
             // short to hold a batch header is an object disagreeing with the
             // index that named it, so the read fails rather than serving it.
-            rewrite_base_offset(&mut blob, batch.reference().base_offset().get(), 0)
-                .map_err(|_| Error::IndexObjectMismatch)?;
+            if rewrite_base_offset(&mut blob, batch.reference().base_offset().get(), 0).is_err() {
+                // ⚠️ **A tail read's parse failure, counted here and only on a
+                // miss.** It is the same failure the history tier counts inside
+                // `one_batch`; it lands later because the stamp is what fails.
+                if fetch.missed {
+                    spend.objects.note_failure();
+                }
+                return Err(ReadFailure {
+                    error: Error::IndexObjectMismatch,
+                    fetched,
+                });
+            }
             records.append(&mut blob);
         }
         Ok(Read { records, fetched })
@@ -137,7 +155,7 @@ impl Cluster {
         topic: &TopicId,
         partition: PartitionId,
         spend: &mut Spend<'_>,
-    ) -> (Result<Vec<u8>, Error>, u64) {
+    ) -> Fetched {
         match batch {
             IndexedBatch::Inline(entry) => {
                 // ⚠️ **A tail read reports no separate fetch cost**, and that
@@ -146,11 +164,29 @@ impl Cluster {
                 // and the caller already charges the larger of the two.
                 // Counting here as well would be a second name for one thing —
                 // and a branch no test could tell from its absence.
-                let (blob, _) = spend
+                let (blob, missed) = spend
                     .objects
                     .get(self, batch.reference().object(), entry.bytes())
                     .await;
-                (blob, 0)
+                // ⚠️ **Nothing *counted* here.** A store failure was already
+                // counted by `get`, on the miss; a tail read's *parse* failure
+                // happens in the caller, after the stamp, which is where it is
+                // counted — and only if this was a miss.
+                //
+                // ⚠️ **But it is charged, and the charge is not zero.** The
+                // range asked for *is* the batch, so on the success path this
+                // number and the records returned are the same and the caller's
+                // `max` of the two is unchanged. On the *failure* path they are
+                // not: the bytes came off the store and the records did not, so
+                // reporting zero would let a read that pulled a whole batch and
+                // could not stamp it cost the request nothing — the tail tier's
+                // version of the defect `M3.26` fixed on the history tier.
+                let cost = if missed {
+                    blob.as_ref().map_or(0, |bytes| bytes.len() as u64)
+                } else {
+                    0
+                };
+                Fetched { blob, cost, missed }
             }
             IndexedBatch::Footer(object) => {
                 let (whole, missed) = spend
@@ -160,9 +196,32 @@ impl Cluster {
                 match whole {
                     Ok(whole) => {
                         let cost = if missed { whole.len() as u64 } else { 0 };
-                        (slice_region(&whole, topic, partition), cost)
+                        let sliced = slice_region(&whole, topic, partition);
+                        // ⚠️ **A bundle that arrived and would not parse is a
+                        // failure of this request too.** The store was healthy,
+                        // so `get` counted nothing — and without this a frame
+                        // naming K malformed bundles escapes the failure cap
+                        // entirely, which is the only bound a read that
+                        // fetched-then-failed is subject to. ⚠️ **On the miss
+                        // only**: the cap counts distinct objects, and a
+                        // partition that took the same bad bundle out of the
+                        // cache issued no GET — counting it would let one
+                        // corrupt object shared by eight topics refuse six
+                        // healthy partitions behind it.
+                        if missed && sliced.is_err() {
+                            spend.objects.note_failure();
+                        }
+                        Fetched {
+                            blob: sliced,
+                            cost,
+                            missed,
+                        }
                     }
-                    Err(error) => (Err(error), 0),
+                    Err(error) => Fetched {
+                        blob: Err(error),
+                        cost: 0,
+                        missed,
+                    },
                 }
             }
         }
@@ -203,7 +262,7 @@ impl Cluster {
         partition: PartitionId,
         start: Offset,
         spend: &mut Spend<'_>,
-    ) -> Result<Read, Error> {
+    ) -> Result<Read, ReadFailure> {
         self.read(topic, partition, start, spend).await
     }
 }
@@ -221,17 +280,22 @@ impl Cluster {
 /// will refuse it again, and a client repeating the entry that failed is
 /// exactly the shape that turns one frame into a GET per entry.
 ///
-/// ⚠️ **What it holds is bounded by the byte budget, and only because the
-/// read stops on bytes *fetched*.** Every successful GET is charged to the
-/// request, and a read stops as soon as what it has pulled crosses its
-/// allowance — so a partition overshoots by at most the one object that
-/// crossed the line, and once the request's budget is spent later partitions
-/// get a zero allowance and never reach the store. ⚠️ **That is a claim about
-/// [`Cluster::read`]'s stop condition**, not about this map: the map keeps
-/// every object it fetched for the life of the request, which was a
-/// per-object allocation before `M3.22` and is a per-request one now. If that
-/// stop is ever weakened to count returned bytes again, this grows with the
-/// page rather than with the budget.
+/// ⚠️ **What it holds is bounded by the byte budget *per pass*, and only
+/// because the read stops on bytes fetched.** Every successful GET is charged,
+/// and a read stops as soon as what it has pulled crosses its allowance — so a
+/// partition overshoots by at most the one object that crossed the line, and
+/// once a pass's budget is spent its later partitions get a zero allowance and
+/// never reach the store. ⚠️ **That is a claim about [`Cluster::read`]'s stop
+/// condition**, not about this map: the map keeps every object it fetched, and
+/// if that stop is ever weakened to count *returned* bytes again this grows
+/// with the page rather than with the budget.
+///
+/// ⚠️ **Multiply by the passes.** Since `M3.26` this outlives one pass and
+/// lives as long as the request, so a parked fetch holds up to
+/// `MAX_READS_PER_REQUEST` budgets' worth plus one over-the-line object per
+/// pass — the price of not re-downloading a bundle once per wakeup, and the
+/// number to size a broker's memory from. It was a per-object allocation
+/// before `M3.22`, a per-pass one after it, and is a per-request one now.
 ///
 /// ⚠️ **Failures are bounded separately** — see
 /// [`MAX_FAILED_FETCHES_PER_REQUEST`], because a failed read is charged no
@@ -240,6 +304,33 @@ impl Cluster {
 pub struct FetchedObjects {
     seen: HashMap<(ObjectKey, RangeKey), Result<Vec<u8>, Error>>,
     failed: u32,
+}
+
+/// One batch's bytes, what fetching them cost, and whether a GET was issued.
+///
+/// ⚠️ **The third field travels with the other two because the failure cap
+/// counts *distinct objects*.** A caller that learns a read failed but not
+/// whether it missed cannot tell a store that refused an object from a client
+/// naming the same bad object twice — and counting the second is how one
+/// corrupt bundle refuses the healthy partitions behind it.
+struct Fetched {
+    blob: Result<Vec<u8>, Error>,
+    cost: u64,
+    missed: bool,
+}
+
+/// A read that failed, and what it had already cost when it did.
+///
+/// ⚠️ **The pair, because a failure is not free.** A read that pulled a whole
+/// bundle and then could not parse it spent exactly what a successful read
+/// would have; an `Error` alone leaves the caller nothing to charge, which is
+/// how a request naming many malformed objects escaped the budget entirely.
+#[derive(Debug)]
+pub struct ReadFailure {
+    /// Why the read failed.
+    pub error: Error,
+    /// Bytes this read had already pulled from object storage.
+    pub fetched: u64,
 }
 
 /// How many of one request's object reads may *fail* before it stops asking.
@@ -312,6 +403,17 @@ pub struct Read {
 }
 
 impl FetchedObjects {
+    /// Records a failure the store did not report: an object that arrived and
+    /// then would not parse.
+    ///
+    /// ⚠️ **Same counter, and the caller must have missed.** The cap counts
+    /// distinct objects the store could not usefully answer for, so a partition
+    /// that took a bad object out of the cache issued no GET and adds nothing —
+    /// `one_batch` checks that before calling this.
+    pub(crate) const fn note_failure(&mut self) {
+        self.failed += 1;
+    }
+
     /// The object at `key` over `range`, fetched at most once per request.
     ///
     /// Returns the bytes and whether this call actually issued the GET — the

@@ -11,7 +11,8 @@
 // clippy's `redundant_pub_crate` asks for.
 #![allow(clippy::redundant_pub_crate)]
 
-use super::{TopicOutcome, resolved_name};
+use super::TopicOutcome;
+use super::pass::resolved_name;
 use crate::cluster::Cluster;
 use crate::read::Spend;
 use oqueue_codec::error_codes;
@@ -71,7 +72,7 @@ pub(crate) fn refuse_all(
             // name hundreds of thousands, so a registry lock and a `String`
             // allocation per entry would be paid on the path that returns *no*
             // records — the cheap answer costing more contention than the read
-            // it replaced. `one_topic` and `watermarks`, both in `mod.rs`, have
+            // it replaced. `one_topic` and `watermarks`, both in `pass.rs`, have
             // the same shape for the same reason.
             let resolved = resolved_name(cluster, topic, version);
             TopicOutcome {
@@ -238,32 +239,44 @@ pub(crate) async fn one_partition(
             log_start_offset: 0,
             records: read.records,
         },
-        // ⚠️ **A confirmed reap is `OFFSET_OUT_OF_RANGE`.** Hazard H4: object
-        // ids are never reused, so a missing object means those offsets were
-        // deleted, not that they have not been written. ⚠️ **What makes it
-        // *confirmed* here is that there is nothing to refresh** — the index
-        // this read consulted is the coordinator's own, in this process, and
-        // nothing in `M3` removes an entry from it. `M7`'s follower reads a
-        // cache instead, and `read_or_refresh` is where its round trip goes;
-        // until then a second read would pay a GET to be told the same thing. The
-        // client's own `auto.offset.reset` is what decides where it goes next,
-        // which is the point of telling it the truth rather than an empty
-        // partition.
-        // ⚠️ **A failed read costs no *budget*, and does not need to.** What
-        // stops a client repeating a failing partition is the object cache,
-        // which remembers the failure: the second entry issues no GET. Charging
-        // the allowance instead would let one transient fault spend a whole
-        // request's budget on bytes nobody fetched, and answer every healthy
-        // partition behind it with `NONE` and no records — a successful poll
-        // returning nothing, from the mechanism written to prevent exactly that.
-        Err(Error::ObjectNotFound { .. }) => refused(error_codes::OFFSET_OUT_OF_RANGE, high),
-        // ⚠️ **Never an empty partition.** Any other failed read is a fault,
-        // and doc 12 §4.6 names silent wrongness — a successful poll returning
-        // no records — as the failure mode this whole milestone is written
-        // against. `OFFSET_NOT_AVAILABLE` is in the Java consumer's enumerated
-        // fetch-error set and retried; it does not let a client conclude it is
-        // caught up.
-        Err(_) => refused(error_codes::OFFSET_NOT_AVAILABLE, high),
+        Err(failure) => PartitionOutcome {
+            // ⚠️ **A failed read is charged what it *fetched*.** Usually
+            // nothing: a read the store refused, or one refused before its GET,
+            // pulled no bytes — and charging its allowance instead would let
+            // one transient fault spend a whole request's budget on bytes
+            // nobody has, answering every healthy partition behind it with
+            // `NONE` and no records. ⚠️ **But a read that pulled a whole bundle
+            // and then could not parse it cost exactly what a successful one
+            // would**, and until `M3.26` it was charged zero — which left a
+            // frame naming K malformed objects bounded by neither the budget
+            // nor the failure cap.
+            cost: failure.fetched,
+            ..refused(refusal_code(&failure.error), high)
+        },
+    }
+}
+
+/// What a client is told when a read fails.
+///
+/// ⚠️ **A confirmed reap is `OFFSET_OUT_OF_RANGE`.** Hazard H4: object ids are
+/// never reused, so a missing object means those offsets were deleted, not that
+/// they have not been written. ⚠️ **What makes it *confirmed* is that there is
+/// nothing to refresh** — the index the read consulted is the coordinator's
+/// own, in this process, and nothing in `M3` removes an entry from it. `M7`'s
+/// follower reads a cache instead, and `read_or_refresh` is where its round
+/// trip goes; until then a second read would pay a GET to be told the same
+/// thing. The client's own `auto.offset.reset` decides where it goes next,
+/// which is the point of telling it the truth rather than an empty partition.
+///
+/// ⚠️ **Never an empty partition for anything else.** Any other failure is a
+/// fault, and doc 12 §4.6 names silent wrongness — a successful poll returning
+/// no records — as the failure mode this milestone is written against.
+/// `OFFSET_NOT_AVAILABLE` is in the Java consumer's enumerated fetch-error set
+/// and is retried; it does not let a client conclude it is caught up.
+const fn refusal_code(error: &Error) -> i16 {
+    match error {
+        Error::ObjectNotFound { .. } => error_codes::OFFSET_OUT_OF_RANGE,
+        _ => error_codes::OFFSET_NOT_AVAILABLE,
     }
 }
 

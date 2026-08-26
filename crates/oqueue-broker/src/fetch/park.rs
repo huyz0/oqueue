@@ -18,11 +18,13 @@
 // clippy's `redundant_pub_crate` asks for.
 #![allow(clippy::redundant_pub_crate)]
 
+use super::deadline::park_ms;
 use super::partition;
 use super::target::Budget;
 use super::target::{MAX_READS_PER_REQUEST, satisfiable_min_bytes, worth_answering};
 use super::{TopicOutcome, read_all, watermarks};
 use crate::cluster::Cluster;
+use crate::read::FetchedObjects;
 use crate::session::Session;
 use oqueue_codec::error_codes;
 use std::time::Duration;
@@ -91,6 +93,16 @@ pub(crate) async fn read_or_park(
     // ⚠️ Counted up rather than down from a decremented ceiling: the bound is
     // "this many reads", and the test below pins that number exactly.
     let mut reads: u32 = 0;
+    // ⚠️ **One object cache for the whole request, every pass included.** It is
+    // what bounds the request's GETs — nothing dedups a client's partition
+    // list, so the same partition named two hundred times, or four partitions
+    // sharing a bundle, must cost the objects behind them once. ⚠️ **Per
+    // request rather than per pass**, because a parked fetch reads up to
+    // [`MAX_READS_PER_REQUEST`] times over the same offsets: a fresh cache each
+    // pass would re-download every bundle per wakeup and turn
+    // `MAX_FAILED_FETCHES_PER_REQUEST` into two failures *per pass*. The byte
+    // budget is the other way round and `read_all` says why.
+    let mut objects = FetchedObjects::default();
     loop {
         // ⚠️ **Both samples come *before* the read, and that ordering is the
         // whole correctness of the park.** `read_all` awaits object-storage
@@ -102,8 +114,19 @@ pub(crate) async fn read_or_park(
         // that was in the index the whole time.
         let before = watermarks(cluster, request, version);
         let mut applied = watch.applied();
-        let outcomes = read_all(cluster, request, version).await;
+        let outcomes = read_all(cluster, request, version, &mut objects).await;
         reads += 1;
+        // ⚠️ **A pass that spent its whole budget is *not* a reason to stop**,
+        // and `M3.26` shipped a version that thought it was. The argument was
+        // that re-reading the same offsets returns the same bytes, so a pass
+        // that came in short under an exhausted budget had proved the target
+        // unreachable — and the object cache in this same commit is what makes
+        // that false. A second pass takes everything the first fetched out of
+        // the cache for *no budget at all*, so it walks strictly further into
+        // the page: on the history tier, where a partition can spend a
+        // megabyte to hand back an eighth of one, the pass after it reaches
+        // twice as far for one GET. Stopping there hands a busy client half its
+        // configured batch on every poll and doubles its round trips.
         if worth_answering(&outcomes, target)
             || reads >= MAX_READS_PER_REQUEST
             || Instant::now() >= deadline
@@ -134,35 +157,6 @@ pub(crate) async fn read_or_park(
         }
     }
 }
-
-/// How long to park, from what the client asked for.
-///
-/// ⚠️ **Clamped at both ends.** A negative `max_wait_ms` is a client bug and
-/// becomes no park at all rather than an arithmetic surprise; anything above
-/// [`MAX_PARK_MS`] becomes that ceiling.
-fn park_ms(max_wait_ms: i32) -> u64 {
-    u64::from(max_wait_ms.clamp(0, MAX_PARK_MS).unsigned_abs())
-}
-
-/// The longest a fetch may be parked, whatever the client asks for.
-///
-/// ⚠️ **A ceiling on a client's number, which is the one place a broker gets
-/// to disagree with it.** `max_wait_ms` is an `i32`, so a client may name
-/// twenty-four days; a connection held that long survives the topic it was
-/// reading. Kafka's own default is 500 ms and librdkafka's is 100 ms, so a
-/// minute is far above anything a real client asks for and far below anything
-/// that looks like a leak.
-///
-/// ⚠️ **It must stay below whatever [`ConnectionLimits::idle_timeout`] a
-/// composer chooses**, and that is a real constraint rather than a
-/// preference: a client that sends one `Fetch` and waits for the answer sends
-/// nothing while it is parked, so the connection looks idle for the whole
-/// park. A shorter idle timeout tears the connection down mid-poll — the
-/// answer is still written, and then the peer is disconnected after every long
-/// poll. `bin/oqueue` picks 120 s against this 60 s, and its own test says so.
-///
-/// [`ConnectionLimits::idle_timeout`]: crate::ConnectionLimits::idle_timeout
-pub const MAX_PARK_MS: i32 = 60_000;
 
 #[cfg(test)]
 mod tests {
@@ -408,13 +402,19 @@ mod tests {
 
         let response = reader.await.expect("the reader joins");
         assert_eq!(response.responses[0].partitions[0].error_code, 0);
-        // ⚠️ **An exact count, not a bound.** Every batch is in the tail tier,
-        // so a read costs one GET per batch it names, and the reads happen at
-        // one, two, three and four batches — 1+2+3+4. A cap one higher would
-        // read a fifth time and cost 15; one lower would cost 6. A `<=` here
-        // would let the ceiling drift upward unnoticed, which is the whole
-        // thing this constant is for.
-        let expected: u64 = u64::from((1..=MAX_READS_PER_REQUEST).sum::<u32>());
+        // ⚠️ **An exact count, not a bound.** Every batch is in the tail tier
+        // and each pass sees exactly one more of them, so a pass costs one GET
+        // — the *new* batch — and the ones it re-reads are cache hits. A cap
+        // one higher would read a fifth time and cost five; one lower, three.
+        // A `<=` here would let the ceiling drift upward unnoticed, which is
+        // the whole thing this constant is for.
+        //
+        // ⚠️ **It was 1+2+3+4 until `M3.26` made the object cache span the
+        // request.** The count fell because the re-reads stopped paying, not
+        // because the cap moved: a parked fetch re-reads the same offsets by
+        // construction, and paying for them again was the park's own
+        // amplification hiding inside a bounded read count.
+        let expected: u64 = u64::from(MAX_READS_PER_REQUEST);
         assert_eq!(
             fixture.store.counts().count(Operation::Get),
             expected,

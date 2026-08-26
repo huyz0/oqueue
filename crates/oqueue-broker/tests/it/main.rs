@@ -4,6 +4,7 @@
 mod budget;
 mod connection;
 mod corpus;
+mod faults;
 mod matrix;
 mod reads;
 mod reap;

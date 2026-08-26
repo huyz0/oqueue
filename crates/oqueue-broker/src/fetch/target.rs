@@ -24,6 +24,17 @@ use oqueue_codec::error_codes;
 /// [`MAX_READS_PER_REQUEST`] is for — this clamp alone would leave the park
 /// bounded in time and unbounded in reads.
 ///
+/// ⚠️ **And a clamped target can still be unreachable for a *second* reason,
+/// which no clamp here can see** (`M3.26`). This counts bytes a response
+/// *carries*; [`Budget`] counts bytes a read *pulled*, and on the history tier
+/// a batch is one partition's region of a bundle covering every partition that
+/// flush wrote — so a pass can spend a megabyte to hand back an eighth of one.
+/// ⚠️ **What answers it is the object cache, not arithmetic**: the pass after
+/// takes everything already fetched for no budget and walks strictly further,
+/// so the target is reached across passes rather than within one. A request
+/// whose target is unreachable even across all of them parks to its deadline —
+/// which is what `max_wait_ms` means, and it costs sleeping rather than reads.
+///
 /// ⚠️ **Clamped against the *request's* ceiling since `M3.22`**, not against
 /// the constant alone. A client may name `fetch.max.bytes = 65536` and
 /// `fetch.min.bytes = 1048576` — both legal, and neither client validates one
