@@ -1,0 +1,106 @@
+{
+  "commits": [
+    "66642871cd646211cc8080135a106e3b96926122",
+    "90182c48cb6bbd1c0150efa6ae4de0d9524e5226",
+    "5bbba7ecdbe6f58809eeda3ec1ed634b55f9c0b5",
+    "8e008609b33ff0c13943685ffe141a2ae11ff21a",
+    "ceec4c8516250a1877b3c8bf12b2cb8792f62e75",
+    "54129341f751cb10457f981da38d4a6919ee2a86",
+    "a44e828f7b219d304e0c8165ac6a4f629d7feaa8",
+    "49b968c89b3a3b2a64063d780a5bfca126426c74",
+    "94e000408fb422aea9a50c81ff5dd26fc20ff6e8",
+    "4bcfab9056d79924a71f09e2a4e316e66fc98bcc",
+    "a85e14c77df0484eb2af9bd618caf7515ea268d1"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-core/src/metadata_log.rs:112-123 says FakeMetadataLog 'satisfies guarantee 1 vacuously' and 'no M3 row covers that gap'. grep finds only FakeMetadataLog and the test-local RefusableLog implementing the trait. Against that: M3.md's Goal and Completion condition; ADR-0020 point 3 and Consequences; backlog M3.14 ('durable and ordered end to end') and M3.16 (FR-10 fault injection); roadmap.md assigning doc 10 #12 to M6. Concrete consequence: Coordinator::open refuses a non-empty log to prevent re-basing every partition at Offset::ZERO, and with an in-memory log that guard is unreachable, because a restart always presents an empty log while the objects it already assigned offsets to are still in the store. FR-10's acceptance cannot distinguish 'durable in object storage' from 'durable and reachable'. No roadmap deferral row records the gap. The outcome is a decision - pull an engine into M3, or scope the claim and add the deferral row - not a task, so no task_id.",
+      "file": "crates/oqueue-core/src/metadata_log.rs",
+      "id": "8d5795399752",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "M3's completion condition, ADR-0020 point 3, M3.14's acceptance and CommitAck's 'its existence is the durability claim' all assert a durability the tree has no implementation of: FakeMetadataLog is the only MetadataLog, and doc 10 #12's engine is M6's."
+    },
+    {
+      "evidence": "M3.14 now owns: replacing StubCluster; max_wait_ms as a select! on IndexWatch::wait_for plus the end-to-end fetch-races-produce test; ListOffsets routed Linearizable (H1); the session carrying CommitAck::watermark() across requests (H2); 404-means-reaped retried through a coordinator refresh, instrumented (H4's second half); and ADR-0022's reader-side byte budget. Each has its own test and failure mode. Non-negotiable 1 is one task = one commit. Outside tests, CacheState::admits, find_batches, LogApplier, IndexWatch, DeltaStream, MemoryIndex and SessionWatermark have no caller. The outward deferrals are correctly formed (roadmap row plus a receiving task in M5.md/M6.md/M7.md); the inward ones have no plan anchor, since M3.md's twenty provisional tasks contain no 'compose the broker' task at all.",
+      "file": "docs/internal/product/backlog.md",
+      "id": "e5dd771017e1",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "M3.14 has accreted five independent commit-sized changes and is the sole production consumer of everything M3.8-M3.10 built, so the milestone's entire functional claim rests on one row that cannot be one commit.",
+      "task_id": "M3.14"
+    },
+    {
+      "evidence": "With doc comments stripped and the type renamed, materialized_index.rs:160-227 and memory.rs:9-86 are identical: a Mutex<IndexState> delegating five methods. The fold, the tier demotion, the paging rule and the first_candidate binary search are all in index_state.rs. ADR-0022 decision 1 claims contracts.md rule 3's test is met because two implementations exist; running one fold through two identical wrappers is one implementation's worth of assurance. The constraint is real - contracts.md rules 9-10 force the faithful fake into core - so the resolution is to collapse MemoryIndex or move the fold, not to keep the documents as they are. M3.11 is the next row that must write index code.",
+      "file": "crates/oqueue-index/src/memory.rs",
+      "id": "7acad3513c9b",
+      "kind": "abstraction",
+      "severity": "major",
+      "summary": "MemoryIndex and FakeMaterializedIndex are the same code, and both the fold and the search live in oqueue-core::IndexState, so oqueue-index no longer holds what architecture.md, its README, its AGENTS.md and ADR-0022's 'two implementations' claim all say it holds.",
+      "task_id": "M3.11"
+    },
+    {
+      "evidence": "coordinator.rs says 'Decided here (M3.9)'. No ADR records it: ADR-0020 makes the coordinator sole writer of the metadata log and never of the index, and its Status line, amended by M3.4 and M3.5, was not touched by M3.9 or M3.10. The rule is restated at materialized_index.rs (clear), applier.rs, coordinator.rs's publish comment, and backlog M3.11. Enforcement was available: open(log, index: Arc<dyn MaterializedIndex>, epoch) requires the caller to retain a handle carrying apply and clear, and M3.14 must retain one to serve fetches; returning a read-only view or a CoordinatorIndex newtype exposing only applied_upto/end_offset/find_batches makes both M3.11's degraded mode and M3.14's fetch path type-checked. That is a contract change and needs its own ADR.",
+      "file": "crates/oqueue-coordinator/src/coordinator.rs",
+      "id": "ada583ebaaa7",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "'The coordinator is the sole writer of its own index' is an ADR-weight decision recorded in a rustdoc and restated in four places, and the seam's own signature is what makes it unenforceable when a read-only view would make it structural.",
+      "task_id": "M3.14"
+    },
+    {
+      "evidence": "M3.18 lists findings from M3.7, M3.8 and M3.9 only, while M3.10's commit body says 'The major is scheduled on M3.18' and no such text is in the row. Still live: ADR-0020 point 1 says 'M3.10 owns picking one' although ADR-0023 picked it, and 0020's Status line carries M3.4 and M3.5 notes and nothing since; commit_version.rs still teaches 'ReadMode::AtLeast(v) is a u64 compare and nothing more', which read_mode.rs made false; IndexState::tail() deep-clones up to 128 entries with no caller; and the duplicated paragraph at index_state.rs:9 vs :112. M3.10 was the last commit of the checkpoint, so the 'next commit carries the row' convention had nothing to carry it.",
+      "file": "docs/internal/product/backlog.md",
+      "id": "9c3f5ba0f549",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "The rule-15 harvest stopped part-way: M3.10's major and five minors and two of M3.6's are in no row, and ADR-0020 point 1 still reads as an open decision that ADR-0023 closed.",
+      "task_id": "M3.18"
+    },
+    {
+      "evidence": "NOT_YET_BUILT keys 'RecordBatch encode / decode', 'CRC-32C over representative sizes' and 'Varint decode (and the paths that avoid it)' to 'M2 has not landed'; roadmap.md marks M2 complete. git grep for a hot-path marker returns nothing and no crate declares a [[bench]] target. The script's stale-entry check only fires once a marker appears, i.e. only after someone does the work the entry was excusing, so the allowlist decays silently - performance.md rule 19's 'so the list above cannot silently rot' is exactly what is not held. M3.18 owns only the fourth row, whose reason M3's close will falsify the same way.",
+      "file": "scripts/check-hot-path-bench.sh",
+      "id": "7ec3bcb831af",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-hot-path-bench.sh reports 8 of 8 hot paths allowlisted and exits 0 while three of its NOT_YET_BUILT reasons say 'M2 has not landed' and M2 is complete; nothing can detect a falsified reason, and no benchmark exists anywhere in the workspace.",
+      "task_id": "M3.18"
+    },
+    {
+      "evidence": "Comment-line ratios: coordinator.rs 243/440, applier.rs 121/183, materialized_index.rs 143/227, subscribe.rs 92/150, staleness.rs 149/273 - 55-66%, against oqueue-codec 18-31% and store.rs 45%. materialized_index.rs was split out because the trait file reached 500 lines while holding ~84 lines of code, and tests/it/materialized_index.rs now stands at 496 of 500, so code-structure.md rule 18's design signal now fires on prose. index_state.rs:9 and :112 carry the same sentence verbatim, which is the M3.6 minor relocated rather than resolved.",
+      "file": "crates/oqueue-core/src/index_state.rs",
+      "id": "98e265bdab47",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Doc-comment density roughly doubled against M1/M2 code, the 500-line file gate is now being consumed by prose rather than by design complexity, and one paragraph is duplicated verbatim inside a single file."
+    },
+    {
+      "evidence": "backlog.md's 'Dissolved into M3.19' and 'moved to M3.19, see M1.7's own row', against the M3 decomposition M3.0-M3.18 and roadmap.md, which correctly records the alg field as 'received by M3.13'. The intended referent was M3.md's task 19; as an ID it reads as a row nothing lists.",
+      "file": "docs/internal/product/backlog.md",
+      "id": "73be67179010",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "backlog.md points twice at task M3.19, which does not exist - M3 stops at M3.18 and the region header's alg field went to M3.13."
+    },
+    {
+      "evidence": "CountingObjectStore decorates the ObjectStore trait, and roadmap.md's M1.16 row already records that it undercounts a multipart put's real request cost - CreateMultipartUpload plus N UploadParts plus CompleteMultipartUpload, all one counted Put - deferred to M14. The gate will read identically for a one-request flush and a thousand-request one. That may be the intended reading (one object, not one HTTP request), but the completion condition says PUT and a reader will take it literally.",
+      "file": "docs/internal/product/backlog.md",
+      "id": "226378f70f72",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "M3.16's FR-32 claim ('a flush spanning N topics issues exactly one PUT') will be measured by a counter that counts a multipart upload as one Put, and M3.13 is specified to be built on M3.12's streaming multipart writer."
+    },
+    {
+      "evidence": "MAX_METADATA_STALENESS_MS, TAIL_WINDOW_ENTRIES, MAX_BATCHES_PER_PAGE, COMMIT_QUEUE_DEPTH, REBUILD_PAGE_ENTRIES, DELTA_BUFFER_ENTRIES, APPLY_BATCH_ENTRIES. m0-complete.sh's NFR_CONSTANTS greps '^NAME=' in shell scripts and cannot see a Rust const; check-drift.sh only fails a line that names a threshold and reads the environment on the same line. So MAX_METADATA_STALENESS_MS - which ADR-0021 makes the floor for M5's deletion_delay and whose own Status warns is 'a tightening no gate objects to' - is pinned by nothing. Separately REBUILD_PAGE_ENTRIES=1024 and APPLY_BATCH_ENTRIES=1000 both bound one all-or-nothing index transaction, in crates that cannot see each other's constant.",
+      "file": "crates/oqueue-core/src/staleness.rs",
+      "id": "eaa1d9925f07",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "Seven new Rust constants each recite 'a constant rather than a knob, per AGENTS.md non-negotiable 2' while no gate pins any of their values, and two of them bound the same durable transaction size with different numbers in different crates."
+    }
+  ],
+  "milestone": "M3",
+  "recorded_at": "2026-08-25T12:15:39Z",
+  "reviewer": "claude-opus-5",
+  "verdict": "changes-requested"
+}

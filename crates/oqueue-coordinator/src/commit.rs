@@ -83,11 +83,20 @@ impl Assignment {
 
 /// A committed position, and the epoch of the coordinator that decided it.
 ///
-/// ⚠️ **Its existence is the durability claim.** `ADR-0020` point 3 orders the
-/// coordinator assign → journal → ack, so nothing constructs one of these
-/// before the metadata record covering it is durable. A caller that has one may
+/// ⚠️ **Its existence is the durability claim, and the claim is exactly as
+/// strong as the log underneath.** `ADR-0020` point 3 orders the coordinator
+/// assign → journal → ack, so nothing constructs one of these before the
+/// metadata record covering it has been appended. A caller that has one may
 /// acknowledge to its client; a caller that does not has no offset to report,
 /// which is what [`UNASSIGNED_OFFSET`] is for.
+///
+/// ⚠️ **In M3 that append lands in an in-memory log** — `FakeMetadataLog` is
+/// the only [`MetadataLog`](oqueue_core::MetadataLog) built, and the durable
+/// engine is doc 10 #12, deferred to `M6` (`M6.md` task 7a). So this
+/// acknowledges *the object is durable* and *the position is committed to a
+/// log that does not survive the process*. FR-10 asks for the first and is
+/// met; anything reading this as surviving a restart is reading `M3.md`'s
+/// Goal as it stood before `M3.19` corrected it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommitAck {
     version: CommitVersion,

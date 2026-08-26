@@ -115,12 +115,22 @@ pub trait MetadataLog: Send + Sync + core::fmt::Debug {
 /// vacuously — nothing here survives the process — so a test that means to
 /// exercise crash behaviour cannot get it from this type.
 ///
-/// ⚠️ And **no `M3` row covers that gap for this seam.** `M3.15`'s durability
-/// conformance case is [`ObjectStore`](crate::ObjectStore)'s
+/// ⚠️ And **no `M3` row covers that gap for this seam**, which is a scoping
+/// fact about the whole milestone rather than a note about this type. `M3.15`'s
+/// durability conformance case is [`ObjectStore`](crate::ObjectStore)'s
 /// (`crash_after_put_before_ack`), not this trait's. Guarantee 1 becomes
 /// checkable only when a real engine exists to check it against, which is
-/// doc 10 #12 — still open, and `M6`'s to close. Until then the guarantee is
-/// stated and unenforced, which is worth knowing rather than discovering.
+/// doc 10 #12 — still open, and `M6`'s to close (`M6.md` task 7a, and
+/// `roadmap.md`'s deferral table, recorded by `M3.19`).
+///
+/// ⚠️ **So an M3 broker is durable in object storage and not in its position.**
+/// A restart presents an empty log, which makes
+/// `oqueue-coordinator::Coordinator::open`'s non-empty-log guard unreachable,
+/// and the allocator re-bases every partition at
+/// [`Offset::ZERO`](crate::Offset::ZERO) over objects that already hold those
+/// offsets. FR-10 is unaffected — it says "durable in object storage" — and
+/// `M3.md`'s Goal, which said more than that, is corrected rather than left to
+/// be discovered by whoever first restarts a broker.
 pub struct FakeMetadataLog {
     entries: Mutex<Vec<MetadataEntry>>,
 }

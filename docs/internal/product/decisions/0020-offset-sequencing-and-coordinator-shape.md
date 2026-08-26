@@ -20,6 +20,24 @@ per lookup is the per-call allocation `ADR-0004` rejected on `Clock` by name.
 That is `M3`'s answer for an in-memory fold, not the project's: a disk-backed
 engine (doc 10 #12, `M6`) may want an async read, and if it does that is a
 contract change with its own ADR rather than something this note settles.
+2026-08-25 (`M3.19`, from M3's checkpoint milestone review): ⚠️ **point 3's
+"durable" is scoped, and this note is the correction rather than a gloss.**
+Point 3 says "the ack the client sees already reflects a committed, durable
+position", and `M3.md`'s Goal says a record is acked only once it is in object
+storage **and** its position is committed. The second half is not true of what
+M3 ships: `FakeMetadataLog` is the only `MetadataLog` in the tree, point 5
+deferred the engine to doc 10 #12, and `roadmap.md` assigns that to **M6**. So
+in M3 the object is durable and the *position* is in memory — a restart finds
+an empty log, `Coordinator::open`'s non-empty-log guard is unreachable, and the
+allocator re-bases at `Offset::ZERO` over objects that already hold those
+offsets. ⚠️ **FR-10 is unaffected**, and that is the reason this is a scoping
+note and not a milestone in trouble: FR-10 says "durable in object storage" and
+says nothing about the metadata log. What was overclaimed is this ADR's prose
+and `M3.md`'s Goal, both corrected, with the residue recorded in `roadmap.md`'s
+deferral table and received by `M6.md`. ⚠️ **Pulling an engine into M3 was the
+alternative and is declined for the reason this ADR already gives**: doc 13 §6
+asks for a benchmark that has not been run, and picking one without it "would
+be an invented number wearing an ADR's clothes".
 Date: 2026-08-23
 Requirements: FR-10, FR-11, FR-12, FR-13, FR-32, NFR-1, NFR-2, NFR-3, NFR-21
 
@@ -128,8 +146,21 @@ Concretely:
    past `v` for unrelated commits). This ADR states the requirement and does
    not choose the mechanism; the candidates are a shard-scoped epoch beside
    the version, or persisting the high-water version with the shard so it
-   resumes rather than restarts. **`M3.10` owns picking one**, and cannot
-   claim read-your-writes without it.
+   resumes rather than restarts. ~~**`M3.10` owns picking one**, and cannot
+   claim read-your-writes without it.~~
+   ⚠️ **Picked, and this paragraph is only half discharged.** `ADR-0023`
+   (`M3.10`) takes **the epoch pair**: a watermark is
+   `(CoordinatorEpoch, CommitVersion)`, so a line carried across a rebalance
+   is *incomparable* rather than falsely comparable, and one round trip per
+   session puts it right. The other candidate — persisting the high-water
+   version with the shard — is rejected there for making correctness depend
+   on a durable write landing during a rebalance, and stays available to `M7`
+   as an optimization on top rather than an alternative to it. ⚠️ **The
+   *shard identity* half is not discharged**: it needs `MetadataShardId`,
+   which is `M7`'s, so today two shards' first coordinators both sit at
+   `CoordinatorEpoch::ZERO` and a watermark from one would compare *equal by
+   epoch* against the other's cache. `roadmap.md`'s deferral table carries
+   it; `M7.md` task 17a receives it.
 2. Producers race to accumulate batches and flush independently (M2's
    connection layer already does this); the coordinator does not arbitrate
    who may PUT. It only decides, after a PUT lands, what offset range that
