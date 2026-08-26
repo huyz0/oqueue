@@ -27,6 +27,7 @@ mod answer;
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use crate::ingest::verify;
+use crate::session::Session;
 use answer::{PartitionSlot, Slot, answer};
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
@@ -60,6 +61,7 @@ struct TopicOutcome {
 /// Decodes, verifies, flushes, answers — or stays silent for `acks=0`.
 pub(crate) async fn handle(
     cluster: &Cluster,
+    session: &Session,
     prelude: RequestPrelude,
     body: &[u8],
 ) -> HandlerResponse {
@@ -88,6 +90,13 @@ pub(crate) async fn handle(
         Ok(Vec::new())
     } else {
         cluster.flush(pending.bundle).await.map(|ack| {
+            // ⚠️ **Remembered before the response is written**, which is the
+            // ordering hazard H2 turns on: a client that reads on the same
+            // connection the moment it sees this ack must find the bar already
+            // raised. Setting it after the write would leave a window in which
+            // the client has the offset and this broker has not yet promised
+            // to serve it.
+            session.observe(ack.watermark());
             ack.assignments()
                 .iter()
                 .map(|assignment| assignment.base_offset().get())
@@ -271,7 +280,8 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn replied(fixture: &Fixture, version: i16, body: &[u8]) -> ProduceResponse {
-        let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude(version), body).await
+        let HandlerResponse::Reply(out) =
+            handle(&fixture.cluster, &fixture.session, prelude(version), body).await
         else {
             panic!("an acks != 0 produce replies");
         };
@@ -333,6 +343,32 @@ pub(crate) mod tests {
                 .high_watermark(&topic("t"), partition(0))
                 .get(),
             0
+        );
+    }
+
+    /// ⚠️ **The ack's watermark is what the session remembers**, and this is
+    /// the half of read-your-writes that lives on the write path. Without it
+    /// the next fetch on this connection has no promise to keep, and hazard
+    /// H2's protection is gone with nothing to notice — in this broker
+    /// especially, where the coordinator folds before it acks and every fetch
+    /// would happen to be fresh anyway.
+    #[tokio::test]
+    async fn a_produce_leaves_its_watermark_on_the_session() {
+        let fixture = fixture(&["t"]).await;
+        assert_eq!(fixture.session.watermark(), None, "nothing produced yet");
+
+        let body = produce_body(9, "t", -1, golden_batch());
+        assert_eq!(verdict(&replied(&fixture, 9, &body).await), (0, 0));
+
+        let remembered = fixture
+            .session
+            .watermark()
+            .expect("the ack's watermark is remembered");
+        assert_eq!(remembered.epoch(), fixture.cluster.epoch());
+        assert_eq!(
+            Some(remembered.version()),
+            fixture.cluster.watch().applied(),
+            "and it is the version the index folded for this commit"
         );
     }
 
@@ -433,7 +469,7 @@ pub(crate) mod tests {
         let fixture = fixture(&["t"]).await;
         let body = produce_body(9, "t", 0, golden_batch());
         assert!(matches!(
-            handle(&fixture.cluster, prelude(9), &body).await,
+            handle(&fixture.cluster, &fixture.session, prelude(9), &body).await,
             HandlerResponse::Silent
         ));
         assert_eq!(fixture.store.counts().count(Operation::Put), 1);

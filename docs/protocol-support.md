@@ -25,6 +25,7 @@ no runtime path anywhere in the workspace.
 |---|---|---|---|
 | Produce | 0 | 3–13 | v0–2 removed by KIP-896. Exactly one RecordBatch (v2 magic) per partition; CRC-32C verified on ingest; base offset assigned by header rewrite. v13 addresses topics by id. |
 | Fetch | 1 | 4–17 | Returns whole batches from the offset asked for, resolved through the index — ⚠️ **not from the log start**, which is what `M2`'s stub had to do and what this row said until `M3.14`. Long-polls on `max_wait_ms`/`min_bytes` (`M3.20`). Fetch sessions declined (`session_id` 0 → clients full-fetch). v13+ addresses topics by id. |
+| `ListOffsets` | 2 | 1–9 | `EARLIEST` (-2) and `LATEST` (-1) answered from the coordinator's own index, never a cache — hazard H1, whose symptom is negative consumer lag. ⚠️ A **wall-clock** timestamp is refused with `UNSUPPORTED_VERSION` (35): there is no index by time, and the nearest offset would be a silent wrong answer. ⚠️ **Not code 43**, the obvious choice — the Java consumer maps that one to a null in `offsetsForTimes`, which an application cannot tell from a truthful "nothing at or after that time". ⚠️ **A null topic name closes the connection**: the field is nullable on the request wire and not on the response wire, so there is nothing parsable to answer with. v0 is a different message (an array of offsets per partition, pre-KIP-79) and is not advertised. |
 | Metadata | 3 | 0–13 | `allow_auto_topic_creation` honoured from v4 (historical always-create below). Topic ids from v10. Single node, single partition per topic. |
 | ApiVersions | 18 | 0–3 | Answered before anything else; unsupported versions get the v0-bodied `UNSUPPORTED_VERSION` fallback with the table populated. |
 
@@ -76,6 +77,27 @@ unadvertised version has no response the client would parse, and outside
 - **`max_bytes` is not honoured.** Both the request-level and per-partition
   fields are parsed and discarded; a fetch is bounded by a per-partition
   constant instead. `M3.22` owns the reader's byte budget.
+- **Read-your-writes is per connection.** A produce's ack carries a commit
+  watermark, the connection remembers it, and the next fetch on that connection
+  waits for the index to fold that far before it answers (hazard H2,
+  `ADR-0023`). ⚠️ **The wait is bounded by the 5 s staleness budget, not by the
+  client's `fetch.max.wait.ms`** — a non-blocking poll must not be able to
+  switch a correctness guarantee off — and ⚠️ **a wait that runs out is an
+  error, not an empty partition**: `OFFSET_NOT_AVAILABLE` (78), which the Java
+  consumer's fetch error handling enumerates and retries. ⚠️ **Not
+  `LEADER_NOT_AVAILABLE`**, the obvious choice — that code is *not* in that
+  set, and falls through to an `IllegalStateException` out of `poll()`, so a
+  refusal meant to protect a client would kill it. An empty partition is what a
+  client reads as "nothing was written", which is the failure this exists to
+  prevent.
+  ⚠️ **Two connections are two sessions, and that is weaker than Kafka.** Real
+  Kafka gives read-your-writes *across* connections: an acked produce is in the
+  leader's log, so any consumer of that leader sees it once the high watermark
+  advances, and no client has ever had to share a connection to get it. Here
+  the guarantee is per connection because the session is where the watermark
+  lives. ⚠️ **A genuine gap, not a non-gap** — invisible today only because a
+  single-node broker's index *is* the coordinator's and therefore never behind,
+  and real the moment a reader is a different process (`M7`).
 - **Unknown topic ids answer `UNKNOWN_TOPIC_ID` (100)**; unknown names
   answer `UNKNOWN_TOPIC_OR_PARTITION` (3) — one refusal per addressing
   path, as real brokers do.

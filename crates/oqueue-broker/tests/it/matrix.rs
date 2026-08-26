@@ -34,6 +34,30 @@ fn framed(api_key: ApiKey, version: i16, body: &[u8]) -> Vec<u8> {
     frame
 }
 
+/// The smallest `ListOffsets` that asks a real question: partition 0 of `"t"`
+/// at LATEST.
+///
+/// ⚠️ **Its own function so `minimal_body` stays under fifty lines**, and
+/// because this is the one API whose minimal body is not `Default::default()`
+/// — an empty topic list would be answered without touching a partition, which
+/// is not what FR-2's matrix is asking.
+fn list_offsets_body(out: &mut Vec<u8>, version: i16) {
+    use kafka_protocol::messages::list_offsets_request::{ListOffsetsPartition, ListOffsetsTopic};
+    let mut request = kafka_protocol::messages::ListOffsetsRequest::default();
+    request.replica_id = kafka_protocol::messages::BrokerId(-1);
+    let mut topic = ListOffsetsTopic::default();
+    topic.name = TopicName(StrBytes::from_static_str("t"));
+    let mut partition = ListOffsetsPartition::default();
+    partition.partition_index = 0;
+    // ⚠️ `-1` is LATEST, the sentinel a real consumer sends; a wall
+    // clock timestamp is the one shape this broker refuses, and this
+    // matrix asks for a real answer.
+    partition.timestamp = -1;
+    topic.partitions.push(partition);
+    request.topics.push(topic);
+    request.encode(out, version).expect("encodes");
+}
+
 /// The smallest valid body for `api_key` at `version`, against a cluster
 /// that has topic `"t"` — enough for a real answer, not an error dance.
 fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
@@ -44,6 +68,7 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
                 .encode(&mut body, version)
                 .expect("encodes");
         }
+        ApiKey::ListOffsets => list_offsets_body(&mut body, version),
         ApiKey::Metadata => {
             MetadataRequest::default()
                 .encode(&mut body, version)
@@ -103,6 +128,13 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         ApiKey::ApiVersions => {
             kafka_protocol::messages::ApiVersionsResponse::decode(&mut rest, version)
                 .expect("ApiVersions reply decodes")
+                .error_code
+        }
+        ApiKey::ListOffsets => {
+            kafka_protocol::messages::ListOffsetsResponse::decode(&mut rest, version)
+                .expect("ListOffsets reply decodes")
+                .topics[0]
+                .partitions[0]
                 .error_code
         }
         ApiKey::Metadata => {

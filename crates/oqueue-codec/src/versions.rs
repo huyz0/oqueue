@@ -34,7 +34,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 4] = [
+pub static ADVERTISED: [Advertised; 5] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -46,6 +46,17 @@ pub static ADVERTISED: [Advertised; 4] = [
         min: 4,
         max: 17,
         flexible_from: Some(12),
+    },
+    Advertised {
+        // ⚠️ **From v1, not v0.** v0 answers an *array* of offsets per
+        // partition — the pre-KIP-79 shape, where a client asked for N and got
+        // a list — and nothing since Kafka 0.10 sends it. Advertising a
+        // version means serving it (FR-2, `matrix.rs`), so the floor is where
+        // the single-offset response begins.
+        api_key: ApiKey::ListOffsets,
+        min: 1,
+        max: 9,
+        flexible_from: Some(6),
     },
     Advertised {
         api_key: ApiKey::Metadata,
@@ -83,8 +94,8 @@ mod tests {
     use super::{ADVERTISED, Advertised, advertised_for, supports};
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
-        ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse, MetadataRequest,
-        MetadataResponse, ProduceRequest, ProduceResponse,
+        ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse, ListOffsetsRequest,
+        ListOffsetsResponse, MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -104,6 +115,10 @@ mod tests {
                     ApiKey::Produce => (
                         ProduceRequest::header_version(version),
                         ProduceResponse::header_version(version),
+                    ),
+                    ApiKey::ListOffsets => (
+                        ListOffsetsRequest::header_version(version),
+                        ListOffsetsResponse::header_version(version),
                     ),
                     ApiKey::Fetch => (
                         FetchRequest::header_version(version),
@@ -163,6 +178,7 @@ mod tests {
             match row.api_key {
                 ApiKey::Produce => pin::<ProduceRequest>(row),
                 ApiKey::Fetch => pin::<FetchRequest>(row),
+                ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
             }
@@ -188,6 +204,7 @@ mod tests {
             match row.api_key {
                 ApiKey::Produce => within::<ProduceRequest>(row),
                 ApiKey::Fetch => within::<FetchRequest>(row),
+                ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
             }

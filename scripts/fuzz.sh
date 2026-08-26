@@ -85,6 +85,7 @@ declare -A COVERED_BY_REQUEST=(
   [metadata]="request"
   [produce]="request"
   [fetch]="request"
+  [listoffsets]="request"
 )
 for src in "$REPO_ROOT"/crates/oqueue-codec/src/*.rs; do
   module="$(basename "$src" .rs)"

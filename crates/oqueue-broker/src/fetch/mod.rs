@@ -26,33 +26,40 @@
 //! semantics**: the deadline is the client's `max_wait_ms` and the timer is
 //! the client's too — the broker contributes a wakeup, not a poll interval.
 
+// ⚠️ `pub(crate)` inside a private module: `unreachable_pub` denies the `pub`
+// clippy's `redundant_pub_crate` asks for.
+#![allow(clippy::redundant_pub_crate)]
+
 mod park;
 mod partition;
 mod target;
 
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
+use crate::session::Session;
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
 use oqueue_codec::fetch::{
     FetchResponse, FetchResponsePartition, FetchResponseTopic, decode_request,
 };
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
+use oqueue_core::{PartitionId, TopicId};
 pub use park::MAX_PARK_MS;
 use park::read_or_park;
 use partition::{PartitionOutcome, one_partition};
 
 /// One topic's response, owned so the borrowed [`FetchResponseTopic`] can
 /// point into its echoed name and its concatenated batch bytes.
-struct TopicOutcome {
+pub(crate) struct TopicOutcome {
     name: Option<String>,
     topic_id: [u8; 16],
-    partitions: Vec<PartitionOutcome>,
+    pub(crate) partitions: Vec<PartitionOutcome>,
 }
 
 /// Decodes, resolves, reads, answers — or closes on a malformed body.
 pub(crate) async fn handle(
     cluster: &Cluster,
+    session: &Session,
     prelude: RequestPrelude,
     body: &[u8],
 ) -> HandlerResponse {
@@ -69,7 +76,7 @@ pub(crate) async fn handle(
         return HandlerResponse::Close;
     }
 
-    let outcomes = read_or_park(cluster, &request, version).await;
+    let outcomes = read_or_park(cluster, session, &request, version).await;
 
     let response = FetchResponse {
         topics: outcomes
@@ -101,6 +108,51 @@ pub(crate) async fn handle(
     // (`encode_response` writes it).
     oqueue_codec::fetch::encode_response(&mut out, version, &response);
     HandlerResponse::Reply(out)
+}
+
+/// Every requested partition, read once.
+pub(crate) async fn read_all(
+    cluster: &Cluster,
+    request: &oqueue_codec::fetch::FetchRequest<'_>,
+    version: i16,
+) -> Vec<TopicOutcome> {
+    let mut outcomes: Vec<TopicOutcome> = Vec::with_capacity(request.topics.len());
+    for topic in &request.topics {
+        outcomes.push(one_topic(cluster, topic, version).await);
+    }
+    outcomes
+}
+
+/// Where each requested partition's log currently ends.
+///
+/// ⚠️ **The cheap half of a re-read.** Every entry here is an index lookup, so
+/// asking after every wakeup costs nothing an idle shard would notice — which
+/// is what lets the expensive half happen only when something moved.
+pub(crate) fn watermarks(
+    cluster: &Cluster,
+    request: &oqueue_codec::fetch::FetchRequest<'_>,
+    version: i16,
+) -> Vec<i64> {
+    let mut ends = Vec::new();
+    for topic in &request.topics {
+        let name = resolved_name(cluster, topic, version);
+        for partition in &topic.partitions {
+            // ⚠️ **Unresolvable entries are skipped, not given a sentinel.** A
+            // topic this broker does not host is a refusal, and a refusal is
+            // answered rather than parked on — so nothing here can be waiting
+            // on one, and a sentinel would only be a value nothing compares.
+            // Skipping is stable across a park because topics are never
+            // removed, so the two vectors line up.
+            if let Some(pair) = name
+                .as_deref()
+                .and_then(|name| TopicId::new(name.to_owned()).ok())
+                .zip(PartitionId::new(partition.index).ok())
+            {
+                ends.push(cluster.high_watermark(&pair.0, pair.1).get());
+            }
+        }
+    }
+    ends
 }
 
 /// The topic this entry names, whichever way this version addresses topics.
@@ -287,7 +339,8 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn replied(fixture: &Fixture, version: i16, body: &[u8]) -> FetchResponse {
-        let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude(version), body).await
+        let HandlerResponse::Reply(out) =
+            handle(&fixture.cluster, &fixture.session, prelude(version), body).await
         else {
             panic!("a fetch with a legal isolation level replies");
         };
@@ -385,6 +438,7 @@ pub(crate) mod tests {
         assert!(matches!(
             handle(
                 &fixture.cluster,
+                &fixture.session,
                 prelude(13),
                 &fetch_body(13, by_id(&fixture), 0, 7)
             )

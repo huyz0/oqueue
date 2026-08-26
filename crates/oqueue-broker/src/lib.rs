@@ -32,9 +32,11 @@ pub mod dispatch;
 pub mod fetch;
 mod flush;
 mod ingest;
+pub mod listoffsets;
 pub mod metadata;
 pub mod produce;
 mod read;
+pub mod session;
 #[cfg(test)]
 mod testing;
 mod writer_id;
@@ -43,4 +45,5 @@ pub use cluster::{Cluster, FlushError, Sequencing};
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, serve_connection};
 pub use dispatch::Dispatcher;
 pub use fetch::MAX_PARK_MS;
+pub use session::Session;
 pub use writer_id::WriterId;

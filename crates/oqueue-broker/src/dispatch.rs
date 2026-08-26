@@ -29,13 +29,25 @@ use oqueue_codec::versions::supports;
 #[derive(Debug)]
 pub struct Dispatcher {
     cluster: std::sync::Arc<crate::cluster::Cluster>,
+    session: crate::session::Session,
 }
 
 impl Dispatcher {
-    /// A dispatcher over `cluster`.
+    /// A dispatcher over `cluster`, and **one session**.
+    ///
+    /// ⚠️ **Build one per connection.** The session is what carries a
+    /// producer's own commit watermark into its next fetch (hazard H2,
+    /// `ADR-0023`), and a session is per connection because that is the scope
+    /// a client understands: two connections are two clients as far as
+    /// read-your-writes is concerned, and sharing one would let an unrelated
+    /// client's produce raise the freshness bar for everybody. Sharing the
+    /// `Cluster` is the point; sharing the `Dispatcher` is not.
     #[must_use]
-    pub const fn new(cluster: std::sync::Arc<crate::cluster::Cluster>) -> Self {
-        Self { cluster }
+    pub fn new(cluster: std::sync::Arc<crate::cluster::Cluster>) -> Self {
+        Self {
+            cluster,
+            session: crate::session::Session::default(),
+        }
     }
 }
 
@@ -79,9 +91,14 @@ impl Dispatcher {
             return HandlerResponse::Close;
         };
         match api_key {
+            ApiKey::ListOffsets => crate::listoffsets::handle(&self.cluster, prelude, body),
             ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body),
-            ApiKey::Produce => crate::produce::handle(&self.cluster, prelude, body).await,
-            ApiKey::Fetch => crate::fetch::handle(&self.cluster, prelude, body).await,
+            ApiKey::Produce => {
+                crate::produce::handle(&self.cluster, &self.session, prelude, body).await
+            }
+            ApiKey::Fetch => {
+                crate::fetch::handle(&self.cluster, &self.session, prelude, body).await
+            }
             // Answered above by the early return; named rather than a
             // wildcard so a fifth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,

@@ -37,7 +37,10 @@
 
 use crate::writer_id::WriterId;
 use oqueue_coordinator::{Coordinator, CoordinatorError};
-use oqueue_core::{BundleNamer, Error, IndexReader, ObjectStore, Offset, PartitionId, TopicId};
+use oqueue_core::{
+    BundleNamer, CacheState, CoordinatorEpoch, Error, IndexReader, ObjectStore, Offset,
+    PartitionId, TopicId,
+};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 use uuid::Uuid;
@@ -195,6 +198,29 @@ impl Cluster {
             partitions: 1,
         });
         true
+    }
+
+    /// This coordinator's incarnation, which every watermark a client carries
+    /// is fenced against (`ADR-0023`).
+    #[must_use]
+    pub const fn epoch(&self) -> CoordinatorEpoch {
+        self.coordinator.epoch()
+    }
+
+    /// What this broker's index looks like to a freshness decision.
+    ///
+    /// ⚠️ **It is not a cache, and that is the whole reason this method
+    /// exists rather than a bare `end_offset` call.** The index here is the
+    /// coordinator's own — folded before the ack, by the only writer — so it
+    /// is never behind what has been acknowledged and never silent, which is
+    /// why `silent_for_ms` is zero. ⚠️ **A *follower*'s index is a cache** and
+    /// will not be able to say that (`M7`); routing the decision through
+    /// [`CacheState::admits`] now is what stops a follower quietly inheriting
+    /// an answer only a coordinator may give — hazard H1, whose symptom is a
+    /// `ListOffsets` below truth and a consumer lag that goes negative.
+    #[must_use]
+    pub fn cache_state(&self) -> CacheState {
+        CacheState::new(self.epoch(), self.index.applied_upto(), 0)
     }
 
     /// How far this shard's index has folded, and a way to park until it

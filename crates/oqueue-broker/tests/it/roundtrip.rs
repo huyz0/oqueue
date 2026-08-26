@@ -93,8 +93,19 @@ async fn fetch(
     topic: &str,
     offset: i64,
 ) -> FetchResponse {
+    fetch_now(dispatcher, broker, topic, offset).await
+}
+
+/// A `Fetch` that will not wait: one look, one answer.
+async fn fetch_now(
+    dispatcher: &Dispatcher,
+    broker: &Broker,
+    topic: &str,
+    offset: i64,
+) -> FetchResponse {
     let mut request = FetchRequest::default();
     request.max_wait_ms = 0;
+    request.min_bytes = 1;
     let mut t = FetchTopic::default();
     t.topic_id = broker.cluster.topic_id(topic).expect("a hosted topic");
     let mut p = FetchPartition::default();
@@ -186,6 +197,44 @@ async fn one_produce_spanning_four_topics_issues_exactly_one_put() {
         assert!(
             p.records.as_ref().is_some_and(|r| !r.is_empty()),
             "{name}: one PUT that lost three topics would still count as one"
+        );
+    }
+}
+
+/// ⚠️ **Hazard H2, on the wire: produce then immediately consume, in one
+/// session, never sees an empty partition.** Doc 12 §4.6 calls this the second
+/// staleness hazard and the reason it matters is that the failure is silent —
+/// a successful poll returning no records, which every client reads as
+/// "nothing was written". The produce's ack carries a watermark, the session
+/// remembers it, and the next fetch on that connection will not answer until
+/// the index has folded that far.
+///
+/// ⚠️ **What this does *not* prove is that the session mechanism works**, and
+/// saying so is the point: in a single-node broker the coordinator folds
+/// before it acks, so this passes on that ordering alone — deleting the
+/// session plumbing entirely leaves it green. It is here because it is the
+/// claim a client makes, and because the day the ordering stops holding this
+/// is what notices. The mechanism itself is constrained by
+/// `session.rs`'s own tests, which set a promise the index has *not* reached.
+#[tokio::test]
+async fn a_produce_followed_immediately_by_a_fetch_sees_its_own_records() {
+    let broker = broker(&["orders"]).await;
+    let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
+
+    for round in 0..5_i64 {
+        let response = produce(&dispatcher, &broker, &["orders"]).await;
+        let p = &response.responses[0].partition_responses[0];
+        assert_eq!(p.error_code, 0);
+        assert_eq!(p.base_offset, round * 2);
+
+        let response = fetch_now(&dispatcher, &broker, "orders", round * 2).await;
+        let p = &response.responses[0].partitions[0];
+        assert_eq!(p.error_code, 0, "round {round}");
+        assert_eq!(p.high_watermark, (round + 1) * 2, "round {round}");
+        assert!(
+            p.records.as_ref().is_some_and(|r| !r.is_empty()),
+            "round {round}: a producer's own consumer must never see an empty \
+             partition — that is the silent wrongness H2 names"
         );
     }
 }

@@ -1,7 +1,7 @@
 //! The API keys this broker serves, and the header versions each implies.
 //!
 //! ⚠️ **`ADR-0019` moved this off `kafka-protocol`.** The dependency's
-//! `ApiKey` knows every key Kafka defines; ours knows only the four this
+//! `ApiKey` knows every key Kafka defines; ours knows only the ones this
 //! broker serves, so a key we do not implement is refused at the type
 //! boundary rather than routed to a handler that would reject it — a tighter
 //! surface, and the whole point of owning the layer.
@@ -25,6 +25,8 @@ pub enum ApiKey {
     Produce = 0,
     /// Fetch (1).
     Fetch = 1,
+    /// `ListOffsets` (2).
+    ListOffsets = 2,
     /// Metadata (3).
     Metadata = 3,
     /// `ApiVersions` (18).
@@ -46,6 +48,7 @@ impl ApiKey {
         match key {
             0 => Some(Self::Produce),
             1 => Some(Self::Fetch),
+            2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
             18 => Some(Self::ApiVersions),
             _ => None,
@@ -92,13 +95,18 @@ mod tests {
         for key in [
             ApiKey::Produce,
             ApiKey::Fetch,
+            ApiKey::ListOffsets,
             ApiKey::Metadata,
             ApiKey::ApiVersions,
         ] {
             assert_eq!(ApiKey::from_i16(key.as_i16()), Some(key));
         }
-        // Keys Kafka defines but this broker does not serve.
-        for unserved in [2, 10, 22, -1, 32512] {
+        // Keys Kafka defines but this broker does not serve. ⚠️ `2` was here
+        // until `M3.21`, which added `ListOffsets`: a key moving
+        // from this list to the one above is what serving a new API looks
+        // like, and leaving it in both is how the round trip above starts
+        // lying.
+        for unserved in [10, 22, -1, 32512] {
             assert_eq!(ApiKey::from_i16(unserved), None);
         }
     }

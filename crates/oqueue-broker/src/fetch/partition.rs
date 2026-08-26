@@ -11,6 +11,7 @@
 // clippy's `redundant_pub_crate` asks for.
 #![allow(clippy::redundant_pub_crate)]
 
+use super::{TopicOutcome, resolved_name};
 use crate::cluster::Cluster;
 use oqueue_codec::error_codes;
 use oqueue_core::{Offset, PartitionId, TopicId};
@@ -37,6 +38,76 @@ pub(crate) struct PartitionOutcome {
     pub(crate) last_stable_offset: i64,
     pub(crate) log_start_offset: i64,
     pub(crate) records: Vec<u8>,
+}
+
+/// Every requested partition, refused with one code.
+///
+/// ⚠️ **Shaped like a read rather than like an error**, because a client parses
+/// one response either way: the same topics in the same order, each partition
+/// carrying the refusal instead of records.
+pub(crate) fn refuse_all(
+    cluster: &Cluster,
+    request: &oqueue_codec::fetch::FetchRequest<'_>,
+    version: i16,
+    error_code: i16,
+) -> Vec<TopicOutcome> {
+    request
+        .topics
+        .iter()
+        .map(|topic| {
+            // ⚠️ **Resolved once per topic, not once per partition.** The
+            // partition count is the client's to choose and a 16 MiB frame can
+            // name hundreds of thousands, so a registry lock and a `String`
+            // allocation per entry would be paid on the path that returns *no*
+            // records — the cheap answer costing more contention than the read
+            // it replaced. `one_topic` and `watermarks`, both in `mod.rs`, have
+            // the same shape for the same reason.
+            let resolved = resolved_name(cluster, topic, version);
+            TopicOutcome {
+                name: if version >= 13 {
+                    None
+                } else {
+                    topic.name.map(str::to_owned)
+                },
+                topic_id: topic.topic_id,
+                partitions: topic
+                    .partitions
+                    .iter()
+                    .map(|partition| {
+                        refused(cluster, resolved.as_deref(), partition.index, error_code)
+                    })
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// One partition, refused — with the real watermark when this broker knows it.
+///
+/// ⚠️ **The watermark is answered even on a refusal, when it is known.** A
+/// client that hears "come back" still needs to know where the log is; the two
+/// *offset* fields stay at the unset sentinel because this broker did not read
+/// the partition, and inventing a `0` for them is the doc 13 §8 inversion.
+pub(crate) fn refused(
+    cluster: &Cluster,
+    topic: Option<&str>,
+    index: i32,
+    error_code: i16,
+) -> PartitionOutcome {
+    let high = topic
+        .and_then(|name| TopicId::new(name.to_owned()).ok())
+        .zip(PartitionId::new(index).ok())
+        .map_or(0, |(topic, partition)| {
+            cluster.high_watermark(&topic, partition).get()
+        });
+    PartitionOutcome {
+        index,
+        error_code,
+        high_watermark: high,
+        last_stable_offset: -1,
+        log_start_offset: -1,
+        records: Vec::new(),
+    }
 }
 
 /// One partition's answer: every batch and the watermark, or a refusal.

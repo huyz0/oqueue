@@ -18,10 +18,12 @@
 // clippy's `redundant_pub_crate` asks for.
 #![allow(clippy::redundant_pub_crate)]
 
+use super::partition;
 use super::target::{MAX_READS_PER_REQUEST, satisfiable_min_bytes, worth_answering};
-use super::{TopicOutcome, one_topic, resolved_name};
+use super::{TopicOutcome, read_all, watermarks};
 use crate::cluster::Cluster;
-use oqueue_core::{PartitionId, TopicId};
+use crate::session::Session;
+use oqueue_codec::error_codes;
 use std::time::Duration;
 use tokio::time::Instant;
 
@@ -45,6 +47,7 @@ use tokio::time::Instant;
 /// client needs to act on.
 pub(crate) async fn read_or_park(
     cluster: &Cluster,
+    session: &Session,
     request: &oqueue_codec::fetch::FetchRequest<'_>,
     version: i16,
 ) -> Vec<TopicOutcome> {
@@ -61,6 +64,25 @@ pub(crate) async fn read_or_park(
     }
     let mut watch = cluster.watch();
     let deadline = Instant::now() + Duration::from_millis(park_ms(request.max_wait_ms));
+    // ⚠️ **Read-your-writes, before anything is read** — hazard H2, and
+    // `Session::catch_up` carries the argument. ⚠️ **A failure is answered as
+    // one**: a partition served short of a promise this connection has already
+    // been given is the silent wrongness doc 12 §4.6 names, so the client is
+    // told to go to `Metadata` and come back rather than being handed records
+    // that are missing its own write.
+    // ⚠️ **An error, not an empty partition.** An empty partition with
+    // `error_code` zero is what a client reads as "nothing was written" —
+    // exactly the outcome read-your-writes exists to prevent.
+    //
+    // ⚠️ **`OFFSET_NOT_AVAILABLE`, and the choice is about what clients *do*.**
+    // Kafka defines code 78 for a partition whose offsets are not readable
+    // yet, which is this situation exactly, and the Java consumer's fetch
+    // error dispatch enumerates it and retries. `LEADER_NOT_AVAILABLE` is not
+    // in that set: it falls through to an `IllegalStateException` out of
+    // `poll()`, so a refusal meant to protect a client would kill it.
+    if session.catch_up(cluster, &mut watch).await.is_err() {
+        return partition::refuse_all(cluster, request, version, error_codes::OFFSET_NOT_AVAILABLE);
+    }
     let target = satisfiable_min_bytes(request.min_bytes);
     // ⚠️ Counted up rather than down from a decremented ceiling: the bound is
     // "this many reads", and the test below pins that number exactly.
@@ -107,51 +129,6 @@ pub(crate) async fn read_or_park(
             }
         }
     }
-}
-
-/// Every requested partition, read once.
-async fn read_all(
-    cluster: &Cluster,
-    request: &oqueue_codec::fetch::FetchRequest<'_>,
-    version: i16,
-) -> Vec<TopicOutcome> {
-    let mut outcomes: Vec<TopicOutcome> = Vec::with_capacity(request.topics.len());
-    for topic in &request.topics {
-        outcomes.push(one_topic(cluster, topic, version).await);
-    }
-    outcomes
-}
-
-/// Where each requested partition's log currently ends.
-///
-/// ⚠️ **The cheap half of a re-read.** Every entry here is an index lookup, so
-/// asking after every wakeup costs nothing an idle shard would notice — which
-/// is what lets the expensive half happen only when something moved.
-fn watermarks(
-    cluster: &Cluster,
-    request: &oqueue_codec::fetch::FetchRequest<'_>,
-    version: i16,
-) -> Vec<i64> {
-    let mut ends = Vec::new();
-    for topic in &request.topics {
-        let name = resolved_name(cluster, topic, version);
-        for partition in &topic.partitions {
-            // ⚠️ **Unresolvable entries are skipped, not given a sentinel.** A
-            // topic this broker does not host is a refusal, and a refusal is
-            // answered rather than parked on — so nothing here can be waiting
-            // on one, and a sentinel would only be a value nothing compares.
-            // Skipping is stable across a park because topics are never
-            // removed, so the two vectors line up.
-            if let Some(pair) = name
-                .as_deref()
-                .and_then(|name| TopicId::new(name.to_owned()).ok())
-                .zip(PartitionId::new(partition.index).ok())
-            {
-                ends.push(cluster.high_watermark(&pair.0, pair.1).get());
-            }
-        }
-    }
-    ends
 }
 
 /// How long to park, from what the client asked for.
@@ -209,7 +186,8 @@ mod tests {
     ) -> tokio::task::JoinHandle<kafka_protocol::messages::FetchResponse> {
         let fixture = std::sync::Arc::clone(fixture);
         tokio::spawn(async move {
-            let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude(13), &body).await
+            let HandlerResponse::Reply(out) =
+                handle(&fixture.cluster, &fixture.session, prelude(13), &body).await
             else {
                 panic!("a fetch replies");
             };

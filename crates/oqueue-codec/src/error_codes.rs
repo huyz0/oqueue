@@ -44,6 +44,18 @@ pub const NOT_ENOUGH_REPLICAS: i16 = 19;
 pub const LEADER_NOT_AVAILABLE: i16 = 5;
 /// The broker hit a condition it has no better code for (-1).
 pub const UNKNOWN_SERVER_ERROR: i16 = -1;
+/// The partition's offsets are not available for reading yet (78).
+///
+/// ⚠️ **The code a fetch answers when it cannot yet be as fresh as it has
+/// promised.** Kafka defines it for a leader whose high watermark has not
+/// caught up, which is the same shape: the partition exists and this broker
+/// will serve it, just not at the freshness already committed to.
+/// ⚠️ **Chosen over `LEADER_NOT_AVAILABLE` because of what clients do with
+/// it**: the Java consumer's fetch error dispatch enumerates this code and
+/// retries, and falls through to an `IllegalStateException` out of `poll()`
+/// for codes it does not know — code 5 among them. A refusal a client turns
+/// into a crash is worse than the wrong answer it was avoiding.
+pub const OFFSET_NOT_AVAILABLE: i16 = 78;
 /// The batch's compression codec is one this broker does not accept (76).
 ///
 /// ⚠️ **Refused rather than trusted.** A compressed batch's records are behind
@@ -97,6 +109,10 @@ mod tests {
         assert_eq!(
             super::UNSUPPORTED_COMPRESSION_TYPE,
             ResponseError::UnsupportedCompressionType.code()
+        );
+        assert_eq!(
+            super::OFFSET_NOT_AVAILABLE,
+            ResponseError::OffsetNotAvailable.code()
         );
         assert_eq!(
             super::UNKNOWN_TOPIC_ID,

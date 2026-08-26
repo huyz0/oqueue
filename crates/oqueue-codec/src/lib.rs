@@ -34,6 +34,7 @@ pub mod error_codes;
 pub mod fetch;
 pub mod flex;
 pub mod frame;
+pub mod listoffsets;
 pub mod metadata;
 pub mod produce;
 pub mod records;

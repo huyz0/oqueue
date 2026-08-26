@@ -48,7 +48,7 @@ pub(crate) fn serve(addr: &str, advertise: Option<&str>, wiring: &Wiring) {
         }
         // ⚠️ Spawned *here*, where something watches it — see `build_cluster`.
         let serving = tokio::spawn(serving.run());
-        let dispatcher = Arc::new(oqueue_broker::Dispatcher::new(Arc::new(cluster)));
+        let cluster = Arc::new(cluster);
         println!(
             "oqueue {} ({:?}, {})",
             env!("CARGO_PKG_VERSION"),
@@ -58,7 +58,7 @@ pub(crate) fn serve(addr: &str, advertise: Option<&str>, wiring: &Wiring) {
         // ⚠️ The line the harness parses; the port is real, not the `:0`
         // the caller may have passed.
         println!("listening on {local}");
-        accept_loop(listener, dispatcher, serving, limits).await
+        accept_loop(listener, cluster, serving, limits).await
     });
     if let Err(error) = result {
         eprintln!("oqueue: serve failed: {error}");
@@ -98,7 +98,7 @@ fn durability_warning(store_name: &str) -> Option<&'static str> {
 /// detail of binding a port.
 async fn accept_loop(
     listener: tokio::net::TcpListener,
-    dispatcher: Arc<oqueue_broker::Dispatcher>,
+    cluster: Arc<oqueue_broker::Cluster>,
     mut serving: tokio::task::JoinHandle<()>,
     limits: oqueue_broker::ConnectionLimits,
 ) -> std::io::Result<()> {
@@ -123,7 +123,16 @@ async fn accept_loop(
             }
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    let handler = Arc::clone(&dispatcher);
+                    // ⚠️ **A dispatcher per connection, not one shared.** It
+                    // carries the session — this client's own commit
+                    // watermark, which its next fetch must be at least as
+                    // fresh as (hazard H2, `ADR-0023`) — and a session is per
+                    // connection because that is the scope a client
+                    // understands. Sharing one would let an unrelated client's
+                    // produce raise everybody's freshness bar. The `Cluster`
+                    // behind it *is* shared, which is where the cost would
+                    // have been.
+                    let handler = Arc::new(oqueue_broker::Dispatcher::new(Arc::clone(&cluster)));
                     tokio::spawn(oqueue_broker::serve_connection(stream, handler, limits));
                 }
                 Err(error) => {

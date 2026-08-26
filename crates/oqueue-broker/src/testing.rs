@@ -45,6 +45,8 @@ use std::sync::Arc;
 pub(crate) struct Fixture {
     pub(crate) cluster: Arc<Cluster>,
     pub(crate) store: Arc<TestStore>,
+    /// One connection's memory, so a test can produce and then read on it.
+    pub(crate) session: crate::session::Session,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -179,6 +181,7 @@ pub(crate) async fn with_store(
     }
     Fixture {
         cluster: Arc::new(cluster),
+        session: crate::session::Session::default(),
         store,
         serving: tokio::spawn(serving.run()),
     }
@@ -213,7 +216,7 @@ pub(crate) async fn produce_one(fixture: &Fixture, name: &str, records: Vec<u8>)
         correlation_id: 1,
     };
     let crate::connection::HandlerResponse::Reply(_) =
-        crate::produce::handle(&fixture.cluster, prelude, &body).await
+        crate::produce::handle(&fixture.cluster, &fixture.session, prelude, &body).await
     else {
         panic!("the fixture produce replies");
     };
