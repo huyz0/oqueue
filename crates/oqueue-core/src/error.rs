@@ -202,6 +202,87 @@ pub enum Error {
     #[error("byte range must not have a zero length")]
     EmptyByteRange,
 
+    /// A bundled object's footer names an algorithm this build does not know.
+    ///
+    /// ⚠️ **An error, never a default.** Doc 10 #40 puts the algorithm in the
+    /// region header from the format's first commit precisely so a reader can
+    /// tell. Treating an unknown value as "stored as written" would hand a
+    /// decoder ciphertext and let it decode whatever that happened to look
+    /// like — the migration hazard the field exists to prevent, arriving
+    /// through the field.
+    #[error("region algorithm {code} is not one this build knows")]
+    UnknownRegionAlg {
+        /// The value read from the footer.
+        code: u8,
+    },
+
+    /// A bundled object's footer names a format version this build does not
+    /// know.
+    #[error("bundle format version {version} is not one this build knows")]
+    UnknownBundleFormat {
+        /// The version read from the trailer.
+        version: u8,
+    },
+
+    /// A bundled object's footer could not be read.
+    ///
+    /// ⚠️ Truncated, torn, or declaring lengths that do not fit. These are
+    /// bytes an object store returned, so this is a thing that happens rather
+    /// than a thing that would mean a bug — `security.md` rule 3 is why the
+    /// parser returns this instead of indexing past the end.
+    #[error("the bundle footer is malformed at byte {at}")]
+    MalformedBundleFooter {
+        /// How far in the parser got.
+        at: usize,
+    },
+
+    /// A region was added with no records in it.
+    ///
+    /// ⚠️ Bytes that advance no offsets are bytes nothing can ever read: the
+    /// fold turns a span's count into offsets, so a region carrying records
+    /// under a count of zero is durable, indexed, billed and unreachable.
+    #[error("a region must carry at least one record")]
+    EmptyRegion,
+
+    /// A region reached the footer writer without a bounded byte range.
+    ///
+    /// ⚠️ [`ByteRange::Full`](crate::ByteRange::Full) cannot be encoded: an
+    /// object holding N regions has none that is the whole of it, and a footer
+    /// claiming otherwise would have a reader decode another topic's records as
+    /// its own.
+    #[error("a bundled region must name a bounded byte range")]
+    UnboundedRegion,
+
+    /// A bundle's footer will not fit its own length fields.
+    ///
+    /// ⚠️ Unreachable in practice — the counts are `u32` — and an error rather
+    /// than a truncated length, which would describe fewer regions than the
+    /// object holds and have a reader take another topic's bytes as its own.
+    #[error("the bundle is too large for its footer to describe")]
+    BundleTooLarge,
+
+    /// A writer identity contains a `/`.
+    ///
+    /// ⚠️ It would let two distinct identities produce one object key by
+    /// moving the boundary between the writer and its sequence — and a shared
+    /// key means one flush overwriting another's acknowledged records.
+    #[error("a writer identity must not contain '/'")]
+    MalformedWriterId,
+
+    /// One writer has flushed `u64::MAX` objects.
+    ///
+    /// ⚠️ An error rather than a wrap, for the reason offset arithmetic
+    /// refuses to wrap: the name after a wrap is one already used.
+    #[error("this writer's bundle sequence is exhausted")]
+    BundleSequenceExhausted,
+
+    /// A bundle was sealed, or read back, with no regions in it.
+    ///
+    /// ⚠️ An empty object costs what a full one costs, and committing no spans
+    /// burns a `CommitVersion` on a record saying nothing happened.
+    #[error("a bundled object must hold at least one region")]
+    EmptyBundle,
+
     /// A ranged `get` asked for bytes past the object's actual size.
     ///
     /// ⚠️ **Not `ObjectNotFound`.** The object exists; the requested range

@@ -41,6 +41,9 @@
 //! can hand out. That is what lets everything downstream stop re-checking.
 #![forbid(unsafe_code)]
 
+mod bundle;
+mod bundle_footer;
+mod bundle_name;
 mod byte_range;
 mod chunk;
 mod clock;
@@ -74,6 +77,9 @@ mod store;
 mod test_executor;
 mod topic;
 
+pub use bundle::{BUNDLE_FORMAT_VERSION, BundleBuilder, Region, RegionAlg, Sealed};
+pub use bundle_footer::parse_footer;
+pub use bundle_name::BundleNamer;
 pub use byte_range::ByteRange;
 pub use chunk::ChunkedObjectStore;
 pub use clock::{Clock, FakeClock, Timestamp};

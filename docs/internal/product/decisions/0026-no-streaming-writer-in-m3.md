@@ -1,6 +1,8 @@
 # 0026. M3's real caller does not need a streaming writer, so it is not built here
 
-Status: accepted
+Status: accepted; 2026-08-26: "Forecloses: nothing" overtaken by `M3.13` —
+decision point 1's proviso does foreclose `KeyLayout::object_key` naming any
+object this system writes, see `M3.md` task 19 and `key_layout.rs`
 Date: 2026-08-26
 Requirements: FR-31, FR-32
 

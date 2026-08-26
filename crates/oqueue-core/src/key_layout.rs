@@ -89,6 +89,26 @@ impl KeyLayout {
     /// string ordering. The zero-padded offset below is for fixed-width
     /// computability, not for sorting.
     ///
+    /// # ⚠️ This does not name a bundled object, and `M3.13` is where that
+    /// # stopped being theoretical
+    ///
+    /// Two reasons, either one sufficient. It floor-aligns the offset, so every
+    /// offset in one quantum computes the same key — a property test pins that
+    /// — and a flush whose base offset lands in a quantum another flush already
+    /// used would overwrite it. And it takes one `(topic, partition)`, which an
+    /// object bundling N topics (FR-32) is not.
+    ///
+    /// ⚠️ **So `M3` writes no object this names.** [`BundleNamer`] is what
+    /// names them — a monotonic sequence per writer, doc 12 §4.6's shape —
+    /// and `ADR-0026`'s decision to write bundles without a `Precondition`
+    /// rests on that. The index-free promise above holds for a key derivation
+    /// nothing currently calls; it is kept rather than deleted because the
+    /// reasoning behind it is what a per-partition object layout would need,
+    /// and `M5`'s compaction may produce exactly that when it regroups output
+    /// "by topic then partition into contiguous ranges".
+    ///
+    /// [`BundleNamer`]: crate::BundleNamer
+    ///
     /// # Errors
     ///
     /// [`crate::Error::EmptyObjectKey`] never — the computed string always

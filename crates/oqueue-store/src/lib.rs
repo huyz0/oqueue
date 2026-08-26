@@ -15,8 +15,10 @@ mod classify;
 mod gcs;
 mod get;
 mod multipart;
+mod retry;
 mod s3;
 mod tls;
 
 pub use gcs::GcsStore;
+pub use retry::retry_config_for;
 pub use s3::S3Store;

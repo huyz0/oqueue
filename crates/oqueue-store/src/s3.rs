@@ -24,6 +24,7 @@ use crate::get::{
     disambiguate_failed_ranged_get, get_options_for, requested_range, truncated_range_error,
 };
 use crate::multipart::{PutStrategy, put_strategy_for};
+use crate::retry::retry_config_for;
 use put::{S3_MULTIPART_LIMITS, put_options_for};
 // ⚠️ Both traits, unaliased-but-unnamed: `object_store::ObjectStore` (the
 // base trait, for `get_opts`/`put_opts`/`put_multipart_opts`) and
@@ -42,7 +43,7 @@ use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectStorePath;
 use oqueue_core::{
     BoxFuture, ByteRange, Error, MultipartLimits, ObjectKey, ObjectMeta, ObjectStore, Precondition,
-    PreconditionToken, Result,
+    PreconditionToken, Result, RetryPolicy,
 };
 use std::ops::Range;
 
@@ -75,11 +76,32 @@ impl S3Store {
     /// endpoint (missing bucket, unparsable region, and the like) — a
     /// configuration mistake retrying can never fix.
     pub fn from_env() -> Result<Self> {
+        Self::from_env_with_retry(RetryPolicy::DEFAULT)
+    }
+
+    /// The same, with the retry policy chosen rather than defaulted.
+    ///
+    /// ⚠️ **Before the builder is built, because it has to be.** The vendor
+    /// applies retry configuration when it constructs its client, so a
+    /// `with_retry_policy` that ran afterwards would silently do nothing —
+    /// which is why this is a constructor rather than the builder-style setter
+    /// `with_multipart_limits` can afford to be.
+    ///
+    /// # Errors
+    ///
+    /// As [`from_env`](Self::from_env).
+    pub fn from_env_with_retry(policy: RetryPolicy) -> Result<Self> {
         // ⚠️ Must run before the builder makes its first HTTPS connection —
         // see `crate::tls` and ADR-0012. Idempotent, so calling this once per
         // `S3Store` built in the same process is cheap and safe.
         install_ring_provider();
         let inner = AmazonS3Builder::from_env()
+            // ⚠️ `ADR-0008`'s premise, discharged at `M3.13`: the vendor retry
+            // is configured from this project's own `RetryPolicy` rather than
+            // left at whatever the crate defaults to. See
+            // `crate::retry_config_for` for why only one of the two retry
+            // layers this sets.
+            .with_retry(retry_config_for(policy))
             .build()
             .map_err(|_source| Error::Permanent)?;
         Ok(Self {

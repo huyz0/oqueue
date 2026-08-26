@@ -73,6 +73,17 @@ impl Error {
             | Self::EncryptionDisabled
             | Self::EmptyObjectKey
             | Self::EmptyByteRange
+            // Never: a malformed or unknown-format object does not become
+            // well-formed by being read again.
+            | Self::UnknownRegionAlg { .. }
+            | Self::UnknownBundleFormat { .. }
+            | Self::MalformedBundleFooter { .. }
+            | Self::EmptyBundle
+            | Self::EmptyRegion
+            | Self::UnboundedRegion
+            | Self::BundleTooLarge
+            | Self::MalformedWriterId
+            | Self::BundleSequenceExhausted
             | Self::ByteRangeOutOfBounds { .. }
             | Self::ChunkLengthTooLarge { .. }
             | Self::PartTooSmall { .. }
@@ -110,10 +121,69 @@ pub struct RetryPolicy {
 }
 
 impl RetryPolicy {
-    /// A policy that retries [`RetryClass::Bounded`] errors up to
-    /// `max_bounded_attempts` times (the first attempt plus this many
-    /// retries), with delay starting at `base_delay`, doubling per attempt,
-    /// capped at `max_delay`.
+    /// The policy a backend uses when its caller names none.
+    ///
+    /// ⚠️ **UNDERIVED**, and `M3.13` is where it stops being absent rather than
+    /// where it becomes measured. `ADR-0008`'s premise — that a real caller
+    /// configures the vendor retry "from `RetryPolicy`'s constants" — had no
+    /// constants to read, which is why the premise sat unwired from `M1.56`
+    /// through `M2.10`. These three numbers are a starting point with the right
+    /// shape: three bounded *attempts* — so two retries — doubling from 100 ms,
+    /// capped at 5 s. `M14`
+    /// measures what they should be against a real backend's error
+    /// distribution.
+    ///
+    /// ⚠️ It bounds only [`RetryClass::Bounded`]. `SlowDown` and `Throttled`
+    /// retry forever with backoff by `error-handling.md` rule 7, and no number
+    /// here changes that.
+    pub const DEFAULT: Self = Self::new(
+        match NonZeroU32::new(3) {
+            Some(n) => n,
+            // Unreachable: 3 is not zero.
+            None => panic!("3 is non-zero"),
+        },
+        Duration::from_millis(100),
+        Duration::from_secs(5),
+    );
+
+    /// How many **attempts** a [`RetryClass::Bounded`] error gets in total.
+    ///
+    /// ⚠️ **Attempts, not retries**, and the distinction is load-bearing:
+    /// [`decide`](Self::decide) gives up once `attempts_so_far` reaches this,
+    /// so `1` means one try and no retry. A vendor configuration that counts
+    /// retries — `object_store`'s does — needs this minus one, which is what
+    /// `oqueue-store`'s translation does and what a straight copy would get
+    /// wrong in the direction that retries when told not to.
+    #[must_use]
+    pub const fn max_bounded_attempts(&self) -> NonZeroU32 {
+        self.max_bounded_attempts
+    }
+
+    /// The first delay, which doubles per attempt.
+    #[must_use]
+    pub const fn base_delay(&self) -> Duration {
+        self.base_delay
+    }
+
+    /// The ceiling that doubling is capped at.
+    #[must_use]
+    pub const fn max_delay(&self) -> Duration {
+        self.max_delay
+    }
+
+    /// A policy that gives a [`RetryClass::Bounded`] error
+    /// `max_bounded_attempts` **attempts in total** — the first try included,
+    /// so `1` means one try and no retry — with delay starting at
+    /// `base_delay`, doubling per attempt, capped at `max_delay`.
+    ///
+    /// ⚠️ The argument is the number [`max_bounded_attempts`] returns and the
+    /// number [`decide`] compares `attempts_so_far` against. Reading it as a
+    /// retry count is off by one in the direction that retries when told not
+    /// to, which is the defect it caused once already in `oqueue-store`'s
+    /// vendor translation.
+    ///
+    /// [`max_bounded_attempts`]: Self::max_bounded_attempts
+    /// [`decide`]: Self::decide
     #[must_use]
     pub const fn new(
         max_bounded_attempts: NonZeroU32,
