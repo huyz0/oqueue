@@ -59,22 +59,82 @@ if (( ${#targets[@]} == 0 )); then
   finish
 fi
 
-# ⚠️ Every module in oqueue-codec must have a target or a recorded reason
-# not to — derived from the source tree, so the check FAILS CLOSED: a new
-# module added without a target (rule 24 already names the next one, index
-# search over corrupt blobs) turns this red rather than staying invisible.
-# The allowlist names the modules that parse no untrusted byte stream of
-# their own, each with its reason.
+# ⚠️ Every module in a crate that holds decoders must have a fuzz target or a
+# recorded reason not to — derived from the source tree, so the check FAILS
+# CLOSED: a new module without a target turns this red rather than staying
+# invisible.
+#
+# ⚠️ **Two crates, not one** (`M3.28`). It scanned `oqueue-codec` only, on the
+# assumption that a decoder is a *wire* decoder — and `parse_footer` is a
+# decoder over bytes an object store returned, in `oqueue-core`, invisible to
+# the gate that exists to notice exactly that. `security.md` rule 3 does not
+# distinguish: nothing reachable from stored bytes may panic either, and `M5`
+# rewrites the objects `M3` wrote.
+DECODER_CRATES=(oqueue-codec oqueue-core)
+# ⚠️ **Every module, not a clever subset, and `M3.28` tried the subset first.**
+# Its first version selected modules by grepping each file for a `pub fn`
+# taking `&[u8]`, on the theory that a decoder is a function handed bytes it
+# did not produce. Review measured it **unsound in the weakening direction**:
+# `compress.rs`'s `decompress_records` has a rustfmt-wrapped signature so the
+# name and the `&[u8]` sit on different lines, `varint`'s entry points take a
+# `&mut Cursor<'_>`, and `wire.rs`'s takes `&'a [u8]` — so deleting the
+# `compress` or `varint` target left this gate GREEN where the hand-written
+# list had failed it. A heuristic that silently un-covers the
+# decompression-bomb path is worse than a long list, and non-negotiable 2 is
+# about that direction exactly.
+#
+# So: enumerate. Each entry is a judgement somebody made once and a reader can
+# check, and what it buys is that a new module cannot be missed by a pattern
+# nobody re-derived.
 declare -A NOT_A_PARSER=(
-  [lib]="the module root; declares, parses nothing"
-  [wire]="Cursor primitives -- every target drives them transitively"
-  [decode_error]="the refusals wire.rs raises and re-exports; an error type, reads no input"
-  [versions]="a static advertised-versions table; parses nothing"
-  [attributes]="a bitfield over an i16 the batch decoder already produced"
-  [apikey]="an i16-to-enum lookup over a value frame.rs's decoder already extracted, not its own byte stream"
-  [emit]="the byte writers wire.rs re-exports; nothing here reads untrusted input"
-  [error_codes]="protocol constants; parses nothing"
-  [apiversions]="encode-only by design -- the ApiVersions request body is informational and never decoded (see the module doc)"
+  # --- oqueue-codec
+  [oqueue-codec::lib]="the module root; declares, parses nothing"
+  [oqueue-codec::wire]="Cursor primitives -- every target drives them transitively"
+  [oqueue-codec::decode_error]="the refusals wire.rs raises and re-exports; an error type, reads no input"
+  [oqueue-codec::versions]="a static advertised-versions table; parses nothing"
+  [oqueue-codec::attributes]="a bitfield over an i16 the batch decoder already produced"
+  [oqueue-codec::apikey]="an i16-to-enum lookup over a value frame.rs's decoder already extracted, not its own byte stream"
+  [oqueue-codec::emit]="the byte writers wire.rs re-exports; nothing here reads untrusted input"
+  [oqueue-codec::error_codes]="protocol constants; parses nothing"
+  [oqueue-codec::apiversions]="encode-only by design -- the ApiVersions request body is informational and never decoded (see the module doc)"
+  # --- oqueue-core. The object format's reader is bundle_footer, which has a
+  # target; everything else is a newtype, a seam, a fake, or a policy.
+  [oqueue-core::lib]="the module root; declares, parses nothing"
+  [oqueue-core::bundle]="assembles a payload from records it never reads; bundle_footer.rs reads one back"
+  [oqueue-core::bundle_name]="builds object keys from a writer identity; parses none"
+  [oqueue-core::byte_range]="a validated (offset, length) pair; its constructor refuses, it does not decode"
+  [oqueue-core::chunk]="splits an owned payload for multipart; reads no untrusted bytes"
+  [oqueue-core::chunk::single_flight]="deduplicates concurrent gets for one key; the bytes pass through opaque"
+  [oqueue-core::clock]="a time seam and its fake"
+  [oqueue-core::commit_version]="a u64 newtype with checked arithmetic"
+  [oqueue-core::coordinator_epoch]="a u64 newtype"
+  [oqueue-core::error]="the crate's error enum"
+  [oqueue-core::fault]="fault-injection config and a delay future; test support"
+  [oqueue-core::fault_metadata_log]="a MetadataLog decorator for tests; delegates, parses nothing"
+  [oqueue-core::index_reader]="a read-only view over a MaterializedIndex; forwards four methods"
+  [oqueue-core::index_state]="folds MetadataEntry values this process built, never bytes off a wire"
+  [oqueue-core::key]="key material types"
+  [oqueue-core::key_layout]="object-key naming rules; builds strings, parses none"
+  [oqueue-core::materialized_index]="a trait and its fake; the fold is over typed entries"
+  [oqueue-core::merge]="coalesces byte ranges into fewer gets; no entry point takes bytes, so there is nothing to hand a fuzzer -- ⚠️ but get_many slices a store-returned buffer, and what stops that panicking is the backends' own truncated-range refusal in oqueue-store, not anything here"
+  [oqueue-core::metadata_log]="a trait and its in-memory fake; entries are typed, not bytes"
+  [oqueue-core::metadata_record]="the record enum the coordinator builds and the index folds; no byte form of its own"
+  [oqueue-core::multipart]="part-size policy arithmetic"
+  [oqueue-core::object_key]="a validated String newtype"
+  [oqueue-core::object_meta]="size and etag a store reported"
+  [oqueue-core::object_ref]="an index entry this process built"
+  [oqueue-core::offset]="an i64 newtype with checked arithmetic"
+  [oqueue-core::op_counts]="an operation counter and its store decorator"
+  [oqueue-core::partition]="an i32 newtype"
+  [oqueue-core::precondition]="a conditional-write mode enum"
+  [oqueue-core::rate_governor]="admission arithmetic over counts"
+  [oqueue-core::read_mode]="a read-mode enum"
+  [oqueue-core::redacted]="a Debug wrapper that withholds"
+  [oqueue-core::retry]="retry classification and backoff arithmetic"
+  [oqueue-core::staleness]="cache-freshness policy over typed versions and epochs"
+  [oqueue-core::store]="the ObjectStore trait and its fake; bytes pass through opaque"
+  [oqueue-core::test_executor]="a cooperative executor for tests"
+  [oqueue-core::topic]="a validated String newtype"
 )
 # ⚠️ Message-body decoders exercised through the `request` target's full
 # dispatch path (header, `supports()` gate, this decoder, the handler) rather
@@ -83,20 +143,58 @@ declare -A NOT_A_PARSER=(
 # blanket exemption, so a new message module still fails closed until it is
 # added here or grows its own target.
 declare -A COVERED_BY_REQUEST=(
-  [metadata]="request"
-  [produce]="request"
-  [fetch]="request"
-  [listoffsets]="request"
+  [oqueue-codec::metadata]="request"
+  [oqueue-codec::produce]="request"
+  [oqueue-codec::fetch]="request"
+  [oqueue-codec::listoffsets]="request"
 )
-for src in "$REPO_ROOT"/crates/oqueue-codec/src/*.rs; do
-  module="$(basename "$src" .rs)"
-  [[ -n "${NOT_A_PARSER[$module]:-}" ]] && continue
-  [[ -n "${COVERED_BY_REQUEST[$module]:-}" ]] && continue
-  found=0
-  for t in "${targets[@]}"; do [[ "$t" == "$module" ]] && found=1; done
-  if (( ! found )); then
-    fail "decoder module '$module' has no fuzz target and no allowlist reason"
+# ⚠️ **Which crate each target speaks for** (`M3.28`), because a bare module
+# name stopped being unique the moment a second crate was scanned: without
+# this, an `oqueue-core::records` would be reported covered by the codec's
+# `records` target, which drives a different decoder entirely.
+#
+# ⚠️ **A target missing from this map is its own failure**, not a silent
+# mismatch: the target list is discovered and this map is written, so the two
+# drift, and the drift's symptom is a message saying a target does not exist
+# when it plainly does. Better to say which of the two is missing.
+declare -A TARGET_CRATE=(
+  [batch]="oqueue-codec"
+  [compress]="oqueue-codec"
+  [flex]="oqueue-codec"
+  [frame]="oqueue-codec"
+  [records]="oqueue-codec"
+  [request]="oqueue-codec"
+  [varint]="oqueue-codec"
+  [bundle_footer]="oqueue-core"
+)
+for t in "${targets[@]}"; do
+  if [[ -z "${TARGET_CRATE[$t]:-}" ]]; then
+    fail "fuzz target '$t' names no crate in TARGET_CRATE, so no module can be matched to it"
   fi
+done
+for crate in "${DECODER_CRATES[@]}"; do
+  # ⚠️ **`find`, not a `*.rs` glob** (`M3.28` round 2). The glob was a
+  # top-level *file* listing wearing the word "module": `chunk/single_flight.rs`
+  # existed the whole time, in a scanned crate, with no target and no
+  # allowlist row, and the scan passed in silence. `testing.md` rule 24's next
+  # target is index search over corrupt blobs, which would land one directory
+  # deep for the same reason `chunk` did.
+  while IFS= read -r src; do
+    rel="${src#"$REPO_ROOT/crates/$crate/src/"}"
+    module="${rel%.rs}"
+    # `chunk/single_flight` becomes `chunk::single_flight`, which is what it
+    # is called in Rust and what an allowlist row can be read against.
+    module="${module//\//::}"
+    [[ -n "${NOT_A_PARSER[$crate::$module]:-}" ]] && continue
+    [[ -n "${COVERED_BY_REQUEST[$crate::$module]:-}" ]] && continue
+    found=0
+    for t in "${targets[@]}"; do
+      [[ "$t" == "$module" && "${TARGET_CRATE[$t]}" == "$crate" ]] && found=1
+    done
+    if (( ! found )); then
+      fail "decoder module '$crate::$module' has no fuzz target and no allowlist reason"
+    fi
+  done < <(find "$REPO_ROOT/crates/$crate/src" -name '*.rs' | sort)
 done
 
 # Build first, separately: a target that does not compile is a build

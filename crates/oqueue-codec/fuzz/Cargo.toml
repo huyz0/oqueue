@@ -28,6 +28,12 @@ oqueue-broker = { path = "../../oqueue-broker" }
 # `scripts/fuzz.sh`: it is its own workspace, so `cargo test --workspace` does
 # not compile it, and `M3.14`'s review found it broken for exactly that reason.
 oqueue-coordinator = { path = "../../oqueue-coordinator" }
+# ⚠️ **Here for the `request` target's fakes since `M3.14`**, and `M3.28`'s
+# `bundle_footer` target is the second user rather than the first — removing
+# either target does not make this dependency droppable. `parse_footer` lives in
+# `oqueue-core` because that is where the object format's types are, and
+# `security.md` rule 3 does not care which direction untrusted bytes arrived
+# from: bytes an object store returned are as unowned as bytes a peer sent.
 oqueue-core = { path = "../../oqueue-core" }
 # ⚠️ `time` because the fetch handler parks (`M3.20`): `sleep_until` panics on
 # a runtime without timers, which this target found the moment the park landed.
@@ -83,6 +89,13 @@ bench = false
 [[bin]]
 name = "compress"
 path = "fuzz_targets/compress.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bundle_footer"
+path = "fuzz_targets/bundle_footer.rs"
 test = false
 doc = false
 bench = false
