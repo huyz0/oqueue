@@ -17,6 +17,7 @@
 //! divergence with it, to `M5`. doc 10 #12's engine is the implementation
 //! `contracts.md` rule 3 is actually satisfied by.
 
+#![allow(unreachable_pub)]
 // Every `expect` is on a value the suite itself built from a literal it
 // controls, so a panic means the suite is wrong, not the code under test.
 #![allow(clippy::expect_used)]
@@ -27,24 +28,24 @@ use oqueue_core::{
 };
 use oqueue_index::MemoryIndex;
 
-fn topic(name: &str) -> TopicId {
+pub fn topic(name: &str) -> TopicId {
     TopicId::new(name.to_owned()).expect("a valid topic")
 }
 
-fn partition(index: i32) -> PartitionId {
+pub fn partition(index: i32) -> PartitionId {
     PartitionId::new(index).expect("a valid partition")
 }
 
-fn offset(value: i64) -> Offset {
+pub fn offset(value: i64) -> Offset {
     Offset::new(value).expect("a valid offset")
 }
 
 /// A commit adding `records` to `orders`/0.
-fn commit(version: u64, records: u32) -> MetadataEntry {
+pub fn commit(version: u64, records: u32) -> MetadataEntry {
     commit_on(version, "orders", 0, records)
 }
 
-fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataEntry {
+pub fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataEntry {
     MetadataEntry::new(
         CommitVersion::new(version),
         MetadataRecord::BatchCommitted {
@@ -62,7 +63,7 @@ fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataEntry
 /// A commit whose span names a real bounded region, so the byte budget has a
 /// length to charge against. ⚠️ `commit`'s `ByteRange::Full` deliberately has
 /// none — `Full` names the whole object, whose size only the store knows.
-fn sized_commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
+pub fn sized_commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
     MetadataEntry::new(
         CommitVersion::new(version),
         MetadataRecord::BatchCommitted {
@@ -79,10 +80,9 @@ fn sized_commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
 
 /// The cases, generic over the implementation. Each takes a fresh, empty index.
 mod contract {
-    use super::{commit, commit_on, offset, partition, sized_commit, topic};
+    use super::{commit, commit_on, offset, partition, topic};
     use oqueue_core::{
-        CommitVersion, Error, MAX_BATCHES_PER_PAGE, MaterializedIndex, MetadataEntry,
-        MetadataRecord, Offset,
+        CommitVersion, Error, MaterializedIndex, MetadataEntry, MetadataRecord, Offset,
     };
 
     /// A fresh index has folded nothing and knows no partition.
@@ -222,6 +222,22 @@ mod contract {
             entries,
             "a refused apply moved the entry count"
         );
+        // ⚠️ **And no `ObjectRef` from the refused batch is *findable*, which
+        // is the half a count cannot see** (`M3.33`). `end_offset` and
+        // `applied_upto` are scalars: an implementation that eagerly pushed the
+        // first entry into its partitions and then rolled back only those two
+        // would leave a reference behind that satisfies both, and hand a fetch
+        // at the high watermark an object *past* it. That is FR-12's zero-GET
+        // claim broken — a read where the index promised none — and a batch a
+        // consumer would be served from a commit it was told did not happen.
+        let page = index
+            .find_batches(&topic("orders"), partition(0), offset(3), 1 << 20)
+            .expect("a lookup at the watermark is not an error");
+        assert!(
+            page.is_empty(),
+            "the refused batch left {} findable reference(s) past the watermark",
+            page.len()
+        );
     }
 
     /// An epoch change advances the version without moving any offset — it is
@@ -319,137 +335,6 @@ mod contract {
             "and a refill reproduces it exactly"
         );
     }
-    /// FR-12's zero-GET case, at the seam that decides it: a fetch that is
-    /// already at the high watermark is told to read nothing, so there is
-    /// nothing for it to GET.
-    pub(super) fn a_fetch_at_the_high_watermark_finds_no_batches<I: MaterializedIndex>(index: &I) {
-        index.apply(&[commit(1, 3), commit(2, 4)]).expect("applied");
-        let hwm = index.end_offset(&topic("orders"), partition(0));
-        assert_eq!(hwm, offset(7));
-        assert_eq!(
-            index
-                .find_batches(&topic("orders"), partition(0), hwm, u64::MAX)
-                .expect("a page"),
-            Vec::new(),
-            "nothing to read at the end of the log"
-        );
-        // And past it, which is what a consumer racing a produce asks for.
-        assert!(
-            index
-                .find_batches(&topic("orders"), partition(0), offset(99), u64::MAX)
-                .expect("a page")
-                .is_empty()
-        );
-    }
-
-    /// A partition the index never folded is empty rather than an error — the
-    /// index knows what the log said, not which topics exist.
-    pub(super) fn an_unknown_partition_finds_no_batches<I: MaterializedIndex>(index: &I) {
-        assert!(
-            index
-                .find_batches(&topic("ghost"), partition(9), Offset::ZERO, u64::MAX)
-                .expect("a page")
-                .is_empty()
-        );
-    }
-
-    /// Everything from `start` onward, in ascending offset order — not just
-    /// the one object that contains `start`.
-    pub(super) fn a_page_runs_from_start_to_the_end_of_the_log<I: MaterializedIndex>(index: &I) {
-        // ⚠️ Sized, not `commit`: an unknown length ends the page after one
-        // batch, which is the case the test below this one is about.
-        for version in 1..=4 {
-            index
-                .apply(&[sized_commit(version, 2, 10)])
-                .expect("applied");
-        }
-        let page = index
-            .find_batches(&topic("orders"), partition(0), offset(3), u64::MAX)
-            .expect("a page");
-        let bases: Vec<i64> = page
-            .iter()
-            .map(|b| b.reference().base_offset().get())
-            .collect();
-        assert_eq!(
-            bases,
-            vec![2, 4, 6],
-            "the object holding offset 3 and every one after it, in order"
-        );
-    }
-
-    /// The budget is charged against known lengths, and never returns empty
-    /// because the first batch is too big.
-    pub(super) fn the_byte_budget_bounds_the_page_but_always_yields_one<I: MaterializedIndex>(
-        index: &I,
-    ) {
-        index
-            .apply(&[
-                sized_commit(1, 2, 100),
-                sized_commit(2, 2, 100),
-                sized_commit(3, 2, 100),
-            ])
-            .expect("applied");
-
-        let two = index
-            .find_batches(&topic("orders"), partition(0), Offset::ZERO, 250)
-            .expect("a page");
-        assert_eq!(two.len(), 2, "100 + 100 fits in 250, a third does not");
-
-        let one = index
-            .find_batches(&topic("orders"), partition(0), Offset::ZERO, 1)
-            .expect("a page");
-        assert_eq!(
-            one.len(),
-            1,
-            "a budget below the first batch still yields it, or the consumer \
-                 never advances"
-        );
-    }
-
-    /// A batch the index cannot price charges nothing against the byte budget
-    /// — it is unpriceable, not free, and the page count is what bounds it.
-    pub(super) fn an_unknown_length_charges_nothing<I: MaterializedIndex>(index: &I) {
-        // `commit` uses ByteRange::Full, whose length only the store knows.
-        index
-            .apply(&[commit(1, 2), commit(2, 2), sized_commit(3, 2, 10)])
-            .expect("applied");
-        let page = index
-            .find_batches(&topic("orders"), partition(0), Offset::ZERO, 10)
-            .expect("a page");
-        assert_eq!(
-            page.len(),
-            3,
-            "two cannot be priced and pass through the budget; the third is \
-             charged against it and exactly fills it"
-        );
-        assert_eq!(page[0].known_len(), None);
-        assert_eq!(page[2].known_len(), Some(10));
-
-        assert_eq!(
-            index
-                .find_batches(&topic("orders"), partition(0), Offset::ZERO, 5)
-                .expect("a page")
-                .len(),
-            2,
-            "the priced one is refused by a budget below it; the unpriceable \
-             ones before it are not"
-        );
-    }
-
-    /// However many batches a partition has, one page names at most
-    /// [`MAX_BATCHES_PER_PAGE`] of them — NFR-30's bound on a cold read.
-    pub(super) fn a_page_is_bounded_by_its_batch_count<I: MaterializedIndex>(index: &I) {
-        for version in 1..=(MAX_BATCHES_PER_PAGE as u64 + 5) {
-            index.apply(&[commit(version, 1)]).expect("applied");
-        }
-        assert_eq!(
-            index
-                .find_batches(&topic("orders"), partition(0), Offset::ZERO, u64::MAX)
-                .expect("a page")
-                .len(),
-            MAX_BATCHES_PER_PAGE
-        );
-    }
 }
 
 /// Runs every case against one implementation. Each case gets a fresh index —
@@ -468,12 +353,12 @@ fn run_contract<I: MaterializedIndex>(make: impl Fn() -> I) {
     contract::an_epoch_change_moves_no_offset(&make());
     contract::an_empty_apply_is_a_no_op(&make());
     contract::dropping_and_refilling_reproduces_the_index(&make());
-    contract::a_fetch_at_the_high_watermark_finds_no_batches(&make());
-    contract::an_unknown_partition_finds_no_batches(&make());
-    contract::a_page_runs_from_start_to_the_end_of_the_log(&make());
-    contract::the_byte_budget_bounds_the_page_but_always_yields_one(&make());
-    contract::an_unknown_length_charges_nothing(&make());
-    contract::a_page_is_bounded_by_its_batch_count(&make());
+    crate::paging::a_fetch_at_the_high_watermark_finds_no_batches(&make());
+    crate::paging::an_unknown_partition_finds_no_batches(&make());
+    crate::paging::a_page_runs_from_start_to_the_end_of_the_log(&make());
+    crate::paging::the_byte_budget_bounds_the_page_but_always_yields_one(&make());
+    crate::paging::an_unknown_length_charges_nothing(&make());
+    crate::paging::a_page_is_bounded_by_its_batch_count(&make());
     contract::the_entry_count_survives_a_drop_and_refill(&make());
 }
 

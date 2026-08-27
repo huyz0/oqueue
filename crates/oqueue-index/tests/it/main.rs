@@ -6,3 +6,4 @@
 mod applier;
 mod index;
 mod memory;
+mod paging;

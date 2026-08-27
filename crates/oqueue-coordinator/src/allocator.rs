@@ -159,6 +159,43 @@ impl Allocator {
         (staged.entry.version(), staged.assignments)
     }
 
+    /// An allocator already near the end of a line, for the tests that are
+    /// about what happens when one runs out.
+    ///
+    /// ⚠️ **`cfg(test)`, and it is the only way those guards are reachable.**
+    /// `stage`'s two refusals need a partition within one batch of `i64::MAX`
+    /// records, or a shard within one commit of `u64::MAX` — and neither
+    /// ceiling is a named constant, because both are the range of the integer
+    /// itself, reached through `Offset::add`'s and `CommitVersion::advance`'s
+    /// `checked_add`. ⚠️ **Getting there by producing is not a fixture, it is
+    /// a geological era**: `record_count` is a `u32`, so even a request
+    /// carrying the largest batch the format can express needs upwards of two
+    /// billion of them, and a realistic one needs orders more. Both are the arithmetic that keeps a
+    /// wrapped offset from being *smaller* than the one before it, and every
+    /// later comparison wrong, so leaving them unreachable would mean the code
+    /// standing between a client and silently reordered offsets was the code
+    /// nothing ever ran.
+    ///
+    /// ⚠️ **Seeds state, does not fake behaviour** (`testing.md` rule 3): what
+    /// it produces is an ordinary `Allocator` that has been running for a long
+    /// time, and every method behaves exactly as it would have.
+    #[cfg(test)]
+    pub(crate) fn seeded(
+        next_version: CommitVersion,
+        ends: &[(TopicId, PartitionId, Offset)],
+    ) -> Self {
+        let mut allocator = Self::new();
+        allocator.next_version = next_version;
+        for (topic, partition, end) in ends {
+            allocator
+                .end_offsets
+                .entry(topic.clone())
+                .or_default()
+                .insert(*partition, *end);
+        }
+        allocator
+    }
+
     /// Where this partition's line has reached, if the allocator has seen it.
     fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Option<Offset> {
         self.end_offsets
@@ -174,7 +211,25 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::Allocator;
-    use oqueue_core::{ByteRange, CommittedSpan, ObjectKey, PartitionId, TopicId};
+    use oqueue_core::{
+        ByteRange, CommitVersion, CommittedSpan, Error, ObjectKey, Offset, PartitionId, TopicId,
+    };
+
+    fn topic() -> TopicId {
+        TopicId::new("t".to_owned()).expect("a valid topic id")
+    }
+
+    fn partition() -> PartitionId {
+        PartitionId::new(0).expect("a valid partition")
+    }
+
+    fn span(records: u32) -> CommittedSpan {
+        CommittedSpan::new(topic(), partition(), records, ByteRange::Full)
+    }
+
+    fn object() -> ObjectKey {
+        ObjectKey::new("o".to_owned()).expect("a valid object key")
+    }
 
     /// ⚠️ The allocator is reachable through `CoordinatorLoop`, which an
     /// operator may format on an error or shutdown path. Its `Debug` must
@@ -211,5 +266,82 @@ mod tests {
             rendered.contains("partitions: 1"),
             "and how much it is holding: {rendered}"
         );
+    }
+
+    /// ⚠️ **A partition's line refuses rather than wrapping.** An offset is an
+    /// `i64` on the wire, and a wrapped one is *smaller* than the one before
+    /// it — every later comparison, every watermark, every consumer's position
+    /// is then wrong, and nothing tells anybody. `Offset::add` is what refuses;
+    /// this is what reaches it, which two-billion produce requests otherwise
+    /// would.
+    #[test]
+    fn a_partition_at_the_end_of_its_line_refuses_rather_than_wrapping() {
+        let allocator = Allocator::seeded(
+            CommitVersion::ZERO,
+            &[(
+                topic(),
+                partition(),
+                Offset::new(i64::MAX - 1).expect("in range"),
+            )],
+        );
+
+        let refused = allocator.stage(object(), vec![span(2)]);
+
+        assert!(
+            matches!(refused, Err(Error::OffsetOverflow { .. })),
+            "a line one record from its end must refuse two: {refused:?}"
+        );
+        // ⚠️ **And the one that fits still fits**, which is what says this is a
+        // ceiling rather than an off-by-one: a guard one too eager refuses the
+        // last legal record of every partition that ever reaches here.
+        allocator
+            .stage(object(), vec![span(1)])
+            .expect("the last record on the line is still assignable");
+    }
+
+    /// ⚠️ **And the shard's version line does the same.** A wrapped
+    /// `CommitVersion` is a version *below* one already folded, which
+    /// `MaterializedIndex` guarantee 1 refuses as non-monotonic — so the shard
+    /// stops committing with a message about ordering rather than about the
+    /// counter that ran out.
+    #[test]
+    fn a_version_line_at_its_end_refuses_rather_than_wrapping() {
+        let allocator = Allocator::seeded(CommitVersion::new(u64::MAX), &[]);
+
+        let refused = allocator.stage(object(), vec![span(1)]);
+
+        assert!(
+            matches!(refused, Err(Error::CommitVersionOverflow { .. })),
+            "the last version on the line cannot be advanced past: {refused:?}"
+        );
+        // ⚠️ **And the last legal version still stages**, the same companion
+        // the offset test carries and for the same reason: a guard one step
+        // too eager costs a shard its final commit, and a test that only ever
+        // probes the value past the end cannot tell the two apart.
+        Allocator::seeded(CommitVersion::new(u64::MAX - 1), &[])
+            .stage(object(), vec![span(1)])
+            .expect("the last version on the line is still assignable");
+    }
+
+    /// ⚠️ **Nothing is consumed by a refusal**, which is what makes both
+    /// guards safe to hit: `stage` computes without taking, so a caller that
+    /// retries a smaller batch gets the offsets it would have got anyway.
+    #[test]
+    fn a_refused_stage_consumes_nothing() {
+        let allocator = Allocator::seeded(
+            CommitVersion::new(7),
+            &[(
+                topic(),
+                partition(),
+                Offset::new(i64::MAX - 1).expect("in range"),
+            )],
+        );
+
+        assert!(allocator.stage(object(), vec![span(2)]).is_err());
+
+        let staged = allocator
+            .stage(object(), vec![span(1)])
+            .expect("a batch that fits still fits");
+        assert_eq!(staged.entry.version(), CommitVersion::new(7));
     }
 }
