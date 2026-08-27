@@ -26,10 +26,9 @@
 
 use crate::cluster::Cluster;
 use crate::fetch::Allowance;
+use crate::region::slice_region;
 use oqueue_codec::batch::rewrite_base_offset;
-use oqueue_core::{
-    ByteRange, Error, IndexedBatch, ObjectKey, Offset, PartitionId, Region, TopicId, parse_footer,
-};
+use oqueue_core::{ByteRange, Error, IndexedBatch, ObjectKey, Offset, PartitionId, TopicId};
 use std::collections::HashMap;
 
 impl Cluster {
@@ -292,8 +291,12 @@ impl Cluster {
 ///
 /// ⚠️ **Multiply by the passes.** Since `M3.26` this outlives one pass and
 /// lives as long as the request, so a parked fetch holds up to
-/// `MAX_READS_PER_REQUEST` budgets' worth plus one over-the-line object per
-/// pass — the price of not re-downloading a bundle once per wakeup, and the
+/// `MAX_READS_PER_REQUEST` budgets' worth plus the over-the-line objects — ⚠️
+/// **more than one per pass since `M3.39`**, because a partition that returned
+/// nothing no longer takes the exemption with it, so a second failing
+/// partition can fetch a whole object past a spent budget before the failure
+/// cap stops it. Bounded at `MAX_FAILED_FETCHES_PER_REQUEST` extra objects per
+/// request, not one per pass — the price of not re-downloading a bundle once per wakeup, and the
 /// number to size a broker's memory from. It was a per-object allocation
 /// before `M3.22`, a per-pass one after it, and is a per-request one now.
 ///
@@ -451,47 +454,4 @@ impl FetchedObjects {
         self.seen.insert(id, fetched.clone());
         (fetched, true)
     }
-}
-
-/// This partition's records, cut out of a whole bundled object.
-fn slice_region(whole: &[u8], topic: &TopicId, partition: PartitionId) -> Result<Vec<u8>, Error> {
-    let size = whole.len() as u64;
-    let regions = parse_footer(whole, size)?;
-    let ByteRange::Bounded(bounds) = region_for(&regions, topic, partition)? else {
-        // `parse_footer` refuses an unbounded region, so this arm is
-        // unreachable — named rather than `unwrap`ped, because a panic here
-        // would be reachable from stored bytes (`security.md` rule 3).
-        return Err(Error::IndexObjectMismatch);
-    };
-    let from = usize::try_from(bounds.offset()).map_err(|_| Error::IndexObjectMismatch)?;
-    let len = usize::try_from(bounds.length()).map_err(|_| Error::IndexObjectMismatch)?;
-    let end = from.checked_add(len).ok_or(Error::IndexObjectMismatch)?;
-    whole
-        .get(from..end)
-        .map(<[u8]>::to_vec)
-        .ok_or(Error::IndexObjectMismatch)
-}
-
-/// The one region in `regions` this partition's records live in.
-///
-/// ⚠️ **Exactly one, and a second is an error rather than a choice.** Regions
-/// carry no offsets — offsets are assigned at commit, after the object is
-/// written — so two regions for one `(topic, partition)` in one object leave
-/// nothing to say which of them an `ObjectRef` names. The write path is what
-/// keeps that from happening: one `Produce` request carries at most one batch
-/// per partition, so one flush pushes at most one region for it. This is where
-/// that assumption is checked rather than trusted.
-fn region_for(
-    regions: &[Region],
-    topic: &TopicId,
-    partition: PartitionId,
-) -> Result<ByteRange, Error> {
-    let mut found = regions
-        .iter()
-        .filter(|region| region.topic() == topic && region.partition() == partition);
-    let region = found.next().ok_or(Error::IndexObjectMismatch)?;
-    if found.next().is_some() {
-        return Err(Error::IndexObjectMismatch);
-    }
-    Ok(region.bytes())
 }

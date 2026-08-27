@@ -36,6 +36,7 @@ pub mod listoffsets;
 pub mod metadata;
 pub mod produce;
 mod read;
+mod region;
 pub mod session;
 #[cfg(test)]
 mod testing;

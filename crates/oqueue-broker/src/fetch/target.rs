@@ -170,10 +170,25 @@ impl Budget {
         }
     }
 
-    /// Records what a partition actually returned.
-    pub(crate) const fn spend(&mut self, cost: u64) {
+    /// Records what a partition cost, and whether it returned anything.
+    ///
+    /// ⚠️ **Two facts, because they stopped being the same one.** This took a
+    /// single `cost` and flipped `returned_anything` whenever it was nonzero —
+    /// true while only a *successful* read cost anything. `M3.26` gave a
+    /// failed read a nonzero cost, and the two came apart: a partition that
+    /// returned no records consumed the response's once-per-response
+    /// exemption, so a corrupt first partition left a healthy second one
+    /// framed `NONE` with no records. ⚠️ **A response in which no partition
+    /// makes progress is doc 12 §4.6's silent wrongness**, and the exemption
+    /// exists precisely so that cannot happen.
+    ///
+    /// ⚠️ **The cost is still charged.** A read that pulled a whole bundle and
+    /// could not use it spent the request's bytes whatever it returned; what
+    /// it did not do is take the one exemption away from somebody who could
+    /// have used it.
+    pub(crate) const fn spend(&mut self, cost: u64, returned_records: bool) {
         self.left = self.left.saturating_sub(cost);
-        if cost > 0 {
+        if returned_records {
             self.returned_anything = true;
         }
     }
@@ -367,12 +382,39 @@ mod tests {
     #[test]
     fn what_one_partition_spends_is_gone_from_the_next_partitions_share() {
         let mut budget = Budget::new(1_000);
-        budget.spend(600);
+        budget.spend(600, true);
         assert_eq!(budget.share(9_000), 400);
-        budget.spend(400);
+        budget.spend(400, true);
         assert_eq!(budget.share(9_000), 0, "and it runs out");
-        budget.spend(50);
+        budget.spend(50, true);
         assert_eq!(budget.share(9_000), 0, "without going negative");
+    }
+
+    /// ⚠️ **A partition that returned nothing does not take the exemption.**
+    /// The bytes it fetched are still gone from the request — a read that
+    /// pulled a whole bundle spent them whatever it could do with them — but
+    /// the one over-the-line read a response is allowed belongs to whoever can
+    /// still use it. ⚠️ **Otherwise a response can carry no records at all**,
+    /// which is doc 12 §4.6's silent wrongness produced by the mechanism that
+    /// exists to stop a consumer parking at an offset forever.
+    #[test]
+    fn a_partition_that_returned_nothing_leaves_the_exemption_for_the_next() {
+        let mut budget = Budget::new(1_000);
+        assert!(budget.may_overshoot(), "nobody has returned anything yet");
+
+        budget.spend(1_000, false);
+
+        assert_eq!(budget.share(9_000), 0, "its bytes are gone all the same");
+        assert!(
+            budget.may_overshoot(),
+            "and the partition behind it can still be served one batch"
+        );
+
+        budget.spend(0, true);
+        assert!(
+            !budget.may_overshoot(),
+            "once something is returned, the exemption is spent"
+        );
     }
 
     /// ⚠️ **A client cannot name a bigger allowance than this broker will

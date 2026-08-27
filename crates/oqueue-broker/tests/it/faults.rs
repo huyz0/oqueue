@@ -147,9 +147,12 @@ async fn a_failing_partition_cannot_be_repeated_for_free() {
 /// whole objects for a `max_bytes` of one, bounded by neither the budget nor
 /// the failure cap.
 ///
-/// ⚠️ **The observable is the healthy partition behind it.** With the charge,
-/// a budget of one bundle is spent by the partition that fetched one; without
-/// it, the budget is untouched and the second partition is served.
+/// ⚠️ **The observable here is that the healthy partition behind it is served
+/// at all**, which is `M3.39`'s half; the *charge* is pinned separately, by
+/// `a_failed_read_spends_the_budget_but_not_the_exemption`, whose third
+/// partition is what tells a spent budget from an unspent one. A two-partition
+/// fixture cannot: once the exemption survives a failure, the second partition
+/// reads either way.
 #[tokio::test]
 async fn a_read_that_fetched_and_then_failed_to_parse_still_spends_the_budget() {
     let broker = broker(&["a", "b"]).await;
@@ -168,11 +171,21 @@ async fn a_read_that_fetched_and_then_failed_to_parse_still_spends_the_budget() 
         response.responses[0].partitions[0].error_code, 0,
         "the partition whose object will not parse says so"
     );
+    // ⚠️ **The bytes are gone and the *exemption* is not** (`M3.39`). The
+    // budget is spent — the store handed over a whole bundle whatever the
+    // reader could do with it — but a partition that returned no records has
+    // not taken the one over-the-line read a response is allowed, so the
+    // healthy partition behind it is still served. ⚠️ **This asserted the
+    // opposite until `M3.39`**, which is what `M3.26`'s review recorded: a
+    // corrupt first partition left a healthy second one framed `NONE` with no
+    // records, and a response in which no partition makes progress is doc 12
+    // §4.6's silent wrongness arriving through the mechanism built to prevent
+    // a consumer parking at an offset forever.
     let behind = &response.responses[1].partitions[0];
+    assert_eq!(behind.error_code, 0);
     assert!(
-        behind.records.as_ref().is_none_or(bytes::Bytes::is_empty),
-        "the bundle it pulled was the response's whole budget, so nothing is \
-         left for the partition behind it"
+        behind.records.as_ref().is_some_and(|r| !r.is_empty()),
+        "a spent budget must not cost the partition behind it its one batch"
     );
 }
 
@@ -331,24 +344,38 @@ async fn a_tail_read_that_could_not_be_stamped_is_charged_and_counted() {
 
 /// ⚠️ **The charge, on its own**, with one failure rather than two so the cap
 /// is not what is being measured. A budget of one batch is spent by the
-/// partition that pulled one, whether or not it could use it.
+/// partition that pulled one, whether or not it could use it — and the
+/// partition behind it is still served, because a read that returned nothing
+/// does not take the response's one over-the-line exemption (`M3.39`).
+///
+/// ⚠️ **The GET count is the observable, and it discriminates in both
+/// directions.** Two, not one: under the old behaviour the second partition
+/// was refused its own read, which is what let a corrupt first partition blank
+/// a whole response. And two, not three: the third partition is reachable only
+/// if the failed read's bytes were never charged, which is `M3.26`'s half.
 #[tokio::test]
-async fn a_spent_budget_stops_the_partition_behind_an_unstampable_tail_read() {
-    let broker = broker(&["a", "b"]).await;
+async fn a_failed_read_spends_the_budget_but_not_the_exemption() {
+    let broker = broker(&["a", "b", "c"]).await;
     let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
     produce(&dispatcher, &broker, &["a"]).await;
     let batch = single_partition_len(&dispatcher, &broker, "a").await;
     corrupt_every_object(&broker).await;
     produce(&dispatcher, &broker, &["b"]).await;
+    produce(&dispatcher, &broker, &["c"]).await;
     let before = broker.store.counts().count(Operation::Get);
 
-    let _ = capped_fetch(&dispatcher, &broker, &["a", "b"], batch, 1 << 20).await;
+    // ⚠️ **Three partitions and a two-batch budget, and both numbers matter.**
+    // With two partitions this could not tell the charge from its absence:
+    // the exemption serves the second partition either way, so the count was
+    // two in both worlds. The third partition is the discriminator — it is
+    // reachable only if the failed read left its bytes unspent.
+    let _ = capped_fetch(&dispatcher, &broker, &["a", "b", "c"], batch * 2, 1 << 20).await;
 
     let spent = broker.store.counts().count(Operation::Get) - before;
     assert_eq!(
-        spent, 1,
-        "the failed read pulled the whole budget off the store, so nothing is \
-         left for the partition behind it: {spent}"
+        spent, 2,
+        "the failed read spends the budget (so `c` is not reachable) and not \
+         the exemption (so `b` still is): {spent}"
     );
 }
 

@@ -147,7 +147,7 @@ async fn one_topic(
                 &mut Spend { allowance, objects },
             )
             .await;
-            budget.spend(outcome.cost);
+            budget.spend(outcome.cost, !outcome.records.is_empty());
             outcome
         });
     }
