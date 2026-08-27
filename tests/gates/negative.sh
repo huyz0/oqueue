@@ -1063,7 +1063,21 @@ invoke_readmes() {
 setup_hot_path_bench() {
   local dir; dir="$(new_scratch hot-path-bench)"
   copy_gate "$dir" check-hot-path-bench.sh
-  mkdir -p "$dir/docs/internal/standards" "$dir/crates/oqueue-x/benches"
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/benches"
+  # ⚠️ A roadmap, because the gate reads milestone states to expire an
+  # allowlist reason (`M3.35`). Without one it reports a missing file as well
+  # as the defect the fixture plants — a second failure that would let this
+  # case pass while the branch it exists to pin had stopped running.
+  # ⚠️ **Every milestone the *real* allowlist owes must be here and open**, or
+  # the gate fails once per entry on "owes 'M14', which … does not list" — a
+  # first draft used an unrelated id and turned one planted failure into nine.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started |
+| 2 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | — | 1 | `x` | not started |
+ROADMAP
   # A minimal table, not the real one -- this gate reads whatever
   # performance.md the tree it runs against has, so the fixture only needs
   # the shape (indented GFM rows inside a numbered list item, per the real
@@ -1109,7 +1123,19 @@ invoke_hot_path_bench() {
 setup_hot_path_bench_required() {
   local dir; dir="$(new_scratch hot-path-bench-required)"
   copy_gate "$dir" check-hot-path-bench.sh
-  mkdir -p "$dir/docs/internal/standards" "$dir/crates/oqueue-x/src"
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/src"
+  # ⚠️ A roadmap, for the reason the fixture above gives: without one the gate
+  # reports a missing file as well as the defect this plants, and a case that
+  # fails for two reasons passes while the branch it pins stops running.
+  # ⚠️ **Every milestone this fixture's allowlist owes must be here and open**,
+  # or the excuse expires and the gate fails for *that* instead.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started |
+| 2 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | — | 1 | `x` | not started |
+ROADMAP
   # All eight of `NOT_YET_BUILT`'s real names, verbatim, plus one row it
   # does not name. Without all eight present, every real entry becomes
   # "stale" against this fixture's table and the gate fails on *that*
@@ -1157,12 +1183,94 @@ invoke_hot_path_bench_required() {
   bash "$1/scripts/check-hot-path-bench.sh"
 }
 
+# --- check-hot-path-bench.sh: an allowlist reason waits on a milestone that
+# has closed -- the expiry `M3.35` added, and the one branch the real tree
+# cannot exercise incidentally ------------------------------------------
+#
+# ⚠️ **The deliverable of `M3.35`, and it was unpinned for one round.** Every
+# other branch of this gate can fire against the working tree by accident; this
+# one fires for the first time only when M14 closes, which is years away and is
+# the moment nobody will be reading the allowlist. Round 3's review measured
+# that deleting it left the whole suite green.
+setup_hot_path_bench_expired() {
+  local dir; dir="$(new_scratch hot-path-bench-expired)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/src"
+  # ⚠️ **M14 complete, M5 open**, and both listed because the real allowlist
+  # owes them: a fixture missing either fails on "does not list" instead, which
+  # is a different branch and would let this case pass for the wrong reason.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started |
+| 2 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | — | 1 | `x` | complete |
+ROADMAP
+  # All eight of `NOT_YET_BUILT`'s real names, verbatim, for the reason the
+  # required-row fixture gives: a shorter table makes every real entry "stale"
+  # and the gate fails on *that* instead.
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+
+## Next section
+EOF
+  # ⚠️ A workspace, because the gate skips outright without one — a skip is
+  # not a failure, so the case would pass for the wrong reason.
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M3.35: an allowlist reason outlives the milestone that owed it")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_expired() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
 # --- check-hot-path-bench.sh: a row is covered but NOT_YET_BUILT still
 # lists it -- the loophole that let a later regression go unnoticed --------
 setup_hot_path_bench_leftover() {
   local dir; dir="$(new_scratch hot-path-bench-leftover)"
   copy_gate "$dir" check-hot-path-bench.sh
-  mkdir -p "$dir/docs/internal/standards" "$dir/crates/oqueue-x/benches"
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/benches"
+  # ⚠️ A roadmap, because the gate reads milestone states to expire an
+  # allowlist reason (`M3.35`). Without one it reports a missing file as well
+  # as the defect the fixture plants — a second failure that would let this
+  # case pass while the branch it exists to pin had stopped running.
+  # ⚠️ **Every milestone the *real* allowlist owes must be here and open**, or
+  # the gate fails once per entry on "owes 'M14', which … does not list" — a
+  # first draft used an unrelated id and turned one planted failure into nine.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started |
+| 2 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | — | 1 | `x` | not started |
+ROADMAP
   # A marker for a row the real, unmodified script's `NOT_YET_BUILT` already
   # names -- exactly what landing that row's milestone and adding its
   # benchmark produces, if the entry is not also deleted in the same
@@ -2472,7 +2580,11 @@ run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readm
 # `build-index.sh --check`, `check-requirements-trace.sh`, the three
 # `check-hot-path-bench.sh` cases below, the four `check-crate.sh` cases
 # further down — **only the first `check-hot-path-bench.sh` fixture emits more
-# than one kind.** So rule 20a requires a pin for that one, and the other
+# than one kind.** ⚠️ **Re-measured at `M3.35`**, which gave this gate a
+# milestone-expiry property and a fourth case: the counts below are that
+# task's, and the population is now four `check-hot-path-bench.sh` cases
+# rather than three. A measurement in a comment is a fact with a date on it,
+# and this one has been re-taken twice. So rule 20a requires a pin for that one, and the other
 # eight carry a pin the rule does not require: harmless extra specificity, and
 # cheap insurance for the day one of those gates grows a property, but not an
 # obligation. An earlier version of this comment claimed the rule demanded all
@@ -2483,17 +2595,23 @@ run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readm
 # and owned by their own comment below — and wrongly reported the row's count
 # as the error.
 #
-# That first fixture is still why the pins exist: it emits eight failures,
-# seven from `NOT_YET_BUILT` staleness rather than the unknown marker it
+# That first fixture is still why the pins exist: it emits several failures,
+# most from `NOT_YET_BUILT` staleness rather than the unknown marker it
 # plants, so deleting the unknown-marker branch outright left the case green,
 # the suite green, and `m0-complete.sh` green. The pins here are read off each
-# gate's actual output rather than guessed.
+# gate's actual output rather than guessed. ⚠️ **The exact count is
+# deliberately not written here any more** (`M3.35`): it moved from eight to
+# sixteen and back when this gate grew a property and the fixtures were
+# corrected, and a number in a comment that nobody re-measures is the thing
+# `M1.27` had to re-measure twice already.
 run_case "check-hot-path-bench.sh"      setup_hot_path_bench      invoke_hot_path_bench \
   "bench_micro.rs:1:// hot-path: RecordBatch encode/decode"
 run_case "check-hot-path-bench.sh (required row)" setup_hot_path_bench_required invoke_hot_path_bench_required \
   "has no benchmark and is not in NOT_YET_BUILT"
 run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftover invoke_hot_path_bench_leftover \
   "NOT_YET_BUILT still lists"
+run_case "check-hot-path-bench.sh (expired excuse)" setup_hot_path_bench_expired invoke_hot_path_bench_expired \
+  "which is complete"
 # ⚠️ The two **pre-existing** portability cases carry an `expect` since `M0.24`
 # gave the gate a fourth property: their fixtures name no script, so they trip
 # check 3's inspected-nothing guard as a *second* problem, and deleting check 1

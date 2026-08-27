@@ -120,6 +120,14 @@ Ordered by observed leverage. **Exhaust the earlier rows before the later ones.*
     that path's `NOT_YET_BUILT` entry in the same commit — after which
     losing the marker again is a real failure for that row alone, not a
     standing exception nothing revisits.
+    ⚠️ **And every allowlist reason names the milestone that owes it, and
+    expires when that milestone closes** (`M3.35`). Prose reasons rotted:
+    "M2 has not landed" survived M2's close, and "no produce path exists yet"
+    survived `M3.14` building one — six of eight entries were false while the
+    gate printed `ok`, because the script's staleness check only fires once
+    somebody does the work the entry excuses, which is the one moment nobody
+    reads the allowlist. A reason is now `<milestone> | <why>`, the milestone
+    must be one `roadmap.md` lists, and a `complete` one fails the gate.
 
 ## Profiling: on demand, never gated
 

@@ -65,23 +65,45 @@ if ! has_rust; then
   finish
 fi
 
-# Rows with no benchmark yet that are not, currently, a failure -- each
-# entry's reason names what has to exist first, checked against this
-# repository's milestone plans rather than guessed. Delete a row's entry in
-# the same commit that adds its `hot-path:` marker; do not add an entry for
-# a row that already has one.
+# Rows with no benchmark yet that are not, currently, a failure.
+#
+# ⚠️ **Every entry names the milestone that owes it, and the reason expires**
+# (`M3.35`). It used to name a *condition* in prose — "M2 has not landed", "no
+# produce path exists yet" — and prose cannot be checked, so six of the eight
+# were false while this gate printed `ok`. ⚠️ **The six**: the three that said
+# "M2 has not landed" after M2 was complete, "no crate exists to allocate or
+# pool a buffer in yet" after `oqueue-buf` had existed since `M0`, and "no
+# produce path exists yet" / "no fetch path exists yet" after `M3.14` built
+# both. ⚠️ **The offset→object row was the interesting one**: "M3 has not
+# landed" was still *literally true*, and would have become false in silence at
+# M3's own close — which is why this could not wait for a sweep.
+# `performance.md` rule 19 claims "the list above cannot silently rot" and
+# nothing held it: the script's own staleness check only fires once somebody
+# does the work the entry excuses, which is the one moment nobody is reading
+# the allowlist.
+#
+# ⚠️ **So the reason is a *receiver*, and the receiver's state is data.** Each
+# value is `<milestone> | <why that milestone>`; the milestone must exist in
+# `roadmap.md`'s table and must not be `complete`. A benchmark whose owing
+# milestone has closed is a benchmark nobody is going to write, and this
+# turns red the moment that becomes true rather than the moment somebody
+# notices.
+#
+# Delete a row's entry in the same commit that adds its `hot-path:` marker; do
+# not add an entry for a row that already has one.
 declare -A NOT_YET_BUILT=(
-  ["RecordBatch encode / decode"]="M2 has not landed (docs/internal/product/milestones/M2.md)"
-  ["CRC-32C over representative sizes"]="M2 has not landed (docs/internal/product/milestones/M2.md)"
-  ["Varint decode (and the paths that avoid it)"]="M2 has not landed (docs/internal/product/milestones/M2.md)"
-  ["Offset→object index lookup"]="M3 has not landed (docs/internal/product/milestones/M3.md)"
-  ["Buffer allocation and pooling"]="no crate exists to allocate or pool a buffer in yet"
-  ["Produce path end to end"]="no produce path exists yet"
-  ["Fetch: tail (cached) and cold (ranged GET)"]="no fetch path exists yet"
-  ["Compaction throughput"]="no compaction exists yet"
+  ["RecordBatch encode / decode"]="M14 | the harness itself: no crates/*/benches exists, no benchmark dependency is in the tree, and choosing one is a toolchain decision with portability.md and build.md consequences -- M14.md task 6a and task 9"
+  ["CRC-32C over representative sizes"]="M14 | same harness, M14.md task 6a"
+  ["Varint decode (and the paths that avoid it)"]="M14 | same harness, M14.md task 6a"
+  ["Buffer allocation and pooling"]="M14 | same harness, M14.md task 6a -- and nothing pools a buffer yet either, which that task now records as the second thing this row waits on"
+  ["Produce path end to end"]="M14 | a macro benchmark, which needs the harness and quiet hardware -- M14.md task 6a"
+  ["Fetch: tail (cached) and cold (ranged GET)"]="M14 | a macro benchmark, same as produce -- M14.md task 6a"
+  ["Offset→object index lookup"]="M14 | the lookup shipped in M3.8 and this is the one row rule 18 pins to code that already exists -- what it waits on is the same harness as the rest, and performance.md rule 2 puts the micro suite on gungraun, whose runner is valgrind: a platform requirement rather than a dev-dependency, which is why M14.md task 9 owns the choice and M3.25 deferred it"
+  ["Compaction throughput"]="M14 | there is no compaction to measure until M5 writes one, and no macro harness to measure it with until M14 chooses one -- M5 closes six slots earlier, so pointing this at M5 would make M5's own closing commit fail this gate with no harness to fix it"
 )
 
 PERFORMANCE_STD="docs/internal/standards/performance.md"
+ROADMAP="docs/internal/product/roadmap.md"
 if [[ ! -f "$PERFORMANCE_STD" ]]; then
   fail "$PERFORMANCE_STD not found; hot-path markers cannot be checked against it"
   finish
@@ -154,7 +176,76 @@ done
 # deleted again -- stayed silent instead of becoming the individual hard
 # failure the header claims. Found by review reproducing exactly that
 # sequence against a scratch fixture, not by inspection.
+# ⚠️ **The state of every milestone `roadmap.md` lists**, read rather than
+# assumed: `| n | [M3](...) | ... | complete |`, keyed by the id in the link
+# text. This is what makes an allowlist reason expire on its own.
+#
+# ⚠️ **The state cell is validated, not just read.** `$(NF-1)` assumes the row
+# ends in `|`, and a row that does not — legal GFM, and one hand edit away —
+# makes it yield the *completion-condition* cell instead. That parses to
+# something that is not `complete`, so every excuse would become permanently
+# unexpirable while this printed `ok`: the exact silent rot the mechanism
+# exists to end, arriving through the mechanism. So a state outside the
+# vocabulary is a failure rather than a shrug, and the row must end in a pipe
+# for its state to be believed at all.
+#
+# ⚠️ **Recorded, not `finish`ed.** An early return here aborted the marker and
+# table checks below, which is `lib.sh`'s "one run reports every violation"
+# contract broken and — measured — three cases in `tests/gates/negative.sh`
+# that stopped exercising the branches they pin, because their fixtures carry
+# a `performance.md` and no roadmap. A missing file is one problem, not a
+# reason to stop looking for others.
+declare -A MILESTONE_STATE=()
+if [[ ! -f "$ROADMAP" ]]; then
+  fail "$ROADMAP not found; NOT_YET_BUILT reasons cannot be checked against it"
+  problems=$((problems + 1))
+fi
+while IFS= read -r row; do
+  [[ "$row" =~ ^\|[[:space:]]*[0-9]+[[:space:]]*\|[[:space:]]*\[([^]]+)\] ]] || continue
+  id="${BASH_REMATCH[1]}"
+  if [[ "$row" != *\| ]]; then
+    fail "$ROADMAP's row for '$id' does not end in '|', so its state cell cannot be located"
+    problems=$((problems + 1))
+    continue
+  fi
+  state="$(awk -F'|' '{print $(NF-1)}' <<< "$row" | sed -E 's/^[[:space:]]+|[[:space:]]+$//g')"
+  case "$state" in
+    complete | "in progress" | "not started") ;;
+    *)
+      fail "$ROADMAP's row for '$id' has state '$state', which is not one of complete/in progress/not started"
+      note "a state this script cannot read is one that can never expire an excuse"
+      problems=$((problems + 1))
+      continue
+      ;;
+  esac
+  # ⚠️ **A repeated id is a failure, not a last-wins override.** Two rows for
+  # one milestone — a second table, a copied row — would let a stale `not
+  # started` overwrite a real `complete` and keep every excuse alive, with the
+  # outcome depending on which came first in the file.
+  if [[ -n "${MILESTONE_STATE[$id]:-}" ]]; then
+    fail "$ROADMAP lists '$id' more than once, so its state is whichever row came last"
+    problems=$((problems + 1))
+    continue
+  fi
+  MILESTONE_STATE["$id"]="$state"
+done < <(grep -E '^\| *[0-9]+ *\| *\[M' "$ROADMAP" 2>/dev/null || true)
+if (( ${#MILESTONE_STATE[@]} == 0 )); then
+  fail "$ROADMAP lists no milestones, so no NOT_YET_BUILT reason can be checked"
+  problems=$((problems + 1))
+fi
+
 for name in "${!NOT_YET_BUILT[@]}"; do
+  owed="${NOT_YET_BUILT[$name]%% |*}"
+  owed="$(sed -E 's/^[[:space:]]+|[[:space:]]+$//g' <<< "$owed")"
+  if [[ -z "${MILESTONE_STATE[$owed]:-}" ]]; then
+    fail "NOT_YET_BUILT's entry for '$name' owes '$owed', which $ROADMAP does not list"
+    note "the reason must name a milestone, so that its state can expire the excuse"
+    problems=$((problems + 1))
+  elif [[ "${MILESTONE_STATE[$owed]}" == "complete" ]]; then
+    fail "NOT_YET_BUILT's entry for '$name' waits on $owed, which is complete"
+    note "the excuse has expired -- write the benchmark, or move the row to a milestone that has not closed"
+    problems=$((problems + 1))
+  fi
   if [[ -z "${TABLE_PATHS[$name]:-}" ]]; then
     fail "NOT_YET_BUILT names '$name', which $PERFORMANCE_STD's table does not list"
     problems=$((problems + 1))
