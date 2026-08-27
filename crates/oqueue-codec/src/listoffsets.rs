@@ -21,7 +21,7 @@
 //! answers instead.
 
 use crate::flex::{
-    TaggedFields, put_array_len, put_nullable_string, put_tagged_fields, read_array_len,
+    TaggedFields, put_array_len, put_string, put_tagged_fields, read_array_len,
     read_nullable_string, read_tagged_fields,
 };
 use crate::wire::{Cursor, DecodeError, put_i16, put_i32, put_i64};
@@ -147,7 +147,13 @@ pub fn encode_response(out: &mut Vec<u8>, version: i16, resp: &ListOffsetsRespon
     }
     put_array_len(out, flexible, Some(resp.topics.len()));
     for topic in &resp.topics {
-        put_nullable_string(out, flexible, topic.name);
+        // ⚠️ **Non-nullable in the response schema** (`M3.40`), so
+        // the writer is the one that cannot express a null. What
+        // reaches here is always `Some`, because the handler refuses a
+        // null request name — three handlers had to learn that
+        // separately. If one ever forgets, this frames a topic no
+        // client will match rather than a body no client can read.
+        put_string(out, flexible, topic.name.unwrap_or_default());
         put_array_len(out, flexible, Some(topic.partitions.len()));
         for partition in &topic.partitions {
             put_i32(out, partition.index);

@@ -43,6 +43,29 @@ pub fn read_nullable_string<'a>(
     }
 }
 
+/// Appends a string a schema declares **non-nullable**, compact when
+/// `flexible` else legacy.
+///
+/// ⚠️ **It exists so the two cases have different names** (`M3.40`). Three
+/// handlers in a row echoed a request's *nullable* topic name into a response
+/// field the schema declares non-nullable, and each time the symptom was a
+/// reply no client can parse — the Java client throws in its response parser,
+/// librdkafka reports a protocol read error. `put_nullable_string` is the
+/// right writer for a field that may be null and the wrong one for a field
+/// that may not, and nothing in a call to it said which kind it was writing.
+///
+/// ⚠️ **A `&str` rather than an `Option`**, which is the whole point: a caller
+/// holding an `Option` has to decide what a `None` means *before* it reaches
+/// the wire, where the only options left are a frame nobody can read or a
+/// silent substitution.
+pub fn put_string(buf: &mut Vec<u8>, flexible: bool, value: &str) {
+    if flexible {
+        put_compact_nullable_string(buf, Some(value));
+    } else {
+        put_legacy_nullable_string(buf, Some(value));
+    }
+}
+
 /// Appends a nullable string, compact when `flexible` else legacy.
 pub fn put_nullable_string(buf: &mut Vec<u8>, flexible: bool, value: Option<&str>) {
     if flexible {
