@@ -6,8 +6,21 @@
 //! `security.md` rule 3 (no panic reachable from stored bytes) and the
 //! disjointness the builder guarantees on write and the parser must
 //! re-establish on read are what is at stake.
+//!
+//! ⚠️ **The sharp cases are the ones that still *parse*** (`M3.27`). A tail
+//! that is obvious rubbish is caught by any check; a region whose length field
+//! is one byte short leaves a footer that is well-formed in every respect
+//! except that it no longer describes its own payload, and a reader honouring
+//! it serves a truncated batch as a topic's records. Nothing downstream can
+//! tell, because the bytes it gets are valid — they are simply not all of
+//! them.
 
 #![allow(clippy::expect_used)]
+// ⚠️ `pub` here is `pub(crate)` in effect — `main.rs` is this test binary's
+// only root, so nothing outside it can name these. The workspace's
+// `unreachable_pub = "deny"` is right about library crates and has no way to
+// tell a test binary's shared module apart from one.
+#![allow(unreachable_pub)]
 
 use oqueue_core::{
     BUNDLE_FORMAT_VERSION, BundleBuilder, ByteRange, Error, PartitionId, RegionAlg, TopicId,
@@ -23,7 +36,7 @@ fn partition(index: i32) -> PartitionId {
 }
 
 /// A flush spanning four topics.
-fn four_topics() -> BundleBuilder {
+pub fn four_topics() -> BundleBuilder {
     let mut bundle = BundleBuilder::new();
     for (n, name) in ["orders", "payments", "shipments", "returns"]
         .into_iter()
@@ -52,79 +65,6 @@ fn the_footer_reads_back_exactly_what_was_written() {
     assert!(
         read.iter().all(|region| region.alg() == RegionAlg::None),
         "doc 10 #40's field exists from this commit, and M3 writes `none`"
-    );
-}
-
-/// ⚠️ **A reader has the object's size, not the object.** It GETs the tail, so
-/// parsing must work from any suffix that contains the whole footer.
-#[test]
-fn the_footer_parses_from_the_object_s_tail_alone() {
-    let sealed = four_topics().seal().expect("regions were pushed");
-    let whole =
-        parse_footer(sealed.payload(), sealed.payload().len() as u64).expect("the footer parses");
-
-    let payload = sealed.payload();
-    // The footer's own declared length is what a reader sizes its tail GET
-    // from; anything at least that long reads the same footer.
-    let trailer = &payload[payload.len() - 4..];
-    let footer_len =
-        u32::from_be_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]) as usize + 9;
-    for tail in [footer_len, footer_len + 17, payload.len()] {
-        let from = payload.len() - tail;
-        assert_eq!(
-            parse_footer(&payload[from..], payload.len() as u64)
-                .expect("a tail containing the footer"),
-            whole,
-            "a {tail}-byte tail reads the same footer"
-        );
-    }
-
-    // ⚠️ And a tail too short to hold the footer is refused rather than
-    // half-parsed — a reader that guessed too small must be told, not handed
-    // some of the regions.
-    assert!(
-        parse_footer(
-            &payload[payload.len() - (footer_len - 1)..],
-            payload.len() as u64
-        )
-        .is_err(),
-        "one byte short of the footer is not a footer"
-    );
-}
-
-/// ⚠️ **No truncation panics**, which is the claim and the whole of it —
-/// `security.md` rule 3, on bytes an object store returned. Some truncations
-/// legitimately *parse*, because a shorter object could have carried the footer
-/// they end at, so "refused" would be the wrong assertion and a name promising
-/// it would be worse than none.
-///
-/// ⚠️ **This is not adversarial coverage.** It walks one payload's suffixes and
-/// crafts no `count`, `footer_len`, `name_len` or range — which is where a
-/// decoder over stored bytes actually breaks. `security.md` rule 5 and
-/// `testing.md` rule 24 ask for a fuzz target, and `M3.18`'s row now names it
-/// — ⚠️ **including teaching `scripts/fuzz.sh` to look here**, which it cannot
-/// today: it walks `crates/oqueue-codec/src/*.rs` only, so a decoder in
-/// `oqueue-core` is not merely untargeted, it is invisible to the gate that
-/// would say so.
-#[test]
-fn no_truncation_of_the_tail_makes_the_parser_panic() {
-    let sealed = four_topics().seal().expect("regions were pushed");
-    let payload = sealed.payload();
-
-    for cut in 1..payload.len().min(200) {
-        let truncated = &payload[..payload.len() - cut];
-        // Either it fails, or it parses a footer that a shorter object could
-        // legitimately have carried; what it must never do is panic.
-        let _ = parse_footer(truncated, truncated.len() as u64);
-    }
-
-    assert!(
-        parse_footer(&[], 0).is_err(),
-        "nothing at all is not a footer"
-    );
-    assert!(
-        parse_footer(&[0, 0, 0, 0, BUNDLE_FORMAT_VERSION, 0, 0, 0, 0], 9).is_err(),
-        "a trailer declaring no regions is refused"
     );
 }
 
@@ -303,4 +243,136 @@ fn an_unknown_region_algorithm_is_refused_rather_than_defaulted() {
         parse_footer(&payload, payload.len() as u64),
         Err(Error::UnknownRegionAlg { code: 7 })
     );
+}
+
+/// ⚠️ **A gap in the middle of a payload is what shortening a length field
+/// produces**, and it is the sharp case: the footer still parses, every region
+/// is still ascending and disjoint, and the reader hands that topic's consumer
+/// a *truncated batch* as its records. Nothing downstream can tell — the bytes
+/// are well-formed, they are simply not all of them — so this is silent
+/// wrongness reachable from stored bytes, which is what `check_regions` exists
+/// to make impossible.
+#[test]
+fn a_region_whose_length_was_shortened_no_longer_parses() {
+    let good = three_regions();
+    let size = good.len() as u64;
+    parse_footer(&good, size).expect("the object as written parses");
+
+    // The first region's `length`, one byte shorter: a gap of one byte opens
+    // between region 0's end and region 1's offset.
+    let shortened = with_first_length(&good, |length| length - 1);
+
+    assert!(
+        matches!(
+            parse_footer(&shortened, size),
+            Err(Error::MalformedBundleFooter { .. })
+        ),
+        "a one-byte gap is a region that no longer describes its own bytes"
+    );
+}
+
+/// ⚠️ **And the *last* region's length, which the pairwise check cannot see.**
+/// There is no next region to disagree with it, so shortening it leaves a gap
+/// between the payload's last byte and the footer — the same silent truncation,
+/// at the one position an ascending-and-disjoint rule is blind to.
+#[test]
+fn the_last_regions_length_is_checked_against_the_payloads_end() {
+    let good = three_regions();
+    let size = good.len() as u64;
+
+    let shortened = with_last_length(&good, |length| length - 1);
+
+    assert!(
+        matches!(
+            parse_footer(&shortened, size),
+            Err(Error::MalformedBundleFooter { .. })
+        ),
+        "the final region has to end where the payload does"
+    );
+}
+
+/// Three regions in one payload, as the builder writes them.
+///
+/// ⚠️ **The record lengths are chosen, not arbitrary.** Each region's `length`
+/// field is located below by searching for its value, and a contiguous layout
+/// makes region *n*'s length equal region *n+1*'s offset by construction — so
+/// the helpers assert how many times each value may appear, and lengths that
+/// collided with anything else would make that assertion unprovable.
+pub fn three_regions() -> Vec<u8> {
+    let mut bundle = BundleBuilder::new();
+    for (name, records) in [
+        ("orders", &b"aaaaa"[..]),
+        ("payments", &b"bbbbbbb"[..]),
+        ("shipments", &b"ccccccccccc"[..]),
+    ] {
+        bundle
+            .push(topic(name), partition(0), 1, records)
+            .expect("a non-empty region");
+    }
+    bundle.seal().expect("regions were pushed").into_payload()
+}
+
+/// The payload with the first region's `length` field rewritten.
+///
+/// ⚠️ **Its value appears exactly twice** — as this region's length and as the
+/// next region's offset, which contiguity makes the same number — and the
+/// first of the two is the length, because a region's own offset is written
+/// before its length and region zero's offset is `0`.
+fn with_first_length(payload: &[u8], change: impl Fn(u64) -> u64) -> Vec<u8> {
+    rewrite_length(payload, 0, 2, change)
+}
+
+/// The payload with the last region's `length` field rewritten.
+///
+/// ⚠️ **Its value appears exactly once**: there is no region after it for
+/// contiguity to make an offset out of it.
+fn with_last_length(payload: &[u8], change: impl Fn(u64) -> u64) -> Vec<u8> {
+    let count = parse_footer(payload, payload.len() as u64)
+        .expect("the object as written parses")
+        .len();
+    rewrite_length(payload, count - 1, 1, change)
+}
+
+/// The payload with one region's `length` field rewritten in place.
+///
+/// ⚠️ **Located by value, and the count is asserted** — which is the only thing
+/// that makes locating by value sound. An earlier version of this helper took
+/// the *last* match, silently rewrote the following region's **offset**
+/// instead, and produced an overlap rather than a gap: the test passed against
+/// the check it was written to fail, because a different check caught a
+/// different defect. `testing.md` rule 5 — a test that cannot fail is not
+/// evidence.
+fn rewrite_length(
+    payload: &[u8],
+    which: usize,
+    expected: usize,
+    change: impl Fn(u64) -> u64,
+) -> Vec<u8> {
+    let regions = parse_footer(payload, payload.len() as u64).expect("it parses");
+    let ByteRange::Bounded(bounds) = regions[which].bytes() else {
+        panic!("a region is always bounded");
+    };
+    let old = bounds.length().to_be_bytes();
+    let new = change(bounds.length()).to_be_bytes();
+    let at: Vec<usize> = payload
+        .windows(8)
+        .enumerate()
+        .filter(|(_, window)| *window == old)
+        .map(|(index, _)| index)
+        .collect();
+    assert_eq!(
+        at.len(),
+        expected,
+        "the length value must appear exactly where this helper expects it"
+    );
+    // ⚠️ **The first match, and `expected` is what makes that sound.** A
+    // region's own offset is written before its length, and region zero's
+    // offset is `0` — so when a value appears twice, the earlier of the two is
+    // this region's length and the later is the next region's offset. An
+    // `Occurrence` parameter stood here and selected nothing, which read as if
+    // the choice had been made when it had not.
+    let at = at[0];
+    let mut out = payload.to_vec();
+    out[at..at + 8].copy_from_slice(&new);
+    out
 }

@@ -78,6 +78,12 @@ impl Error {
             | Self::UnknownRegionAlg { .. }
             | Self::UnknownBundleFormat { .. }
             | Self::MalformedBundleFooter { .. }
+            // Never, and `BundleTailTooShort`'s own docs say why it is here
+            // rather than in `Bounded`: the object is healthy and the read was
+            // too narrow, so the *same* call fails identically forever. A
+            // ladder that retried it would loop on an identical GET; what the
+            // caller must do is issue a wider one, which is a new call.
+            | Self::BundleTailTooShort { .. }
             | Self::EmptyBundle
             | Self::IndexObjectMismatch
             | Self::EmptyRegion

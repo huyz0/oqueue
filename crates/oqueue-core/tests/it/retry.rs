@@ -74,6 +74,19 @@ fn client_errors_are_never_retried() {
         Error::PartTooLarge { bytes: 10, max: 1 },
         Error::TooManyParts { max: 1 },
         Error::ObjectTooLarge { max: 1 },
+        // ⚠️ **The one on this list that looks like it belongs elsewhere.**
+        // `BundleTailTooShort` says the *object* is healthy and the read was
+        // too narrow, which reads like a retryable situation and is not: the
+        // same call re-reads the same bytes and fails identically, so a ladder
+        // acting on the class would loop on an identical GET. What recovers is
+        // a *wider* call, which only a caller holding the variant can make.
+        // `M3.27` was amended against its own acceptance criterion on exactly
+        // this point, and this is the assertion that keeps the amendment from
+        // being three paragraphs of prose and nothing else.
+        Error::BundleTailTooShort {
+            got: 4,
+            needed: 113,
+        },
     ];
     for err in cases {
         assert_eq!(
@@ -82,6 +95,25 @@ fn client_errors_are_never_retried() {
             "{err:?} must be RetryClass::Never"
         );
     }
+}
+
+/// ⚠️ **And the decision, not only the class**, for the one variant whose
+/// class is a judgement rather than a reading. A class is a label; what a
+/// caller feels is what [`RetryPolicy::decide`] returns, and this is the
+/// assertion that fails if `BundleTailTooShort` is ever moved to `Bounded` —
+/// which the suite otherwise cannot see, because a `|`-pattern arm stays
+/// covered by its neighbours and no mutation operator relocates a variant.
+#[test]
+fn a_tail_that_was_too_narrow_is_never_retried_as_it_stands() {
+    let error = Error::BundleTailTooShort {
+        got: 4,
+        needed: 113,
+    };
+    assert_eq!(
+        policy().decide(&error, 1),
+        RetryDecision::GiveUp,
+        "a wider read is a new call, not a retry of this one"
+    );
 }
 
 /// `Forever`-class errors retry no matter how many attempts have already

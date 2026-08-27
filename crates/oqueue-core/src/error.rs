@@ -236,6 +236,43 @@ pub enum Error {
         at: usize,
     },
 
+    /// The bytes handed to [`parse_footer`](crate::parse_footer) were a
+    /// *suffix* shorter than the footer they describe.
+    ///
+    /// ⚠️ **Not corruption, and that distinction is the whole variant.** A
+    /// reader that does not know an object's layout GETs its last few
+    /// kilobytes and hopes the footer is inside them; when it is not, the
+    /// object is fine and the *read* was too narrow. Reported as
+    /// [`Error::MalformedBundleFooter`] — which it was until `M3.27` — a
+    /// healthy object is indistinguishable from a permanently broken one, and
+    /// the caller gives up on records that are there.
+    ///
+    /// ⚠️ **`needed` is a number the parser computed and used to discard.**
+    /// The trailer says how long the footer is, so the tail length that would
+    /// have worked is known at exactly the moment the parse fails.
+    ///
+    /// ⚠️ **It is a *lower bound*, and one branch is why.** A tail too short to
+    /// hold even the trailer cannot say how long the footer is — the field
+    /// that would say so is among the bytes that are missing — so `needed`
+    /// there is the trailer's own length, and a read of exactly that much can
+    /// come back asking for more. A caller loops until it succeeds or the
+    /// number stops growing; it must not treat a second failure as proof of
+    /// corruption. ⚠️ **It converges in at most two steps**, because the
+    /// second read always holds the trailer and the trailer holds the footer's
+    /// real length.
+    ///
+    /// ⚠️ **It is still [`RetryClass::Never`](crate::RetryClass::Never)**, and
+    /// that is not a contradiction: retrying *this* call re-reads the same
+    /// bytes and fails identically. What helps is a *different* call, and only
+    /// a caller holding this variant can know to make it.
+    #[error("a {got}-byte tail cannot hold a footer needing {needed}")]
+    BundleTailTooShort {
+        /// Bytes the caller passed.
+        got: u64,
+        /// Bytes from the end of the object the caller needed to pass.
+        needed: u64,
+    },
+
     /// A region was added with no records in it.
     ///
     /// ⚠️ Bytes that advance no offsets are bytes nothing can ever read: the

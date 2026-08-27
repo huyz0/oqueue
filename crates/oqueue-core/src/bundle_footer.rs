@@ -21,8 +21,15 @@ use crate::{ByteRange, Error, PartitionId, Result, TopicId};
 /// offsets in the *object*, and a suffix cannot say whether one reaches past
 /// the payload — so the check that would catch a region claiming the whole
 /// object needs the size the caller already has from its
-/// [`ObjectMeta`](crate::ObjectMeta). Passing the wrong size weakens that one
-/// check and nothing else.
+/// [`ObjectMeta`](crate::ObjectMeta).
+///
+/// ⚠️ **A wrong `object_size` is now a wrong answer, not a weaker check**
+/// (`M3.27`). It used to bound one comparison; the regions must now end
+/// *exactly* at the payload's end, and `payload_end` is derived from this
+/// number — so a size one byte off rejects a healthy object as
+/// [`Error::MalformedBundleFooter`]. It is the caller's `ObjectMeta` for the
+/// bytes it actually read, never a remembered one: `M5` rewrites these
+/// objects, and a size from before a rewrite describes a different object.
 ///
 /// ⚠️ **Every length is checked before it is used**, and that is not
 /// defensiveness: this parses bytes an object store returned, and `M5` will
@@ -32,16 +39,29 @@ use crate::{ByteRange, Error, PartitionId, Result, TopicId};
 ///
 /// # Errors
 ///
-/// [`Error::MalformedBundleFooter`] if the tail is too short, the declared
-/// footer length does not fit, or a region's fields run past the end.
+/// [`Error::BundleTailTooShort`] if `tail` is a *suffix* too narrow to hold
+/// the footer the trailer describes — ⚠️ **which is not corruption**: the
+/// object is fine, the read was too small, and the error carries how many
+/// trailing bytes would have been enough. A caller that treats it as
+/// corruption reports live records permanently gone.
+/// [`Error::MalformedBundleFooter`] if the *object* is too small to hold what
+/// its own trailer describes, the declared footer length does not fit, or a
+/// region's fields run past the end, leave a gap, or stop short of the
+/// payload's end.
 /// [`Error::UnknownRegionAlg`] if a region names an algorithm this build does
 /// not know. [`Error::EmptyBundle`] if the footer declares no regions.
 pub fn parse_footer(tail: &[u8], object_size: u64) -> Result<Vec<Region>> {
     let bytes = tail;
+    let got = bytes.len() as u64;
+    // ⚠️ **`needed` here is a lower bound, not the answer**, and it is the
+    // only place that is true: the field that says how long the footer is has
+    // not been read yet, because it is among the bytes that are missing. A
+    // caller re-reading exactly this much gets the trailer and, with it, the
+    // real number — so this converges in one further step and never more.
     let trailer_at = bytes
         .len()
         .checked_sub(TRAILER_LEN)
-        .ok_or(Error::MalformedBundleFooter { at: 0 })?;
+        .ok_or_else(|| short_tail_or_corrupt(got, TRAILER_LEN as u64, object_size))?;
     let trailer = &bytes[trailer_at..];
     let count = u32::from_be_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]) as usize;
     let version = trailer[4];
@@ -52,9 +72,15 @@ pub fn parse_footer(tail: &[u8], object_size: u64) -> Result<Vec<Region>> {
         return Err(Error::EmptyBundle);
     }
     let footer_len = u32::from_be_bytes([trailer[5], trailer[6], trailer[7], trailer[8]]) as usize;
-    let footer_at = trailer_at
-        .checked_sub(footer_len)
-        .ok_or(Error::MalformedBundleFooter { at: trailer_at })?;
+    let footer_at = trailer_at.checked_sub(footer_len).ok_or_else(|| {
+        // ⚠️ **The number the caller needs, at the moment it is known.** The
+        // trailer just said how long the footer is, so "this tail was too
+        // narrow, ask for this many bytes" is derivable exactly here — and
+        // was being discarded, leaving a healthy object reported as
+        // permanently malformed.
+        let needed = (footer_len as u64).saturating_add(TRAILER_LEN as u64);
+        short_tail_or_corrupt(got, needed, object_size)
+    })?;
 
     let mut cursor = Cursor {
         bytes: &bytes[footer_at..trailer_at],
@@ -80,6 +106,20 @@ pub fn parse_footer(tail: &[u8], object_size: u64) -> Result<Vec<Region>> {
     Ok(regions)
 }
 
+/// A tail too narrow to hold the footer, or an object too small to have one.
+///
+/// ⚠️ **The object's size is what tells them apart**, and the caller already
+/// passes it. If the object itself cannot hold what the trailer describes, the
+/// bytes are wrong and no wider read will fix them. If the *tail* cannot but
+/// the object can, the object is fine and the read was too narrow.
+const fn short_tail_or_corrupt(got: u64, needed: u64, object_size: u64) -> Error {
+    if object_size < needed {
+        Error::MalformedBundleFooter { at: 0 }
+    } else {
+        Error::BundleTailTooShort { got, needed }
+    }
+}
+
 /// Re-establishes on the read path what [`BundleBuilder`] guarantees on the
 /// write path.
 ///
@@ -90,9 +130,20 @@ pub fn parse_footer(tail: &[u8], object_size: u64) -> Result<Vec<Region>> {
 /// `offset = 0, length = u64::MAX` parses, and a reader honouring it GETs the
 /// whole bundle and serves one topic's consumer another topic's records.
 ///
-/// Four things, all cheap: regions are in ascending order, they do not
-/// overlap, none reaches into the footer, and none claims records it has no
-/// offsets for.
+/// Five things, all cheap: each region begins exactly where the previous one
+/// ended, the last ends exactly where the payload does, none reaches into the
+/// footer, and none claims records it has no offsets for.
+///
+/// ⚠️ **Contiguous, not merely ascending and disjoint** (`M3.27`). Ascending
+/// and disjoint permits *gaps*, and a gap is what shortening one region's
+/// length field produces: the footer still parses, and a reader serves that
+/// topic's consumer a truncated batch as its data — records silently missing
+/// from the middle of a partition, which no client can detect. The write path
+/// makes gaps impossible by construction, because [`BundleBuilder::push`] sets
+/// every region's offset to the payload length so far; this is the same
+/// statement, checked rather than trusted. ⚠️ **And the last region's end is
+/// checked against the payload end for the same reason** — without it, the
+/// *final* region's length can be shortened and nothing notices.
 ///
 /// ⚠️ **The record-count check is here for the same reason it is in the
 /// builder**, not for symmetry. [`BundleBuilder::push`] refuses a region with
@@ -122,10 +173,13 @@ fn check_regions(regions: &[Region], payload_end: u64) -> Result<()> {
             .offset()
             .checked_add(bounds.length())
             .ok_or(Error::MalformedBundleFooter { at: index })?;
-        if bounds.offset() < next_free || end > payload_end {
+        if bounds.offset() != next_free || end > payload_end {
             return Err(Error::MalformedBundleFooter { at: index });
         }
         next_free = end;
+    }
+    if next_free != payload_end {
+        return Err(Error::MalformedBundleFooter { at: regions.len() });
     }
     Ok(())
 }
