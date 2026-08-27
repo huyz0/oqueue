@@ -103,6 +103,107 @@ proptest! {
         );
     }
 
+    /// ⚠️ **A cache that has folded *nothing* admits nothing**, and until
+    /// `M3.30` no test built one. `applied` is an `Option` precisely because a
+    /// cache exists before its first delta arrives, and `is_some_and` on
+    /// `None` is `false` — but so is every other reading of a value nobody
+    /// constructs, so flipping it to `is_none_or` left the suite green. What
+    /// that flip buys a client is the exact failure `AtLeast` exists to
+    /// prevent: a producer's own consumer, reading back at the version its ack
+    /// carried, served an empty partition by a cache holding nothing at all.
+    #[test]
+    fn a_cache_that_has_folded_nothing_admits_no_read_your_writes(
+        want in any::<u64>(),
+    ) {
+        let epoch = CoordinatorEpoch::ZERO;
+        let mode = ReadMode::AtLeast(SessionWatermark::new(epoch, CommitVersion::new(want)));
+        let cache = CacheState::new(epoch, None, 0);
+        prop_assert_eq!(
+            cache.admits(mode, epoch),
+            Err(RefreshReason::NotYetVisible { wanted: want, applied: None })
+        );
+    }
+
+    /// ⚠️ **A watermark from a *newer* epoch says the cache is the stale one**,
+    /// and answering it as "the cache is current and correct" is exactly
+    /// backwards. It is the one piece of evidence a reader-side cache has that
+    /// its own coordinator is the departed one: the client was served by an
+    /// incarnation this side has not heard from, so the remediation is to go
+    /// back to the coordinator rather than to tell the client its watermark is
+    /// incomparable.
+    ///
+    /// ⚠️ **Both directions in one property**, because an inequality passes a
+    /// test that only ever looks at one of them — which is how the direction
+    /// went unnoticed.
+    #[test]
+    fn the_direction_of_a_watermarks_epoch_decides_which_side_is_stale(
+        cache_epoch in 1_u64..=u64::MAX - 1,
+        version in any::<u64>(),
+    ) {
+        let epoch = CoordinatorEpoch::new(cache_epoch);
+        let cache = CacheState::new(epoch, Some(CommitVersion::new(version)), 0);
+
+        let newer = SessionWatermark::new(
+            CoordinatorEpoch::new(cache_epoch + 1),
+            CommitVersion::new(version),
+        );
+        prop_assert_eq!(
+            cache.admits(ReadMode::AtLeast(newer), epoch),
+            Err(RefreshReason::CacheFromAnOlderEpoch {
+                watermark: cache_epoch + 1,
+                cache: cache_epoch,
+            }),
+            "a newer watermark means this cache's coordinator departed"
+        );
+
+        let older = SessionWatermark::new(
+            CoordinatorEpoch::new(cache_epoch - 1),
+            CommitVersion::new(version),
+        );
+        prop_assert_eq!(
+            cache.admits(ReadMode::AtLeast(older), epoch),
+            Err(RefreshReason::WatermarkFromAnotherEpoch {
+                watermark: cache_epoch - 1,
+                cache: cache_epoch,
+            }),
+            "an older watermark is the incomparable one"
+        );
+    }
+
+    /// ⚠️ **The epoch fence is in front of `Linearizable` too**, and the
+    /// distinction is what makes that right: a cache from a departed epoch
+    /// says *this agent* is not the incarnation it believes it is, which is a
+    /// fact about the process rather than about how fresh a cache is. The one
+    /// caller reads an offset out of its own index on `Authoritative` and
+    /// refuses on anything else, so a `Linearizable` short-circuit placed
+    /// above this check would let a follower serve a log-end-offset off a
+    /// rewound line — hazard H1, arriving through the fence built to stop it.
+    ///
+    /// ⚠️ **Unasserted for one round of review, and reachable by nothing**,
+    /// because `Cluster::cache_state` reports the agent's own epoch today. It
+    /// becomes reachable with `M7`'s follower, which is exactly when nobody
+    /// will be looking at this ordering.
+    #[test]
+    fn a_departed_incarnation_refuses_an_authoritative_read_too(
+        cache_epoch in 0_u64..=u64::MAX - 1,
+        cached in any::<u64>(),
+    ) {
+        let cache = CacheState::new(
+            CoordinatorEpoch::new(cache_epoch),
+            Some(CommitVersion::new(cached)),
+            0,
+        );
+        let current = CoordinatorEpoch::new(cache_epoch + 1);
+        prop_assert_eq!(
+            cache.admits(ReadMode::Linearizable, current),
+            Err(RefreshReason::CacheFromAnotherEpoch {
+                cache: cache_epoch,
+                current: cache_epoch + 1,
+            }),
+            "the fence is about the agent, not about freshness"
+        );
+    }
+
     /// ⚠️ `Linearizable` is never admitted from cache, however fresh. Hazard
     /// H1: `ListOffsets` served from a stale cache reports a log-end-offset
     /// below truth and produces negative consumer lag, so the mode exists to
@@ -120,12 +221,20 @@ proptest! {
         );
     }
 
-    /// ⚠️ Hazard H4's breaker, and it is in front of **every** mode. A cache
-    /// that is current and one whose push stream died hold the same version;
-    /// only elapsed silence tells them apart, so no version comparison can do
-    /// this and `Stale` is not exempt from it.
+    /// ⚠️ Hazard H4's breaker, and it is in front of **every mode that reads
+    /// the cache**. A cache that is current and one whose push stream died
+    /// hold the same version; only elapsed silence tells them apart, so no
+    /// version comparison can do this and `Stale` is not exempt from it.
+    ///
+    /// ⚠️ **`Linearizable` is not one of them, and `M3.30` corrected this
+    /// property to say so.** It reported `PushStreamSilent` — a cache fault,
+    /// raised at the `ListOffsets` rate, for a read no cache may answer and
+    /// which therefore never consults one. An operator watching that alarm
+    /// could not tell a dead push stream from ordinary traffic, while
+    /// `Authoritative`, the reason that is *not* a fault and the one they need
+    /// to see, read zero.
     #[test]
-    fn silence_past_the_limit_refuses_every_mode(
+    fn silence_past_the_limit_refuses_every_mode_that_reads_the_cache(
         silent in (MAX_METADATA_STALENESS_MS + 1)..=u64::MAX,
         cached in any::<u64>(),
     ) {
@@ -134,7 +243,6 @@ proptest! {
         for mode in [
             ReadMode::Stale,
             ReadMode::AtLeast(SessionWatermark::new(epoch, CommitVersion::ZERO)),
-            ReadMode::Linearizable,
         ] {
             prop_assert_eq!(
                 cache.admits(mode, epoch),
@@ -144,6 +252,11 @@ proptest! {
                 })
             );
         }
+        prop_assert_eq!(
+            cache.admits(ReadMode::Linearizable, epoch),
+            Err(RefreshReason::Authoritative),
+            "a read no cache may answer must not raise a cache fault"
+        );
     }
 
     /// ⚠️ **The breaker's own edge**, which the limit's source states exactly:

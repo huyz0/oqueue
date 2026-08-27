@@ -1,4 +1,4 @@
-//! Whether a cache may answer this read, and the five ways the answer is no.
+//! Whether a cache may answer this read, and the ways the answer is no.
 
 use crate::{CommitVersion, CoordinatorEpoch, ReadMode};
 
@@ -77,10 +77,10 @@ impl SessionWatermark {
 
 /// Why a cache was not allowed to answer.
 ///
-/// ⚠️ **Five reasons, not one**, and collapsing them would be the mistake.
+/// ⚠️ **Several reasons, not one**, and collapsing them would be the mistake.
 /// They are found by different checks, they say different things to an
-/// operator, and — most of all — they have **different remediations**. Two of
-/// them mean the cache's contents are suspect and two mean the cache is merely
+/// operator, and — most of all — they have **different remediations**. Some
+/// mean the cache's contents are suspect and some mean the cache is merely
 /// behind, and a caller that discarded a cache for the second kind would turn
 /// `ADR-0023`'s "one round trip per session, paid once" into one full rebuild
 /// per session.
@@ -148,7 +148,40 @@ pub enum RefreshReason {
         current: u64,
     },
 
-    /// The caller's watermark was issued by a different incarnation.
+    /// The caller's watermark was issued by a **newer** incarnation than the
+    /// one this cache belongs to.
+    ///
+    /// `ADR-0023`. ⚠️ **The evidence runs the other way here, and that is the
+    /// whole variant.** A watermark carries the epoch of the coordinator that
+    /// issued it, so a client holding one from an epoch *above* this cache's
+    /// has been served by a coordinator this cache has not heard from — a
+    /// failover happened and this side has not noticed. ⚠️ **The cache is
+    /// wrong, not merely unverifiable, so it is *discarded***: this agent
+    /// belongs to a superseded incarnation, and its entries are positions on a
+    /// line the failover may have rewound — the same remediation
+    /// [`CacheFromAnotherEpoch`](Self::CacheFromAnotherEpoch) gets, for the
+    /// same reason. Catching it up instead would keep serving those entries.
+    /// ⚠️ **Not the round trip [`WatermarkFromAnotherEpoch`](Self::WatermarkFromAnotherEpoch)
+    /// asks for**, which is this enum's whole organizing rule: that one means
+    /// the cache is fine and the *watermark* cannot be compared to it.
+    ///
+    /// ⚠️ **Why it is not [`CacheFromAnotherEpoch`](Self::CacheFromAnotherEpoch)**:
+    /// that one fires when this agent's own `current_epoch` disagrees with the
+    /// cache, which is a fact this side already knows. This fires when the
+    /// only party who knows is the *client*, and the watermark it presents is
+    /// the message.
+    #[error(
+        "the watermark was issued by coordinator epoch {watermark}, \
+         above the epoch {cache} this cache belongs to"
+    )]
+    CacheFromAnOlderEpoch {
+        /// The epoch that issued the caller's watermark.
+        watermark: u64,
+        /// The epoch this cache was built under.
+        cache: u64,
+    },
+
+    /// The caller's watermark was issued by an **older** incarnation.
     ///
     /// `ADR-0023`. ⚠️ **The cache is current and correct**; it is the
     /// *watermark* that cannot be compared against it, because two epochs'
@@ -200,21 +233,27 @@ impl CacheState {
 
     /// Whether this cache may answer `mode`, and why not if it may not.
     ///
-    /// ⚠️ **The order of the checks is the design.** The epoch fence comes
-    /// first because it is the only one that says the *contents* are wrong
-    /// rather than old — a cache from a rewound line can be arbitrarily far
-    /// ahead by version and must still not answer. The silence breaker comes
-    /// next, and applies to every mode including
-    /// [`Stale`](ReadMode::Stale), because no version comparison can tell a
-    /// current cache from one whose push stream died. Only then is the
+    /// ⚠️ **The order of the checks is the design**, and it is three tiers.
+    /// The epoch fence comes first, for **every** mode, because it is the only
+    /// one that says the *contents* are wrong rather than old — a cache from a
+    /// rewound line can be arbitrarily far ahead by version and must still not
+    /// answer, and a cache from a departed epoch means the *agent* is not the
+    /// incarnation it believes it is. [`Linearizable`](ReadMode::Linearizable)
+    /// is answered next, because no cache may serve one and every remaining
+    /// question is about how good a cache is. The silence breaker comes third
+    /// and applies to every mode that does read the cache,
+    /// [`Stale`](ReadMode::Stale) included, because no version comparison can
+    /// tell a current cache from one whose push stream died. Only then is the
     /// version question asked at all.
     ///
     /// ⚠️ **`Ok(())` is the only way to serve from cache**, and every other
     /// path names a reason. There is deliberately no boolean: a `false` at a
     /// call site becomes a log line that says nothing, and an operator
-    /// chasing a client's impossible lag needs to know *which* of five things
-    /// happened — and two of them are answered by a round trip while two are
-    /// answered by discarding the cache.
+    /// chasing a client's impossible lag needs to know *which* thing happened
+    /// — some are answered by a round trip and some by discarding the cache,
+    /// and each variant's own doc says which. ⚠️ **The count is deliberately
+    /// not written here**: it was written in four places and went stale in all
+    /// four the day a sixth reason was added (`M3.30`).
     ///
     /// # Errors
     ///
@@ -224,19 +263,42 @@ impl CacheState {
         mode: ReadMode,
         current_epoch: CoordinatorEpoch,
     ) -> Result<(), RefreshReason> {
-        // H5, and it comes first: this cache belongs to an incarnation that is
-        // gone. Its entries are positions on a line a failover may have
-        // rewound, so it can be arbitrarily far *ahead* by version and must
-        // still not answer.
+        // H5, and it comes first for **every** mode, `Linearizable` included:
+        // this cache belongs to an incarnation that is gone. Its entries are
+        // positions on a line a failover may have rewound, so it can be
+        // arbitrarily far *ahead* by version and must still not answer.
+        //
+        // ⚠️ **`Linearizable` is fenced here even though no cache may answer
+        // it**, and that is not a contradiction: a cache from a departed epoch
+        // means *this process* is not the incarnation it believes it is, which
+        // is a fact about the agent rather than about the cache.
+        // `listoffsets.rs` reads an offset out of its own index on
+        // `Authoritative` and refuses on anything else, so short-circuiting
+        // above this check would let a follower serve a log-end-offset off a
+        // rewound line — hazard H1, arriving through the fence built to stop
+        // it. `M3.30` did exactly that for one round of review.
         if self.epoch != current_epoch {
             return Err(RefreshReason::CacheFromAnotherEpoch {
                 cache: self.epoch.get(),
                 current: current_epoch.get(),
             });
         }
-        // H4's breaker, and it is in front of every mode including `Stale`: a
-        // cache that is current and one whose push stream died hold the same
-        // version, and only elapsed silence separates them.
+        // ⚠️ **A `Linearizable` read is answered before the *freshness*
+        // questions are asked**, and the order is the point. No cache may
+        // answer one, so everything below is asking how good a cache is for a
+        // read that will not consult it — and the answers are *faults*. A
+        // silent agent reported `PushStreamSilent` for every `ListOffsets`:
+        // a cache alarm firing at the `ListOffsets` rate, which an operator
+        // cannot tell from ordinary traffic. Meanwhile `Authoritative` — the
+        // reason that is *not* a fault, and the one they need to see — read
+        // zero. ⚠️ **Below the epoch fence, not above it**: that one is about
+        // the agent, not about freshness.
+        if matches!(mode, ReadMode::Linearizable) {
+            return Err(RefreshReason::Authoritative);
+        }
+        // H4's breaker, and it is in front of every mode that reads the cache,
+        // `Stale` included: a cache that is current and one whose push stream
+        // died hold the same version, and only elapsed silence separates them.
         if self.silent_for_ms > MAX_METADATA_STALENESS_MS {
             return Err(RefreshReason::PushStreamSilent {
                 silent_for_ms: self.silent_for_ms,
@@ -244,11 +306,23 @@ impl CacheState {
             });
         }
         match mode {
+            // Answered above, before anything about the cache was asked.
             ReadMode::Linearizable => Err(RefreshReason::Authoritative),
             ReadMode::Stale => Ok(()),
             // `ADR-0023`: a version compare happens only between versions from
             // one line. A watermark carried across a rebalance is
             // incomparable, not behind.
+            // ⚠️ **A *newer* epoch is the one piece of evidence a reader-side
+            // cache has that its own coordinator is the departed one**, and
+            // answering it as "the cache is current and correct" is exactly
+            // backwards. `CoordinatorEpoch` is `Ord`, so the direction is a
+            // comparison rather than an inequality.
+            ReadMode::AtLeast(want) if want.epoch() > self.epoch => {
+                Err(RefreshReason::CacheFromAnOlderEpoch {
+                    watermark: want.epoch().get(),
+                    cache: self.epoch.get(),
+                })
+            }
             ReadMode::AtLeast(want) if want.epoch() != self.epoch => {
                 Err(RefreshReason::WatermarkFromAnotherEpoch {
                     watermark: want.epoch().get(),
