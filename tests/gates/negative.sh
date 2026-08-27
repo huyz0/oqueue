@@ -405,6 +405,32 @@ invoke_clippy_pin() {
   bash "$1/scripts/check-drift.sh"
 }
 
+# --- check-drift.sh: a Rust bound moved away from its pinned value --------
+#
+# ⚠️ **`testing.md` rule 20a, on the day the gate grew a property** (`M3.36`).
+# `RUST_BOUNDS` pins eleven `pub const` bounds by value on the commit path,
+# because `m0-complete.sh`'s `NFR_CONSTANTS` resolves a shell `NAME=` and
+# cannot see a Rust one — so eight bounds deciding how much object storage one
+# request may cost were pinned by nothing. A gate nobody has watched fail is a
+# gate nobody has tested, and `M2.9` set this precedent in this same script
+# when it added `CLIPPY_THRESHOLDS`.
+setup_rust_bound() {
+  local dir; dir="$(new_scratch rust-bound)"
+  copy_gate "$dir" check-drift.sh
+  mkdir -p "$dir/crates/oqueue-broker/src/fetch"
+  # ⚠️ The real map's own file and name, with the value raised. Raising is the
+  # weakening direction for this one: it lets a client's read volume be set by
+  # somebody else's write rate.
+  cat > "$dir/crates/oqueue-broker/src/fetch/target.rs" <<'RS'
+pub(crate) const MAX_READS_PER_REQUEST: u32 = 64;
+RS
+  (cd "$dir" && git add -A && git commit -q -m "M3.36: a bound raised away from its pinned value")
+  printf '%s\n' "$dir"
+}
+invoke_rust_bound() {
+  bash "$1/scripts/check-drift.sh"
+}
+
 # --- check-drift.sh: a _days threshold ------------------------------------
 #
 # ⚠️ `M1.35` widened THRESHOLD_RE with `_days?` and left it unpinned; review
@@ -2538,6 +2564,8 @@ run_case "check-drift.sh (a _msec threshold)" setup_drift_msec       invoke_drif
 run_case "check-drift.sh (a raised clippy threshold)" setup_clippy_pin invoke_clippy_pin
 run_case "check-drift.sh (a _days threshold)" setup_drift_days       invoke_drift_days \
   "threshold made settable"
+run_case "check-drift.sh (a raised Rust bound)" setup_rust_bound     invoke_rust_bound \
+  "MAX_READS_PER_REQUEST is '64'"
 run_case "check-layering.sh"            setup_layering            invoke_layering \
   "depends on oqueue-codec, not oqueue-core"
 run_case "check-layering.sh (non-UTF-8 crash)" setup_layering_non_utf8 invoke_layering_non_utf8 \

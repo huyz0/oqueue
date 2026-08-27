@@ -162,7 +162,6 @@ pub(crate) async fn read_or_park(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::MAX_READS_PER_REQUEST;
     use crate::connection::HandlerResponse;
     use crate::fetch::handle;
     use crate::fetch::tests::{
@@ -414,7 +413,13 @@ mod tests {
         // because the cap moved: a parked fetch re-reads the same offsets by
         // construction, and paying for them again was the park's own
         // amplification hiding inside a bounded read count.
-        let expected: u64 = u64::from(MAX_READS_PER_REQUEST);
+        // ⚠️ **A literal, not `MAX_READS_PER_REQUEST`** (`M3.36`). Deriving
+        // the expectation from the constant makes the assertion true for every
+        // value of it: raise the cap and this test raises with it, which is a
+        // test that cannot fail on the change it exists to catch. The
+        // constant's value is held by `check-drift.sh`'s pin map, so the two
+        // must be changed together and a reviewer sees both.
+        let expected: u64 = 4;
         assert_eq!(
             fixture.store.counts().count(Operation::Get),
             expected,

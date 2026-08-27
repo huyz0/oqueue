@@ -51,8 +51,15 @@ async fn a_failing_store_is_not_asked_once_per_partition_named() {
     let response = capped_fetch(&dispatcher, &broker, &names, 1 << 20, 1).await;
 
     let spent = broker.store.counts().count(Operation::Get) - before;
+    // ⚠️ **A literal, not the constant under test** (`M3.36`). Asserting
+    // `spent <= MAX_FAILED_FETCHES_PER_REQUEST` compares the measurement to
+    // the very number it exists to pin: raise the constant to sixty-four and
+    // the eight-distinct-failing-partitions fan-out this was written against
+    // is restored, green. The value is held by `check-drift.sh`'s pin map, so
+    // moving it is a diff someone reviews; the number here is what the *test*
+    // requires, and the two disagreeing is the point of writing both.
     assert!(
-        spent <= oqueue_broker::MAX_FAILED_FETCHES_PER_REQUEST.into(),
+        spent <= 2,
         "eight distinct failing partitions must not buy eight reads: {spent}"
     );
     // ⚠️ **And every one of them still says so.** Refusing to ask the store is
@@ -362,5 +369,55 @@ async fn corrupt_every_object(broker: &Broker) {
             .put(&key, vec![0u8; was], None)
             .await
             .expect("the fake overwrites");
+    }
+}
+
+/// ⚠️ **Two failures, then a healthy partition — the boundary the cap actually
+/// governs**, and the one nothing asserted. One test arms a single fault and
+/// never reaches the cap; another fails every GET and leaves no healthy
+/// partition to observe. What the cap *does* is refuse a partition whose object
+/// is present and readable, without a GET, because two unrelated ones failed
+/// earlier in the same frame.
+///
+/// ⚠️ **It is a real cost, and it is the trade the cap makes.** A consumer on
+/// ten partitions where two hold reaped objects is told `OFFSET_NOT_AVAILABLE`
+/// for the eight healthy ones, every poll. Refusing to *ask* is what stops a
+/// frame's read rate against a sick store rising with the client's own
+/// subscription fan-out — but a client author cannot predict it from the
+/// protocol, and neither exempting a healthy partition nor removing the refusal
+/// would have been detected before this.
+#[tokio::test]
+async fn two_failures_refuse_the_healthy_partition_behind_them_without_a_read() {
+    let names = ["a", "b", "c"];
+    let broker = broker(&names).await;
+    let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
+    // Each in its own object, so the cache dedups nothing.
+    for name in &names {
+        produce(&dispatcher, &broker, &[name]).await;
+    }
+    let keys = broker.store.inner().keys();
+    // Reap exactly the first two partitions' objects. `c`'s is untouched.
+    let mut sorted = keys;
+    sorted.sort();
+    broker
+        .store
+        .delete(&sorted[..2])
+        .await
+        .expect("the fake deletes");
+    let before = broker.store.counts().count(Operation::Get);
+
+    let response = capped_fetch(&dispatcher, &broker, &names, 1 << 20, 1 << 20).await;
+
+    let spent = broker.store.counts().count(Operation::Get) - before;
+    assert_eq!(
+        spent, 2,
+        "the third partition must be refused without reaching the store: {spent}"
+    );
+    for topic in &response.responses {
+        assert_ne!(
+            topic.partitions[0].error_code, 0,
+            "and every partition, healthy or not, is told so rather than \
+             framed as caught up"
+        );
     }
 }

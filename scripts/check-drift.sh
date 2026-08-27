@@ -260,4 +260,164 @@ if [[ -f clippy.toml ]]; then
   fi
 fi
 
+# ── Rust bounds: a `pub const` this project treats as a threshold ───────────
+#
+# ⚠️ **`m0-complete.sh`'s `NFR_CONSTANTS` cannot see these** (`M3.36`). It
+# resolves a shell `NAME=` assignment, and a Rust `pub const NAME: T = value;`
+# matches nothing it greps — so `M3` added eight bounds that decide how much
+# object storage one request may cost, and *not one* was pinned by value
+# anywhere. Non-negotiable 2 says a threshold is a constant no environment can
+# move; the half this closes is that it must also be a constant no *edit* moves
+# without a gate noticing.
+#
+# ⚠️ **Here rather than in `m0-complete.sh`, and that is the point.** That gate
+# is a milestone boundary, invoked by neither the pre-commit hook nor
+# `gates.yml` — this header's own second limitation. A bound moved on the
+# commit path would land green and be caught whenever somebody next ran a
+# milestone gate. This script is on the commit path.
+#
+# ⚠️ **The direction that weakens differs per row**, so each row says which and
+# there is no blanket rule. A first draft asserted one — "every one of these is
+# a ceiling, so raising is the weakening move" — and review found it wrong for
+# three of eight: raising `TAIL_WINDOW_ENTRIES` keeps *more* entries in the
+# priceable tail tier and makes a read *cheaper*, `COMMIT_QUEUE_DEPTH` is a
+# channel capacity rather than a per-request cost, and raising
+# `MAX_METADATA_STALENESS_MS` makes requests cheaper while widening hazard H4's
+# window. This is the generalisation this file's own header warns against, two
+# hundred lines up, where two of `m0-complete.sh`'s seven rows were wrong across
+# two drafts for the same reason.
+declare -A RUST_BOUNDS=(
+  # How many object-storage reads one parked `Fetch` may make. Raising it lets
+  # a client's read volume be set by somebody else's write rate.
+  ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"
+  # How many of a request's object reads may fail before it stops asking.
+  # Raising it lets a frame's read rate against a sick store rise with the
+  # fan-out of the client's own subscription.
+  ["crates/oqueue-broker/src/read.rs|MAX_FAILED_FETCHES_PER_REQUEST"]="2"
+  # What one response may pull off the store, whatever `max_bytes` says.
+  ["crates/oqueue-broker/src/fetch/partition.rs|READ_BUDGET_BYTES"]="1024 * 1024"
+  # The longest a fetch may park. ⚠️ Must stay under whatever
+  # `ConnectionLimits::idle_timeout` a composer picks, so raising it is
+  # weakening in a second way: it can cross that ceiling silently.
+  ["crates/oqueue-broker/src/fetch/deadline.rs|MAX_PARK_MS"]="60_000"
+  # How many batches one index page may name, and how many entries a partition
+  # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
+  ["crates/oqueue-core/src/index_state.rs|MAX_BATCHES_PER_PAGE"]="64"
+  ["crates/oqueue-core/src/index_state.rs|TAIL_WINDOW_ENTRIES"]="128"
+  # How many commits may queue behind the single serialization point. Raising
+  # it turns a durable engine's commit latency into seconds of queueing against
+  # NFR-1's 500 ms p99.
+  ["crates/oqueue-coordinator/src/coordinator.rs|COMMIT_QUEUE_DEPTH"]="1024"
+  # `ADR-0021`'s staleness limit: how long an agent may serve from a cache
+  # nothing has arrived for. Raising it widens hazard H4's window.
+  ["crates/oqueue-core/src/staleness.rs|MAX_METADATA_STALENESS_MS"]="5_000"
+  # ⚠️ **Three more, found by this row's own review.** Each says in its own doc
+  # comment that it is "a constant rather than a knob, per non-negotiable 2",
+  # and each was pinned by nothing: measured, all three raised a thousandfold
+  # in one edit and this gate printed `ok`.
+  # How much of a log one replay folds at a time. ⚠️ **Weakens by rising** —
+  # `applier.rs` calls it the bound on replay after a crash, so it is `M6`'s
+  # RTO with another name.
+  ["crates/oqueue-index/src/applier.rs|APPLY_BATCH_ENTRIES"]="1_000"
+  # How many deltas a follower may fall behind before it is dropped. ⚠️
+  # **Weakens by rising**: it is per-shard memory under NFR-11, and structurally
+  # the same kind of queue depth as `COMMIT_QUEUE_DEPTH` above.
+  ["crates/oqueue-coordinator/src/subscribe.rs|DELTA_BUFFER_ENTRIES"]="1_024"
+  # How much of the log one rebuild page holds. ⚠️ **Weakens by rising** — it
+  # is sized to bound the memory one page costs, on the path a dropped cache
+  # takes back to service.
+  ["crates/oqueue-coordinator/src/serve.rs|REBUILD_PAGE_ENTRIES"]="1024"
+)
+# ⚠️ **Files whose numeric constants are not thresholds at all**, each with its
+# reason — the shape `fuzz.sh`'s decoder enumeration uses, and for the same
+# purpose: without it the map above is a list that can be emptied in silence.
+# Measured before writing this: deleting all eight of the first draft's entries
+# left the gate printing `ok  Rust bounds match the pin map (0 pinned)`, which
+# is verbatim the defect this file's own header records for `NFR_CONSTANTS` two
+# hundred lines up, reproduced by the section written to close it.
+declare -A NOT_A_BOUND_FILE=(
+  ["crates/oqueue-codec/src/error_codes.rs"]="Kafka's own error codes; the protocol fixes every value"
+  ["crates/oqueue-codec/src/batch.rs"]="RecordBatch v2's fixed layout -- header length, CRC offsets, magic"
+  ["crates/oqueue-codec/src/listoffsets.rs"]="the protocol's earliest/latest timestamp sentinels"
+  ["crates/oqueue-codec/src/metadata.rs"]="the protocol's authorized-operations sentinel"
+  ["crates/oqueue-codec/src/produce.rs"]="the protocol's log-append-time sentinel"
+  ["crates/oqueue-codec/src/varint.rs"]="the widest legal varint and varlong, fixed by the encoding"
+  ["crates/oqueue-core/src/key_layout.rs"]="FNV-1a's basis and prime, fixed by the algorithm"
+  ["crates/oqueue-broker/src/listoffsets.rs"]="a protocol sentinel and the advertised version this handler serves"
+  ["crates/oqueue-broker/src/produce/answer.rs"]="the unassigned-offset sentinel a refusal answers with"
+  ["crates/oqueue-coordinator/src/commit.rs"]="the unassigned-offset sentinel, beside the type that returns it"
+)
+# ⚠️ Individual constants in files that also hold real bounds.
+declare -A NOT_A_BOUND=(
+  ["crates/oqueue-broker/src/fetch/partition.rs|OFFSET_UNSET"]="the protocol's unset-offset sentinel"
+  ["crates/oqueue-codec/src/records.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
+  ["crates/oqueue-core/src/bundle.rs|BUNDLE_FORMAT_VERSION"]="this object format's version number"
+  ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
+  ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
+)
+rust_violations=0
+# ⚠️ **Every numeric constant in the tree is a candidate**, so a new bound
+# cannot ship unpinned and unmentioned. Tests are excluded: a fixture's step
+# count is nobody's threshold, and requiring a reason for each would make this
+# list noise.
+while IFS= read -r decl; do
+  file="${decl%%:*}"
+  name="${decl##*:}"
+  [[ "$file" == *"/tests/"* || "$file" == *"/fuzz/"* ]] && continue
+  [[ -n "${NOT_A_BOUND_FILE[$file]:-}" ]] && continue
+  [[ -n "${NOT_A_BOUND[$file|$name]:-}" ]] && continue
+  [[ -n "${RUST_BOUNDS[$file|$name]+x}" ]] && continue
+  fail "$file: const $name is neither pinned in RUST_BOUNDS nor recorded as not a bound"
+  note "a numeric constant this project chose is a threshold; add its value, or say why it is not one"
+  rust_violations=$((rust_violations + 1))
+done < <(git ls-files '*.rs' 2>/dev/null | xargs grep -HE \
+  "^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?const [A-Z][A-Z0-9_]*[[:space:]]*:[[:space:]]*(u8|u16|u32|u64|usize|i8|i16|i32|i64|isize)[[:space:]]*=" 2>/dev/null \
+  | sed -E 's|^([^:]+):.*const ([A-Z0-9_]+).*|\1:\2|' | sort -u || true)
+for key in "${!RUST_BOUNDS[@]}"; do
+  file="${key%%|*}"
+  name="${key##*|}"
+  want="${RUST_BOUNDS[$key]}"
+  if [[ ! -f "$file" ]]; then
+    fail "$file does not exist, so $name cannot be pinned"
+    note "a bound whose file moved is a bound nothing is holding"
+    rust_violations=$((rust_violations + 1))
+    continue
+  fi
+  # ⚠️ Tolerates `pub`, `pub(crate)` and a leading doc-comment-free blank: what
+  # is asserted is the *assignment*, not the visibility, because a bound that
+  # became private is still a bound.
+  mapfile -t decls < <(grep -E "^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?const[[:space:]]+${name}[[:space:]]*:" "$file" 2>/dev/null || true)
+  # ⚠️ **More than one declaration is a failure, not a first-wins pick.** A
+  # `#[cfg(feature = "x")]` pair compiles, reads as an ordinary edit, and lets
+  # the value that is actually compiled differ from the one pinned — measured:
+  # a first draft took `head -1` and passed while the real constant was
+  # sixteen times the pinned number.
+  if (( ${#decls[@]} > 1 )); then
+    fail "$file declares const $name ${#decls[@]} times, so which one is pinned is not decidable"
+    note "a cfg-gated pair is the reachable shape; pin the value in one place"
+    rust_violations=$((rust_violations + 1))
+    continue
+  fi
+  line="${decls[0]:-}"
+  if [[ -z "$line" ]]; then
+    fail "$file does not declare a const $name"
+    note "renaming a bound is fine; renaming it without moving this entry is not"
+    rust_violations=$((rust_violations + 1))
+    continue
+  fi
+  got="${line#*=}"
+  got="${got%%;*}"
+  got="${got%%//*}"
+  got="$(sed -E 's/^[[:space:]]+|[[:space:]]+$//g' <<< "$got")"
+  if [[ "$got" != "$want" ]]; then
+    fail "$file: $name is '$got'; check-drift.sh holds '$want'"
+    note "every bound here is a ceiling, so raising it is the weakening move (non-negotiable 2)"
+    note "changing it means changing this entry in the same commit, which is a diff someone reviews"
+    rust_violations=$((rust_violations + 1))
+  fi
+done
+if (( rust_violations == 0 )); then
+  ok "Rust bounds match the pin map (${#RUST_BOUNDS[@]} pinned)"
+fi
+
 finish
