@@ -23,8 +23,8 @@ no runtime path anywhere in the workspace.
 
 | API | Key | Versions | Notes |
 |---|---|---|---|
-| Produce | 0 | 3–13 | v0–2 removed by KIP-896. Exactly one RecordBatch (v2 magic) per partition; CRC-32C verified on ingest; base offset assigned by header rewrite. v13 addresses topics by id. |
-| Fetch | 1 | 4–17 | Returns whole batches from the offset asked for, resolved through the index — ⚠️ **not from the log start**, which is what `M2`'s stub had to do and what this row said until `M3.14`. Long-polls on `max_wait_ms`/`min_bytes` (`M3.20`). Fetch sessions declined (`session_id` 0 → clients full-fetch). v13+ addresses topics by id. |
+| Produce | 0 | 3–13 | v0–2 removed by KIP-896. ⚠️ **A null topic name closes the connection** below v13, same as `Fetch` and `ListOffsets`. Exactly one RecordBatch (v2 magic) per partition; CRC-32C verified on ingest; base offset assigned by header rewrite. v13 addresses topics by id. |
+| Fetch | 1 | 4–17 | ⚠️ **A null topic name closes the connection** below v13, for the reason the `ListOffsets` row gives — the field is nullable on the request wire and not on the response wire. Returns whole batches from the offset asked for, resolved through the index — ⚠️ **not from the log start**, which is what `M2`'s stub had to do and what this row said until `M3.14`. Long-polls on `max_wait_ms`/`min_bytes` (`M3.20`). Fetch sessions declined (`session_id` 0 → clients full-fetch). v13+ addresses topics by id. |
 | `ListOffsets` | 2 | 1–9 | `EARLIEST` (-2) and `LATEST` (-1) answered from the coordinator's own index, never a cache — hazard H1, whose symptom is negative consumer lag. ⚠️ A **wall-clock** timestamp is refused with `UNSUPPORTED_VERSION` (35): there is no index by time, and the nearest offset would be a silent wrong answer. ⚠️ **Not code 43**, the obvious choice — the Java consumer maps that one to a null in `offsetsForTimes`, which an application cannot tell from a truthful "nothing at or after that time". ⚠️ **A null topic name closes the connection**: the field is nullable on the request wire and not on the response wire, so there is nothing parsable to answer with. v0 is a different message (an array of offsets per partition, pre-KIP-79) and is not advertised. |
 | Metadata | 3 | 0–13 | `allow_auto_topic_creation` honoured from v4 (historical always-create below). Topic ids from v10. Single node, single partition per topic. |
 | ApiVersions | 18 | 0–3 | Answered before anything else; unsupported versions get the v0-bodied `UNSUPPORTED_VERSION` fallback with the table populated. |
@@ -88,15 +88,43 @@ unadvertised version has no response the client would parse, and outside
   ⚠️ **The budget counts bytes *fetched*, not bytes returned**: a history batch
   lives inside a bundle covering every partition one flush wrote, so charging
   only the slice would let a read pull sixty-four whole bundles off the store
-  to answer with a megabyte. ⚠️ **A partition whose read *fails* is charged
-  too** — it spent the request — or the same partition could be repeated for
-  free. ⚠️ **And `fetch.min.bytes` is clamped to what the response can hold**,
+  to answer with a megabyte. ⚠️ **A partition whose read fails is charged what
+  it *fetched*** — usually nothing, because a read the store refused pulled
+  nothing; but a read that pulled a whole bundle and then could not use it
+  spent exactly what a successful one would. ⚠️ **And it does not take the
+  response's once-per-response exemption with it**, so *some* partition still
+  makes progress: the exemption is one over-the-line read per **response**, and
+  a failed read no longer consumes it, so it passes to the first partition that
+  can use it. ⚠️ **Partitions after that one can still come back empty** when
+  the budget is gone — the ordinary bound, which every client handles by
+  polling again, and which both the Java consumer and librdkafka plan for by
+  rotating the order they list partitions in. ⚠️ **What stops a failing partition being repeated for free is not
+  the budget**: an object is fetched at most once per request *per byte range* — a tail entry
+  names one partition's slice of a shared bundle, so a frame naming twenty
+  partitions of one flush still issues twenty ranged GETs of that object, and
+  what the cache stops is the *same* read being repeated — and after **two**
+  failed object reads the rest of the request is refused *without asking the
+  store at all*. ⚠️ **That last part is client-visible and worth planning
+  for**: a consumer polling ten partitions of which two hold reaped objects
+  can be answered `OFFSET_NOT_AVAILABLE` for the other eight. ⚠️ **Which
+  partitions are refused depends on the order the frame lists them in** —
+  the two failures have to come first for the refusal to reach anything, and
+  clients rotate that order between polls — so this is a shape to be resilient
+  to rather than a set to predict. The alternative was a frame's read rate against a
+  struggling store rising with the fan-out of the client's own subscription.
+  ⚠️ **And `fetch.min.bytes` is clamped to what the response can hold**,
   so a client naming a minimum above its own `max_bytes` does not park to its
   deadline on every poll of a full log.
 - **A 404 from object storage is never "end of log".** Object ids are never
   reused, so an object the index named and the store does not have was
   **reaped**: the index is behind a deletion and those offsets are gone. The
-  read answers `OFFSET_OUT_OF_RANGE` — never an empty partition, which is what a consumer
+  read answers `OFFSET_OUT_OF_RANGE` — ⚠️ **on the first miss, with no refresh
+  and no retry**, because in a single-node broker the index a fetch reads *is*
+  the coordinator's own and nothing removes an entry from it, so a second read
+  would consult provably identical state and pay a second GET for the same
+  answer. Doc 12 §4.6 asks for a coordinator round trip before this answer and
+  `M7` is where it becomes real work, on a follower whose index is a cache and
+  whose 404 is genuinely ambiguous. Never an empty partition, which is what a consumer
   reads as "I am caught up" while records it had not read are being deleted
   underneath it. ⚠️ **It is counted**: a nonzero rate means `M5`'s deletion
   delay is too short.
