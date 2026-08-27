@@ -1,10 +1,10 @@
 //! Fixtures every suite in this binary shares.
 //!
-//! ⚠️ One copy, not three: the `RefusableLog` below is a fake of a seam, and
-//! `contracts.md` rule 10 makes a fake's job fidelity to the *documented*
-//! contract — three copies of it would be three meanings of guarantee 3.
-//! `M3.18` moves it beside the trait in `oqueue-core`, which is where rule 9
-//! says a fake belongs; until it does, this is one place rather than three.
+//! ⚠️ **No fake of a seam lives here any more.** `RefusableLog` did, with a
+//! note saying it belonged beside the trait in `oqueue-core` — `contracts.md`
+//! rule 9 — and `M3.32` moved it: it is `FaultMetadataLog` now, a decorator
+//! over any `MetadataLog` rather than a second fake of one, and it can hold an
+//! append open as well as refuse it.
 
 #![allow(clippy::expect_used)]
 // ⚠️ `redundant_pub_crate` and `unreachable_pub` disagree about a `pub(crate)`
@@ -15,13 +15,11 @@
 
 use oqueue_coordinator::Coordinator;
 use oqueue_core::{
-    BoxFuture, ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error,
-    FakeMaterializedIndex, FakeMetadataLog, IndexReader, MaterializedIndex, MetadataEntry,
-    MetadataLog, ObjectKey, Offset, PartitionId, Result, TopicId,
+    ByteRange, CommittedSpan, CoordinatorEpoch, FakeMaterializedIndex, FakeMetadataLog,
+    IndexReader, MaterializedIndex, MetadataLog, ObjectKey, Offset, PartitionId, TopicId,
 };
 use std::future::Future;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 pub(crate) fn topic() -> TopicId {
@@ -52,68 +50,6 @@ pub(crate) fn region(name: &str, partition: i32, records: u32, at: u64) -> Commi
         records,
         ByteRange::bounded(at, 16).expect("a non-empty range"),
     )
-}
-
-/// A [`MetadataLog`] whose `append` can be made to refuse, so a test can watch
-/// what the coordinator does when the journal step fails.
-///
-/// ⚠️ A fake rather than a mock (`testing.md` rule 3): it delegates to
-/// [`FakeMetadataLog`] and adds one switch, so what it stores when it is *not*
-/// refusing is the real contract rather than a recorded expectation.
-#[derive(Debug)]
-pub(crate) struct RefusableLog {
-    inner: FakeMetadataLog,
-    refusing: AtomicBool,
-    refusing_reads: AtomicBool,
-}
-
-impl RefusableLog {
-    pub(crate) const fn new() -> Self {
-        Self {
-            inner: FakeMetadataLog::new(),
-            refusing: AtomicBool::new(false),
-            refusing_reads: AtomicBool::new(false),
-        }
-    }
-
-    pub(crate) fn refuse(&self, refusing: bool) {
-        self.refusing.store(refusing, Ordering::SeqCst);
-    }
-
-    /// Makes every read fail, so a test can prove a path never reads.
-    pub(crate) fn refuse_reads(&self, refusing: bool) {
-        self.refusing_reads.store(refusing, Ordering::SeqCst);
-    }
-
-    pub(crate) fn len(&self) -> usize {
-        self.inner.len()
-    }
-}
-
-impl MetadataLog for RefusableLog {
-    fn append<'a>(&'a self, entries: &'a [MetadataEntry]) -> BoxFuture<'a, Result<()>> {
-        Box::pin(async move {
-            if self.refusing.load(Ordering::SeqCst) {
-                return Err(Error::Transient);
-            }
-            self.inner.append(entries).await
-        })
-    }
-
-    fn read_from(
-        &self,
-        start: CommitVersion,
-        max_entries: usize,
-    ) -> BoxFuture<'_, Result<Vec<MetadataEntry>>> {
-        if self.refusing_reads.load(Ordering::SeqCst) {
-            return Box::pin(async { Err(Error::Transient) });
-        }
-        self.inner.read_from(start, max_entries)
-    }
-
-    fn last_version(&self) -> BoxFuture<'_, Result<Option<CommitVersion>>> {
-        self.inner.last_version()
-    }
 }
 
 /// Opens a coordinator over `log` and spawns its serializing loop, returning

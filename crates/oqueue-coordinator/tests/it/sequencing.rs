@@ -12,11 +12,11 @@
 // `oqueue-core`'s own suites.
 #![allow(clippy::expect_used)]
 
-use crate::support::{RefusableLog, object, partition, span, start, topic};
+use crate::support::{object, partition, span, start, topic};
 use oqueue_coordinator::{Coordinator, CoordinatorError, UNASSIGNED_OFFSET};
 use oqueue_core::{
-    CommitVersion, CoordinatorEpoch, Error, FakeMaterializedIndex, FakeMetadataLog, MetadataEntry,
-    MetadataLog, PartitionId,
+    CommitVersion, CoordinatorEpoch, Error, FakeMaterializedIndex, FakeMetadataLog,
+    FaultMetadataLog, LogFaults, MetadataEntry, MetadataLog, PartitionId,
 };
 use std::sync::Arc;
 
@@ -88,21 +88,24 @@ async fn a_commit_version_is_stamped_in_append_order() {
 
 #[tokio::test]
 async fn a_refused_journal_consumes_neither_a_version_nor_an_offset() {
-    let log = Arc::new(RefusableLog::new());
+    let log = Arc::new(FaultMetadataLog::new(FakeMetadataLog::new()));
     let (coordinator, driver) = start(log.clone()).await;
 
-    log.refuse(true);
+    log.set_faults(LogFaults {
+        refuse_append: true,
+        ..LogFaults::default()
+    });
     let refused = coordinator
         .commit(object(0), vec![span(5)])
         .await
         .expect_err("a journal that refuses is not an ack");
     assert_eq!(refused, CoordinatorError::Journal(Error::Transient));
-    assert_eq!(log.len(), 0, "a refused append stores nothing");
+    assert_eq!(log.inner().len(), 0, "a refused append stores nothing");
 
     // The retry gets the position the refused attempt would have had. If the
     // failed attempt had advanced the allocator, this would start at offset 5
     // — a gap FR-11 forbids — or at version 1.
-    log.refuse(false);
+    log.set_faults(LogFaults::default());
     let ack = coordinator
         .commit(object(1), vec![span(5)])
         .await
