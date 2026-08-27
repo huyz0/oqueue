@@ -2,7 +2,7 @@
 
 use crate::allocator::Allocator;
 use crate::commit::CommitAck;
-use crate::error::CoordinatorError;
+use crate::error::{CoordinatorError, OpenRejected};
 #[cfg(doc)]
 use crate::serve::REBUILD_PAGE_ENTRIES;
 use crate::serve::{CommitRequest, CoordinatorLoop, Request};
@@ -83,22 +83,43 @@ impl Coordinator {
     ///
     /// # Errors
     ///
-    /// [`CoordinatorError::ReplayRequired`] if `log` already holds entries —
-    /// see that variant for why this refuses rather than resumes.
-    /// [`CoordinatorError::Journal`] if the log cannot be read at all.
+    /// [`OpenRejected`], carrying [`CoordinatorError::ReplayRequired`] if `log`
+    /// already holds entries — see that variant for why this refuses rather
+    /// than resumes — or [`CoordinatorError::Journal`] if the log cannot be
+    /// read at all.
+    ///
+    /// ⚠️ **A refusal hands `index` back** (`M3.34`). Taking it by value is
+    /// what makes the sole-writer rule structural, and it is also what makes a
+    /// plain `Err` destroy the thing the caller may not be able to rebuild —
+    /// doc 10 #12's engine is an open database, not an allocation. Both
+    /// refusals happen before the index is touched, so what comes back is
+    /// exactly what went in.
+    ///
+    /// ⚠️ **Not cancel-safe, and the same ownership is why**
+    /// (`async-concurrency.md` rule 10). This future owns `index` across its
+    /// one await — the log's `last_version` — so dropping it takes the index
+    /// with it and leaves the caller nothing: no [`OpenRejected`] to catch,
+    /// and the loss this row exists to prevent arriving through a `select!`
+    /// arm or a startup `timeout`. Bound the log's own read instead of this
+    /// call, or accept that a cancelled open costs an index.
     pub async fn open(
         log: Arc<dyn MetadataLog>,
         index: Box<dyn MaterializedIndex>,
         epoch: CoordinatorEpoch,
-    ) -> Result<(Self, CoordinatorLoop, IndexReader), CoordinatorError> {
-        if let Some(last) = log
-            .last_version()
-            .await
-            .map_err(CoordinatorError::Journal)?
-        {
-            return Err(CoordinatorError::ReplayRequired {
-                last_version: last.get(),
-            });
+    ) -> Result<(Self, CoordinatorLoop, IndexReader), OpenRejected> {
+        let last = match log.last_version().await {
+            Ok(last) => last,
+            Err(error) => {
+                return Err(OpenRejected::new(CoordinatorError::Journal(error), index));
+            }
+        };
+        if let Some(last) = last {
+            return Err(OpenRejected::new(
+                CoordinatorError::ReplayRequired {
+                    last_version: last.get(),
+                },
+                index,
+            ));
         }
         // ⚠️ **Cleared, not trusted.** The log has just been checked empty, so
         // an index arriving with a version folded into it holds one from some

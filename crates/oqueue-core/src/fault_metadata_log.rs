@@ -33,8 +33,15 @@ use std::task::{Context, Poll};
 pub struct LogFaults {
     /// Every `append` resolves [`Error::Transient`] without storing anything.
     pub refuse_append: bool,
-    /// Every `read_from` resolves [`Error::Transient`], so a test can prove a
-    /// path never reads.
+    /// Every read resolves [`Error::Transient`], so a test can prove a path
+    /// never reads.
+    ///
+    /// ⚠️ **`last_version` too, not only `read_from`** (`M3.34`). It was
+    /// `read_from` alone, and the sentence above was false of the one caller
+    /// that matters most: `Coordinator::open` reads a log's *last version* and
+    /// nothing else, so a test injecting a read failure at startup got a
+    /// coordinator that opened cleanly. A fault switch that misses a method is
+    /// worse than none, because a test written against it passes.
     pub refuse_read: bool,
     /// Every `append` parks before doing anything, and stays parked until
     /// [`FaultMetadataLog::release`] is called.
@@ -134,7 +141,12 @@ impl<L: MetadataLog> MetadataLog for FaultMetadataLog<L> {
     }
 
     fn last_version(&self) -> BoxFuture<'_, Result<Option<CommitVersion>>> {
-        self.inner.last_version()
+        Box::pin(async move {
+            if self.refuse_read.load(Ordering::SeqCst) {
+                return Err(Error::Transient);
+            }
+            self.inner.last_version().await
+        })
     }
 }
 
@@ -264,8 +276,13 @@ mod tests {
 
     /// ⚠️ **Reads refuse separately from appends**, so a test can prove a path
     /// never reads without also making it unable to write.
+    ///
+    /// ⚠️ **Both reads**, which `M3.34` found the switch was not covering:
+    /// `Coordinator::open` reads a log's `last_version` and nothing else, so a
+    /// startup test injecting a read failure got a coordinator that opened
+    /// cleanly and an assertion that passed for the wrong reason.
     #[test]
-    fn a_refused_read_leaves_appends_alone() {
+    fn a_refused_read_refuses_every_read_and_leaves_appends_alone() {
         let log = log();
         log.set_faults(LogFaults {
             refuse_read: true,
@@ -277,6 +294,10 @@ mod tests {
             drive(log.read_from(CommitVersion::ZERO, 10)),
             Err(Error::Transient)
         ));
+        assert!(
+            matches!(drive(log.last_version()), Err(Error::Transient)),
+            "a log's last version is a read of it too"
+        );
     }
 
     /// ⚠️ **A held append parks, and stays parked**, which is the capability

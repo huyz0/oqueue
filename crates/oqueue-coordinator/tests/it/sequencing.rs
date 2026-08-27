@@ -16,7 +16,7 @@ use crate::support::{object, partition, span, start, topic};
 use oqueue_coordinator::{Coordinator, CoordinatorError, UNASSIGNED_OFFSET};
 use oqueue_core::{
     CommitVersion, CoordinatorEpoch, Error, FakeMaterializedIndex, FakeMetadataLog,
-    FaultMetadataLog, LogFaults, MetadataEntry, MetadataLog, PartitionId,
+    FaultMetadataLog, LogFaults, MaterializedIndex, MetadataEntry, MetadataLog, PartitionId,
 };
 use std::sync::Arc;
 
@@ -177,16 +177,100 @@ async fn opening_over_a_log_that_already_holds_entries_refuses() {
     driver.await.expect("the loop ends");
 
     // A second coordinator over the same log would restart its offset line at
-    // zero, which is silent duplication rather than a failure. `M3.8` replays;
-    // until it does, this refuses.
-    assert_eq!(
-        Coordinator::open(
-            log,
-            Box::new(FakeMaterializedIndex::new()),
-            CoordinatorEpoch::ZERO
-        )
+    // zero, which is silent duplication rather than a failure. ⚠️ **`M6` is
+    // what lifts this, not `M3.8`** — `CoordinatorError::ReplayRequired`'s own
+    // doc says so: `M3.8`'s replay is the *index*'s and leaves the allocator's
+    // offset lines untouched, which is the duplication this refuses to allow.
+    let index = FakeMaterializedIndex::new();
+    index
+        .apply(&[MetadataEntry::new(
+            CommitVersion::ZERO,
+            oqueue_core::MetadataRecord::EpochChanged {
+                epoch: CoordinatorEpoch::ZERO,
+            },
+        )])
+        .expect("a fold this test can look for afterwards");
+
+    let rejected = Coordinator::open(log, Box::new(index), CoordinatorEpoch::ZERO)
         .await
-        .err(),
-        Some(CoordinatorError::ReplayRequired { last_version: 0 })
+        .expect_err("a non-empty log refuses");
+
+    assert_eq!(
+        rejected.error(),
+        &CoordinatorError::ReplayRequired { last_version: 0 }
     );
+    // ⚠️ **And the index comes back**, unmodified (`M3.34`). `open` takes it by
+    // value so the caller keeps no writable handle, which also means a plain
+    // `Err` would destroy it. ⚠️ **What the caller does with it is its own
+    // business**: feeding it back into `open` is not the remedy — the clear on
+    // the success path would wipe anything replayed into it, and `M6` owns
+    // that interaction. What this asserts is that the caller still *has* it.
+    let returned = rejected.into_index();
+    assert_eq!(
+        returned.applied_upto(),
+        Some(CommitVersion::ZERO),
+        "the refusal cleared an index it was only supposed to hand back"
+    );
+}
+
+/// ⚠️ **A transient log read is the case this matters for.** `ReplayRequired`
+/// is `Never`-retryable, so a caller holding it changes course; a `Journal`
+/// error wrapping [`Error::Transient`] is the one where the right move is to
+/// *try again* — and a caller cannot, if the attempt consumed its index.
+///
+/// ⚠️ **For `MemoryIndex` that costs an allocation and for doc 10 #12's engine
+/// it costs an open database**, which is why the shape is worth a type: the
+/// seam is the same either way, and the engine behind it is what `ADR-0020`
+/// point 5 left undecided.
+#[tokio::test]
+async fn a_transient_journal_failure_hands_the_index_back_to_be_retried_with() {
+    let log = Arc::new(FaultMetadataLog::new(FakeMetadataLog::new()));
+    log.set_faults(LogFaults {
+        refuse_read: true,
+        ..LogFaults::default()
+    });
+
+    // ⚠️ **A fold nobody else could have made**, so "the index came back" is a
+    // claim about *this* index rather than about some index: a refusal that
+    // handed back a freshly built one would satisfy every other assertion here
+    // while costing the caller exactly what this row is about.
+    let index = FakeMaterializedIndex::new();
+    index
+        .apply(&[MetadataEntry::new(
+            CommitVersion::ZERO,
+            oqueue_core::MetadataRecord::EpochChanged {
+                epoch: CoordinatorEpoch::ZERO,
+            },
+        )])
+        .expect("a fold this test can look for afterwards");
+
+    let rejected = Coordinator::open(
+        Arc::clone(&log) as Arc<dyn MetadataLog>,
+        Box::new(index),
+        CoordinatorEpoch::ZERO,
+    )
+    .await
+    .expect_err("a log that will not answer cannot be opened over");
+
+    let (error, index) = rejected.into_parts();
+    assert_eq!(error, CoordinatorError::Journal(Error::Transient));
+    assert_eq!(
+        index.applied_upto(),
+        Some(CommitVersion::ZERO),
+        "the index handed back is not the one that went in"
+    );
+
+    // The same index, into the retry that now succeeds.
+    log.set_faults(LogFaults::default());
+    let (coordinator, driver, _reader) =
+        Coordinator::open(log as Arc<dyn MetadataLog>, index, CoordinatorEpoch::ZERO)
+            .await
+            .expect("the retry opens over the same index");
+    let driver = tokio::spawn(driver.run());
+    coordinator
+        .commit(object(0), vec![span(2)])
+        .await
+        .expect("and it works");
+    drop(coordinator);
+    driver.await.expect("the loop ends");
 }

@@ -13,6 +13,15 @@ decision point 2 enumerates `IndexReader`'s surface as three methods, which was
 true the day this was written; `ADR-0025` added `entries` the next day, and the
 reader now exposes four. Recorded here rather than in the body for the reason
 the paragraph above already gives.
+⚠️ 2026-08-27 (`M3.34`): decision point 1's signature and its "the caller
+keeps nothing" both hold on the **success** path and gained an exception on the
+refusal one — `open` returns `OpenRejected`, which carries the reason *and* the
+`Box<dyn MaterializedIndex>` back. ⚠️ **The sole-writer property is unchanged**:
+a refusal constructs no coordinator, no loop and no reader, so the handle the
+caller gets back is the one it owned a moment earlier and nothing else can
+reach that index. What the exception buys is that a transient log read no
+longer destroys what the caller may not be able to rebuild — doc 10 #12's
+engine is an open database, not an allocation.
 Date: 2026-08-25
 Requirements: FR-12, FR-13, NFR-2, NFR-11
 
