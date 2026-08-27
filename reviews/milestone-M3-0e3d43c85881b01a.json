@@ -1,0 +1,75 @@
+{
+  "commits": [
+    "202a6a88d870a47c5362ae92e86e8857322ac433",
+    "cebcccacc98438b384d1f5fea03689577832533f",
+    "579b158ffbb0f1166ac93c6927e6e7235799789f",
+    "e0e82ce52f1771a09afc6fc6d4793172a18ace31",
+    "328209fa94d63cb6bb4d96b728e24a70053b9db4",
+    "52ee248fe2bd8bfa2ad8ca694df6a7137fc59431",
+    "60c457518137afc5466b377a3125339ca809e787",
+    "e70a3d96d1904193f37dac8733cbd3dd20ede129",
+    "419cad81dc43edadaeca5f439bac379322e99039",
+    "7040aeda5bcdbecb02b3979758ba1d1d57fa7b8f",
+    "8f93116721d7272b8b5b1715311c6a9649008486",
+    "c558641a11ec621b1f6cec7b8a0bafa325e5700c",
+    "6496fd4d30842ea396a59c3948a565457b803d0f",
+    "45ce189b8905e7731d33f966eb2c8b2194089b48",
+    "52b1fbf12f3faedca3fbb99017deebe04c7f3b8b",
+    "78b1abe9b55e0ed93a2c69a2c02e13b510d33795",
+    "11ab25658ff17403350fd57bc93e2a3227e36b71"
+  ],
+  "findings": [
+    {
+      "evidence": "M3.26/M3.38/M3.39 established: a failed read is charged what it fetched, failures are cached, and the failure cap sits below the cache. Seven sentences still say otherwise. (a) docs/protocol-support.md:95 'so some partition still makes progress' - falsified by crates/oqueue-broker/tests/it/faults.rs:420 two_failures_refuse_the_healthy_partition_behind_them_without_a_read, which asserts error_code != 0 for every partition including the healthy one. (b) docs/protocol-support.md:105 'the rest of the request is refused without asking the store at all' - crates/oqueue-broker/src/read.rs:435 returns seen.clone() before the failed >= MAX_FAILED_FETCHES_PER_REQUEST test at :443, so a cached object is served after the cap. (c) docs/protocol-support.md:124 and the identical sentence in read.rs:249 'pay a second GET for the same answer' - seen caches failures too, so it would pay none. (d) read.rs:307-309 'a failed read is charged no bytes and so cannot be bounded by a byte budget at all', twenty lines below the same comment's 'a second failing partition can fetch a whole object past a spent budget'. (e) read.rs:345-348 MAX_FAILED_FETCHES_PER_REQUEST's stated rationale, contradicted by faults.rs:317 a_tail_read_that_could_not_be_stamped_is_charged_and_counted. (f) read.rs:90 'a tail read's range is its batch, so it reports no separate fetch', denied by read.rs:163-191. (g) tests/it/reads.rs:7-9 'a read that failed is charged nothing at all', and the same module doc describes a two-file split M3.26 made three. M3.38's body says M3.37 owns exactly this class of sentence; M3.37 enumerates its corrections and protocol-support.md is not among them.",
+      "id": "41ac917a9520",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "The reader's charging-and-refusal model is stated correctly in the code and wrongly in seven surviving sentences, three of them in the published FR-2 contract, and one of the three is falsified by a test M3 itself committed.",
+      "task_id": "M3.45"
+    },
+    {
+      "evidence": "M3.37's body records as minors that M3.43's prescribed BATCH_HEADER_LEN + cur.position() names the byte after the varint, and that M3.44's 'count_records has never been fuzzed' is false because the request target reaches it through ingest::verify. Both rows still stated the refuted version. Verify against crates/oqueue-codec/src/records.rs:279-306 - read_varint advances before the RecordTooShort is constructed - and crates/oqueue-broker/src/ingest.rs:84 plus crates/oqueue-codec/fuzz/fuzz_targets/request.rs. A third gap in the same row: M3.43 names only RecordTooShort, while LengthOutOfBounds at records.rs:285 hardcodes the identical at: BATCH_HEADER_LEN. sdd.md's freeze covers done rows only, so both are editable and nothing scheduled the edit; M3.17's criterion is the re-plan that must do it.",
+      "id": "2c5c201b4dc1",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "Two of the four open rows carry acceptance criteria their own review refuted, with the refutation recorded only in a commit body that next-task does not read - so both would be implemented faithfully and wrongly.",
+      "task_id": "M3.17"
+    },
+    {
+      "evidence": "scripts/gates/m3-complete.sh:236 prints 'FR-10: the fake passes the conformance suite, ack-loss case included'. crates/oqueue-store/tests/it/fake.rs:21-44 asserts only report.skipped.is_empty() and !report.ran.is_empty(); it never names the case. Delete a_failed_put_is_not_proof_of_absence from cases() at crates/oqueue-store/tests/it/conformance.rs:228-232 and the leg stays green while M3.15's deliverable - the durability case deferred from M1.37/M1.58 - has silently left the suite. The gate's own header states the rule this breaks, and run_counted exists in the same file because a filter matching nothing exits 0. One assertion closes it.",
+      "id": "f1dc91d92627",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "m3-complete.sh's FR-10 conformance leg prints a claim it does not assert - the exact defect the gate was rewritten to eliminate - and it is the leg covering the one obligation M3 inherited from M1.",
+      "task_id": "M3.46"
+    },
+    {
+      "evidence": "backlog.md:78 and the M3.25 row at :186 both say 'five obligations' moved to roadmap.md's deferral table; grep -c '(from M3' over the table gives six, and M3.25's own commit body says six. sdd.md:133 forbids writing a derivable count into prose at all. Recorded as major finding 1 in M3.25's commit body, explicitly flagged as correctable under the freeze exception that commit added, and not taken by M3.37 whose harvest range includes that body.",
+      "id": "64db0f6367fd",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "backlog.md states a derivable count in prose, twice, and both copies are wrong.",
+      "task_id": null
+    },
+    {
+      "evidence": "reviews/milestone-M3-8d90fdc70dab26d4.json carries two major findings whose task_id is M3.18; backlog.md marks M3.18 dissolved. scripts/check-milestone-review.sh:305 tests row existence only, and scripts/lib.sh:254-260 open_task_ids filters on the trailing done cell alone, so every dissolved row reads as open at record time too. The items were in fact re-homed by M3.25 into M3.26-M3.38, so nothing is lost - but that guarantee rests on prose, not on the mechanism that is supposed to hold it.",
+      "id": "81476301bbdf",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "check-milestone-review.sh accepts a finding bound to a dissolved backlog row, which next-task will never surface - the exact parking the mechanism exists to prevent.",
+      "task_id": null
+    },
+    {
+      "evidence": "requirements.md:140 gives NFR-30 the verification method 'Gate asserting the read path issues zero LIST calls'. roadmap.md:171 and M1.md:12 assign NFR-30 to M1; grep -i list scripts/gates/m1-complete.sh returns nothing. m3-complete.sh section 0c and its verdict line are the only places it is asserted, M3.md's completion condition cites NFR-30, and backlog row M3.22 says 'Serves FR-13, NFR-3, NFR-30' - while M3.md's Serves line and roadmap.md:173 do not list it. check-requirements-trace.sh prints agreement because it checks the plan header against the roadmap table and reads neither the completion condition nor the backlog rows. ADR-0009's Consequences anticipated this.",
+      "id": "64c1288ff5b2",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "NFR-30's stated verification method is now asserted only by m3-complete.sh, while roadmap.md and M3.md both attribute NFR-30 to M1, whose gate asserts nothing about it - and the trace gate reports agreement because it compares only those two headers.",
+      "task_id": null
+    }
+  ],
+  "milestone": "M3",
+  "recorded_at": "2026-08-27T08:08:43Z",
+  "reviewer": "claude-opus-5 (milestone-reviewer subagent, M3 closing review)",
+  "verdict": "changes-requested"
+}
