@@ -76,11 +76,19 @@ pub struct Allowance {
     pub bytes: u64,
     /// Whether this read may return one batch past that bound.
     ///
-    /// ⚠️ **True for at most one read per *response*.** A partition whose very
-    /// first batch exceeds the allowance must still be readable or its
-    /// consumer parks at that offset forever; granting that per *partition*
-    /// would let a client naming one partition two hundred times collect two
-    /// hundred whole batches for a `max_bytes` of one.
+    /// ⚠️ **At most one read per *response* may return a batch past the
+    /// bound.** A partition whose very first batch exceeds the allowance must
+    /// still be readable or its consumer parks at that offset forever;
+    /// granting that per *partition* would let a client naming one partition
+    /// two hundred times collect two hundred whole batches for a `max_bytes`
+    /// of one.
+    ///
+    /// ⚠️ **It is not "at most one read"**, which is what this said until
+    /// `M3.37`: since `M3.39` a read that returns *nothing* does not spend the
+    /// flag, so several failing partitions can each cross the line before one
+    /// succeeds. What bounds that is the failure cap, and
+    /// the object cache is where the memory
+    /// consequence is written down.
     pub may_overshoot: bool,
 }
 

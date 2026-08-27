@@ -8,11 +8,17 @@
 #
 # `M-1.29`'s backlog row says "every hot path named in performance.md rule 18
 # has a benchmark" — read literally, all eight, always. The eight rows
-# belong to code that does not all land at once: `RecordBatch encode/decode`,
-# CRC-32C, and Varint decode are M2's; Compaction throughput is M5's (see
-# each milestone's own plan). A gate enforcing "all eight, every commit"
+# belong to code that does not all land at once. ⚠️ **All eight now wait on
+# `M14`** (`M3.35`), and this paragraph said otherwise until `M3.37`: it named
+# `RecordBatch encode/decode`, CRC-32C and varint decode as M2's and compaction
+# throughput as M5's, which was true of the *code* and never of the benchmark —
+# what every row waits on is the harness, and choosing it is `M14.md` task 9's
+# decision. ⚠️ **Acting on the old sentence would re-break this gate**: an
+# entry re-pointed at `M5` fails M5's own closing commit with no harness in the
+# tree to satisfy it, which is what `M14.md` says the placement exists to
+# prevent. A gate enforcing "all eight, every commit"
 # from the moment any crate exists would stay red from M0's first commit
-# until M5 ships, failing every commit on every unrelated task in between —
+# until the harness exists, failing every commit on every unrelated task —
 # not what rule 19 ("so the list above cannot silently rot") is asking for,
 # read against what "rot" means: the table becoming *inaccurate*, not the
 # table being *incomplete* while the code it describes has not been written.

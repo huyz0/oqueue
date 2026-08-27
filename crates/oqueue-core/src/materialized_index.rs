@@ -64,7 +64,10 @@ use std::sync::Mutex;
 ///    counted. ⚠️ **Named here because a number in a doc comment is a
 ///    suggestion and a number in this list is a contract**: `M5`'s quota is
 ///    enforced against it, which an approximation cannot carry, and it is read
-///    on paths NFR-2 bounds, which a traversal cannot. ⚠️ **Both halves, for
+///    **once per fold**, which a traversal cannot be. ⚠️ **Not NFR-2**, which
+///    is the tail-read budget and reads this number nowhere: the fold is on
+///    the produce path, under NFR-1. `M3.31` cited the wrong requirement and
+///    `M3.37` corrected it. ⚠️ **Both halves, for
 ///    the same reason** — an implementation answering exactly by counting its
 ///    partition map satisfies one and breaks the other, and the conformance
 ///    suite asserts values and can never assert cost.

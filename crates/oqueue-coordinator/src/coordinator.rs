@@ -74,7 +74,9 @@ impl Coordinator {
     /// `ADR-0024`, which carries the reasoning. A caller that constructed an
     /// `Arc` would keep one, and an `Arc<dyn MaterializedIndex>` carries
     /// `apply` and `clear`; moving a `Box` in leaves the caller nothing to
-    /// write through. What comes back is an [`IndexReader`] — every read a
+    /// write through *on the path that succeeds* — ⚠️ **a refusal hands it
+    /// back**, which is `M3.34`'s exception and is stated in full under
+    /// `# Errors` below rather than qualified here twice. What comes back is an [`IndexReader`] — every read a
     /// fetch needs, with the write side simply absent.
     ///
     /// Dropping the cache stays available and goes through

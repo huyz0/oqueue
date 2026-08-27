@@ -411,7 +411,7 @@ for key in "${!RUST_BOUNDS[@]}"; do
   got="$(sed -E 's/^[[:space:]]+|[[:space:]]+$//g' <<< "$got")"
   if [[ "$got" != "$want" ]]; then
     fail "$file: $name is '$got'; check-drift.sh holds '$want'"
-    note "every bound here is a ceiling, so raising it is the weakening move (non-negotiable 2)"
+    note "the weakening direction is per row -- read this entry's own comment, not a rule of thumb (non-negotiable 2)"
     note "changing it means changing this entry in the same commit, which is a diff someone reviews"
     rust_violations=$((rust_violations + 1))
   fi

@@ -101,8 +101,11 @@ fn client_errors_are_never_retried() {
 /// class is a judgement rather than a reading. A class is a label; what a
 /// caller feels is what [`RetryPolicy::decide`] returns, and this is the
 /// assertion that fails if `BundleTailTooShort` is ever moved to `Bounded` —
-/// which the suite otherwise cannot see, because a `|`-pattern arm stays
+/// which coverage and the mutation gate cannot see: a `|`-pattern arm stays
 /// covered by its neighbours and no mutation operator relocates a variant.
+/// ⚠️ **The array above sees it too**, and this said "the suite otherwise
+/// cannot" until `M3.37` — both assertions fail when the variant moves, on two
+/// different functions, and neither is redundant.
 #[test]
 fn a_tail_that_was_too_narrow_is_never_retried_as_it_stands() {
     let error = Error::BundleTailTooShort {

@@ -224,9 +224,12 @@ fn one_partition(
 ///   nothing else writes — so the round trip is a local read. `M7`'s follower
 ///   is where it becomes a message.
 /// - **Any other refusal is a cache that is wrong rather than merely not
-///   authoritative** — a different epoch, or a push stream that has gone
-///   silent — and this broker's index *is* the coordinator's, so hearing one
-///   means the process is not the one it believes it is. Answering an offset
+///   authoritative** — a different epoch, which since `M3.30` is the *only*
+///   refusal this arm can receive: `admits` answers `Linearizable` before it
+///   asks any freshness question, so a silent push stream never reaches here.
+///   ⚠️ **This named two until `M3.37`** — a different epoch *or* a silent
+///   push stream — and the second stopped being reachable at `M3.30`. This broker's index *is* the coordinator's, so
+///   hearing one means the process is not the one it believes it is. Answering an offset
 ///   then is how a stale log-end-offset becomes negative consumer lag, so it
 ///   refuses instead.
 /// - `Ok(())` cannot happen for `Linearizable` and would mean a cache had been

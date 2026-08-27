@@ -2,10 +2,11 @@
 //!
 //! ⚠️ **Its own file because `mod.rs` reached the 500-line limit**, and the
 //! seam is the ordinary one: `mod.rs` is the handler and this is what it is
-//! asserted to do. ⚠️ **`pub(crate)`, because two other suites build on it** —
-//! `produce_body` and `replied` are how the fetch and roundtrip tests get a
-//! partition with records in it, so the produce path is their fixture rather
-//! than a second stub.
+//! asserted to do. ⚠️ **`pub(crate)` for one consumer**: `produce/answer.rs`'s
+//! own tests build on `produce_body`, `replied` and `verdict`. ⚠️ **Not the
+//! fetch or roundtrip suites**, which this claimed until `M3.37` — those use
+//! `crate::testing::produce_one`, a second hand-rolled copy of the same
+//! request encoding, which is the duplication this note said had been avoided.
 
 #![allow(clippy::expect_used)]
 #![allow(clippy::redundant_pub_crate)]

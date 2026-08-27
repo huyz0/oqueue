@@ -154,7 +154,7 @@ async fn a_failing_partition_cannot_be_repeated_for_free() {
 /// fixture cannot: once the exemption survives a failure, the second partition
 /// reads either way.
 #[tokio::test]
-async fn a_read_that_fetched_and_then_failed_to_parse_still_spends_the_budget() {
+async fn a_failed_parse_leaves_the_exemption_for_the_partition_behind_it() {
     let broker = broker(&["a", "b"]).await;
     let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
     // Past the tail window and one topic per flush, so each partition resolves
@@ -348,11 +348,14 @@ async fn a_tail_read_that_could_not_be_stamped_is_charged_and_counted() {
 /// partition behind it is still served, because a read that returned nothing
 /// does not take the response's one over-the-line exemption (`M3.39`).
 ///
-/// ⚠️ **The GET count is the observable, and it discriminates in both
-/// directions.** Two, not one: under the old behaviour the second partition
-/// was refused its own read, which is what let a corrupt first partition blank
-/// a whole response. And two, not three: the third partition is reachable only
-/// if the failed read's bytes were never charged, which is `M3.26`'s half.
+/// ⚠️ **The GET count discriminates the *charge*, and only that.** Two, not
+/// three: the third partition is reachable only if the failed read's bytes
+/// were never charged, which is `M3.26`'s half. ⚠️ **It does not discriminate
+/// the exemption**, and this said it did until `M3.37` — with a two-batch
+/// budget the second partition reads whether or not the exemption survived, so
+/// `M3.39`'s half is pinned by the two assertions in
+/// [`a_failed_parse_leaves_the_exemption_for_the_partition_behind_it`] and by
+/// `target.rs`'s unit case.
 #[tokio::test]
 async fn a_failed_read_spends_the_budget_but_not_the_exemption() {
     let broker = broker(&["a", "b", "c"]).await;

@@ -235,9 +235,11 @@ async fn the_view_answers_every_read_a_fetch_needs() {
 /// would pass this unchanged. The property — that a clear cannot land between
 /// the loop's own "is this current" check and its fold, where `apply` accepts
 /// it because an emptied index has no `applied_upto` to refuse against — is
-/// held by the queue and asserted by nothing. `M3.18` owns the fault decorator
-/// that would let a test hold a commit open inside `append` and race a drop
-/// against it.
+/// held by the queue, and this said it was "asserted by nothing" until
+/// `M3.37`. ⚠️ **`M3.32` asserted it**: see
+/// [`a_drop_cannot_land_between_a_commits_journal_and_its_fold`] below, which
+/// `FaultMetadataLog`'s `hold_append` makes possible by holding a commit open
+/// inside `append` and racing a drop against it.
 #[tokio::test(start_paused = true)]
 async fn dropping_the_cache_goes_through_the_queue_and_the_log_refills_it() {
     let (coordinator, index, driver) = start_indexed().await;

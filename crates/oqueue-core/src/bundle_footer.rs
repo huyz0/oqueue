@@ -57,7 +57,9 @@ pub fn parse_footer(tail: &[u8], object_size: u64) -> Result<Vec<Region>> {
     // only place that is true: the field that says how long the footer is has
     // not been read yet, because it is among the bytes that are missing. A
     // caller re-reading exactly this much gets the trailer and, with it, the
-    // real number — so this converges in one further step and never more.
+    // real number — so this converges in one further *failure* and never more,
+    // which is two further reads: the one that learns the number and the one
+    // that uses it. ⚠️ **Three sites said this three ways** until `M3.37`.
     let trailer_at = bytes
         .len()
         .checked_sub(TRAILER_LEN)
@@ -130,7 +132,7 @@ const fn short_tail_or_corrupt(got: u64, needed: u64, object_size: u64) -> Error
 /// `offset = 0, length = u64::MAX` parses, and a reader honouring it GETs the
 /// whole bundle and serves one topic's consumer another topic's records.
 ///
-/// Five things, all cheap: each region begins exactly where the previous one
+/// Four things, all cheap: each region begins exactly where the previous one
 /// ended, the last ends exactly where the payload does, none reaches into the
 /// footer, and none claims records it has no offsets for.
 ///

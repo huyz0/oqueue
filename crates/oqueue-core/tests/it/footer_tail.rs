@@ -14,9 +14,10 @@
 //! into.
 
 #![allow(clippy::expect_used)]
-// ⚠️ `pub` here is `pub(crate)` in effect — `main.rs` is this test binary's
-// only root, and nothing outside it can name these.
-#![allow(unreachable_pub)]
+// ⚠️ **No `pub` item lives here**, so the `unreachable_pub` allow this file
+// carried until `M3.37` was suppressing a lint nothing could trip. Removed
+// rather than kept "in case": a blanket allow justified by nothing is
+// indistinguishable from one whose reason has expired.
 
 use crate::bundle_footer::{four_topics, three_regions};
 use oqueue_core::{BUNDLE_FORMAT_VERSION, Error, parse_footer};
@@ -190,7 +191,7 @@ fn narrowest_tail_that_parses(payload: &[u8]) -> usize {
 /// trailer holds the real length. That bound is what makes "loop until it
 /// succeeds" a safe thing to tell a caller to do.
 #[test]
-fn a_tail_below_the_trailer_converges_in_one_further_read() {
+fn a_tail_below_the_trailer_converges_in_two_further_reads() {
     let whole = three_regions();
     let size = whole.len() as u64;
 

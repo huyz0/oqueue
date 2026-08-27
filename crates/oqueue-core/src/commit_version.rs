@@ -9,15 +9,21 @@ use crate::{Error, Result};
 /// # Invariant
 ///
 /// **No operation on it ever wraps.** `ADR-0020` makes this the one scalar
-/// staleness compares on — `ReadMode::AtLeast(v)` is a `u64` compare and
-/// nothing more — so a silent wrap is the only arithmetic result that breaks
-/// ordering without failing anything: the successor comes back smaller than
+/// staleness compares on — this said `ReadMode::AtLeast(v)` was "a `u64`
+/// compare and nothing more" until `M3.37`, which `ADR-0023` falsified: an
+/// `AtLeast` watermark carries the epoch that issued it, and
+/// [`CacheState::admits`](crate::CacheState::admits) settles both epoch
+/// directions before any version is compared. The compare *within* an epoch is
+/// still exactly a `u64` one, which is why a silent wrap is the only
+/// arithmetic result that breaks ordering without failing anything: the successor comes back smaller than
 /// what it started from, and every later comparison is wrong. So
 /// [`CommitVersion::advance`] returns [`Error::CommitVersionOverflow`] rather
 /// than a number, exactly as [`Offset::add`](crate::Offset::add) does.
 ///
 /// ⚠️ **It is a counter, not a timestamp or a hash** (`M3.md` task 1). Nothing
-/// downstream may compare it as anything but a `u64`.
+/// downstream may compare *the scalar* as anything but a `u64` — and nothing
+/// may compare it alone, because `ADR-0023` pairs it with an epoch precisely
+/// so a version from a superseded incarnation cannot read as fresh.
 ///
 /// ⚠️ **It is only ordered within its own metadata log.** `ADR-0020` shards
 /// the log and gives each shard its own allocator, so comparing versions

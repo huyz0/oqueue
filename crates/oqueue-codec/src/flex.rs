@@ -54,10 +54,13 @@ pub fn read_nullable_string<'a>(
 /// right writer for a field that may be null and the wrong one for a field
 /// that may not, and nothing in a call to it said which kind it was writing.
 ///
-/// ⚠️ **A `&str` rather than an `Option`**, which is the whole point: a caller
-/// holding an `Option` has to decide what a `None` means *before* it reaches
-/// the wire, where the only options left are a frame nobody can read or a
-/// silent substitution.
+/// ⚠️ **A `&str` rather than an `Option`**, so the *writer* cannot express a
+/// null. ⚠️ **That is not the same as the caller having to decide**, which is
+/// what this claimed until `M3.37`: all three call sites resolve their
+/// `Option` with `unwrap_or_default()` one line above, so a fourth handler
+/// gets a topic named `""` — readable, unmatchable, and quieter than the
+/// unparsable frame it replaces. `M3.41` is the row that makes the invalid
+/// state unrepresentable rather than merely inexpressible at the last step.
 pub fn put_string(buf: &mut Vec<u8>, flexible: bool, value: &str) {
     if flexible {
         put_compact_nullable_string(buf, Some(value));

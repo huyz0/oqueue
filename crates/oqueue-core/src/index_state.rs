@@ -113,11 +113,10 @@ impl PartitionIndex {
 
 /// The state every in-memory materialization keeps, and the fold over it.
 ///
-/// ⚠️ Shared by [`FakeMaterializedIndex`](crate::FakeMaterializedIndex) and by `oqueue-index`'s `MemoryIndex`
-/// rather than written twice. Two copies of a fold this subtle — order
-/// checking, all-or-nothing application, non-wrapping addition, tier demotion
-/// — would drift, and the conformance suite would then be asserting the
-/// contract against two different meanings of it.
+/// ⚠️ Shared by [`FakeMaterializedIndex`](crate::FakeMaterializedIndex) and by
+/// `oqueue-index`'s `MemoryIndex` — the module doc above says why, and said it
+/// twice verbatim until `M3.37`; the `M3.6` minor that noticed was relocated
+/// rather than resolved by `M3.8`'s module split.
 ///
 /// ⚠️ **Nested rather than keyed by `(TopicId, PartitionId)`.** A tuple key has
 /// no borrowed form, so every lookup would have to `clone()` the topic name to
@@ -247,6 +246,13 @@ impl IndexState {
 
     /// The partition's tail window: entries carrying inline byte ranges, so
     /// reading one is a single GET.
+    ///
+    /// ⚠️ **No production caller, and deliberately so.** A fetch goes through
+    /// [`find_batches`](Self::find_batches), which pages and prices; this hands
+    /// back the whole window so the suite can assert what demotion did to it.
+    /// It clones — up to [`TAIL_WINDOW_ENTRIES`] entries with an
+    /// [`ObjectKey`](crate::ObjectKey) each — which is fine off the read path
+    /// and worth saying in a type that refuses a tuple key to avoid one clone.
     #[must_use]
     pub fn tail(&self, topic: &TopicId, partition: PartitionId) -> Vec<TailEntry> {
         self.partition(topic, partition)

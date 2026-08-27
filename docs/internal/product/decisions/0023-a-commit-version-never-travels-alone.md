@@ -4,8 +4,12 @@ Status: accepted; 2026-08-27 (`M3.30`): the epoch comparison is
 **directional**, which this ADR's body states as an inequality. A watermark
 from an *older* epoch is incomparable and the cache is fine; a watermark from a
 *newer* one is evidence that this cache's own coordinator has been superseded,
-and the remediation is the opposite — go back to the coordinator, rather than
-tell the client its watermark cannot be compared. `RefreshReason` carries two
+and the remediation is the opposite — ⚠️ **discard the cache**, the same
+answer `CacheFromAnotherEpoch` gets and for the same reason, rather than tell
+the client its watermark cannot be compared. ⚠️ **This note said "go back to
+the coordinator" until `M3.37`**, which is this enum's vocabulary for the
+*round trip* a merely-behind cache gets — the opposite half of the rule the
+code calls its organizing one. `RefreshReason` carries two
 reasons for the two directions since that task.
 Date: 2026-08-25
 Requirements: FR-11, FR-12, FR-13, NFR-21

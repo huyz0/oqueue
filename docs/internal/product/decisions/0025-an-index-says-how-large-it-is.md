@@ -1,6 +1,12 @@
 # 0025. A materialized index says how large it is
 
-Status: accepted; 2026-08-27 (`M3.31`): decision point 3's estimate licence is
+Status: accepted; ⚠️ 2026-08-27 (`M3.31`) **overturns decision point 3 rather
+than merely diverging from it**, which the `adr` skill routes through
+supersession — recorded on this line anyway, and `M3.37` says why rather than
+leaving the departure silent: a superseding ADR for one revoked clause of a
+one-day-old decision would be an ADR for everything, which is an ADR for
+nothing, and this note names both Consequences lines it falsifies so a reader
+of the Decision section is not the last to know. The clause: decision point 3's estimate licence is
 **withdrawn**. `entries()` is exact, because `M5`'s quota is enforced against
 this number and a quota over an approximation is not one. ⚠️ **Not because the
 conformance suite may not move** — revising an over-asserting case is
@@ -16,7 +22,8 @@ foreclose an engine whose exact count is expensive, and
 the question. And "Makes hard: … must be able to answer this **cheaply**" is
 now cheaply *and exactly*, which is the burden a new implementor takes on.
 Date: 2026-08-26
-Requirements: NFR-11, NFR-2
+Requirements: NFR-11, NFR-1 (⚠️ **read `NFR-2` until `M3.37`** — see decision
+point 3, which mis-cited the bound this number is measured against)
 
 ## Context
 
@@ -59,8 +66,12 @@ fn entries(&self) -> usize;
    `IndexState`, which maintains the count rather than traversing.
 3. It is *not* a quota, a limit, or a policy. An implementation that cannot
    count cheaply may return an estimate, and the doc says so; what it may not
-   do is traverse its partition map, because this is read on paths NFR-2
-   bounds.
+   do is traverse its partition map. ⚠️ **This said "because this is read on
+   paths NFR-2 bounds" until `M3.37`, and NFR-2 reads it nowhere**: the caller
+   is the fold, once per fold, on the produce path — so the budget that makes
+   cheapness matter is **NFR-1**'s, not the tail-read one. The requirement is
+   the same size; the bound it is measured against is a different one, and an
+   implementor sizing this against a fetch's budget would size it wrong.
 
 ⚠️ **Additive, and it still narrows what an implementor guarantees**, which is
 why `contracts.md` rule 15 asks for this ADR rather than letting it land as an

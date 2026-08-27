@@ -135,8 +135,10 @@ pub enum RefreshReason {
 
     /// The cache holds state from a coordinator incarnation that is gone.
     ///
-    /// Hazard H5. ⚠️ **Not a freshness problem, and the only reason here that
-    /// means the contents are wrong.** A failover may have rewound the log, so
+    /// Hazard H5. ⚠️ **Not a freshness problem, and one of *two* reasons here
+    /// that mean the contents are wrong** — the other is
+    /// [`CacheFromAnOlderEpoch`](Self::CacheFromAnOlderEpoch), which `M3.30`
+    /// added and which this sentence called nonexistent until `M3.37`. A failover may have rewound the log, so
     /// the cache's entries are positions on a line that no longer exists — it
     /// can be arbitrarily far *ahead* by version and must still be
     /// **discarded** rather than caught up.
@@ -234,11 +236,15 @@ impl CacheState {
     /// Whether this cache may answer `mode`, and why not if it may not.
     ///
     /// ⚠️ **The order of the checks is the design**, and it is three tiers.
-    /// The epoch fence comes first, for **every** mode, because it is the only
-    /// one that says the *contents* are wrong rather than old — a cache from a
-    /// rewound line can be arbitrarily far ahead by version and must still not
-    /// answer, and a cache from a departed epoch means the *agent* is not the
-    /// incarnation it believes it is. [`Linearizable`](ReadMode::Linearizable)
+    /// The epoch fence comes first, for **every** mode, because it is the
+    /// *cheapest* check that can say the contents are wrong rather than old —
+    /// a cache from a rewound line can be arbitrarily far ahead by version and
+    /// must still not answer, and a cache from a departed epoch means the
+    /// *agent* is not the incarnation it believes it is. ⚠️ **It is not the
+    /// only such check, and this said it was until `M3.37`**: the version tier
+    /// returns [`CacheFromAnOlderEpoch`](RefreshReason::CacheFromAnOlderEpoch),
+    /// which also discards, and it sits *below* the silence breaker — see
+    /// `M3.43`, which is the row that owns that ordering. [`Linearizable`](ReadMode::Linearizable)
     /// is answered next, because no cache may serve one and every remaining
     /// question is about how good a cache is. The silence breaker comes third
     /// and applies to every mode that does read the cache,

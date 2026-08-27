@@ -120,9 +120,12 @@ impl Cluster {
             // short to hold a batch header is an object disagreeing with the
             // index that named it, so the read fails rather than serving it.
             if rewrite_base_offset(&mut blob, batch.reference().base_offset().get(), 0).is_err() {
-                // ⚠️ **A tail read's parse failure, counted here and only on a
-                // miss.** It is the same failure the history tier counts inside
-                // `one_batch`; it lands later because the stamp is what fails.
+                // ⚠️ **A parse failure, counted here and only on a miss.**
+                // ⚠️ **Both tiers reach this**, and the comment said "a tail
+                // read's" until `M3.37`: a history batch whose region slices
+                // cleanly and is then too short to hold a batch header fails
+                // the stamp too. `one_batch` counts the *slice* failure; this
+                // counts the stamp's, for either tier.
                 if fetch.missed {
                     spend.objects.note_failure();
                 }
@@ -157,12 +160,13 @@ impl Cluster {
     ) -> Fetched {
         match batch {
             IndexedBatch::Inline(entry) => {
-                // ⚠️ **A tail read reports no separate fetch cost**, and that
-                // is not an omission: the range asked for *is* the batch, so
-                // the bytes fetched and the bytes returned are the same number
-                // and the caller already charges the larger of the two.
-                // Counting here as well would be a second name for one thing —
-                // and a branch no test could tell from its absence.
+                // ⚠️ **A tail read's fetch and its records are the same
+                // bytes** on the success path — the range asked for *is* the
+                // batch — so the caller's `max` of the two is unchanged by
+                // what this reports. ⚠️ **On the failure path they are not**,
+                // which is why it reports the fetch rather than nothing; the
+                // comment here said "no separate fetch cost" until `M3.37`,
+                // eighteen lines above the code that computes one.
                 let (blob, missed) = spend
                     .objects
                     .get(self, batch.reference().object(), entry.bytes())
