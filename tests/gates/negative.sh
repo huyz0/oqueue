@@ -1952,6 +1952,117 @@ invoke_m2_complete_no_matrix() {
   bash "$1/scripts/gates/m2-complete.sh"
 }
 
+# ⚠️ `m3-complete.sh`'s zero-LIST leg is the only one of its five that is
+# not a `cargo test` filter, and it is the one most easily made vacuous: it
+# reads two files' *shape*, so a moved path would leave NFR-30 asserted by
+# nothing while every other line still printed green. Two cases, because
+# the two failure modes are different — the seam being gone, and the seam
+# having grown a fourth method.
+setup_m3_complete_no_store_seam() {
+  local dir; dir="$(new_scratch m3-complete-no-store-seam)"
+  mkdir -p "$dir/scripts/gates" "$dir/crates/oqueue-core/src"
+  cp "$REPO_ROOT/scripts/gates/m3-complete.sh" "$dir/scripts/gates/m3-complete.sh"
+  chmod +x "$dir/scripts/gates/m3-complete.sh"
+  # `op_counts.rs` is present; `store.rs` is not. The gate must name the
+  # missing one rather than reporting both or neither.
+  cp "$REPO_ROOT/crates/oqueue-core/src/op_counts.rs" "$dir/crates/oqueue-core/src/op_counts.rs"
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+invoke_m3_complete_no_store_seam() {
+  bash "$1/scripts/gates/m3-complete.sh"
+}
+
+# A fourth method on the trait — the change `ADR-0009` §2 says must reopen
+# the decision rather than widen this line. It has to fail *before* the
+# milestone-review leg can mask it, which is why this scratch repo carries
+# a `check-milestone-review.sh` that passes.
+setup_m3_complete_store_grew_a_method() {
+  local dir; dir="$(new_scratch m3-complete-store-grew)"
+  mkdir -p "$dir/scripts/gates" "$dir/crates/oqueue-core/src"
+  cp "$REPO_ROOT/scripts/gates/m3-complete.sh" "$dir/scripts/gates/m3-complete.sh"
+  chmod +x "$dir/scripts/gates/m3-complete.sh"
+  cp "$REPO_ROOT/crates/oqueue-core/src/op_counts.rs" "$dir/crates/oqueue-core/src/op_counts.rs"
+  cat > "$dir/crates/oqueue-core/src/store.rs" <<'EOF'
+pub trait ObjectStore {
+    fn get(&self) {}
+    fn put(&self) {}
+    fn delete(&self) {}
+    fn list(&self) {}
+}
+EOF
+  cat > "$dir/scripts/check-milestone-review.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$dir/scripts/check-milestone-review.sh"
+  # No Cargo.toml: `has_rust` is false, so every cargo leg is skipped. The
+  # structural check runs *above* that guard, which is the property this
+  # case protects — move it below and the gate exits 0 with the leg unrun.
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+invoke_m3_complete_store_grew_a_method() {
+  bash "$1/scripts/gates/m3-complete.sh"
+}
+
+# ⚠️ The two shapes round one's reviewer used to defeat the first version of
+# section 0c, kept as cases so the fix is pinned rather than remembered. A
+# `List` carrying data is what a `MaintenanceStore` counter would actually
+# look like (`ADR-0009` §2), and a supertrait is how a method arrives on a
+# trait without appearing in its method list.
+_m3_scratch_with_seams() {
+  local dir; dir="$(new_scratch "$1")"
+  mkdir -p "$dir/scripts/gates" "$dir/crates/oqueue-core/src"
+  cp "$REPO_ROOT/scripts/gates/m3-complete.sh" "$dir/scripts/gates/m3-complete.sh"
+  chmod +x "$dir/scripts/gates/m3-complete.sh"
+  cp "$REPO_ROOT/crates/oqueue-core/src/store.rs" "$dir/crates/oqueue-core/src/store.rs"
+  cp "$REPO_ROOT/crates/oqueue-core/src/op_counts.rs" "$dir/crates/oqueue-core/src/op_counts.rs"
+  cat > "$dir/scripts/check-milestone-review.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+  chmod +x "$dir/scripts/check-milestone-review.sh"
+  printf '%s\n' "$dir"
+}
+
+setup_m3_complete_list_carries_data() {
+  local dir; dir="$(_m3_scratch_with_seams m3-complete-list-data)"
+  cat > "$dir/crates/oqueue-core/src/op_counts.rs" <<'EOF'
+pub enum Operation {
+    Get,
+    Put,
+    Delete,
+    List(crate::ObjectKey),
+}
+EOF
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+invoke_m3_complete_list_carries_data() {
+  bash "$1/scripts/gates/m3-complete.sh"
+}
+
+setup_m3_complete_supertrait_lists() {
+  local dir; dir="$(_m3_scratch_with_seams m3-complete-supertrait)"
+  cat > "$dir/crates/oqueue-core/src/store.rs" <<'EOF'
+pub trait Listing {
+    fn list(&self);
+}
+
+pub trait ObjectStore: Send + Sync + Listing {
+    fn get(&self);
+    fn put(&self);
+    fn delete(&self);
+}
+EOF
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+invoke_m3_complete_supertrait_lists() {
+  bash "$1/scripts/gates/m3-complete.sh"
+}
+
 # A row that records a gap without recording anything about it -- the rule
 # `check-mutants.sh` and `check-unsafe.sh` already enforce on their baselines.
 setup_conformance_matrix_no_reason() {
@@ -2722,6 +2833,14 @@ run_case "m1-complete.sh (no recorded matrix)" setup_m1_complete_no_matrix invok
   "the recorded backend matrix is the artifact this gate checks"
 run_case "m2-complete.sh (no protocol-support matrix)" setup_m2_complete_no_matrix invoke_m2_complete_no_matrix \
   "the public protocol-support matrix is an M2 deliverable"
+run_case "m3-complete.sh (the object-store seam is gone)" setup_m3_complete_no_store_seam invoke_m3_complete_no_store_seam \
+  "the zero-LIST claim is asserted from this file's shape"
+run_case "m3-complete.sh (ObjectStore grew a fourth method)" setup_m3_complete_store_grew_a_method invoke_m3_complete_store_grew_a_method \
+  "ObjectStore's method set is"
+run_case "m3-complete.sh (a List variant that carries data)" setup_m3_complete_list_carries_data invoke_m3_complete_list_carries_data \
+  "Operation's variants are"
+run_case "m3-complete.sh (a supertrait that can list)" setup_m3_complete_supertrait_lists invoke_m3_complete_supertrait_lists \
+  "ObjectStore's declaration is"
 run_case "check-conformance-matrix.sh (unrecognized status)" setup_conformance_matrix_bad_status invoke_conformance_matrix \
   "which is neither verified nor not-yet-run"
 run_case "check-conformance-matrix.sh (roster names an unknown backend)" setup_conformance_matrix_unknown_in_roster invoke_conformance_matrix_roster \
