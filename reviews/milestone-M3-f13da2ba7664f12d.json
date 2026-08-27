@@ -1,0 +1,39 @@
+{
+  "commits": [
+    "8677d53f47c85cfc0c604c0993bfa7e837f00748"
+  ],
+  "findings": [
+    {
+      "evidence": "backlog.md:78-87 says the fix for the wrong 'five' is 'not a corrected number but a derivation: count the rows of roadmap.md's deferral table whose second cell names M3 as the source' - and then rejects grep -c '(from M3' because 'it counts every M3-sourced deferral in the table rather than the ones M3.25 moved'. Those are the same selector. Run it: 17 rows name M3 in their second cell (13 match the grep), against the 6 the paragraph is replacing, and no derivation that yields 6 is stated anywhere. Meanwhile the same commit writes 'It ran over six' (backlog.md:155-157), 'Six rows M3 opened after its own decomposition' (roadmap.md:223) and 'six rows M3 opened' (M10.md:26) - three copies of a count sdd.md:133 forbids in prose, which roadmap.md:223 then undercuts in the same cell with 'M10.0 must re-derive the set rather than trust this list'. Recorded as minor 1 of 8677d53's per-commit review and left standing. Non-actionable as a row: prose only, review.md rule 9a's floor, and M10.0 re-derives regardless.",
+      "id": "c84099208669",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "backlog.md's replacement for the wrong hardcoded count prescribes a derivation that its own next sentence refutes, and the same commit writes three new derivable counts one clause after invoking the rule that forbids them."
+    },
+    {
+      "evidence": "crates/oqueue-codec/README.md:28-38 says fuzz/ holds 'one target per decoder module - frame, varint, batch, records, compress' and that the request path 'is M2.27's target, held back'. The directory holds eight targets (batch, bundle_footer, compress, flex, frame, records, request, varint); request.rs's module doc says it drives a real cluster after M3.14; and README.md:53 two sections below says 'plus request for the full dispatch path, run nightly'. The same paragraph's 'a codec module with neither a target nor an allowlisted reason' is also wrong: scripts/fuzz.sh:73 sets DECODER_CRATES=(oqueue-codec oqueue-core) and bundle_footer targets oqueue-core, which was M3.28's point. The request-target half was the sole minor of M2's addendum commit 70029265 and is still true two milestones later; M3.37, chartered for every sentence M3's commits falsified, did not reach it. Non-actionable as a row - prose, rule 9a - but concrete evidence that a minor recorded in a closing commit's body has no harvester, since ADR-0016 parks it until a sweep and the milestone's sweep has already run. 8677d53's three minors are in that same position.",
+      "id": "2aa30e1be7b8",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "oqueue-codec/README.md's fuzz-harness paragraph is stale three ways after M3, one of them the exact minor M2's closing addendum recorded and nothing ever harvested - which is what a minor written into a closing commit's body costs."
+    },
+    {
+      "evidence": "roadmap.md:173 and M3.md:12 give M3 NFR-21, and it appears in no other milestone row and no deferral row, so M3 is its sole owner. requirements.md:132 gives it the method 'Invariant test: the cache is never ahead of durability'. scripts/gates/m3-complete.sh names FR-10, FR-11, FR-12, FR-13, FR-32, NFR-30 and NFR-31, never NFR-21; M3.md:182-187's completion condition omits it. The invariant is asserted - produce/answer.rs:144-151 and M3.33's staged-entry assertion - but only under FR-10's and FR-11's printed legs, so nothing connects NFR-21 to evidence. The prescribed harness is M10.md provisional task 10, and no deferral row records that hand-off. check-requirements-trace.sh reports agreement because it compares the plan header to the roadmap table and reads neither the completion condition nor the backlog - what the closing review established for NFR-30. Kept minor because the substance is asserted and no milestone's gate here names every requirement it serves, so this is a standing repo-wide condition rather than something M3 abandoned.",
+      "id": "f44bf613fc65",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "NFR-21 is M3's alone, M3 is closing, and its stated verification method exists in no gate leg, no test name and no deferral row - the identical blind spot the closing review recorded for NFR-30, one requirement over."
+    },
+    {
+      "evidence": "review.md:169-173 and baselines/review.txt's own header require a boundary read. .agents/skills/milestone-review/SKILL.md mentions the file only as the escape hatch for an unresolved finding and prescribes no boundary read; scripts/milestone-review.sh context does not put it in the packet; and none of M3's three milestone artifacts or 8677d53's body mentions it. M3 added two lines (8d5795399752, 0503718c1131). Performed here, since it is the boundary: both are kind spec-wrong discharged as in-commit corrections with recorded reasons and named receivers, so the growth carries no signal - the obligation was unperformed rather than failed, which is why this is minor and needs no row. It is a rule whose gate does not exist, which AGENTS.md says is the kind that matters more.",
+      "id": "d61690952a7e",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "review.md rule 17 obliges a read of the argued-findings baseline at every milestone boundary; no skill names the step and no M3 artifact or commit body performs it, though M3 grew the list by two."
+    }
+  ],
+  "milestone": "M3",
+  "recorded_at": "2026-08-27T08:43:38Z",
+  "reviewer": "claude-opus-5 (milestone-review addendum agent, M3 closing commit)",
+  "verdict": "pass"
+}
