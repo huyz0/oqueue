@@ -58,6 +58,16 @@ use std::sync::Mutex;
 ///    index already carrying part of that batch.
 /// 3. **`clear` returns it to its fresh state**, and replaying the same log
 ///    reproduces the same observable state.
+/// 4. **[`entries`](Self::entries) is exact and cheap**, and moves only when
+///    the index does: a refused `apply` leaves it where guarantee 2 leaves
+///    everything else, and `clear` takes it to zero along with everything it
+///    counted. ⚠️ **Named here because a number in a doc comment is a
+///    suggestion and a number in this list is a contract**: `M5`'s quota is
+///    enforced against it, which an approximation cannot carry, and it is read
+///    on paths NFR-2 bounds, which a traversal cannot. ⚠️ **Both halves, for
+///    the same reason** — an implementation answering exactly by counting its
+///    partition map satisfies one and breaks the other, and the conformance
+///    suite asserts values and can never assert cost.
 pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
     /// Folds a batch of log entries in.
     ///
@@ -76,12 +86,40 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
 
     /// How many entries this index holds, across every partition and tier.
     ///
-    /// `ADR-0025`. ⚠️ **It must be cheap**, because it is read on paths NFR-2
-    /// bounds and, once `M5`'s quota exists, once per fold. A maintained
-    /// counter, never a traversal of the partition map, and never a
-    /// `SELECT count(*)` for doc 10 #12's engine — an implementation that
-    /// cannot count exactly at that price may return an estimate, and what it
-    /// may not do is make the answer expensive.
+    /// `ADR-0025`, with the estimate licence withdrawn by `M3.31`. ⚠️ **It
+    /// must be cheap *and* exact**, and those are not in tension *for this
+    /// method set*: every mutation crosses the seam — `apply` receives the
+    /// entries and `clear` drops them all — so an implementation always knows
+    /// the delta, and a maintained counter is both. Never a traversal of the
+    /// partition map, and never a `SELECT count(*)` for doc 10 #12's engine.
+    ///
+    /// ⚠️ **`M5`'s eviction is what could break that**, and it is named here
+    /// so the next contract decision is not a surprise: the cheap eviction for
+    /// an LSM-backed engine is engine-managed — compaction dropping whole
+    /// tables — which removes entries the implementor never observes, and a
+    /// maintained counter would drift with nothing to correct it. Whoever adds
+    /// eviction routes the delta back through the seam, or this guarantee
+    /// changes with an ADR rather than quietly.
+    ///
+    /// ⚠️ **The estimate `ADR-0025` allowed could not have been used**, which
+    /// is why it is gone rather than kept for an engine that might want it:
+    /// the conformance suite has asserted this number *exactly* since the
+    /// method existed, so an implementation taking the licence would fail
+    /// there rather than here — long after someone chose an engine on the
+    /// strength of a promise this trait had made.
+    ///
+    /// ⚠️ **What decides it is not that the suite may not move**, which is a
+    /// judgement rather than a rule: revising an over-asserting conformance
+    /// case is legitimate, and non-negotiable 2 forbids weakening a check *to
+    /// make it pass*, which is a different act. What decides it is that `M5`'s
+    /// quota is enforced against this number, and a quota over an
+    /// approximation is not a quota. ⚠️ **`M7` verifies NFR-11 by measuring
+    /// *memory*** — `requirements.md` asks for a test that node memory is flat
+    /// as the **cluster-wide** partition count grows, which is a different
+    /// number from this one and the requirement's whole content: cost is
+    /// proportional to the partitions active on a node and never to the
+    /// cluster's total. So this count is the *mechanism's*, not that
+    /// verification's, and claiming otherwise would be `M3.11`'s error again.
     ///
     /// ⚠️ **It is a measurement, not a limit.** M3 bounds nothing: enforcing a
     /// ceiling at this index's keying gives back range a rebuild cannot

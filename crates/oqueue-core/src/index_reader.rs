@@ -58,6 +58,10 @@ impl IndexReader {
     /// materialization that folds every partition on a shard is the one nobody
     /// can measure. ⚠️ **A measurement, not a limit** — nothing in M3 bounds
     /// it; `roadmap.md` carries the enforcement to `M5`.
+    ///
+    /// ⚠️ **Exact**, per [`MaterializedIndex`]'s guarantee 4: this is the
+    /// number `M5`'s quota is enforced against, and a quota over an
+    /// approximation is not one.
     #[must_use]
     pub fn entries(&self) -> usize {
         self.index.entries()

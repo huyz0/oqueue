@@ -1,6 +1,20 @@
 # 0025. A materialized index says how large it is
 
-Status: accepted
+Status: accepted; 2026-08-27 (`M3.31`): decision point 3's estimate licence is
+**withdrawn**. `entries()` is exact, because `M5`'s quota is enforced against
+this number and a quota over an approximation is not one. ⚠️ **Not because the
+conformance suite may not move** — revising an over-asserting case is
+legitimate, and no rule here says otherwise — but the suite has asserted this
+number exactly since the method existed, so the licence was one an
+implementation would have discovered it could not take long after an engine had
+been chosen on the strength of it. Nothing else in the decision changes; both
+materializations already maintain an exact counter, so the tree was never using
+it either. ⚠️ **Except two lines in Consequences.** "Forecloses: nothing"
+rests on the escape hatch by name — after this note the decision *does*
+foreclose an engine whose exact count is expensive, and
+`materialized_index.rs` names `M5`'s eviction as the case that would reopen
+the question. And "Makes hard: … must be able to answer this **cheaply**" is
+now cheaply *and exactly*, which is the burden a new implementor takes on.
 Date: 2026-08-26
 Requirements: NFR-11, NFR-2
 

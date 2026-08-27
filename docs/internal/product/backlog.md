@@ -101,8 +101,15 @@ how a row is lost:
 4. `M3.20`-`M3.22`, each of which needs the composer `M3.14` builds.
 5. `M3.26`, `M3.27`, `M3.29`, `M3.30` — the client-visible defects first,
    because each is behaviour a Kafka client can already reach.
-6. `M3.31`, then `M3.32`, `M3.33`, `M3.34` — the contract change before the
-   code that leans on it (non-negotiable 6).
+6. `M3.31`, then `M3.32`, `M3.33`, `M3.34` — what the seam guarantees before
+   the code that leans on it. ⚠️ **`M3.31` turned out not to be a contract
+   change** in non-negotiable 6's sense: `contracts.md` rule 13 makes that a
+   `fn` signature set, and none moved. ⚠️ **And no rule covers it**: rule 15
+   asks for an ADR when an *additive* change narrows what implementing the
+   trait means, and its antecedent is unmet here too. So `ADR-0025`'s dated
+   note was written on judgement rather than on a rule — the judgement being
+   that a narrowing nothing mechanical can see is the kind most in need of a
+   record. Its commit carries the argument.
 7. `M3.28`, after `M3.27`, so the target fuzzes the fixed parser rather than
    pinning the defect.
 8. `M3.35`, `M3.36` — the gates and the bounds, after the constants they pin
@@ -169,7 +176,7 @@ with live alternatives, each its own row: offset sequencing (doc 10 #1,
 | M3.28 | A fuzz target for `parse_footer`, and `fuzz.sh` learning where decoders live | Serves NFR-21; `security.md` rule 5, `testing.md` rule 24. `scripts/fuzz.sh` walks `oqueue-codec/src` only, so a parser in `oqueue-core` is invisible to the check that fails a decoder with no target. Both halves: the target, surviving 100k inputs, and the gate failing for a decoder module in any crate — measured by deleting the target and watching it fail. | todo |
 | M3.29 | Two wire refusals: `Fetch`'s null topic name, and a zero-length record | Serves FR-1, FR-2. Below v13 the request name is nullable and the response field is not, so a null frames a reply no client can parse — `ListOffsets` refuses this and `Fetch` does not, asserted at every advertised version below 13. And `count_records` requires a minimum per-record length, so N `0x00` bytes are refused rather than walked as N records. | done |
 | M3.30 | `CacheState::admits`: the order of the checks, and the direction of the epoch compare | Serves FR-11, FR-12; `ADR-0021`, `ADR-0023`. A `Linearizable` read on a silent agent reports `Authoritative`, not a cache fault it was never going to consult. A watermark from a *newer* epoch is the evidence a reader has that its own coordinator departed, so the comparison is directional. A test builds `CacheState` with `applied: None`, so `is_some_and`→`is_none_or` fails. `ADR-0023` carries a dated Status note. | done |
-| M3.31 | `entries()` joins the contract it is already asserted against | Serves NFR-11; non-negotiable 6, the `contract-change` skill. The trait says `entries()` may estimate and the **conformance** suite asserts it exactly, so an engine doc 10 #12 admits would fail a suite it may not weaken. Trait, fakes, implementations and `ADR-0024` point 2 — four methods, linking `ADR-0025` — in one commit. | todo |
+| M3.31 | `entries()` joins the contract it is already asserted against | Serves NFR-11's *mechanism* — the requirement is `M7`'s, and an M3 row claiming it outright was `M3.11`'s corrected error. The trait said `entries()` may estimate and the **conformance** suite asserts it exactly, so an engine doc 10 #12 admits would fail a suite nobody would think to check it against. The licence is withdrawn: exact, because `M5`'s quota is enforced against this number and a quota over an approximation is not one. Guarantee 4 on the trait and the conformance case are what bind it; `ADR-0025` carries a dated Status note. | done |
 | M3.32 | A fault decorator beside `MetadataLog`, and the two properties it makes assertable | Serves FR-10, NFR-1; `contracts.md` rule 9. `FaultMetadataLog` beside the trait in `oqueue-core`, the shape `FaultConfig`/`CountingObjectStore` set; `oqueue-coordinator`'s test-local `RefusableLog` deleted for it. `ADR-0024`'s serialization property becomes asserted rather than argued: a decorator that holds an `append` open is what races a `drop_cache` against a commit already inside `serve`. | todo |
 | M3.33 | Two guarantees pinned by nothing: the overflow guards and the staged entry | Serves FR-11, FR-13. A `cfg(test)` seeding constructor on `Allocator` reaches both `CoordinatorError::Unassignable` arms, which need ~2^31 commits through `commit`. And a refused batch leaves no `ObjectRef` in `IndexState`'s partitions — `MaterializedIndex` guarantee 2's staged-entry half, a one-line assertion through `find_batches`. | todo |
 | M3.34 | `Coordinator::open` gives the index back when it fails retryably | Serves FR-10, NFR-2. A retryable journal failure at `open` returns the `Box<dyn MaterializedIndex>` to the caller rather than consuming it, and `MaterializedIndex`'s trait header stops naming `M3.11`'s quota as a live dropper. | todo |

@@ -8,7 +8,11 @@ lands: a ceiling at M3's index keying gives back range a rebuild cannot
 restore, so `roadmap.md`'s deferral table carries the enforcement to `M5`
 beside the coarse per-object re-keying, and `M5.md` task 8a receives it.
 Nothing about this ADR's own decision moves: the door a quota asks through is
-still `Coordinator::drop_cache`, and still queued.
+still `Coordinator::drop_cache`, and still queued. ⚠️ 2026-08-27 (`M3.31`):
+decision point 2 enumerates `IndexReader`'s surface as three methods, which was
+true the day this was written; `ADR-0025` added `entries` the next day, and the
+reader now exposes four. Recorded here rather than in the body for the reason
+the paragraph above already gives.
 Date: 2026-08-25
 Requirements: FR-12, FR-13, NFR-2, NFR-11
 

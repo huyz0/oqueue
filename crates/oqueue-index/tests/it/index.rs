@@ -201,12 +201,27 @@ mod contract {
     /// already carrying part of the batch.
     pub(super) fn a_rejected_apply_folds_nothing<I: MaterializedIndex>(index: &I) {
         index.apply(&[commit(1, 3)]).expect("applied");
+        let entries = index.entries();
         index
             .apply(&[commit(2, 5), commit(2, 5)])
             .expect_err("refused for its second entry");
 
         assert_eq!(index.end_offset(&topic("orders"), partition(0)), offset(3));
         assert_eq!(index.applied_upto(), Some(CommitVersion::new(1)));
+        // ⚠️ **The count is part of "folds nothing" too** (guarantee 4,
+        // `M3.31`). An implementation that pushes an entry and increments
+        // before validating the *next* one leaves the count a batch ahead of
+        // everything the guarantee does restore, and a caller that retries the
+        // refused batch folds onto an index already carrying part of it.
+        // ⚠️ **A drop-and-refill *would* correct it** — `clear` zeroes the
+        // counter and the replay recounts — so what this pins is the window
+        // between the refusal and a rebuild nobody has asked for. `M5`'s quota
+        // is what acts on the number inside that window.
+        assert_eq!(
+            index.entries(),
+            entries,
+            "a refused apply moved the entry count"
+        );
     }
 
     /// An epoch change advances the version without moving any offset — it is
@@ -278,7 +293,12 @@ mod contract {
     }
 
     /// ⚠️ **`entries()` is part of guarantee 3's "same observable state"**
-    /// (`ADR-0025`), so a refill has to reproduce it too. An implementation
+    /// (`ADR-0025`), so a refill has to reproduce it too. ⚠️ **And of
+    /// guarantee 4**, which `M3.31` added after finding this suite asserting
+    /// the number *exactly* while the trait said an implementation "may return
+    /// an estimate" — one of the two had to give, and an estimator would have
+    /// failed here rather than at the trait, long after an engine was chosen
+    /// on the strength of that promise. An implementation
     /// keeping a maintained counter — which the trait asks for, because this
     /// is read on paths NFR-2 bounds — and forgetting to zero it in `clear`
     /// reports twice the truth after a drop-and-refill, and `M5`'s quota is
