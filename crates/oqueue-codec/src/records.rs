@@ -42,6 +42,15 @@ use crate::batch::{BATCH_HEADER_LEN, BatchError, CRC_COVERAGE_START, crc_coverag
 use crate::varint::{read_varint, read_varlong};
 use crate::wire::{Cursor, DecodeError};
 
+/// The shortest record body the format can express.
+///
+/// ⚠️ **Derived from the fields, not chosen.** A record body is `attributes`
+/// (one byte) followed by `timestamp_delta`, `offset_delta`, `key_length`,
+/// `value_length` and `header_count` — five varints, each at least one byte —
+/// before any key or value bytes at all. [`read_one_record`] reads exactly
+/// those, so this number moves only if the record format does.
+const MIN_RECORD_BODY_LEN: usize = 6;
+
 /// Why records could not be read.
 #[derive(Debug)]
 pub enum RecordsError {
@@ -275,6 +284,27 @@ pub fn count_records(batch: &[u8]) -> Result<u32, BatchError> {
             max: u64::try_from(records.len()).unwrap_or(u64::MAX),
             at: BATCH_HEADER_LEN,
         })?;
+        // ⚠️ **A zero-length record is not a record**, and counting one is how
+        // a batch of `0x00` bytes became a batch of records. The walk skips
+        // what each length declares, so `0x00` declares nothing, consumes one
+        // byte, and counts — N such bytes claim N records, each of which the
+        // coordinator allocates an *offset* for. A partition's offsets then
+        // advance a per-byte rate for records that carry no attributes, no
+        // timestamp, no key and no value, and a consumer fetching them is
+        // served bytes no client can decode.
+        //
+        // ⚠️ **The floor is the format's, not a policy**: a record body is one
+        // byte of attributes and five varints — timestamp delta, offset delta,
+        // key length, value length, header count — before a single byte of key
+        // or value, and every varint is at least one byte. `read_one_record`
+        // reads exactly those fields, which is where the number comes from.
+        if length < MIN_RECORD_BODY_LEN {
+            return Err(BatchError::Decode(DecodeError::RecordTooShort {
+                length: length as u64,
+                min: MIN_RECORD_BODY_LEN as u64,
+                at: BATCH_HEADER_LEN,
+            }));
+        }
         cur.take(length)?;
         counted += 1;
     }
@@ -352,6 +382,49 @@ pub(crate) mod tests {
         // The first record's varint length is the byte right after the header.
         buf[BATCH_HEADER_LEN] = 0xFE;
         assert!(super::count_records(&buf).is_err());
+    }
+
+    /// ⚠️ **A zero-length record is not a record.** The walk skips whatever
+    /// each length declares, so a `0x00` byte declares nothing, consumes one
+    /// byte, and counted — N such bytes claimed N records, each of which the
+    /// coordinator allocates an *offset* for. One byte per offset is not the
+    /// unbounded lie the count check closed, but it is still a partition whose
+    /// offsets advance for records carrying no attributes, no timestamp, no key
+    /// and no value, and a consumer fetching them gets bytes no client decodes.
+    ///
+    /// ⚠️ **The floor is the format's**: a record body is one byte of
+    /// attributes and five varints before any key or value at all, which is
+    /// exactly what `read_one_record` reads.
+    #[test]
+    fn a_record_shorter_than_the_format_allows_is_refused_not_counted() {
+        for length in 0..6_u8 {
+            let mut buf = crate::batch::tests::encoded_two_record_batch();
+            buf.truncate(BATCH_HEADER_LEN);
+            // One "record" of the declared length, and that many filler bytes.
+            buf.push(length << 1); // zigzag: a small non-negative varint
+            buf.extend(std::iter::repeat_n(0_u8, usize::from(length)));
+            let shorter = i32::try_from(buf.len() - 12).expect("small");
+            buf[8..12].copy_from_slice(&shorter.to_be_bytes());
+            assert!(
+                super::count_records(&buf).is_err(),
+                "a {length}-byte record body cannot be a record"
+            );
+        }
+    }
+
+    /// ⚠️ **And the shortest body that *is* one is counted**, which is the
+    /// other half: a floor set one too high refuses records a real producer
+    /// sends, and no client would be able to produce at all.
+    #[test]
+    fn the_shortest_record_the_format_can_express_is_counted() {
+        let mut buf = crate::batch::tests::encoded_two_record_batch();
+        buf.truncate(BATCH_HEADER_LEN);
+        buf.push(6 << 1); // a six-byte body: the format's minimum
+        // attributes, and five varints of one byte each.
+        buf.extend_from_slice(&[0, 0, 0, 1, 1, 0]);
+        let shorter = i32::try_from(buf.len() - 12).expect("small");
+        buf[8..12].copy_from_slice(&shorter.to_be_bytes());
+        assert_eq!(super::count_records(&buf), Ok(1));
     }
 
     /// ⚠️ **An empty record array counts zero and does not loop.** The `while`

@@ -29,6 +29,7 @@ pub mod apiversions;
 pub mod attributes;
 pub mod batch;
 pub mod compress;
+mod decode_error;
 pub mod emit;
 pub mod error_codes;
 pub mod fetch;

@@ -18,103 +18,10 @@
 // The byte writers live in [`crate::emit`] so this module stays under the
 // size limit; re-exported here because every caller reaches them as
 // `crate::wire::put_*` and the split is an implementation detail.
+pub use crate::decode_error::DecodeError;
 pub use crate::emit::{
     put_bool, put_i8, put_i16, put_i32, put_i64, put_legacy_nullable_string, put_u32,
 };
-
-/// Why a decode stopped. Carries what a debugger needs: how much was asked
-/// for, how much existed, where.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DecodeError {
-    /// The input ended before the value did.
-    UnexpectedEof {
-        /// Bytes the read needed.
-        needed: usize,
-        /// Bytes that remained.
-        remaining: usize,
-        /// Byte offset the read started at.
-        at: usize,
-    },
-    /// A length field exceeds the bound the caller stated for it.
-    ///
-    /// ⚠️ The bound is the caller's claim about what is sane (a frame cap, a
-    /// batch cap), not the buffer's size — `UnexpectedEof` covers running
-    /// out of bytes. Separating them is what lets an operator tell "peer
-    /// sent a 2 GiB frame" from "the read was truncated".
-    LengthOutOfBounds {
-        /// The length the peer claimed.
-        length: u64,
-        /// The caller's stated maximum.
-        max: u64,
-        /// Byte offset of the length field.
-        at: usize,
-    },
-    /// A length field is negative where the caller said null is not legal.
-    NegativeLength {
-        /// The value as sent.
-        length: i32,
-        /// Byte offset of the length field.
-        at: usize,
-    },
-    /// A varint's continuation bits ran past the widest legal encoding.
-    VarintTooLong {
-        /// The maximum bytes this varint width may span.
-        max_bytes: usize,
-        /// Byte offset the varint started at.
-        at: usize,
-    },
-    /// A string field's bytes are not valid UTF-8. Kafka strings are UTF-8;
-    /// a malformed one is as unusable as a malformed length.
-    InvalidUtf8 {
-        /// Byte offset the string's bytes started at.
-        at: usize,
-    },
-    /// A field is null where the caller said null is not legal — the
-    /// compact encoding's `0` length, distinct from a negative i32 length.
-    UnexpectedNull {
-        /// Byte offset of the length field.
-        at: usize,
-    },
-}
-
-impl core::fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::UnexpectedEof {
-                needed,
-                remaining,
-                at,
-            } => write!(
-                f,
-                "input ended: needed {needed} byte(s) at offset {at}, {remaining} remained"
-            ),
-            Self::LengthOutOfBounds { length, max, at } => write!(
-                f,
-                "length {length} at offset {at} exceeds the stated bound {max}"
-            ),
-            Self::NegativeLength { length, at } => {
-                write!(
-                    f,
-                    "negative length {length} at offset {at} where null is not legal"
-                )
-            }
-            Self::VarintTooLong { max_bytes, at } => {
-                write!(
-                    f,
-                    "varint at offset {at} continues past its maximum {max_bytes} byte(s)"
-                )
-            }
-            Self::InvalidUtf8 { at } => {
-                write!(f, "string at offset {at} is not valid UTF-8")
-            }
-            Self::UnexpectedNull { at } => {
-                write!(f, "null at offset {at} where null is not legal")
-            }
-        }
-    }
-}
-
-impl std::error::Error for DecodeError {}
 
 /// A position over a borrowed buffer, from which every read is bounds-checked
 /// and zero-copy.

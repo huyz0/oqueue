@@ -77,6 +77,23 @@ pub(crate) async fn handle(
     if !matches!(request.isolation_level, 0 | 1) {
         return HandlerResponse::Close;
     }
+    // ⚠️ **A null topic name has no answer, so it closes** — the same defect
+    // `M3.21` fixed for `ListOffsets`, in the handler that had it too. Below
+    // v13 the field is nullable on the request wire and **not** nullable on
+    // the response wire, so echoing a null frames a body no client can parse:
+    // the Java client throws in its response parser and librdkafka reports a
+    // protocol read error, and either way the connection dies having been sent
+    // bytes it could not read. Closing is the same policy every other
+    // unanswerable shape gets, and it is the one that leaves the client able to
+    // tell what happened.
+    //
+    // ⚠️ **Below v13 only, because above it there is no name to be null**: the
+    // wire carries an id, the decoder does not read a name, and the response
+    // echoes the id. A check that ran at every version would be a branch
+    // nothing can take, which reads as a case that has been handled.
+    if version <= 12 && request.topics.iter().any(|topic| topic.name.is_none()) {
+        return HandlerResponse::Close;
+    }
 
     let outcomes = read_or_park(cluster, session, &request, version).await;
 
@@ -257,6 +274,72 @@ pub(crate) mod tests {
         let fixture = fixture(&["t"]).await;
         produce_one(&fixture, "t", golden_batch()).await;
         fixture
+    }
+
+    /// ⚠️ **A null topic name closes rather than being echoed**, at every
+    /// advertised version that has a name to be null. The field is nullable on
+    /// the request wire and not nullable on the response wire, so echoing it
+    /// frames a body no client can parse — the Java client throws in its
+    /// response parser, librdkafka reports a protocol read error, and the
+    /// connection dies having been handed bytes it could not read.
+    ///
+    /// ⚠️ **Every version, not one.** `M3.21` fixed this for `ListOffsets` and
+    /// found `Fetch` had it too; the wire's string encoding changes at v12
+    /// (compact) and the surrounding request layout changes three times, so a
+    /// test at one version pins one encoding and leaves eight unchecked.
+    #[tokio::test]
+    async fn a_null_topic_name_closes_at_every_version_that_has_one() {
+        let fixture = fixture(&["zzzprobe"]).await;
+        for version in 4..=12 {
+            let body = with_null_name(version, "zzzprobe");
+            assert!(
+                matches!(
+                    handle(&fixture.cluster, &fixture.session, prelude(version), &body).await,
+                    HandlerResponse::Close
+                ),
+                "v{version} framed a reply for a null topic name"
+            );
+        }
+    }
+
+    /// A `Fetch` request whose one topic's name is the wire's null marker.
+    ///
+    /// ⚠️ **Built by the dependency and then patched**, because the dependency
+    /// will not encode a null here — and hand-writing nine versions of the
+    /// surrounding layout would be re-implementing the request encoder inside
+    /// a test of the handler. What is patched is only the name field, located
+    /// by its own bytes.
+    fn with_null_name(version: i16, name: &str) -> Vec<u8> {
+        let body = fetch_body(version, by_name(name), 0, 0);
+        let flexible = version >= 12;
+        let encoded: Vec<u8> = if flexible {
+            // Compact string: length+1 as a varint, then the bytes.
+            let mut v = vec![u8::try_from(name.len() + 1).expect("a short name")];
+            v.extend_from_slice(name.as_bytes());
+            v
+        } else {
+            // Non-compact: an `i16` length, then the bytes.
+            let mut v = i16::try_from(name.len())
+                .expect("a short name")
+                .to_be_bytes()
+                .to_vec();
+            v.extend_from_slice(name.as_bytes());
+            v
+        };
+        // Null is a zero-length compact string, or an `i16` of -1.
+        let null: Vec<u8> = if flexible {
+            vec![0]
+        } else {
+            (-1_i16).to_be_bytes().to_vec()
+        };
+        let at = body
+            .windows(encoded.len())
+            .position(|window| window == encoded.as_slice())
+            .expect("the name the encoder wrote is in the body");
+        let mut out = body[..at].to_vec();
+        out.extend_from_slice(&null);
+        out.extend_from_slice(&body[at + encoded.len()..]);
+        out
     }
 
     #[tokio::test]

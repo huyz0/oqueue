@@ -68,6 +68,7 @@ fi
 declare -A NOT_A_PARSER=(
   [lib]="the module root; declares, parses nothing"
   [wire]="Cursor primitives -- every target drives them transitively"
+  [decode_error]="the refusals wire.rs raises and re-exports; an error type, reads no input"
   [versions]="a static advertised-versions table; parses nothing"
   [attributes]="a bitfield over an i16 the batch decoder already produced"
   [apikey]="an i16-to-enum lookup over a value frame.rs's decoder already extracted, not its own byte stream"
