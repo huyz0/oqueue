@@ -36,5 +36,8 @@ rustls.workspace = true
 # (`rt-multi-thread`, `macros`, `time`) come from the workspace pin.
 tokio.workspace = true
 
+# See the workspace manifest: reading a PUT body out of `HttpRequestBody`.
+http-body-util.workspace = true
+
 [lints]
 workspace = true

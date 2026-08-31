@@ -1,6 +1,14 @@
 # 0027. The simulation harness is three pieces, each placed by what it depends on
 
-Status: accepted
+Status: accepted; ⚠️ 2026-09-01 (`M10.2`) — point 6 assigns the
+`turmoil`-versus-duplex measurement to `M10.2`, and it is `M10.26`: that is a
+piece-3 question and `M10.2` is piece 2. ⚠️ And the Decision's "nothing
+test-only enters a crate's shipped `src/`" needed one thing it did not
+anticipate: `S3Store::from_client`, a `pub` constructor whose only caller today
+is the model. It is a seam rather than test code — a caller with its own
+credentials or endpoint gets the same behaviour — but the headline reads as
+absolute and is not, and the `WriterId` question point 5 leaves open is the
+same shape.
 Date: 2026-09-01
 Requirements: NFR-20, FR-51
 

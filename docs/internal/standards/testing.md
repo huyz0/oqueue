@@ -133,6 +133,14 @@ rediscover them, both established by compiling the failing form first:
   being named. ⚠️ `.expect(...)`, not `?`: `HttpError` has no
   `From<InvalidStatusCode>`, so the question-mark form is `E0277`. `From<Vec<u8>>` and `From<String>` for `HttpResponseBody`
   cover the body, so `bytes` and `http-body-util` are not needed either.
+- ⚠️ **The *request* body is the exception, found by `M10.2`.**
+  `HttpRequestBody::as_bytes()` answers `Some` only for its `Bytes` variant,
+  and a PUT from `object_store` carries a `PutPayload` — so reading what the
+  store actually sent needs `http_body::Body`, and `http-body-util` is a
+  dev-dependency after all. The probe above never issued a PUT, which is why
+  the sentence before this one is right about responses and wrong about
+  requests. Symptom if rediscovered: the body stores as empty and the round
+  trip fails with no hint at the cause.
 
 ⚠️ **What this does *not* buy.** The seam is above HTTP, so a model behind it
 tests this project's request *construction* and response *handling* — not the

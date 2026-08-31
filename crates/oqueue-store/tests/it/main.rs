@@ -7,3 +7,4 @@ pub mod conformance;
 mod fake;
 mod retry;
 mod s3_minio;
+mod sim;

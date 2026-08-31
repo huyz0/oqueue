@@ -105,6 +105,17 @@ tokio = { version = "1", default-features = false, features = [
     "macros",
     "time",
 ] }
+
+# ⚠️ **Dev-only, and only for `oqueue-store`'s simulated transport** (`M10.2`).
+# `object_store`'s `HttpRequestBody` exposes `as_bytes()` only for the `Bytes`
+# variant, and a PUT carries a `PutPayload` — so reading what the store sent
+# needs `http_body::Body`, and this is the ergonomic way to collect it.
+# ⚠️ `testing.md` says `http-body-util` is "not needed"; that is true of the
+# *response* body, which `From<Vec<u8>>` covers, and `M1.22`'s probe never
+# issued a PUT. Already in `Cargo.lock` through `reqwest`, so this resolves
+# nothing new, and pure Rust — doc 20 §1's C-toolchain budget is untouched.
+http-body-util = "0.1"
+
 # ⚠️ Not used directly in any crate's code — present purely to steer Cargo's
 # feature unification for the *shared* `reqwest` instance `object_store`
 # already depends on, away from the `rustls` feature's bundled `aws-lc-rs`

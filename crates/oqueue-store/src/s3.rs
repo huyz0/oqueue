@@ -110,6 +110,47 @@ impl S3Store {
         })
     }
 
+    /// Wraps a client the caller built.
+    ///
+    /// ⚠️ **A seam, not a test hook**, and the distinction is `ADR-0027`'s: a
+    /// caller that has configured its own [`AmazonS3`](object_store::aws::AmazonS3)
+    /// — a different credential source, a different endpoint, or a
+    /// deterministic transport through
+    /// [`with_http_connector`](object_store::aws::AmazonS3Builder::with_http_connector)
+    /// — gets exactly the `put`/`get`/`delete` behaviour [`from_env`] gives,
+    /// because it is the same code over a different client.
+    ///
+    /// ⚠️ **It carries no retry configuration**, which [`from_env_with_retry`]
+    /// does: whatever the caller set on the builder is what this store uses,
+    /// and `ADR-0008`'s premise is discharged by the caller rather than here.
+    /// Multipart bounds start at the S3 defaults — see
+    /// [`with_multipart_limits`].
+    ///
+    /// ⚠️ **The caller must build over HTTP, or install the crypto provider
+    /// before building.** `ADR-0012` picks `ring`, and every constructor here
+    /// calls `install_ring_provider` *before* the builder makes its first
+    /// HTTPS connection — but this one is handed a client that is already
+    /// built, so the call would be too late to matter. Review found the
+    /// consequence by running it: an `AmazonS3Builder` with an `https://`
+    /// endpoint **panics inside `build()`** with "No rustls crypto provider is
+    /// configured", and the remedy it suggests is `aws_lc_rs`, which is the
+    /// provider `ADR-0012` exists to avoid. A caller supplying its own
+    /// transport — the case this constructor is for — never reaches rustls at
+    /// all. ⚠️ **The provider installer is deliberately not public**: exposing
+    /// it would be a second way to satisfy `ADR-0012`, and this doc is the
+    /// first list of differences that is meant to be exhaustive.
+    ///
+    /// [`from_env`]: Self::from_env
+    /// [`from_env_with_retry`]: Self::from_env_with_retry
+    /// [`with_multipart_limits`]: Self::with_multipart_limits
+    #[must_use]
+    pub const fn from_client(inner: object_store::aws::AmazonS3) -> Self {
+        Self {
+            inner,
+            multipart_limits: S3_MULTIPART_LIMITS,
+        }
+    }
+
     /// Overrides the multipart bounds `put` uses — see [`S3Store::from_env`].
     #[must_use]
     pub const fn with_multipart_limits(mut self, limits: MultipartLimits) -> Self {
