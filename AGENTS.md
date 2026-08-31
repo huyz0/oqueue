@@ -169,6 +169,68 @@ where nobody ran it, pushing to CI, has rule 4 enforced by nothing at all.
    decision. → `scripts/check-unsafe.sh` (M-1.11). See
    [docs/researches/18](docs/researches/18-rust-performance-methodology.md) §5.7.
 
+## Running anything that builds or tests
+
+⚠️ **Run it in the container.** `scripts/docker-test.sh` is the local way to run
+anything that invokes `cargo`:
+
+```
+scripts/docker-test.sh gate                    # the whole pre-commit suite
+scripts/docker-test.sh                         # cargo test --workspace
+scripts/docker-test.sh cargo test -p oqueue-core
+scripts/docker-test.sh scripts/gates/m3-complete.sh
+scripts/docker-test.sh bash                    # a shell inside it
+```
+
+⚠️ **This is containment, not tidiness.** On WSL2 the VM has no per-process
+ceiling, so a build or test that allocates without bound exhausts the whole
+machine and takes the running session with it — recovery is a manual
+`wsl --shutdown`. The container caps memory with swap disabled, CPUs, pids and
+`/tmp`, so the kernel kills something inside it instead. Verified by watching
+it: a deliberate allocator loop under `MEM=256m` exits 137, and the host does
+not move.
+
+⚠️ **The container is the *more* capable environment, which is worth knowing
+before treating a skip as normal.** It carries the cross toolchain
+`m0-complete.sh` needs to check the whole workspace for aarch64, a JDK and
+`confluent-kafka` so `kafka-client-harness.sh` runs both real clients, and a
+nightly toolchain with `cargo-fuzz`. ⚠️ **One leg cannot run inside**:
+`m1-complete.sh` starts MinIO through a Docker daemon the container has no
+socket for, so it skips and says the gate proved nothing about S3 — run that
+one on the host.
+
+⚠️ **Reviewing stays on the host**, because `scripts/review.sh` needs no
+toolchain and the container's `target/` is a named volume — so a verdict
+recorded there is not visible here, which is why `docker-test.sh gate` skips
+`check-reviewed`, for the same reason CI does.
+
+⚠️ **The commit hook is not contained, and that is a gap** (`M10.24`).
+`check-crate`, `check-coverage` and `check-mutants` are all
+`stages: [pre-commit]`, so `git commit` runs `cargo test`, a full instrumented
+`cargo llvm-cov` rebuild and cargo-mutants on the **host**. ⚠️ **Running the
+gate here first does not contain that** — the container's `target/` is a named
+volume, so the hook still builds cold on the host. What it buys is knowing the
+gate passes before paying for it uncontained, which is worth doing and is not
+the same thing.
+
+⚠️ **CI does not use the container.** GitHub Actions runners are already
+isolated VMs, so containing them again would only cost build time;
+`.github/workflows/gates.yml` runs the same commands natively. `gate` expands
+to the same `pre-commit` invocation rather than to a list kept here, so the two
+cannot drift into different definitions.
+
+⚠️ **NFR-56's budget moves with the CPU cap.** `check-budget.sh` times the
+suite against a 10 s ceiling non-negotiable 2 forbids raising, and the
+container's share changes the measurement. ⚠️ **The spread is wide and the
+ranges overlap**: across repeated runs 8 CPUs gave 8153-9255 ms and 12 gave
+7577-8904 ms, so `CPUS=12` buys roughly a tenth of the ceiling rather than the
+quarter a single pair of readings suggested — 16 measured 7508 ms and is not
+worth the host's cores. 12 is the default on that basis, not on a clean
+separation. ⚠️ **Lowering it can fail
+the budget inside while the host passes**, and the reading is that the caps
+were tightened, not that the suite grew — the constant is not the repair. The
+container also keeps its own `target/`, so its own trend history.
+
 ## Never
 
 - Never push unless asked.
