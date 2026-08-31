@@ -23,10 +23,19 @@
 
 // A panic in a test harness is the test failing, which is what it is for.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
+// ⚠️ `pub(crate)` inside a private module: `unreachable_pub` denies the bare
+// `pub` clippy's `redundant_pub_crate` asks for — the trade `model.rs`,
+// `latency.rs` and `transport.rs` all make beside it, for the same reason.
+// `store_over` and `key` are here rather than in `faults.rs` because both files
+// build a store the same way, and two spellings of that would be two backends.
+#![allow(clippy::redundant_pub_crate)]
 
 mod encoding;
+mod faults;
 mod latency;
 mod model;
+mod state;
+mod transport;
 
 use crate::conformance::{
     Capabilities, Harness, record::record_backend_run, run_conformance_suite,
@@ -38,7 +47,7 @@ use oqueue_core::{ByteRange, Error, ObjectKey, ObjectStore, Precondition};
 use oqueue_store::{S3Store, retry_config_for};
 
 /// An `S3Store` whose every request is answered by `model`.
-fn store_over(model: &ModelS3) -> S3Store {
+pub(crate) fn store_over(model: &ModelS3) -> S3Store {
     let inner = AmazonS3Builder::new()
         .with_bucket_name(BUCKET)
         .with_region("us-east-1")
@@ -181,7 +190,7 @@ async fn a_model_without_latency_answers_at_once() {
     assert_eq!(virtual_start.elapsed(), std::time::Duration::ZERO);
 }
 
-fn key(name: &str) -> ObjectKey {
+pub(crate) fn key(name: &str) -> ObjectKey {
     ObjectKey::new(name).expect("a valid key")
 }
 

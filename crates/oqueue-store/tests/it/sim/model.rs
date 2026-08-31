@@ -1,4 +1,9 @@
-//! The deterministic S3 itself: one `HttpService`, answering from a `HashMap`.
+//! The deterministic S3 itself: what an S3 answers to a request.
+//!
+//! ⚠️ **This said "one `HttpService`, answering from a `HashMap`" until `M10.7`
+//! moved both away** — the trait impls to `transport.rs`, the map to
+//! `state.rs`. A summary describing what a file no longer holds is how the
+//! seam those two files were paid for gets undone by a later edit reading it.
 //!
 //! ⚠️ **Split from `sim.rs` at `M10.2` when the file hit the 500-line limit**,
 //! and on the seam the limit is a signal for: this is the *backend* — what an
@@ -12,8 +17,23 @@
 //! break**: the GET and HEAD `etag` and `last-modified` headers can be dropped;
 //! the 416 branch can be deleted (`truncated_range_error` produces the same
 //! error from the success path); HEAD's 404 arm can answer 500. A change near
-//! any of them is unprotected, and `M10.7` — 503 storms, conditional-write
-//! races, partial failures — will add more.
+//! any of them is unprotected.
+//!
+//! ⚠️ **`M10.7`'s three interception points are *not* on that list, and each was
+//! hand-mutated to establish it**: weakening `Faults::storm`'s `remaining > 0`
+//! guard fails the absorbed-storm case, answering `<Deleted>` for a refused key
+//! fails the partial-delete case, and moving the `lost_race` plant to after the
+//! precondition checks fails the planted-race case. ⚠️ **The list is an
+//! inventory of holes, so a guarded branch written into it is worse than an
+//! omission** — it invites a later editor to write a test that exists and to
+//! discount the four entries that are real.
+//!
+//! ⚠️ **`faults_injected` covers a different mutation from any of those**: a
+//! fault that matches *nothing*. Each of the three above still leaves the fault
+//! met and the counter right, and is caught by the outcome the case asserts;
+//! what the counter catches is an `inject` whose fault no request ever meets,
+//! which leaves a case asserting the unfaulted behaviour it was written to
+//! contrast with.
 //!
 //! ⚠️ **Two more the list missed on its first draft**, which is the argument
 //! for not trusting it as an inventory: `a >= total` in the 416 branch can be
@@ -33,34 +53,18 @@
 // `region.rs` and `oqueue-core`'s `page.rs` make, for the same reason.
 #![allow(clippy::redundant_pub_crate)]
 
-use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use super::encoding::{percent_decode, xml_unescape};
-use std::future::Future;
-use std::pin::Pin;
+use super::faults::require_a_single_threaded_runtime;
+use super::state::{LAST_MODIFIED, ModelState, Stored};
+use super::transport::{body_bytes, status};
 use std::sync::{Arc, Mutex};
 
-use object_store::ClientOptions;
-use object_store::client::{HttpConnector, HttpError, HttpRequest, HttpResponse, HttpService};
+use object_store::client::{HttpRequest, HttpResponse};
 
 /// The bucket every request in this file is addressed to.
 pub(crate) const BUCKET: &str = "oqueue-sim";
-
-/// ⚠️ **Fixed, because this file is the deterministic one.** A real
-/// `Last-Modified` would make two runs of one seed differ in a header
-/// `object_store` parses, which is the whole property `M10.4` is built on.
-const LAST_MODIFIED: &str = "Wed, 01 Jan 2020 00:00:00 GMT";
-
-/// What the model holds under one key.
-#[derive(Clone)]
-struct Stored {
-    bytes: Vec<u8>,
-    /// The entity tag this object would present. ⚠️ A counter rather than a
-    /// hash: two writes of identical bytes must produce **different** tags, or
-    /// `Precondition::IfMatches` would admit a write it should refuse.
-    etag: u64,
-}
 
 /// An in-process S3, deterministic and shared by clones.
 ///
@@ -71,40 +75,6 @@ struct Stored {
 #[derive(Debug, Default, Clone)]
 pub(crate) struct ModelS3 {
     state: Arc<Mutex<ModelState>>,
-}
-
-#[derive(Default)]
-struct ModelState {
-    objects: HashMap<String, Stored>,
-    next_etag: u64,
-    /// Per-request delay, when the model was built with one.
-    ///
-    /// ⚠️ **Off by default**, so every test written before `M10.6` keeps its
-    /// meaning: a conformance run that suddenly took simulated minutes would
-    /// be a different test, not the same one made realistic.
-    latency: Option<super::latency::Latency>,
-    /// One-shot: the next PUT stores its bytes and then answers a failure.
-    ///
-    /// ⚠️ **The thing a real S3 cannot be told to do**, which is why
-    /// `s3_minio.rs` declares `injectable_ack_loss: false` and skips
-    /// `a_failed_put_is_not_proof_of_absence` — `ADR-0005` guarantee 2, that a
-    /// failed write is not proof of absence. A model can be told, so the
-    /// simulated backend runs the case S3 must skip.
-    lose_next_ack: bool,
-}
-
-impl std::fmt::Debug for ModelState {
-    /// ⚠️ **Counts, not contents.** A `Debug` that printed every stored object
-    /// would put an arbitrary payload in a panic message; the count is what a
-    /// reader of a failure actually needs.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ModelState")
-            .field("objects", &self.objects.len())
-            .field("next_etag", &self.next_etag)
-            .field("lose_next_ack", &self.lose_next_ack)
-            .field("latency", &self.latency)
-            .finish()
-    }
 }
 
 impl ModelS3 {
@@ -123,20 +93,15 @@ impl ModelS3 {
         )
     }
 
-    async fn respond(&self, req: HttpRequest) -> HttpResponse {
-        // ⚠️ **Collected before the lock is taken**, which is what keeps the
-        // guard off an `await` — `async-concurrency.md`'s rule. Every method's
-        // body is read, not only a PUT's: a GET's is empty and collecting it
-        // costs nothing, where a `match` that collected only sometimes would
-        // be a second place for the method dispatch to disagree with itself.
-        let (req, body) = body_bytes(req).await;
-        let key = Self::key_of(&req);
-        // ⚠️ **The gap is decided before the lock is taken.** The panic below
-        // used to fire while the guard was live, which poisons the mutex — so
-        // the next request through any clone died on this `expect`, asserting
-        // the opposite of what happened and naming neither method nor URI.
-        // That is the same displacement three layers from the gap that the
-        // panic replaced a 405 to remove.
+    /// Refuses a request the model has no branch for, before any state is
+    /// touched.
+    ///
+    /// ⚠️ **Before the lock is taken.** The panic used to fire while the guard
+    /// was live, which poisons the mutex — so the next request through any
+    /// clone died on an `expect`, asserting the opposite of what happened and
+    /// naming neither method nor URI. That is the same displacement three
+    /// layers from the gap that the panic replaced a 405 to remove.
+    fn assert_modelled(req: &HttpRequest) {
         assert!(
             matches!(req.method().as_str(), "PUT" | "GET" | "HEAD" | "DELETE")
                 || (req.method() == "POST" && req.uri().query() == Some("delete")),
@@ -145,6 +110,17 @@ impl ModelS3 {
             req.method(),
             req.uri()
         );
+    }
+
+    pub(crate) async fn respond(&self, req: HttpRequest) -> HttpResponse {
+        // ⚠️ **Collected before the lock is taken**, which is what keeps the
+        // guard off an `await` — `async-concurrency.md`'s rule. Every method's
+        // body is read, not only a PUT's: a GET's is empty and collecting it
+        // costs nothing, where a `match` that collected only sometimes would
+        // be a second place for the method dispatch to disagree with itself.
+        let (req, body) = body_bytes(req).await;
+        let key = Self::key_of(&req);
+        Self::assert_modelled(&req);
         // ⚠️ **Drawn under the lock, slept outside it**, because a guard held
         // across an `.await` is what `async-concurrency.md` forbids. The lock
         // is not optional in any case: `Latency::draw` takes `&mut self`.
@@ -153,9 +129,10 @@ impl ModelS3 {
         // A mutex serializes access without ordering it, so two concurrent
         // requests on a multi-thread runtime take the draws in whichever order
         // the workers arrive — one seed, two runs. What buys determinism is the
-        // `current_thread` runtime `ADR-0028` specifies. ⚠️ **So turning
-        // latency on for the conformance test, which is `multi_thread`, needs
-        // that decided first** — `M10.7` is where it lands.
+        // `current_thread` runtime `ADR-0028` specifies, and `M10.7` made that
+        // a refusal rather than a caveat: `with_latency` and `inject` both
+        // assert the flavour, so the conformance run — `multi_thread` because
+        // `conformance::block_on` spins — cannot acquire either by accident.
         let delay = {
             let mut state = self
                 .state
@@ -177,9 +154,17 @@ impl ModelS3 {
             .state
             .lock()
             .expect("the model's lock is never poisoned");
-        // ⚠️ Matched as a string so this file names no `http` crate — the
-        // same discipline `status()` below follows, and the reason neither
-        // needs a dependency `object_store` already carries.
+        // ⚠️ **After the delay and before the dispatch.** A shedding S3 still
+        // takes time to say so, so a storm composes with `latency` rather than
+        // short-circuiting it; and answering before the `match` is what keeps
+        // a stormed request from also *doing* the thing it refused.
+        if let Some(code) = state.faults.storm(req.method().as_str()) {
+            drop(state);
+            return status(code);
+        }
+        // ⚠️ Matched as a string so this file names no `http` crate — the same
+        // discipline `transport.rs`'s `status()` follows, and the reason
+        // neither needs a dependency `object_store` already carries.
         let resp = match req.method().as_str() {
             "PUT" => Self::put(&mut state, &req, key, body),
             "GET" => Self::get(&state, &req, &key),
@@ -228,15 +213,19 @@ impl ModelS3 {
 
     /// Answers every request after a delay drawn from doc 04 §2's curves.
     ///
-    /// ⚠️ **Costs no real time only under a paused runtime.** Its one caller
-    /// writes `#[tokio::test(start_paused = true)]`; on a plain
-    /// `#[tokio::test]` every draw becomes a real `sleep`, which across the
-    /// conformance suite's requests would be tens of seconds against NFR-56's
-    /// budget. ⚠️ **Not `ADR-0028`'s runtime**, which is
+    /// ⚠️ **Costs no real time only under a paused runtime.** Its callers write
+    /// `#[tokio::test(start_paused = true)]`; on a plain `#[tokio::test]` every
+    /// draw becomes a real `sleep`, which across a suite's requests would be
+    /// tens of seconds against NFR-56's budget. ⚠️ **The flavour is asserted
+    /// and the pause is not**, because the two are not equally checkable: a
+    /// `multi_thread` run is wrong in a way no test can see, while a run that
+    /// forgot `start_paused` is merely slow and says so in the timing.
+    /// ⚠️ **Not `ADR-0028`'s runtime**, which is
     /// `oqueue-testkit::seeded_runtime` and adds a seeded scheduler this crate
     /// does not depend on — so a run here is paused but not seeded.
     #[must_use]
     pub(crate) fn with_latency(self, seed: u64) -> Self {
+        require_a_single_threaded_runtime("simulated latency");
         self.state
             .lock()
             .expect("the model's lock is never poisoned")
@@ -244,7 +233,42 @@ impl ModelS3 {
         self
     }
 
+    /// Arms one fault, to be met by whichever request meets it.
+    ///
+    /// ⚠️ **Guarded like `with_latency`**, and for the same reason: a storm
+    /// counted down by two workers in arrival order is a count no seed pins.
+    pub(crate) fn inject(&self, fault: super::faults::Fault) {
+        require_a_single_threaded_runtime("fault injection");
+        self.state
+            .lock()
+            .expect("the model's lock is never poisoned")
+            .faults
+            .arm(fault);
+    }
+
+    /// How many requests this model has answered with an injected fault.
+    pub(crate) fn faults_injected(&self) -> u32 {
+        self.state
+            .lock()
+            .expect("the model's lock is never poisoned")
+            .faults
+            .injected()
+    }
+
     /// Arms the one-shot above. Cheap enough to be called per case.
+    ///
+    /// ⚠️ **The third fault entry point, and the one that is deliberately
+    /// *not* guarded** — `inject` and `with_latency` both refuse a
+    /// multi-thread runtime and this does not, because
+    /// `the_simulated_backend_passes_the_full_conformance_suite` arms it and
+    /// is `multi_thread` by necessity. ⚠️ **What makes that safe is not stated
+    /// anywhere else and is not a property of this method**:
+    /// `conformance::block_on` drives one case at a time with a spin loop, so
+    /// exactly one request is ever in flight and there is no arrival order for
+    /// two workers to disagree about. A case that armed an ack loss and then
+    /// issued two concurrent puts would get the hazard `require_a_single_threaded_runtime`
+    /// exists to refuse, with nothing firing — so this is the exception that
+    /// has to be argued rather than the rule.
     pub(crate) fn arm_ack_loss(&self) {
         self.state
             .lock()
@@ -253,6 +277,15 @@ impl ModelS3 {
     }
 
     fn put(state: &mut ModelState, req: &HttpRequest, key: String, body: Vec<u8>) -> HttpResponse {
+        // ⚠️ **Before `existing` is read, which is what makes it a race.** The
+        // competitor lands between the caller's decision and this check, so a
+        // conditional write that was correct when it was issued fails here —
+        // the window `ADR-0005`'s commit protocol is built to lose in.
+        if let Some(bytes) = state.faults.lost_race(&key) {
+            state.next_etag += 1;
+            let etag = state.next_etag;
+            state.objects.insert(key.clone(), Stored { bytes, etag });
+        }
         let existing = state.objects.get(&key).cloned();
         // `Precondition::IfAbsent` reaches the wire as `If-None-Match: *`.
         if req.headers().get("if-none-match").is_some() && existing.is_some() {
@@ -319,7 +352,22 @@ impl ModelS3 {
             // ⚠️ Removed by the *decoded* key, echoed with the *raw* one: the
             // map is keyed the way a path decodes, and the response has to be
             // XML `object_store` can parse back.
-            state.objects.remove(&xml_unescape(raw));
+            let decoded = xml_unescape(raw);
+            // ⚠️ **A per-key `<Error>` inside a 200**, which is the shape that
+            // makes a bulk delete partially fail: the response is a success as
+            // far as HTTP is concerned, and `object_store` reads the outcome
+            // per key out of the body. A model that could only fail the whole
+            // request could not produce it.
+            if let Some(code) = state.faults.refusal(&decoded) {
+                write!(
+                    out,
+                    "<Error><Key>{raw}</Key><Code>{code}</Code>\
+                     <Message>injected by the harness</Message></Error>"
+                )
+                .expect("a String write cannot fail");
+                continue;
+            }
+            state.objects.remove(&decoded);
             write!(out, "<Deleted><Key>{raw}</Key></Deleted>").expect("a String write cannot fail");
         }
         out.push_str("</DeleteResult>");
@@ -419,65 +467,5 @@ impl ModelS3 {
             );
         }
         resp
-    }
-}
-
-/// A response carrying a status and nothing else.
-///
-/// ⚠️ `HttpResponse::builder()` is unreachable — `builder()` is an inherent
-/// method on `Response<()>` and the alias fixes the body type — and
-/// `status_mut()`'s signature is what infers `StatusCode` without this file
-/// ever naming the `http` crate's type. Both recorded in `testing.md` by
-/// `M1.22` so they would not be rediscovered; they were not.
-fn status(code: u16) -> HttpResponse {
-    let mut resp = HttpResponse::new(Vec::new().into());
-    *resp.status_mut() = code.try_into().expect("a valid status");
-    resp
-}
-
-/// What the store actually sent.
-///
-/// ⚠️ **`as_bytes()` is not enough, and `testing.md` says otherwise about the
-/// *response* body.** `HttpRequestBody` exposes it only for its `Bytes`
-/// variant, and a PUT from `object_store` carries a `PutPayload` — so a
-/// `body_bytes` built on `as_bytes` stored nothing and the round trip read
-/// back empty. `M1.22`'s probe never issued a PUT, which is why the note it
-/// left does not cover this.
-///
-/// The body is fully in memory, so collecting it completes without ever
-/// pending; `block_on` here would be a bug and an `await` is what this is.
-async fn body_bytes(req: HttpRequest) -> (HttpRequest, Vec<u8>) {
-    use http_body_util::BodyExt as _;
-    let (parts, body) = req.into_parts();
-    let bytes = body
-        .collect()
-        .await
-        .expect("an in-memory body cannot fail to collect")
-        .to_bytes()
-        .to_vec();
-    (HttpRequest::from_parts(parts, Vec::new().into()), bytes)
-}
-
-// ⚠️ **The desugared form, so this file adds no `async-trait` dependency** —
-// `testing.md` records the probe that established it.
-impl HttpService for ModelS3 {
-    fn call<'life0, 'async_trait>(
-        &'life0 self,
-        req: HttpRequest,
-    ) -> Pin<Box<dyn Future<Output = Result<HttpResponse, HttpError>> + Send + 'async_trait>>
-    where
-        'life0: 'async_trait,
-        Self: 'async_trait,
-    {
-        Box::pin(async move { Ok(self.respond(req).await) })
-    }
-}
-
-impl HttpConnector for ModelS3 {
-    fn connect(
-        &self,
-        _options: &ClientOptions,
-    ) -> object_store::Result<object_store::client::HttpClient> {
-        Ok(object_store::client::HttpClient::new(self.clone()))
     }
 }
