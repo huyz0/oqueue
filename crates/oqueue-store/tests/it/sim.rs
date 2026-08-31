@@ -32,8 +32,10 @@
 
 mod encoding;
 mod faults;
+mod handlers;
 mod latency;
 mod model;
+mod pauses;
 mod state;
 mod transport;
 

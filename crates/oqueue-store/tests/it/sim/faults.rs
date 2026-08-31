@@ -70,6 +70,33 @@ pub(crate) enum Fault {
         /// What the competitor wrote, so a test can prove whose bytes survived.
         bytes: Vec<u8>,
     },
+    /// The request is executed and its **response** is withheld for `holding`.
+    ///
+    /// ⚠️ **After the work, not instead of it — that is the whole distinction
+    /// from a kill.** A killed node did nothing; a paused one did everything
+    /// and said nothing, so the caller's deadline expires over a change that
+    /// has already happened. Every metastable finding in the peer-system audit
+    /// (doc 13 §"Metastable failure via lease expiry") came from that shape,
+    /// and a harness that only kills is complete against the easy case.
+    ///
+    /// ⚠️ **The caller's deadline is the test's, not the client's.** A custom
+    /// `HttpConnector` bypasses `ClientOptions::timeout` entirely — that
+    /// 30-second default is applied by `reqwest`'s builder, which this model
+    /// replaces — and `RetryConfig::retry_timeout` is only consulted *between*
+    /// attempts, so nothing in `object_store` cuts a single hanging request
+    /// here. ⚠️ **That is a fidelity gap between `sim` and `s3_minio`, stated
+    /// rather than papered over**: against real S3 a pause this long is cut at
+    /// 30 s by the client, and here it is unbounded, so a case that wants a
+    /// deadline supplies its own — which is what `connection.rs`'s
+    /// `tokio::time::timeout` does in the code this models.
+    Pause {
+        /// Matched against the request's method verbatim, as `Storm`'s is.
+        method: &'static str,
+        /// How long the response is withheld, in virtual time.
+        holding: core::time::Duration,
+        /// How many more matching requests are paused, decremented per use.
+        remaining: u32,
+    },
     /// A bulk delete naming `key` reports a per-key `<Error>` with this code,
     /// and the object stays.
     ///
@@ -97,6 +124,16 @@ impl std::fmt::Debug for Fault {
                 .debug_struct("LostRace")
                 .field("key", key)
                 .field("bytes", &format_args!("{} bytes", bytes.len()))
+                .finish(),
+            Self::Pause {
+                method,
+                holding,
+                remaining,
+            } => f
+                .debug_struct("Pause")
+                .field("method", method)
+                .field("holding", holding)
+                .field("remaining", remaining)
                 .finish(),
             Self::RefusedDelete { key, code } => f
                 .debug_struct("RefusedDelete")
@@ -145,6 +182,23 @@ impl Faults {
         });
         self.injected += u32::from(answered.is_some());
         answered
+    }
+
+    /// How long this request's response is withheld, consuming one pause.
+    pub(crate) fn pause(&mut self, method: &str) -> Option<core::time::Duration> {
+        let held = self.armed.iter_mut().find_map(|fault| match fault {
+            Fault::Pause {
+                method: m,
+                holding,
+                remaining,
+            } if *m == method && *remaining > 0 => {
+                *remaining -= 1;
+                Some(*holding)
+            }
+            _ => None,
+        });
+        self.injected += u32::from(held.is_some());
+        held
     }
 
     /// The bytes a competitor lands under `key` before this PUT is evaluated.
