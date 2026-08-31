@@ -1,6 +1,45 @@
 # 0027. The simulation harness is three pieces, each placed by what it depends on
 
-Status: accepted; ⚠️ 2026-09-01 (`M10.2`) — point 6 assigns the
+Status: accepted; ⚠️ 2026-09-01 (`M10.26`) **point 6 is
+answered and its premise was wrong**. The socket is `tokio::io::duplex`, which
+has been the broker's since `M2.17` — `connection.rs` and `lib.rs` both say so,
+and eight of the nine tests in `tests/it/connection.rs` drive one, the ninth
+asserting `Display` strings; all nine finish in 0.00 s. ⚠️ **But that does not give a seeded run**, which is what point 6
+claimed and what `M10.4` was written against. Measured: **200 iterations** of a
+*two-arm* `select!` with both arms already ready, under
+`#[tokio::test(start_paused = true)]` — which implies a **current_thread**
+runtime, since `multi_thread` with `start_paused` does not compile — split
+**102/98**, because `tokio` randomises branch order from a thread-local RNG;
+with `biased;` the same probe is **200/0**. Reproduced independently at
+105/95 and 104/96. There is no `biased;` anywhere in this workspace and
+no `tokio_unstable`, so no seed the testkit holds reaches that RNG.
+⚠️ **`turmoil` is not rejected, and two drafts of this note rejected it for
+reasons that did not hold.** The second said it seeds network delivery and not
+`select!`; verified against the crate source, `turmoil-0.7.2/src/rt.rs:235-246`
+derives a `tokio::runtime::RngSeed` from its own seed for every host runtime —
+under `#[cfg(tokio_unstable)]`, which is the same flag this note's other
+candidate needs. So on that flag turmoil gives seeded branch order *and* seeded
+delivery. It was true of 0.6.x and is not true of the current release.
+**Three candidates for `M10.4`**: `biased;` plus arm reordering (measured, no
+dependency, production behaviour changes); `tokio_unstable`'s
+`Builder::rng_seed` alone (unmeasured, no dependency); or `turmoil` on the same
+flag (a dependency that owns the runtime, and the only one that also seeds
+delivery — which is what `M7`'s deferred partition will want). ⚠️ **`biased;` is not the whole of the first**, and this note said
+it was: `session.rs:130` and `fetch/park.rs:146` both put
+`sleep_until(deadline)` **first**, so the keyword alone makes each *prefer the
+deadline* — an empty fetch where a commit landed in the same poll, and a
+staleness refusal where the version had in fact arrived. Both need their arms
+**reordered** as well, and that is a client-visible behaviour change rather
+than a determinism affordance. (There is also no read-versus-idle-timeout
+select: the idle timeout is a `tokio::time::timeout` wrapper, not an arm.)
+⚠️ So the first candidate is a **production** change at two sites and is
+`M10.4`'s to propose and review. ⚠️ **And reordering alone is not safe
+either**: with `biased;` and the watch arm first, `park.rs` polls the deadline
+only while the watch is pending, so a busy shard can run a parked fetch past
+`fetch.max.wait.ms` — the loop's deadline check is outside it. Whichever
+candidate wins, that check has to move inside.
+
+⚠️ 2026-09-01 (`M10.2`) — point 6 assigns the
 `turmoil`-versus-duplex measurement to `M10.2`, and it is `M10.26`: that is a
 piece-3 question and `M10.2` is piece 2. ⚠️ And the Decision's "nothing
 test-only enters a crate's shipped `src/`" needed one thing it did not
