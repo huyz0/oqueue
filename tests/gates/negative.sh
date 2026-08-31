@@ -2080,7 +2080,13 @@ invoke_conformance_matrix() {
 # valid in every other way; only `gcs` is missing.
 setup_conformance_matrix_missing_backend() {
   local dir; dir="$(new_scratch conformance-missing-backend)"
+  # ⚠️ **Every required backend but `gcs`**, so `gcs` is the one omission the
+  # case plants. `M10.3` added `sim` to `REQUIRED_BACKENDS` and not here, which
+  # disarmed this case without failing it: the gate then refused the fixture
+  # over the *missing* `sim` row, so deleting `gcs` from the required list
+  # stopped being detectable while this case stayed green.
   _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+sim  verified  the deterministic in-process S3
 s3  verified  MinIO at T2
 s3-real  not-yet-run  deferred, doc 10 #33
 gcs-real  not-yet-run  deferred, doc 10 #33'
@@ -2089,9 +2095,14 @@ gcs-real  not-yet-run  deferred, doc 10 #33'
 
 # `M2.11` (closing `M1.51`): the same image pinned to two different tags in
 # two tracked files — the gate and CI silently testing different servers.
+# ⚠️ The matrix here carries every required backend, `sim` included: a fixture
+# missing one fails the required-backend check *as well as* the defect it
+# plants, and a case whose exit code has two causes is one the suite can stop
+# constraining. `M10.3` fixed that next door and left this one.
 setup_conformance_image_pins() {
   local dir; dir="$(new_scratch conformance-image-pins)"
   _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+sim  verified  the deterministic in-process S3
 s3  verified  MinIO at T2
 gcs  not-yet-run  no emulator round-trips the client
 s3-real  not-yet-run  deferred

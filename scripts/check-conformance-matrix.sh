@@ -195,7 +195,7 @@ ok "backend matrix is well-formed (${n_verified} verified, ${n_pending} not-yet-
 # only by leaving the project. ⚠️ Hand-maintained itself, deliberately — the
 # alternative, deriving it from `lib.rs` exports, ties a text gate to Rust
 # parsing for five names that change once per backend ever.
-REQUIRED_BACKENDS="fake s3 gcs s3-real gcs-real"
+REQUIRED_BACKENDS="fake sim s3 gcs s3-real gcs-real"
 missing_required=0
 for b in $REQUIRED_BACKENDS; do
   if ! rows | awk -v b="$b" '$1 == b { found=1 } END { exit !found }'; then

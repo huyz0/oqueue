@@ -26,10 +26,14 @@
 
 mod model;
 
+use crate::conformance::{
+    Capabilities, Harness, record::record_backend_run, run_conformance_suite,
+};
 use model::{BUCKET, ModelS3};
 use object_store::aws::AmazonS3Builder;
+use oqueue_core::RetryPolicy;
 use oqueue_core::{ByteRange, Error, ObjectKey, ObjectStore, Precondition};
-use oqueue_store::S3Store;
+use oqueue_store::{S3Store, retry_config_for};
 
 /// An `S3Store` whose every request is answered by `model`.
 fn store_over(model: &ModelS3) -> S3Store {
@@ -40,10 +44,93 @@ fn store_over(model: &ModelS3) -> S3Store {
         .with_secret_access_key("sim")
         .with_endpoint("http://sim.invalid")
         .with_allow_http(true)
+        // ⚠️ **The production retry budget, not the vendor default.** Review
+        // measured the gap: `RetryConfig::default()` is `max_retries: 10` and
+        // `retry_config_for(RetryPolicy::DEFAULT)` is `max_retries: 2` — so
+        // **eleven attempts against three**, which is the conversion
+        // `retry_config_for`'s own doc calls the whole of the translation that
+        // could be wrong, and which an earlier draft of this comment got wrong
+        // by calling retries attempts. A model absorbing a storm eight
+        // attempts longer than the shipped client would let `M10.7` — the row
+        // that builds 503 storms — "prove" survival of a storm no deployment
+        // survives.
+        .with_retry(retry_config_for(RetryPolicy::DEFAULT))
         .with_http_connector(model.clone())
         .build()
         .expect("the model builder is fully specified");
     S3Store::from_client(inner)
+}
+
+/// ⚠️ **The whole conformance suite, against a backend that is not a fake.**
+/// `M10.3`. The suite is `oqueue-store`'s own description of what an
+/// `ObjectStore` must do, and holding the model to it is the alternative to
+/// writing a second description of the same contract and hoping they agree.
+///
+/// ⚠️ **`Capabilities::FULL`, which `s3_minio.rs` cannot declare.** Nothing can
+/// tell S3 to lose an acknowledgement after a durable write, so that backend
+/// declares `injectable_ack_loss: false` and the case is skipped and recorded.
+/// A model *can* be told — `arm_ack_loss` — so this is the first backend
+/// besides the in-memory fake to run `a_failed_put_is_not_proof_of_absence`,
+/// which is `ADR-0005` guarantee 2.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_simulated_backend_passes_the_full_conformance_suite() {
+    let model = ModelS3::default();
+    let store = store_over(&model);
+    let arm = || model.arm_ack_loss();
+    let harness = Harness::new(&store).with_crash_after_put(&arm);
+
+    let report = run_conformance_suite("sim", &harness, Capabilities::FULL);
+
+    assert_eq!(report.backend_name, "sim");
+    assert!(
+        report.skipped.is_empty(),
+        "the model declares every capability, so nothing should be skipped: {:?}",
+        report.skipped
+    );
+    assert!(
+        !report.ran.is_empty(),
+        "the suite must have actually run at least one case"
+    );
+    // ⚠️ **Named, not counted.** `M10.22` is the row for a leg that printed
+    // "ack-loss case included" over a test asserting only that nothing was
+    // skipped; this is the same claim made where it can be checked. ⚠️ **That
+    // row is not discharged by this line**: `fake.rs` still asserts nothing
+    // about `report.ran`, and `m3-complete.sh` reads `fake.rs`.
+    assert!(
+        report.ran.contains(&"a_failed_put_is_not_proof_of_absence"),
+        "the case S3 must skip is the reason this backend exists: {:?}",
+        report.ran
+    );
+
+    record_backend_run("sim");
+}
+
+/// ⚠️ **The error *class*, which the suite cannot see.**
+/// `a_failed_put_is_not_proof_of_absence` asserts only `is_err()`, so the
+/// status the model answers for an injected ack loss survived mutation: 403
+/// classifies as `Permanent` — `RetryClass::Never` — where the fake gives
+/// `Transient`, and the one case both backends advertise as running would have
+/// produced opposite retry classes with every test green. A caller obeying
+/// `retry_class()` would give up on a write that actually landed.
+#[tokio::test]
+async fn an_injected_ack_loss_is_retriable_exactly_as_the_fake_makes_it() {
+    let model = ModelS3::default();
+    let store = store_over(&model);
+    let k = key("ack/lost");
+
+    model.arm_ack_loss();
+    let err = store
+        .put(&k, b"durable".to_vec(), None)
+        .await
+        .expect_err("the injected loss makes this put fail");
+
+    assert_eq!(err, Error::Transient);
+    // And the bytes are there, which is what makes it a *lost ack* rather
+    // than a failed write — `ADR-0005` guarantee 2.
+    assert_eq!(
+        store.get(&k, ByteRange::Full).await,
+        Ok(b"durable".to_vec())
+    );
 }
 
 fn key(name: &str) -> ObjectKey {

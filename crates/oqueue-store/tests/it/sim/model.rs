@@ -5,6 +5,22 @@
 //! S3 answers to a request — while `sim.rs` is what `S3Store` does when it
 //! gets those answers. A change to one is rarely a change to the other.
 //!
+//! ⚠️ **`cargo mutants` generates nothing for `tests/`**, verified — 145
+//! mutants for this crate, every one under `src/` — so no gate constrains this
+//! file and the survivors below are recorded here because nothing else will
+//! re-establish them. ⚠️ **Each is a branch a green suite would let you
+//! break**: the GET and HEAD `etag` and `last-modified` headers can be dropped;
+//! the 416 branch can be deleted (`truncated_range_error` produces the same
+//! error from the success path); HEAD's 404 arm can answer 500. A change near
+//! any of them is unprotected, and `M10.7` — 503 storms, conditional-write
+//! races, partial failures — will add more.
+//!
+//! ⚠️ **Two more the list missed on its first draft**, which is the argument
+//! for not trusting it as an inventory: `a >= total` in the 416 branch can be
+//! weakened to `a >` (every case uses offset 10 on a 3-byte object, so the
+//! `start == size` boundary is unexercised), and an `If-Match` against an
+//! *absent* key can be made to answer 200 (every case writes the key first).
+//!
 //! ⚠️ **Fidelity here is the whole product.** Two rounds of review found a
 //! branch that could never run with a confident comment beside it — the 416,
 //! then the `DELETE` — so a case added here should be reachable through
@@ -59,6 +75,14 @@ pub(crate) struct ModelS3 {
 struct ModelState {
     objects: HashMap<String, Stored>,
     next_etag: u64,
+    /// One-shot: the next PUT stores its bytes and then answers a failure.
+    ///
+    /// ⚠️ **The thing a real S3 cannot be told to do**, which is why
+    /// `s3_minio.rs` declares `injectable_ack_loss: false` and skips
+    /// `a_failed_put_is_not_proof_of_absence` — `ADR-0005` guarantee 2, that a
+    /// failed write is not proof of absence. A model can be told, so the
+    /// simulated backend runs the case S3 must skip.
+    lose_next_ack: bool,
 }
 
 impl std::fmt::Debug for ModelState {
@@ -69,6 +93,7 @@ impl std::fmt::Debug for ModelState {
         f.debug_struct("ModelState")
             .field("objects", &self.objects.len())
             .field("next_etag", &self.next_etag)
+            .field("lose_next_ack", &self.lose_next_ack)
             .finish()
     }
 }
@@ -164,6 +189,14 @@ impl ModelS3 {
         resp
     }
 
+    /// Arms the one-shot above. Cheap enough to be called per case.
+    pub(crate) fn arm_ack_loss(&self) {
+        self.state
+            .lock()
+            .expect("the model's lock is never poisoned")
+            .lose_next_ack = true;
+    }
+
     fn put(state: &mut ModelState, req: &HttpRequest, key: String, body: Vec<u8>) -> HttpResponse {
         let existing = state.objects.get(&key).cloned();
         // `Precondition::IfAbsent` reaches the wire as `If-None-Match: *`.
@@ -185,6 +218,25 @@ impl ModelS3 {
         state.next_etag += 1;
         let etag = state.next_etag;
         state.objects.insert(key, Stored { bytes: body, etag });
+        if state.lose_next_ack {
+            state.lose_next_ack = false;
+            // ⚠️ **Not a 5xx**: `object_store` retries a server error, and the
+            // second attempt would find the flag consumed and succeed — turning
+            // "the write happened and the ack was lost" into "the write
+            // happened", which is not the case being modelled. A 4xx is
+            // answered once.
+            //
+            // ⚠️ **And not 403, which review measured.** `object_store` maps
+            // FORBIDDEN to `PermissionDenied` and `classify` maps that to
+            // `Error::Permanent` — `RetryClass::Never` — where
+            // `FaultConfig::crash_after_put_before_ack` on the fake gives
+            // `Error::Transient`. The one case both backends advertise as
+            // running would have produced opposite retry classes, and
+            // `a_failed_put_is_not_proof_of_absence` cannot see it because it
+            // asserts only `is_err()`. A 400 is answered once *and* classifies
+            // as the fake does.
+            return status(400);
+        }
         let mut resp = status(200);
         resp.headers_mut().insert(
             "etag",

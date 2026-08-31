@@ -162,13 +162,15 @@ fi
 require_tool cargo "install Rust via https://rustup.rs" || finish
 
 # ---------------------------------------------------------------------------
-# 1. The fake, at T1. No container, no network.
+# 1. The fake and the simulated S3, both at T1. No container, no network.
 # ---------------------------------------------------------------------------
 rm -f "$ROSTER"
 if cargo test -p oqueue-store --test it >/dev/null 2>&1; then
-  ok "conformance suite passes against the in-memory fake"
+  ok "conformance suite passes against the in-memory fake and the simulated S3"
 else
-  fail "conformance suite does not pass against the in-memory fake"
+  # ⚠️ **Two backends since `M10.3`**, and naming one sent an operator to
+  # `oqueue-core`'s `FakeObjectStore` for a defect in `tests/it/sim/model.rs`.
+  fail "conformance suite does not pass against the in-memory fake or the simulated S3"
   note "run: cargo test -p oqueue-store --test it"
   finish
 fi
