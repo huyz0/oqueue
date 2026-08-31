@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# The pre-commit stage, run inside the container when one is available.
+#
+# ⚠️ **This file decides *where* the gate runs and never *what* it is.**
+# `.pre-commit-config.yaml` is the definition, and `.github/workflows/gates.yml`
+# reads the same file — so a hook that enumerated gates here would be a second
+# definition, which is the fork `M10.23` was careful not to create and the
+# property `M10.24`'s row names as non-negotiable.
+#
+# ⚠️ **Containment has to wrap the whole invocation, not each hook.**
+# `lib.sh`'s `_record_timing` keys a run by **process group** and
+# `check-budget.sh` groups on it — and inside a PID namespace every run is
+# pgid **1**, so per-hook containers would write rows that all collide on one
+# key rather than staying separate. ⚠️ **This comment said the opposite** —
+# "three unrelated pgids" — and getting the direction wrong is what hid the
+# defect review then reproduced: rows from an earlier contained run charged to
+# the next commit, 19586 ms over a 10000 ms budget across 20 gates. The
+# `OQUEUE_RUN_ID` that `docker-test.sh` sets is what actually identifies a run
+# here; one container per stage is what keeps the gates in it together.
+#
+# `M10.24`. Installed by `scripts/setup-hooks.sh`.
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root" || exit 1
+
+run_native() {
+  exec pre-commit run --hook-stage pre-commit
+}
+
+# ⚠️ **CI is never contained**, and this is the branch that keeps that true: a
+# GitHub Actions runner is already an isolated VM, so a container there would
+# only cost build time. `CI` is set by Actions and by most other CI systems.
+# ⚠️ In practice CI never reaches this file at all — it runs `pre-commit run
+# --all-files` directly and git hooks do not fire — but a hook that would do
+# the wrong thing if it *were* reached is a trap waiting for the first workflow
+# that calls `git commit`.
+[ -n "${CI:-}" ] && run_native
+
+# An explicit escape hatch, for a machine where the container is the problem
+# rather than the protection.
+[ -n "${OQUEUE_NO_CONTAINER:-}" ] && run_native
+
+# ⚠️ **A missing Docker is a loud native run, never a silent one.** The whole
+# claim of this hook is that `git commit` cannot exhaust the machine; when that
+# is not true the developer has to be told, because the failure mode it guards
+# against takes the session down with no diagnostic of its own.
+if ! docker info >/dev/null 2>&1; then
+  printf '\n\033[33mpre-commit: Docker is not available — running the gate UNCONTAINED\033[0m\n' >&2
+  printf 'pre-commit: on WSL2 a runaway cargo here can exhaust the VM (M10.23)\n' >&2
+  run_native
+fi
+
+# ⚠️ `SKIP` is forwarded by `docker-test.sh`, because `SKIP=<id> git commit`
+# works natively and in CI and silently doing nothing here would be a
+# behaviour change the developer is given no sign of.
+exec "$root/scripts/docker-test.sh" pre-commit run --hook-stage pre-commit

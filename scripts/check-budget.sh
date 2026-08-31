@@ -10,10 +10,15 @@
 # run. A budget gate that re-ran the suite would double the thing it exists to
 # keep short, which is a strange shape for a gate about duration.
 #
-# The grouping key is the **process group id**. `pre-commit` spawns every hook
-# with a different `PPID` and the same `PGID`, so `PGID` identifies one run of
-# the suite. ⚠️ Measured before it was relied on, not assumed — an earlier
-# design keyed on `PPID` and would have seen one gate per group.
+# The grouping key is **`OQUEUE_RUN_ID` when it is set, and the process group
+# otherwise**. `pre-commit` spawns every hook with a different `PPID` and the
+# same `PGID`, so `PGID` identifies one run of the suite — natively. ⚠️ Measured
+# before it was relied on, not assumed: an earlier design keyed on `PPID` and
+# would have seen one gate per group. ⚠️ **And it identifies nothing inside a
+# container**, where every run is `PGID` 1 while `target/timings` outlives the
+# run — so `M10.24`'s contained commit path sets a per-invocation id that this
+# gate and `lib.sh` both prefer. Without it an earlier contained run's rows were
+# charged to the next commit: 19586 ms across 20 gates for a 17-gate suite.
 #
 # ## What the artifact is for
 #
@@ -148,12 +153,20 @@ if [[ -n "${OQUEUE_SUPPRESS_TIMING:-}" ]]; then
   finish
 fi
 
-require_tool ps "install procps, or the equivalent for this system" || finish
-
-pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
-if [[ -z "$pgid" ]]; then
-  skip "suite budget (cannot determine the process group)"
-  finish
+# ⚠️ **`OQUEUE_RUN_ID` first, matching `lib.sh`'s `_record_timing`.** The two
+# must agree on what identifies a run or this gate groups on a key nothing
+# wrote. Inside a container every pgid is 1 and `target/timings` outlives the
+# run, so the pgid would gather this suite *and* every earlier contained one —
+# measured at 19586 ms across 20 gates for a 17-gate suite. `M10.24`.
+if [[ -n "${OQUEUE_RUN_ID:-}" ]]; then
+  pgid="$OQUEUE_RUN_ID"
+else
+  require_tool ps "install procps, or the equivalent for this system" || finish
+  pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')"
+  if [[ -z "$pgid" ]]; then
+    skip "suite budget (cannot determine the process group)"
+    finish
+  fi
 fi
 
 if [[ ! -f "$_TIMINGS_FILE" ]]; then

@@ -115,11 +115,16 @@ RUN rustup toolchain install nightly --profile minimal \
 RUN pip3 install --no-cache-dir --break-system-packages \
         confluent-kafka pre-commit
 
-# The repo is bind-mounted from the host, so its files belong to the host user
-# while the container runs as root. Git refuses to operate on a repo it sees as
-# someone else's, and every script here finds the repo root through
-# `git rev-parse`. The mount is the thing we came here to work on, so trusting
-# it is correct.
+# The repo is bind-mounted from the host, so git may see its files as someone
+# else's and refuse to operate — and every script here finds the repo root
+# through `git rev-parse`. The mount is the thing we came here to work on, so
+# trusting it is correct.
+#
+# ⚠️ **Kept for a root shell only.** `M10.24` runs the container as the
+# invoking uid with `HOME=/tmp/home`, so this file — `/root/.gitconfig` — is
+# not read on the commit path, and `docker-test.sh` passes the same exception
+# through `GIT_CONFIG_PARAMETERS` instead. It still covers `docker run` against
+# this image without those flags, which is how the image is used by hand.
 RUN git config --global --add safe.directory /work
 
 WORKDIR /work

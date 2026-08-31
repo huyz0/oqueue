@@ -104,7 +104,7 @@ _TIMINGS_FILE="$REPO_ROOT/target/timings/gates.tsv"
 _record_timing() {
   # ⚠️ **Only under `pre-commit`.** Every script sourcing this file calls
   # `finish()` — including `review.sh`, `milestone-review.sh` and the negative
-  # suite — and `check-budget.sh` groups by process group, so a
+  # suite — and `check-budget.sh` groups by the same run key this does, so a
   # `review.sh && git commit` in one shell would charge review time to the
   # pre-commit suite. `PRE_COMMIT=1` is set by pre-commit and by nothing else.
   [[ -n "${PRE_COMMIT:-}" ]] || return 0
@@ -117,7 +117,18 @@ _record_timing() {
   [[ -n "$now" && -n "$_GATE_STARTED_MS" ]] || return 0
   ms=$(( now - _GATE_STARTED_MS ))
   (( ms < 0 )) && return 0
-  pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" || pgid=""
+  # ⚠️ **`OQUEUE_RUN_ID` first, and a container is why.** The pgid identifies
+  # one suite run because a shell gives each pipeline its own process group —
+  # true natively, false inside a PID namespace, where every run is pgid 1. So
+  # a contained run's rows collide with the previous contained run's in a
+  # `target/timings` that outlives the container, and `check-budget.sh` sums
+  # two runs into one. `scripts/docker-test.sh` sets this per invocation;
+  # unset, nothing changes. `M10.24`.
+  if [[ -n "${OQUEUE_RUN_ID:-}" ]]; then
+    pgid="$OQUEUE_RUN_ID"
+  else
+    pgid="$(ps -o pgid= -p $$ 2>/dev/null | tr -d ' ')" || pgid=""
+  fi
   [[ -n "$pgid" ]] || return 0
   mkdir -p "$(dirname "$_TIMINGS_FILE")" 2>/dev/null || return 0
   # ⚠️ Best effort, and silent on failure. A gate must never fail because it

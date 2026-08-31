@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# The commit-msg stage. Same shape as `pre-commit` beside it, and the same
+# rule: this file decides where, `.pre-commit-config.yaml` decides what.
+#
+# ⚠️ **Not contained, and that is not an oversight.** Both gates on this stage
+# — `check-commit-msg.sh` and `check-tests-kept.sh` — read the message file and
+# the staged diff and invoke no toolchain, so there is nothing here for a
+# memory ceiling to catch. Containing them would buy a container start per
+# commit and no protection. ⚠️ **And no, the path is not the obstacle**: git
+# passes `.git/COMMIT_EDITMSG`, relative to the worktree root, from any
+# directory — so a contained run would need no translation. Measured, because
+# an earlier version of this comment asserted the opposite as a reason.
+#
+# `M10.24`. Installed by `scripts/setup-hooks.sh`.
+set -uo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+cd "$root" || exit 1
+
+exec pre-commit run --hook-stage commit-msg --commit-msg-filename "$1"

@@ -2872,7 +2872,13 @@ setup_budget_over() {
   # the thing under test is the comparison, and a fixture that took 10 real
   # seconds to prove a 10-second budget would be its own budget problem.
   mkdir -p "$dir/target/timings"
-  local pg; pg="$(ps -o pgid= -p $$ | tr -d ' ')"
+  # ⚠️ **The same key `check-budget.sh` will group on**, which is
+  # `OQUEUE_RUN_ID` when it is set and the process group otherwise
+  # (`lib.sh`, `M10.24`). Keyed on the pgid alone, this fixture wrote rows
+  # the gate could not see whenever the suite itself ran inside the
+  # container — the case reported ok on a planted defect, which is what
+  # this suite exists to catch.
+  local pg; pg="${OQUEUE_RUN_ID:-$(ps -o pgid= -p $$ | tr -d ' ')}"
   # ⚠️ **No single entry over `COMPILING_GATE_MS` (5000).** The gate exempts a
   # run where one gate dominates, because that is a build rather than an eroded
   # suite -- so a fixture with a 7000 ms entry tests the *exemption* and reports
@@ -2900,7 +2906,13 @@ setup_budget_eroded_behind_a_build() {
   local dir; dir="$(new_scratch budget_eroded_build)"
   copy_gate "$dir" check-budget.sh
   mkdir -p "$dir/target/timings"
-  local pg; pg="$(ps -o pgid= -p $$ | tr -d ' ')"
+  # ⚠️ **The same key `check-budget.sh` will group on**, which is
+  # `OQUEUE_RUN_ID` when it is set and the process group otherwise
+  # (`lib.sh`, `M10.24`). Keyed on the pgid alone, this fixture wrote rows
+  # the gate could not see whenever the suite itself ran inside the
+  # container — the case reported ok on a planted defect, which is what
+  # this suite exists to catch.
+  local pg; pg="${OQUEUE_RUN_ID:-$(ps -o pgid= -p $$ | tr -d ' ')}"
   local now; now="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   {
     # One genuine build, well over COMPILING_GATE_MS.

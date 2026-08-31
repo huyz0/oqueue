@@ -96,27 +96,21 @@ TMPFS="${TMPFS:-2g}"
 # `.pre-commit-config.yaml` alone and a developer cannot run a subset of it by
 # accident.
 #
-# ⚠️ **`SKIP=check-reviewed`, for the reason CI skips it and no other.** A
-# review verdict is written to `target/review/`, which is gitignored, and the
-# container's `target/` is a named volume rather than the host's — so the
-# verdict recorded on the host is not visible here. Non-negotiable 4 is
-# enforced by the local commit hook, which runs on the host and does see it.
+# ⚠️ **`SKIP=check-reviewed` here, and it is about `--all-files` rather than
+# about the container.** `M10.24` bind-mounts the host's `target/review` in, so
+# the verdicts *are* visible now — but `gate` runs the whole suite against the
+# tree rather than against a staged change, and `check-reviewed` answers a
+# question about staged bytes. With nothing staged it skips anyway; with
+# something staged it would report on a diff `gate` never looked at. CI skips
+# it for the older reason: there are no verdicts in a runner at all.
 #
-# ⚠️ **The commit hook is NOT contained, and that is a gap rather than a
-# design.** This said reviewing and committing "need no toolchain", which is
-# false and was the wrong reason for a true sentence: `check-crate`,
-# `check-coverage` and `check-mutants` are all `stages: [pre-commit]`, so every
-# `git commit` runs `cargo test`, a full instrumented `cargo llvm-cov` rebuild
-# and cargo-mutants on the **host**, uncontained — the heaviest recurring cargo
-# path in the repository, and exactly the hazard this script exists for.
-# `M10.24` owns closing it; it needs the CI interaction decided first, because
-# the same hooks run in Actions where a container would only cost build time.
-# ⚠️ **And running the gate here first does not fix it** — this said the hook
-# would "re-run it warm", which is false for the reason twenty lines below:
-# the container's `target/` is a named volume, so a container run leaves the
-# host's untouched and the hook still builds cold. What a container run buys is
-# knowing the gate *passes* before paying for it uncontained. That is worth
-# something and it is not containment.
+# ⚠️ **The commit hook comes through here too** (`M10.24`): `.githooks/pre-commit`
+# runs `pre-commit run --hook-stage pre-commit` through this script, so
+# `check-crate`, `check-coverage` and `check-mutants` — `cargo test`, an
+# instrumented `cargo llvm-cov`, and cargo-mutants — are inside the caps rather
+# than on the host. That is what the extra mounts and the `--user` flag below
+# are all for: a commit-path run writes to `.git` and reads the developer's
+# git configuration, and a `--all-files` gate run does neither.
 if [ "${1:-}" = "gate" ]; then
   # ⚠️ Refused rather than ignored: `docker-test.sh gate check-crate` is the
   # obvious guess given `pre-commit run check-crate`, and silently running the
@@ -126,7 +120,10 @@ if [ "${1:-}" = "gate" ]; then
     echo "docker-test: for one hook, run: scripts/docker-test.sh pre-commit run <id> --all-files" >&2
     exit 1
   fi
-  CMD=(env SKIP=check-reviewed pre-commit run --all-files)
+  # ⚠️ Appended to the caller's `SKIP` rather than replacing it: the variable
+  # is forwarded into the container now, and `env SKIP=...` here would discard
+  # what the caller asked for while running the suite anyway.
+  CMD=(env SKIP="check-reviewed${SKIP:+,$SKIP}" pre-commit run --all-files)
 elif [ $# -eq 0 ]; then
   # ⚠️ **Not `"${@:-cargo test --workspace}"`**, which is what this was and
   # which never worked: with no positional parameters that expansion yields a
@@ -172,6 +169,21 @@ if [ -n "$stale" ]; then
   echo "docker-test: reclaim with: docker rmi $(printf '%s ' $stale)" >&2
 fi
 
+
+# ⚠️ **As the invoking user, not root, and `M10.24` is why.** The commit path
+# runs `pre-commit run --hook-stage pre-commit`, whose first act is
+# `staged_files_only` — `git write-tree` against the bind-mounted `.git`. As
+# root that writes root-owned loose objects and fan-out directories into the
+# host repository; measured, seven of them, after three hook runs. This clone
+# survived only because all 256 fan-outs already existed. A fresh clone has
+# none, so the first contained commit creates them root-owned and the
+# developer's next `git add` fails with "insufficient permission for adding an
+# object" until somebody runs `chown -R`.
+#
+# ⚠️ The volumes are created root-owned by docker, so they are chowned once,
+# below, or nothing the container builds can be written.
+HOST_UID="$(id -u)"; HOST_GID="$(id -g)"
+
 # Named volumes for the cargo registry and the target directory. Without them
 # every run recompiles the world, which is itself a memory spike worth
 # avoiding.
@@ -186,23 +198,119 @@ fi
 # already look costs nothing and reintroduces nothing.
 #
 # ⚠️ The consequence is that the container's `target/` is **not** the host's:
-# artifacts do not mix, a host and a container build never fight over one lock,
-# and `target/review` inside here is empty (see `SKIP` above).
+# artifacts do not mix and a host and a container build never fight over one
+# lock.
+#
+# ⚠️ **One exception, bind-mounted back over the volume: `target/review`.**
+# `M10.24` put the commit hook in here, and `check-reviewed` is a pre-commit
+# gate that reads the verdict `scripts/review.sh` wrote on the host — non-
+# negotiable 4, the one rule enforced by the local hook alone. Without this
+# mount the contained hook would find an empty directory and refuse every
+# commit. The verdicts are small JSON and the review path stays on the host,
+# so this shares the artifact rather than moving the work.
 docker volume create oqueue-cargo-registry >/dev/null
 docker volume create oqueue-target >/dev/null
+# ⚠️ Created host-side first: a bind source docker has to invent is created
+# root-owned, and a root-owned `target/review` breaks `review.sh` afterwards.
+mkdir -p "$REPO/target/review" "$REPO/target/pre-commit-home"
+
+# ⚠️ **Asked, not remembered.** A named volume is created root-owned, and with
+# `--user` below an unwritable one makes every build fail on a permission error
+# naming a path inside the container and nothing else. ⚠️ **The probe is
+# `test -w` as the invoking uid, not a marker file**: a marker records that a
+# chown happened and not *for whom*, so a second developer on the same host, or
+# the same one after a uid change, skipped the chown and got EACCES from every
+# cargo invocation — the failure this is here to prevent.
+for v in oqueue-cargo-registry oqueue-target; do
+  if ! docker run --rm -u "$HOST_UID:$HOST_GID" -v "$v:/v" "$IMAGE" \
+        test -w /v 2>/dev/null; then
+    docker run --rm -u 0 -v "$v:/v" "$IMAGE" \
+      chown -R "$HOST_UID:$HOST_GID" /v >/dev/null
+  fi
+done
+
+# ⚠️ **A unique id per invocation, because a container's pgid is always 1.**
+# `lib.sh` keys a timing row by process group and `check-budget.sh` groups on
+# it. Inside a PID namespace every run is pgid 1, and `target/timings` lives on
+# a volume that outlives `--rm` — so rows from an earlier contained run are
+# charged to the next one. Measured: three single-hook runs, then a hook that
+# reported 19586 ms over a 10000 ms budget across 20 gates with two counted
+# twice, and refused the commit. `lib.sh` prefers this when it is set and falls
+# back to the pgid, so a native run is unchanged.
+RUN_ID="oq-$$-$(date +%s%N 2>/dev/null || date +%s)"
+
+# ⚠️ **`PRE_COMMIT_HOME` on a host path, and this one is about not losing
+# work.** `pre-commit run --hook-stage pre-commit` stashes unstaged changes to
+# a patch under its cache and reapplies them in a `finally`. Left on the
+# container's writable layer that patch dies with `--rm` — so a container the
+# kernel OOM-kills, which is the event this script exists to cause, takes the
+# developer's uncommitted edits with it and leaves nothing to recover from.
+#
+# ⚠️ **And the user's git configuration**, because `check-reviewed` recomputes
+# a hash `review.sh` computed on the host. `core.abbrev`, `diff.noprefix`,
+# `diff.context` and `diff.algorithm` all change `git diff --cached` output;
+# measured, four different hashes for one staged tree. Without this a developer
+# with any of them set records a verdict under one hash and the contained gate
+# looks for another, and every commit is refused for a reason the error cannot
+# name.
+# ⚠️ **The host's *resolved* global config, forwarded as values — not its
+# files, mounted.** `check-reviewed` recomputes a hash `review.sh` computed on
+# the host, and `core.abbrev`, `diff.noprefix`, `diff.context` and
+# `diff.algorithm` all change `git diff --cached`; measured, four hashes for
+# one staged tree. Three rounds of review were spent trying to mirror the
+# *locations* git reads and each version missed one: `~/.gitconfig` only, then
+# an `if/elif` that chose one file where git merges two, then both files but
+# not `include.path` or `includeIf`, which resolve to a third file nothing
+# mounted. ⚠️ **`git config --global --list --includes` ends that class**: it
+# is what git itself resolves to, includes followed, and
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` is git's own
+# documented way to carry it. No mount, no precedence to re-implement.
+#
+# ⚠️ **`--show-scope`, not `--global`**, and the difference is a case review
+# caught: with both `~/.gitconfig` and `~/.config/git/config` present,
+# `--global --list` reports only the first while git *reads* both — so
+# `diff.noprefix` set in the XDG file was still missing inside. `--show-scope`
+# reports what git actually resolved, and `local`/`worktree`/`command` are
+# dropped because `.git/config` is on the bind mount and read inside exactly as
+# it is outside.
+GITCONFIG_ARGS=()
+_gc_n=0
+while IFS='=' read -r _gc_k _gc_v; do
+  [ -n "$_gc_k" ] || continue
+  GITCONFIG_ARGS+=(-e "GIT_CONFIG_KEY_${_gc_n}=$_gc_k" -e "GIT_CONFIG_VALUE_${_gc_n}=$_gc_v")
+  _gc_n=$(( _gc_n + 1 ))
+done <<EOF
+$(git config --list --show-scope --includes 2>/dev/null \
+    | grep -vE '^(local|worktree|command)	' | cut -f2- || true)
+EOF
+# ⚠️ **`safe.directory` rides in the same list** rather than through
+# `GIT_CONFIG_PARAMETERS`: `GIT_CONFIG_COUNT` and that variable are both read,
+# but keeping one mechanism means one place to look when the container's git
+# disagrees with the host's.
+GITCONFIG_ARGS+=(-e "GIT_CONFIG_KEY_${_gc_n}=safe.directory" -e "GIT_CONFIG_VALUE_${_gc_n}=/work")
+_gc_n=$(( _gc_n + 1 ))
+GITCONFIG_ARGS+=(-e "GIT_CONFIG_COUNT=$_gc_n")
 
 # `-it` only when there is a terminal: an agent or a CI job invokes this with
 # no TTY, and `docker run -it` fails outright there rather than degrading.
 TTY_FLAGS=()
 [ -t 0 ] && [ -t 1 ] && TTY_FLAGS=(-it)
 
-exec docker run --rm "${TTY_FLAGS[@]}" \
+exec docker run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
+  --user "$HOST_UID:$HOST_GID" \
   --memory="$MEM" --memory-swap="$MEM" \
   --cpus="$CPUS" --pids-limit="$PIDS" \
   --tmpfs "/tmp:rw,exec,size=$TMPFS,mode=1777" \
   -v "$REPO:/work" \
   -v oqueue-cargo-registry:/usr/local/cargo/registry \
   -v oqueue-target:/work/target \
+  -v "$REPO/target/review:/work/target/review" \
+  -v "$REPO/target/pre-commit-home:$REPO/target/pre-commit-home" \
+  ${GITCONFIG_ARGS[@]+"${GITCONFIG_ARGS[@]}"} \
+  -e HOME=/tmp/home \
+  -e PRE_COMMIT_HOME="$REPO/target/pre-commit-home" \
+  -e OQUEUE_RUN_ID="$RUN_ID" \
+  ${SKIP:+-e SKIP="$SKIP"} \
   -e CARGO_BUILD_JOBS="$CARGO_JOBS" \
   -w /work \
   "$IMAGE" \

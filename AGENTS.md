@@ -126,11 +126,21 @@ runs `pre-commit run --all-files` on every push — but with `SKIP:
 check-reviewed`, because a verdict artifact lives under gitignored `target/`
 and CI has nothing to read. **Rule 4 is therefore enforced only by the local
 hook**, and that is by design rather than by omission: a commit cannot exist in
-history unless it passed locally, which rests on rule 3. Locally, `.git/hooks`
-is not tracked and a fresh clone enforces nothing until someone runs
-`pre-commit install` once — `.pre-commit-config.yaml` sets
-`default_install_hook_types` so that one command wires both stages. A clone
-where nobody ran it, pushing to CI, has rule 4 enforced by nothing at all.
+history unless it passed locally, which rests on rule 3. Locally the hooks are
+tracked in [`.githooks/`](.githooks/) and installed by
+`scripts/setup-hooks.sh`, which points `core.hooksPath` at them; a clone where
+nobody ran it, pushing to CI, has rule 4 enforced by nothing at all.
+
+⚠️ **The hooks are tracked because the untracked one went stale and nothing
+could see it.** `M10.24` found this machine committing through a hand-written
+`.git/hooks/pre-commit` predating `.pre-commit-config.yaml`, which ran **12**
+of the config's **17** pre-commit gates — `check-crate`, `check-coverage`,
+`check-mutants`, `check-conformance-matrix` and `check-budget` were silently
+absent — so every commit passed a subset while the tree claimed the suite. An
+untracked hook cannot be reviewed, updated by a commit, or seen to have gone
+stale. ⚠️ **`.githooks/` is not a second definition of the gate**: each hook
+delegates to `pre-commit run --hook-stage <stage>` against the same
+`.pre-commit-config.yaml` CI reads, and decides only *where* the stage runs.
 
 1. **One task equals one commit equals one change that leaves the tree green.**
    Split anything that cannot meet that. The commit subject starts with the
@@ -200,18 +210,26 @@ socket for, so it skips and says the gate proved nothing about S3 — run that
 one on the host.
 
 ⚠️ **Reviewing stays on the host**, because `scripts/review.sh` needs no
-toolchain and the container's `target/` is a named volume — so a verdict
-recorded there is not visible here, which is why `docker-test.sh gate` skips
-`check-reviewed`, for the same reason CI does.
+toolchain — but the verdict it writes is bind-mounted into the container, since
+`check-reviewed` is a pre-commit gate and the commit path now runs in there.
+⚠️ `docker-test.sh gate` still skips it, for a different reason than CI does:
+`gate` runs `--all-files` and `check-reviewed` answers a question about *staged*
+bytes. CI skips it because a runner holds no verdicts at all.
 
-⚠️ **The commit hook is not contained, and that is a gap** (`M10.24`).
-`check-crate`, `check-coverage` and `check-mutants` are all
-`stages: [pre-commit]`, so `git commit` runs `cargo test`, a full instrumented
-`cargo llvm-cov` rebuild and cargo-mutants on the **host**. ⚠️ **Running the
-gate here first does not contain that** — the container's `target/` is a named
-volume, so the hook still builds cold on the host. What it buys is knowing the
-gate passes before paying for it uncontained, which is worth doing and is not
-the same thing.
+⚠️ **The commit hook runs in here too** (`M10.24`) — which is what
+`scripts/setup-hooks.sh` installs, and why it exists. `check-crate`,
+`check-coverage` and `check-mutants` are all `stages: [pre-commit]`, so
+`git commit` runs `cargo test`, an instrumented `cargo llvm-cov` and
+cargo-mutants; before `M10.24` all three ran on the host, uncontained.
+⚠️ **The whole stage in one container, not a container per hook**: `lib.sh`
+keys a run by process group and `check-budget.sh` groups on it, and inside a
+PID namespace every run is pgid **1** — so `docker-test.sh` sets an
+`OQUEUE_RUN_ID` that both prefer, and one container per stage keeps a stage's
+gates under one key. ⚠️ **`CI`, `OQUEUE_NO_CONTAINER`, or an unreachable Docker
+fall back to a native run**, and the last of the three says so in yellow first:
+a gate that quietly stopped protecting the machine is worse than one that
+failed. ⚠️ **`target/review` is bind-mounted back in** over the volume, because
+`check-reviewed` is a pre-commit gate reading a verdict the host wrote.
 
 ⚠️ **CI does not use the container.** GitHub Actions runners are already
 isolated VMs, so containing them again would only cost build time;

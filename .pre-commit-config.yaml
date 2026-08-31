@@ -1,7 +1,14 @@
-# Wires every gate script in scripts/ as a local hook, so a fresh clone can
-# run `pre-commit install` once and inherit the exact same enforcement this
-# repository's own hand-installed .git/hooks only ever gave the machine they
-# were typed on. `M-1.14`. See AGENTS.md's non-negotiables for what each gate
+# Wires every gate script in scripts/ as a local hook, so a fresh clone
+# inherits the exact same enforcement this repository's own hand-installed
+# .git/hooks only ever gave the machine they were typed on. `M-1.14`.
+#
+# ⚠️ **Install with `scripts/setup-hooks.sh`, not `pre-commit install`**
+# (`M10.24`). The tracked hooks in `.githooks/` delegate straight back to
+# `pre-commit run --hook-stage <stage>` against this file, and route the
+# pre-commit stage through `scripts/docker-test.sh`'s resource caps — three
+# gates here run cargo, and on WSL2 an uncontained runaway takes the machine
+# down. `pre-commit install` refuses outright once `core.hooksPath` is set, and
+# its suggested remedy is to unset it, which is the containment being undone. See AGENTS.md's non-negotiables for what each gate
 # enforces and why; this file only says when each one runs.
 #
 # `default_install_hook_types` covers both stages with the one command --
