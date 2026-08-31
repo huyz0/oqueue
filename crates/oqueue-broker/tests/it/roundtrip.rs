@@ -93,7 +93,27 @@ pub(crate) async fn produce(
     response
 }
 
-async fn fetch(
+/// The framed `Produce` request `produce` sends, for a caller that needs the
+/// future rather than the answer.
+pub(crate) fn produce_frame(broker: &Broker, topic: &'static str) -> Vec<u8> {
+    let mut request = ProduceRequest::default();
+    request.acks = -1;
+    let mut t = TopicProduceData::default();
+    t.topic_id = broker.cluster.topic_id(topic).expect("a hosted topic");
+    let mut p = PartitionProduceData::default();
+    p.index = 0;
+    p.records = Some(bytes::Bytes::from(golden_batch(&[
+        topic.as_bytes(),
+        b"world",
+    ])));
+    t.partition_data.push(p);
+    request.topic_data.push(t);
+    let mut body = Vec::new();
+    request.encode(&mut body, PRODUCE_VERSION).expect("encodes");
+    framed(ApiKey::Produce, PRODUCE_VERSION, &body)
+}
+
+pub(crate) async fn fetch(
     dispatcher: &Dispatcher,
     broker: &Broker,
     topic: &str,

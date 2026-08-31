@@ -19,17 +19,29 @@ use oqueue_broker::{Cluster, Sequencing, WriterId};
 use oqueue_coordinator::Coordinator;
 use oqueue_core::{
     CoordinatorEpoch, CountingObjectStore, FakeMaterializedIndex, FakeMetadataLog, FakeObjectStore,
-    ObjectStore,
+    FaultMetadataLog, ObjectStore,
 };
 use std::sync::Arc;
 
 /// The store an integration test can count operations against.
 pub type TestStore = CountingObjectStore<FakeObjectStore>;
 
+/// The log an integration test can make refuse.
+///
+/// ⚠️ **Wrapped for every broker rather than by a second constructor**, and
+/// injecting nothing until told to. `M10.9` needs the *middle* crash point —
+/// the object durable and the commit refused — and the alternative was a
+/// parallel `broker_with_faulty_log` whose wiring could drift from this one's.
+/// A fixture that differs from the fixture under test is how a fault test ends
+/// up proving something about the fixture.
+pub type TestLog = FaultMetadataLog<FakeMetadataLog>;
+
 /// A cluster, its store, and the task serving its commits.
 pub struct Broker {
     pub cluster: Arc<Cluster>,
     pub store: Arc<TestStore>,
+    /// The metadata log behind the coordinator, so a test can refuse a commit.
+    pub log: Arc<TestLog>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -42,11 +54,15 @@ impl Drop for Broker {
 /// A broker hosting each of `topics`.
 pub async fn broker(topics: &[&str]) -> Broker {
     let store = Arc::new(CountingObjectStore::new(FakeObjectStore::new()));
-    let log = Arc::new(FakeMetadataLog::new());
+    let log = Arc::new(FaultMetadataLog::new(FakeMetadataLog::new()));
     let index = Box::new(FakeMaterializedIndex::new());
-    let (coordinator, serving, reader) = Coordinator::open(log, index, CoordinatorEpoch::new(1))
-        .await
-        .expect("an empty log opens");
+    let (coordinator, serving, reader) = Coordinator::open(
+        Arc::clone(&log) as Arc<dyn oqueue_core::MetadataLog>,
+        index,
+        CoordinatorEpoch::new(1),
+    )
+    .await
+    .expect("an empty log opens");
     let shared: Arc<dyn ObjectStore> = Arc::clone(&store) as Arc<dyn ObjectStore>;
     let sequencing = Sequencing::new(coordinator, reader);
     let cluster = Cluster::new("h", 1, sequencing, shared, &WriterId::mint())
@@ -57,6 +73,7 @@ pub async fn broker(topics: &[&str]) -> Broker {
     Broker {
         cluster: Arc::new(cluster),
         store,
+        log,
         serving: tokio::spawn(serving.run()),
     }
 }
