@@ -11,6 +11,8 @@
 //! `oqueue-broker`'s own `tests/` trees.
 #![forbid(unsafe_code)]
 
+pub mod invariants;
 pub mod seed;
 
+pub use invariants::{Broken, Invariants, Observation, Violation};
 pub use seed::{run_seeded, seeded_runtime};

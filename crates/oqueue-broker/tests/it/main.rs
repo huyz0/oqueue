@@ -6,6 +6,7 @@ mod connection;
 mod corpus;
 mod crash_points;
 mod faults;
+mod invariants;
 mod matrix;
 mod reads;
 mod reap;
