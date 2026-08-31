@@ -42,6 +42,9 @@ uuid = { version = "1", default-features = false }
 # what this crate's own tests use to build request bytes and decode
 # responses -- `client` is added for that.
 [dev-dependencies]
+# ⚠️ `M10.5`: `virtual_time.rs` drives `run_seeded` to measure the premise the
+# clock rule rests on. Dev-only — `check-layering.sh` forbids the runtime form.
+oqueue-testkit = { path = "../oqueue-testkit" }
 kafka-protocol = { version = "0.18.0", default-features = false, features = ["broker", "client"] }
 # Test fixtures hand the dependency's request types their batch bytes.
 bytes = "1"

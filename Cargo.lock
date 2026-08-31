@@ -978,6 +978,7 @@ dependencies = [
  "oqueue-codec",
  "oqueue-coordinator",
  "oqueue-core",
+ "oqueue-testkit",
  "thiserror",
  "tokio",
  "uuid",

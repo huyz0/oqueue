@@ -691,6 +691,55 @@ invoke_sans_io() {
   bash "$1/scripts/check-sans-io.sh"
 }
 
+# ⚠️ **The broker is exempt from `CLOCK_RE` and not from `REAL_CLOCK_RE`**
+# (`M10.5`), which is the half a scan of the other crates cannot reach: the
+# broker legitimately holds timers, and what it may not hold is a clock a
+# seeded run cannot advance. `tokio::time`'s reads are virtual under a paused
+# runtime — measured, a 600 s timeout in 1.3 us of wall clock — so this plants
+# the form that is not.
+setup_sans_io_broker_clock() {
+  local dir; dir="$(new_scratch sans-io-broker-clock)"
+  copy_gate "$dir" check-sans-io.sh
+  mkdir -p "$dir/crates/oqueue-broker/src"
+  # ⚠️ **The realistic spelling**, not the fully-qualified one. The first
+  # version of `REAL_CLOCK_RE` matched only `std::time::Instant::now()` — a
+  # form nobody writes — and this `use` plus a bare call walked through it.
+  cat > "$dir/crates/oqueue-broker/src/session.rs" <<'EOF'
+use std::time::Instant;
+
+pub fn started() -> Instant {
+    Instant::now()
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M10.5: a clock no seeded run can control")
+  printf '%s\n' "$dir"
+}
+invoke_sans_io_broker_clock() {
+  bash "$1/scripts/check-sans-io.sh"
+}
+
+# The one file that may hold it, so the exemption is watched as well as the
+# rule — a named exemption nobody checks is a hole rather than a decision.
+# ⚠️ **The exemption is watched too**, by a positive check rather than a
+# `run_case`: a named exemption nobody exercises is a hole rather than a
+# decision, and this suite's shape only proves that broken things fail.
+check_sans_io_writer_id_stays_exempt() {
+  local dir; dir="$(new_scratch sans-io-writer-id)"
+  copy_gate "$dir" check-sans-io.sh
+  mkdir -p "$dir/crates/oqueue-broker/src"
+  cat > "$dir/crates/oqueue-broker/src/writer_id.rs" <<'EOF'
+pub fn stamp() -> std::time::SystemTime {
+    std::time::SystemTime::now()
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M10.5: the exempt file")
+  if bash "$dir/scripts/check-sans-io.sh" >/dev/null 2>&1; then
+    ok "check-sans-io.sh keeps writer_id.rs exempt from the seeded-clock rule"
+  else
+    fail "check-sans-io.sh flags writer_id.rs, whose exemption ADR-0028 rests on"
+  fi
+}
+
 # --- check-core-contract.sh: a trait's method set changes, no ADR ----------
 setup_core_contract() {
   local dir; dir="$(new_scratch core-contract)"
@@ -2699,6 +2748,10 @@ run_case "check-layering.sh ([profile] in a member)" setup_layering_member_profi
 run_case "check-layering.sh (no overflow-checks)" setup_layering_no_overflow_checks invoke_layering \
   "does not set overflow-checks = true"
 run_case "check-sans-io.sh"             setup_sans_io             invoke_sans_io
+run_case "check-sans-io.sh (a clock the broker's seeded runs cannot control)" \
+  setup_sans_io_broker_clock invoke_sans_io_broker_clock \
+  "a clock no seeded run can control"
+check_sans_io_writer_id_stays_exempt
 run_case "check-core-contract.sh"       setup_core_contract       invoke_core_contract
 run_case "check-core-contract.sh (non-UTF-8 crash)" setup_core_contract_non_utf8 invoke_core_contract_non_utf8
 run_case "check-unsafe.sh"              setup_unsafe              invoke_unsafe

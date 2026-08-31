@@ -1,6 +1,6 @@
 # 0027. The simulation harness is three pieces, each placed by what it depends on
 
-Status: accepted; ⚠️ 2026-09-01 (`M10.4`) **point 5 is decided by `ADR-0028`**: the reproducibility criterion is stated over the *schedule* and what the assertions see, not over object keys, because `writer_id.rs`'s `SystemTime::now()` is deliberate — a harness needing stable keys fixes the `WriterId` at its own composition root. `M10.5` does not re-decide it.; ⚠️ 2026-09-01 (`M10.26`) **point 6 is
+Status: accepted; ⚠️ 2026-09-01 (`M10.5`) **point 5's routing clause is overturned and point 4's exemption count is stale.** The three sites it names — `session.rs`, `fetch/park.rs`, `connection.rs` — read `tokio::time`, which is virtual under `ADR-0028`'s paused-time runtime (measured: a 600 s timeout in 1.3 µs of wall clock), so no routing was owed and none was done. And `check-sans-io.sh` now keeps *four* exemptions, not two: two crates as before, plus two named files for the broker-only clock rule `M10.5` added — `writer_id.rs`, and the test that measures the rule's own premise. ⚠️ 2026-09-01 (`M10.4`) **point 5 is decided by `ADR-0028`**: the reproducibility criterion is stated over the *schedule* and what the assertions see, not over object keys, because `writer_id.rs`'s `SystemTime::now()` is deliberate — a harness needing stable keys fixes the `WriterId` at its own composition root. `M10.5` does not re-decide it.; ⚠️ 2026-09-01 (`M10.26`) **point 6 is
 answered and its premise was wrong**. The socket is `tokio::io::duplex`, which
 has been the broker's since `M2.17` — `connection.rs` and `lib.rs` both say so,
 and eight of the nine tests in `tests/it/connection.rs` drive one, the ninth
@@ -117,8 +117,9 @@ has no single answer. What decides each piece is which dependency it needs.
 ## Decision
 
 **Three pieces, each placed by the dependency that constrains it. No crate is
-added, no gate gains an exemption, and nothing test-only enters a crate's
-shipped `src/`.**
+added and nothing test-only enters a crate's shipped `src/`.** ⚠️ **This also
+said "no gate gains an exemption" until `M10.5`**, which added two — named
+files, for a broker-only clock rule that did not exist when this was written. See the `Status:` note.
 
 1. **The seed, the scheduler, the fault schedule and the invariant checks go in
    `oqueue-testkit`.** They need `oqueue-core` and nothing else — no
