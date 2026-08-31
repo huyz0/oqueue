@@ -33,7 +33,12 @@
 #   `pub trait` seam in `oqueue-core`; its real implementation is the one
 #   place these calls belong, and that implementation lives in `oqueue-broker`
 #   per the same reasoning as the socket exemption — so `oqueue-broker` is
-#   exempt from this pattern too.
+#   exempt from this pattern too. ⚠️ **And `tokio::time::Instant::now()` is not
+#   a real clock read** (`M10.6`): under a paused runtime it is virtual, so
+#   that exact token is deleted from a line before the pattern runs — **in a
+#   `tests/` tree only**, because production never pauses. The rest of the line
+#   stays in scope, which is what stops
+#   `tokio::time::sleep(SystemTime::now().elapsed()..)` from walking through.
 # - **A clock a seeded run cannot advance** (`M10.5`), which applies to
 #   `oqueue-broker` *because* it is exempt from the pattern above. The broker
 #   is the I/O shell and legitimately holds timers; what it may not hold is a
@@ -189,6 +194,41 @@ scan_real_clock() {
   done <<< "$matches"
 }
 
+# ⚠️ **`tokio::time::Instant::now()` is not a real clock read**, and `CLOCK_RE`
+# cannot say so on its own: it matches the bare `Instant::now()`, which is the
+# same text. Under `ADR-0028`'s paused runtime a `tokio::time` read is virtual
+# — `M10.5` measured it — so flagging one is flagging determinism, and `M10.6`
+# hit exactly that writing a test that reads the simulated clock.
+# ⚠️ **The token is deleted, not the line.** A first version filtered out any
+# line containing `tokio::time::`, which suppressed every other alternative on
+# it — `tokio::time::sleep(std::time::SystemTime::now().elapsed()...)`, a
+# library crate deriving a sleep from the wall clock, walked straight through
+# a gate it had been failing. Removing just the virtual read and matching what
+# is left keeps the rest of the line in scope.
+scan_clock() {
+  local f="$1" matches lineno
+  # ⚠️ **The exemption is for a `tests/` tree only.** A paused runtime is a
+  # *test* construct; production never pauses, so a `tokio::time::Instant::now()`
+  # in a library crate's `src/` is a real clock read and stays flagged. A first
+  # version applied the deletion everywhere, which let a coordinator read the
+  # runtime clock in shipped code and pass — a strict weakening of
+  # non-negotiable 5, for a problem whose only instance was one test file.
+  if [[ "$f" == */tests/* ]]; then
+    matches="$(sed -E 's/tokio::time::Instant::now\(\)//g' "$f" 2>/dev/null \
+      | grep -nE "$CLOCK_RE" || true)"
+  else
+    matches="$(grep -nE "$CLOCK_RE" "$f" 2>/dev/null || true)"
+  fi
+  [[ -n "$matches" ]] || return 0
+  while IFS= read -r m; do
+    [[ -n "$m" ]] || continue
+    lineno="${m%%:*}"
+    # ⚠️ The *file's* line, not the sed-mutated one: printing `let x = ;` sends
+    # an author looking for a syntax error the file does not have.
+    report "a real clock read" "$f" "$lineno" "$(sed -n "${lineno}p" "$f")"
+  done <<< "$matches"
+}
+
 scan_pattern() {
   local re="$1" kind="$2" f="$3"
   local matches
@@ -206,7 +246,7 @@ for f in "${files[@]}"; do
 
   if [[ "$f" != "$BROKER_DIR"/* ]]; then
     scan_pattern "$SOCKET_RE" "a concrete socket type" "$f"
-    scan_pattern "$CLOCK_RE" "a real clock read" "$f"
+    scan_clock "$f"
     if [[ "$f" != "$STORE_DIR"/* ]]; then
       scan_pattern "$STORE_RE" "an object-storage SDK call" "$f"
     fi

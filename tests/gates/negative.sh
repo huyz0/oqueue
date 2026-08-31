@@ -691,6 +691,74 @@ invoke_sans_io() {
   bash "$1/scripts/check-sans-io.sh"
 }
 
+# ⚠️ **`scan_clock` in both directions** (`M10.6`). It deletes the
+# `tokio::time::Instant::now()` token and matches what is left, so two things
+# need watching: a genuine wall-clock read in a library crate still fails, and
+# a line carrying *both* a virtual read and a real one still fails — a first
+# version filtered the whole line and let the second walk through.
+setup_sans_io_wall_clock() {
+  local dir; dir="$(new_scratch sans-io-wall-clock)"
+  copy_gate "$dir" check-sans-io.sh
+  mkdir -p "$dir/crates/oqueue-core/src"
+  # ⚠️ **One line holding both**, which is what distinguishes deleting the
+  # virtual *token* from filtering the whole line: a line filter drops this
+  # line and the wall-clock read with it.
+  mkdir -p "$dir/crates/oqueue-core/tests"
+  cat > "$dir/crates/oqueue-core/tests/mixed.rs" <<'EOF'
+pub fn both() -> (tokio::time::Instant, std::time::SystemTime) {
+    (tokio::time::Instant::now(), std::time::SystemTime::now())
+}
+EOF
+  cat > "$dir/crates/oqueue-core/src/lib.rs" <<'EOF'
+pub async fn nap() {
+    tokio::time::sleep(std::time::SystemTime::now().elapsed().unwrap()).await;
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M10.6: a wall clock beside a virtual one")
+  printf '%s\n' "$dir"
+}
+invoke_sans_io_wall_clock() {
+  bash "$1/scripts/check-sans-io.sh"
+}
+
+# The other direction: a pure `tokio::time` read is virtual under a paused
+# runtime and must NOT be flagged, or the gate flags determinism.
+setup_sans_io_virtual_clock_in_src() {
+  local dir; dir="$(new_scratch sans-io-virtual-in-src)"
+  copy_gate "$dir" check-sans-io.sh
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/crates/oqueue-core/src/lib.rs" <<'EOF'
+pub fn started() -> tokio::time::Instant {
+    tokio::time::Instant::now()
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M10.6: a runtime clock in shipped code")
+  printf '%s\n' "$dir"
+}
+invoke_sans_io_virtual_clock_in_src() {
+  bash "$1/scripts/check-sans-io.sh"
+}
+
+check_sans_io_allows_virtual_clock() {
+  local dir; dir="$(new_scratch sans-io-virtual-clock)"
+  copy_gate "$dir" check-sans-io.sh
+  # ⚠️ **In a `tests/` tree, because that is the whole scope of the licence.**
+  # A paused runtime is a test construct; the same line in `src/` is a real
+  # clock read in shipped code and stays flagged.
+  mkdir -p "$dir/crates/oqueue-core/tests"
+  cat > "$dir/crates/oqueue-core/tests/paused.rs" <<'EOF'
+pub fn started() -> tokio::time::Instant {
+    tokio::time::Instant::now()
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M10.6: a virtual clock read")
+  if bash "$dir/scripts/check-sans-io.sh" >/dev/null 2>&1; then
+    ok "check-sans-io.sh allows a tokio::time read, which a paused run controls"
+  else
+    fail "check-sans-io.sh flags tokio::time::Instant::now(), which is virtual"
+  fi
+}
+
 # ⚠️ **The broker is exempt from `CLOCK_RE` and not from `REAL_CLOCK_RE`**
 # (`M10.5`), which is the half a scan of the other crates cannot reach: the
 # broker legitimately holds timers, and what it may not hold is a clock a
@@ -2748,6 +2816,13 @@ run_case "check-layering.sh ([profile] in a member)" setup_layering_member_profi
 run_case "check-layering.sh (no overflow-checks)" setup_layering_no_overflow_checks invoke_layering \
   "does not set overflow-checks = true"
 run_case "check-sans-io.sh"             setup_sans_io             invoke_sans_io
+run_case "check-sans-io.sh (a wall clock beside a virtual one)" \
+  setup_sans_io_wall_clock invoke_sans_io_wall_clock \
+  "a real clock read"
+check_sans_io_allows_virtual_clock
+run_case "check-sans-io.sh (a runtime clock in shipped code)" \
+  setup_sans_io_virtual_clock_in_src invoke_sans_io_virtual_clock_in_src \
+  "a real clock read"
 run_case "check-sans-io.sh (a clock the broker's seeded runs cannot control)" \
   setup_sans_io_broker_clock invoke_sans_io_broker_clock \
   "a clock no seeded run can control"

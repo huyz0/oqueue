@@ -35,6 +35,8 @@
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
+
+use super::encoding::{percent_decode, xml_unescape};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -75,6 +77,12 @@ pub(crate) struct ModelS3 {
 struct ModelState {
     objects: HashMap<String, Stored>,
     next_etag: u64,
+    /// Per-request delay, when the model was built with one.
+    ///
+    /// ⚠️ **Off by default**, so every test written before `M10.6` keeps its
+    /// meaning: a conformance run that suddenly took simulated minutes would
+    /// be a different test, not the same one made realistic.
+    latency: Option<super::latency::Latency>,
     /// One-shot: the next PUT stores its bytes and then answers a failure.
     ///
     /// ⚠️ **The thing a real S3 cannot be told to do**, which is why
@@ -94,6 +102,7 @@ impl std::fmt::Debug for ModelState {
             .field("objects", &self.objects.len())
             .field("next_etag", &self.next_etag)
             .field("lose_next_ack", &self.lose_next_ack)
+            .field("latency", &self.latency)
             .finish()
     }
 }
@@ -136,6 +145,34 @@ impl ModelS3 {
             req.method(),
             req.uri()
         );
+        // ⚠️ **Drawn under the lock, slept outside it**, because a guard held
+        // across an `.await` is what `async-concurrency.md` forbids. The lock
+        // is not optional in any case: `Latency::draw` takes `&mut self`.
+        //
+        // ⚠️ **It does not buy determinism, and a first version said it did.**
+        // A mutex serializes access without ordering it, so two concurrent
+        // requests on a multi-thread runtime take the draws in whichever order
+        // the workers arrive — one seed, two runs. What buys determinism is the
+        // `current_thread` runtime `ADR-0028` specifies. ⚠️ **So turning
+        // latency on for the conformance test, which is `multi_thread`, needs
+        // that decided first** — `M10.7` is where it lands.
+        let delay = {
+            let mut state = self
+                .state
+                .lock()
+                .expect("the model's lock is never poisoned");
+            state.latency.as_mut().map(|l| {
+                l.draw(if matches!(req.method().as_str(), "PUT" | "POST") {
+                    super::latency::Op::Write
+                } else {
+                    super::latency::Op::Read
+                })
+            })
+        };
+        if let Some(d) = delay {
+            tokio::time::sleep(d).await;
+        }
+
         let mut state = self
             .state
             .lock()
@@ -187,6 +224,24 @@ impl ModelS3 {
         // guard has no business outliving the only statement that needs it.
         drop(state);
         resp
+    }
+
+    /// Answers every request after a delay drawn from doc 04 §2's curves.
+    ///
+    /// ⚠️ **Costs no real time only under a paused runtime.** Its one caller
+    /// writes `#[tokio::test(start_paused = true)]`; on a plain
+    /// `#[tokio::test]` every draw becomes a real `sleep`, which across the
+    /// conformance suite's requests would be tens of seconds against NFR-56's
+    /// budget. ⚠️ **Not `ADR-0028`'s runtime**, which is
+    /// `oqueue-testkit::seeded_runtime` and adds a seeded scheduler this crate
+    /// does not depend on — so a run here is paused but not seeded.
+    #[must_use]
+    pub(crate) fn with_latency(self, seed: u64) -> Self {
+        self.state
+            .lock()
+            .expect("the model's lock is never poisoned")
+            .latency = Some(super::latency::Latency::new(seed));
+        self
     }
 
     /// Arms the one-shot above. Cheap enough to be called per case.
@@ -365,44 +420,6 @@ impl ModelS3 {
         }
         resp
     }
-}
-
-/// Undoes the percent-encoding `object_store` applies to a key in a URL path.
-///
-/// ⚠️ **Without it the map is keyed two different ways.** A PUT arrives as a
-/// path — `a%20b` — and a bulk delete arrives as XML text — `a b` — so a key
-/// with any character outside the unreserved set was stored under one spelling
-/// and deleted under another: the delete answered `<Deleted>` and the object
-/// stayed. `ObjectKey::new` accepts any non-empty string, so that is reachable
-/// rather than theoretical, and every key in `conformance.rs` happens to avoid
-/// it, which is why the suite could not see it.
-fn percent_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            let hex = &s[i + 1..i + 3];
-            if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                out.push(byte);
-                i += 3;
-                continue;
-            }
-        }
-        out.push(bytes[i]);
-        i += 1;
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// The five XML entities `object_store` escapes a key with.
-fn xml_unescape(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        // ⚠️ Last, or `&amp;lt;` would round-trip to `<` rather than `&lt;`.
-        .replace("&amp;", "&")
 }
 
 /// A response carrying a status and nothing else.

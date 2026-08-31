@@ -24,6 +24,8 @@
 // A panic in a test harness is the test failing, which is what it is for.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+mod encoding;
+mod latency;
 mod model;
 
 use crate::conformance::{
@@ -132,6 +134,51 @@ async fn an_injected_ack_loss_is_retriable_exactly_as_the_fake_makes_it() {
         store.get(&k, ByteRange::Full).await,
         Ok(b"durable".to_vec())
     );
+}
+
+/// ⚠️ **Simulated latency reaches a real `S3Store` call.** The curve is
+/// `latency.rs`'s business and *that virtual time costs no real time* is
+/// `oqueue-broker/tests/it/virtual_time.rs`'s; what this pins is that the
+/// model's delay is on the request path at all — a `with_latency` that drew
+/// and discarded would leave every other test in this file green.
+#[tokio::test(start_paused = true)]
+async fn simulated_latency_advances_the_clock_and_not_the_wall() {
+    let model = ModelS3::default().with_latency(9);
+    let store = store_over(&model);
+    let k = key("slow");
+
+    let virtual_start = tokio::time::Instant::now();
+    store
+        .put(&k, b"bytes".to_vec(), None)
+        .await
+        .expect("the put succeeds");
+    let simulated = virtual_start.elapsed();
+
+    // ⚠️ **Non-zero, not a threshold.** A bound of 20 ms would be `PUT_MS`'s
+    // invented p0 tested against itself, and would start failing the moment
+    // that endpoint moved — which `latency.rs` records as a number chosen
+    // rather than measured. What this test is for is that the delay reaches
+    // the request path at all.
+    assert!(
+        simulated > std::time::Duration::ZERO,
+        "the put took no simulated time, so the model's delay never reached it"
+    );
+}
+
+/// ⚠️ **Off by default**, which is what keeps every test written before
+/// `M10.6` meaning what it did.
+#[tokio::test(start_paused = true)]
+async fn a_model_without_latency_answers_at_once() {
+    let model = ModelS3::default();
+    let store = store_over(&model);
+    let virtual_start = tokio::time::Instant::now();
+
+    store
+        .put(&key("prompt"), b"bytes".to_vec(), None)
+        .await
+        .expect("the put succeeds");
+
+    assert_eq!(virtual_start.elapsed(), std::time::Duration::ZERO);
 }
 
 fn key(name: &str) -> ObjectKey {

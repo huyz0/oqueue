@@ -34,7 +34,9 @@ rustls.workspace = true
 # eventually drives one (`bin/oqueue`, later) owns the runtime. Only this
 # crate's own tests need one, to drive real calls against MinIO. Features
 # (`rt-multi-thread`, `macros`, `time`) come from the workspace pin.
-tokio.workspace = true
+# ⚠️ `test-util` for `start_paused`: `M10.6`'s latency is simulated, so a
+# 300 ms tail must advance a virtual clock rather than the wall.
+tokio = { workspace = true, features = ["test-util"] }
 
 # See the workspace manifest: reading a PUT body out of `HttpRequestBody`.
 http-body-util.workspace = true
