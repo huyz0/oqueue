@@ -11,6 +11,12 @@ Because the property tests and the conformance suites need seeded generators and
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `tokio` (with `test-util`) — `ADR-0028`'s seeded runtime needs the runtime
+  builder and a pausable clock, not just the macros. ⚠️ **A normal dependency
+  in a crate that is itself dev-only**, so `test-util` *does* unify into
+  `cargo build --workspace` — measured — while `cargo build -p oqueue` is
+  unaffected. `check-layering.sh` governs edges, not features. See this crate's
+  `Cargo.toml` and `ADR-0028`.
 
 ## Downstream
 

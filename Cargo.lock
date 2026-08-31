@@ -1070,6 +1070,7 @@ name = "oqueue-testkit"
 version = "0.0.0"
 dependencies = [
  "oqueue-core",
+ "tokio",
 ]
 
 [[package]]

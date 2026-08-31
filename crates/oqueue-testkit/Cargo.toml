@@ -12,5 +12,27 @@ publish = false
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
 
+# ⚠️ **A runtime, in a crate that is itself dev-only.** `ADR-0027` puts the
+# seed and the schedule here, and `ADR-0028` makes a run reproducible by
+# seeding tokio's own RNG — which needs the runtime builder, not just the
+# macros. Nothing here reaches a socket; the flavour is `current_thread` with
+# time paused, which is what a seed can describe.
+# ⚠️ `test-util` on top of the workspace pin: `start_paused` lives there, and
+# a paused clock is half of what a seed has to describe.
+#
+# ⚠️ **It DOES unify into `cargo build --workspace`, and an earlier comment here
+# said it could not.** Measured with `cargo build --workspace --unit-graph`:
+# with this line the single `tokio` unit carries `test-util`, and without it it
+# does not. `check-layering.sh`'s rule is about dependency *edges* and says
+# nothing about feature unification — the other `test-util` entries in this
+# workspace stay out of a non-test build because they are `[dev-dependencies]`,
+# and this one is not, because `seed.rs` lives in `src/`.
+#
+# ⚠️ **So `cargo build --workspace` and `cargo build -p oqueue` now differ**,
+# and `m0-complete.sh`'s link check runs the first. Release packaging must
+# build the binary by name; `ADR-0028`'s Consequences carry that, and `M14`
+# owns making it a gate rather than a sentence.
+tokio = { workspace = true, features = ["test-util"] }
+
 [lints]
 workspace = true

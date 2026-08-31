@@ -127,4 +127,13 @@ RUN pip3 install --no-cache-dir --break-system-packages \
 # this image without those flags, which is how the image is used by hand.
 RUN git config --global --add safe.directory /work
 
+# ⚠️ **No `ENV RUSTFLAGS` here, deliberately.** `ADR-0028` puts
+# `--cfg tokio_unstable` in the repo's `.cargo/config.toml`, and cargo reads an
+# environment `RUSTFLAGS` *instead of* `build.rustflags` — never merged. So an
+# `ENV` here would be the mechanism for the drift it was added to prevent: the
+# day a second flag joins that file, a host build would get both and a
+# contained build only the one. It buys nothing either, measured —
+# `docker-test.sh` works from the bind-mounted repo, and even `cargo llvm-cov`
+# with `RUSTFLAGS` unset compiles code that cannot build without the flag.
+
 WORKDIR /work

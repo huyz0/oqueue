@@ -1,0 +1,17 @@
+# ⚠️ **Workspace-wide, and `M10.4` is why.** `--cfg tokio_unstable` unlocks
+# `tokio::runtime::Builder::rng_seed`, which is what makes a run reproducible
+# from a seed: without it `select!` draws its branch order from a thread-local
+# RNG nothing here can reach, measured at 102/98 over 200 two-arm selects with
+# both arms ready. With a seeded runtime the same probe replays exactly.
+# See `ADR-0028`.
+#
+# ⚠️ **It changes no *source*, and it is not free in the release binary**:
+# `[build] rustflags` applies to every profile, and under `tokio_unstable` the
+# scheduler dispatches poll hooks and maintains extra counters on every poll.
+# Unmeasured here — `ADR-0028`'s Consequences say so rather than claiming no
+# effect. And it is a `RUSTFLAGS` change, so every build that does not set it
+# has a different fingerprint and rebuilds: that is why it lives here rather
+# than in a per-invocation variable CI and the container would each have to
+# remember.
+[build]
+rustflags = ["--cfg", "tokio_unstable"]

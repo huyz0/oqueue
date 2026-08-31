@@ -1,6 +1,6 @@
 # 0027. The simulation harness is three pieces, each placed by what it depends on
 
-Status: accepted; ⚠️ 2026-09-01 (`M10.26`) **point 6 is
+Status: accepted; ⚠️ 2026-09-01 (`M10.4`) **point 5 is decided by `ADR-0028`**: the reproducibility criterion is stated over the *schedule* and what the assertions see, not over object keys, because `writer_id.rs`'s `SystemTime::now()` is deliberate — a harness needing stable keys fixes the `WriterId` at its own composition root. `M10.5` does not re-decide it.; ⚠️ 2026-09-01 (`M10.26`) **point 6 is
 answered and its premise was wrong**. The socket is `tokio::io::duplex`, which
 has been the broker's since `M2.17` — `connection.rs` and `lib.rs` both say so,
 and eight of the nine tests in `tests/it/connection.rs` drive one, the ninth
