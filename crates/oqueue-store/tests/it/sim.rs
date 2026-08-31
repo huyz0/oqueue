@@ -93,9 +93,10 @@ async fn the_simulated_backend_passes_the_full_conformance_suite() {
     );
     // ⚠️ **Named, not counted.** `M10.22` is the row for a leg that printed
     // "ack-loss case included" over a test asserting only that nothing was
-    // skipped; this is the same claim made where it can be checked. ⚠️ **That
-    // row is not discharged by this line**: `fake.rs` still asserts nothing
-    // about `report.ran`, and `m3-complete.sh` reads `fake.rs`.
+    // skipped; this is the same claim made where it can be checked. ⚠️ **`M10.22`
+    // discharged it on the other side too**: `fake.rs` carries the same
+    // assertion now, which is the one `m3-complete.sh`'s FR-10 leg actually
+    // runs — this file's is not reachable from that gate.
     assert!(
         report.ran.contains(&"a_failed_put_is_not_proof_of_absence"),
         "the case S3 must skip is the reason this backend exists: {:?}",

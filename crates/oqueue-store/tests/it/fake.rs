@@ -39,6 +39,18 @@ fn fake_passes_the_full_conformance_suite() {
         !report.ran.is_empty(),
         "the suite must have actually run at least one case"
     );
+    // ⚠️ **Named, not counted** (`M10.22`, from `M3.46`).
+    // `m3-complete.sh`'s FR-10 leg prints "ack-loss case included" over this
+    // test, and the two assertions above are true of a suite that no longer
+    // contains the case: delete `a_failed_put_is_not_proof_of_absence` from
+    // `cases()` and nothing here notices, while the gate keeps claiming it.
+    // `ADR-0005` guarantee 2 is what the case is, and `M3.15` is the row that
+    // put it here — so the leg's claim is asserted where it can be checked.
+    assert!(
+        report.ran.contains(&"a_failed_put_is_not_proof_of_absence"),
+        "the ack-loss case is what m3-complete.sh's FR-10 leg claims ran: {:?}",
+        report.ran
+    );
 
     record_backend_run("fake");
 }
