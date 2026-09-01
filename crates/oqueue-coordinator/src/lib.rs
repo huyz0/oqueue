@@ -54,7 +54,8 @@ mod error;
 mod serve;
 mod subscribe;
 
-pub use commit::{Assignment, CommitAck, UNASSIGNED_OFFSET};
+pub use allocator::RejectReason;
+pub use commit::{Assignment, CommitAck, SpanOutcome, UNASSIGNED_OFFSET};
 pub use coordinator::{COMMIT_QUEUE_DEPTH, Coordinator};
 pub use error::{CoordinatorError, OpenRejected};
 pub use serve::{CoordinatorLoop, REBUILD_PAGE_ENTRIES};

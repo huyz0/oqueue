@@ -10,6 +10,12 @@
 
 mod admission;
 
+// ⚠️ `RejectReason` is `pub` (`M11.6`) so `oqueue-broker` can name and match
+// on it through `SpanOutcome::Rejected`, but `admission` itself stays
+// private — nothing outside this crate needs the module, only the one type
+// this re-export and `lib.rs`'s own re-export of *this* path expose.
+pub use admission::RejectReason;
+
 use crate::commit::Assignment;
 use oqueue_core::{
     CommitVersion, CommittedSpan, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,

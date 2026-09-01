@@ -6,6 +6,7 @@
 // comments, so the lint that disagrees is the one allowed.
 #![allow(clippy::redundant_pub_crate)]
 
+use crate::allocator::RejectReason;
 use oqueue_core::{
     CommitVersion, CoordinatorEpoch, Offset, PartitionId, SessionWatermark, TopicId,
 };
@@ -102,6 +103,37 @@ pub struct CommitAck {
     version: CommitVersion,
     epoch: CoordinatorEpoch,
     assignments: Vec<Assignment>,
+    outcomes: Vec<SpanOutcome>,
+}
+
+/// What became of one span given to [`Coordinator::commit`](crate::Coordinator::commit) —
+/// every span, not only the ones that landed.
+///
+/// ⚠️ **`M11.6`, and the reason it exists beside [`assignments`](CommitAck::assignments)
+/// rather than replacing it.** That method's own doc says "positional... the
+/// *n*th entry describes the *n*th span" — a promise every caller before
+/// `M11` could keep because nothing yet excluded a span from what `stage`
+/// saw. `Allocator::admit` (`M11.3`) can now exclude one: a replay resolves
+/// without ever reaching `stage`, and a rejection is excluded entirely. So
+/// `assignments` narrows to "positional against the spans that got an
+/// offset" — still exact for every caller that predates producer identities,
+/// since none of them can ever produce an exclusion — and this is the
+/// generalization that also answers for the rest: one entry per span
+/// [`Coordinator::commit`](crate::Coordinator::commit) was actually given,
+/// in that order, naming a refusal where `assignments` would have had a
+/// gap.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SpanOutcome {
+    /// A real position — freshly assigned, or the one an exact replay
+    /// already held (`ADR-0031` point 2's transparent-success case).
+    Assigned(Assignment),
+    /// Excluded by [`Allocator::admit`](crate::allocator::Allocator::admit):
+    /// a sequence gap, or a stale duplicate whose record count does not
+    /// match. Not a wire code — `oqueue-broker` maps this to
+    /// `OUT_OF_ORDER_SEQUENCE_NUMBER`/`DUPLICATE_SEQUENCE_NUMBER`, keeping a
+    /// protocol concern out of the one crate this workspace keeps sans
+    /// wire-format.
+    Rejected(RejectReason),
 }
 
 impl CommitAck {
@@ -114,16 +146,24 @@ impl CommitAck {
     /// [`CoordinatorError::Journal`](crate::CoordinatorError::Journal) and
     /// acknowledge a client for records that never reached the log, which is
     /// FR-10 broken by a type whose docs say it cannot be.
+    ///
+    /// ⚠️ **`outcomes.len()` need not equal `assignments.len()`** — a
+    /// rejected span contributes to the first and not the second. The
+    /// caller (`serve.rs`) is what reconstructs `outcomes` in the original
+    /// order from `Allocator::admit`'s three separately-indexed buckets;
+    /// this constructor trusts that work rather than repeating it.
     #[must_use]
     pub(crate) const fn new(
         version: CommitVersion,
         epoch: CoordinatorEpoch,
         assignments: Vec<Assignment>,
+        outcomes: Vec<SpanOutcome>,
     ) -> Self {
         Self {
             version,
             epoch,
             assignments,
+            outcomes,
         }
     }
 
@@ -160,20 +200,36 @@ impl CommitAck {
         SessionWatermark::new(self.epoch, self.version)
     }
 
-    /// One assignment per span the commit was given, **in the order they were
-    /// given**.
+    /// One assignment per span that got a real offset, **in the order those
+    /// spans were given** — admitted or exactly replayed, `outcomes`'
+    /// `Rejected` entries excluded.
     ///
-    /// ⚠️ **Positional, not keyed, and that is the guarantee to attribute an
-    /// offset by.** A commit may name one `(topic, partition)` in more than one
-    /// span — an object bundling two producers' batches for the same partition
-    /// does exactly that — so the pairs here are not distinct, and the *n*th
-    /// entry describes the *n*th span and no other. A caller acknowledging the
-    /// producer that contributed a particular span reads it from this slice by
-    /// position; [`base_offset`](Self::base_offset) answers a different
-    /// question and is not a substitute.
+    /// ⚠️ **Positional against that subset, not keyed, and no longer against
+    /// every span given from `M11` on** (`M11.6` narrowed this — see
+    /// [`outcomes`](Self::outcomes) for the full, exclusion-aware picture).
+    /// A commit may name one `(topic, partition)` in more than one span — an
+    /// object bundling two producers' batches for the same partition does
+    /// exactly that — so the pairs here are not distinct, and the *n*th
+    /// entry describes the *n*th *offset-bearing* span and no other. Every
+    /// caller from before `M11` still reads this exactly as documented,
+    /// because none of them can construct a span `Allocator::admit` would
+    /// exclude — this is a narrowing no existing caller can observe, not a
+    /// behaviour change for one. A caller acknowledging the producer that
+    /// contributed a particular span reads it from this slice by position;
+    /// [`base_offset`](Self::base_offset) answers a different question and
+    /// is not a substitute.
     #[must_use]
     pub fn assignments(&self) -> &[Assignment] {
         &self.assignments
+    }
+
+    /// One outcome per span [`Coordinator::commit`](crate::Coordinator::commit)
+    /// was given, **in that exact order, with no exclusions** — the
+    /// generalization [`assignments`](Self::assignments) cannot be, once a
+    /// rejection can leave a span with no offset at all.
+    #[must_use]
+    pub fn outcomes(&self) -> &[SpanOutcome] {
+        &self.outcomes
     }
 
     /// The **first** offset this commit gave that partition, on the wire's

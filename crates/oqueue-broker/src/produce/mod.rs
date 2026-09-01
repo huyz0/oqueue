@@ -28,7 +28,7 @@ use crate::cluster::{Cluster, FlushError};
 use crate::connection::HandlerResponse;
 use crate::ingest::verify;
 use crate::session::Session;
-use answer::{PartitionSlot, Slot, answer};
+use answer::{PartitionSlot, PushOutcome, Slot, answer};
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
@@ -68,7 +68,7 @@ async fn flush(
     cluster: &Cluster,
     session: &Session,
     pending: Pending,
-) -> Result<Vec<i64>, FlushError> {
+) -> Result<Vec<PushOutcome>, FlushError> {
     if pending.bundle.is_empty() {
         return Ok(Vec::new());
     }
@@ -79,10 +79,41 @@ async fn flush(
         // raised. Setting it after the write would leave a window in which the
         // client has the offset and this broker has not yet promised to serve
         // it.
-        session.observe(ack.watermark());
-        ack.assignments()
+        //
+        // ⚠️ **Only when something was actually assigned** (`M11.6` review).
+        // An all-rejected commit (`Allocator::admit` excluded every span) can
+        // leave `CoordinatorLoop::serve` with nothing ever staged, journaled,
+        // or published — its ack's version is `last_committed`'s fallback for
+        // a coordinator that has *never* committed anything, which is never
+        // itself published. Observing that watermark regardless would raise
+        // this session's read-your-writes bar to a version `IndexWatch`'s own
+        // `AtLeast` wait can never see satisfied (it requires the index to
+        // have applied *something* first, whatever the version), stalling
+        // this connection's next fetch for a write that never happened. A
+        // produce answered entirely in refusals has nothing for read-your-
+        // writes to guarantee, so it raises no bar at all.
+        if ack
+            .outcomes()
             .iter()
-            .map(|assignment| assignment.base_offset().get())
+            .any(|outcome| matches!(outcome, oqueue_coordinator::SpanOutcome::Assigned(_)))
+        {
+            session.observe(ack.watermark());
+        }
+        // ⚠️ **`outcomes`, not `assignments`, from `M11.6`** — a rejected
+        // producer sequence excludes its span from `assignments` entirely
+        // (`CommitAck`'s own doc), which would silently shift every later
+        // region's offset onto the wrong pushed position. `outcomes` has one
+        // entry per pushed region, in push order, with no exclusions.
+        ack.outcomes()
+            .iter()
+            .map(|outcome| match outcome {
+                oqueue_coordinator::SpanOutcome::Assigned(assignment) => {
+                    PushOutcome::Assigned(assignment.base_offset().get())
+                }
+                oqueue_coordinator::SpanOutcome::Rejected(reason) => {
+                    PushOutcome::from_rejection(*reason)
+                }
+            })
             .collect()
     })
 }

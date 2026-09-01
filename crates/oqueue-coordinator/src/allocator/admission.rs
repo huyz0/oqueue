@@ -23,12 +23,17 @@ const fn next_sequence(last: i32) -> i32 {
 /// Why [`Allocator::admit`] excluded a span from the commit it was offered
 /// in.
 ///
-/// ⚠️ **Coordinator-internal, not a wire code.** `M11.6` maps this to
-/// `OUT_OF_ORDER_SEQUENCE_NUMBER`/`DUPLICATE_SEQUENCE_NUMBER` on the produce
-/// path; naming Kafka's error codes here would put a protocol concern in the
-/// one crate this workspace keeps sans wire-format.
+/// ⚠️ **`pub`, not `pub(crate)`, from `M11.6`.** Its own doc used to say
+/// "coordinator-internal, not a wire code" — true of the *codes* (naming
+/// Kafka's own error numbers here would put a protocol concern in the one
+/// crate this workspace keeps sans wire-format), but a caller across the
+/// crate boundary still needs to *name* this type to map it, which a
+/// `pub(crate)` variant inside a public [`SpanOutcome`](crate::SpanOutcome)
+/// cannot let it do. `oqueue-broker`'s `produce` handler is that caller —
+/// see [`error_codes::OUT_OF_ORDER_SEQUENCE_NUMBER`] and
+/// [`error_codes::DUPLICATE_SEQUENCE_NUMBER`] in `oqueue-codec`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum RejectReason {
+pub enum RejectReason {
     /// The sequence skips ahead of what this producer's line expects next —
     /// a real gap, or (for now) an epoch that does not match the one on
     /// record. `M11.7` owns turning the epoch half of this into fencing.
@@ -39,20 +44,29 @@ pub(crate) enum RejectReason {
     Duplicate,
 }
 
-/// What [`Allocator::admit`] decided about every span it was handed.
+/// What [`Allocator::admit`] decided about every span it was handed, each
+/// tagged with its position in the slice `admit` was given.
+///
+/// ⚠️ **The position, not the `(topic, partition)`, is the correlation key**
+/// (`M11.6`). `CommitAck`'s own doc already warns that a bundled commit may
+/// name one `(topic, partition)` in more than one span — `FR-32` bundling
+/// several producers into one object is exactly that case — so a caller
+/// reconstructing "what happened to the *n*th span I gave `admit`" cannot key
+/// on the pair without risking two spans answering as one. `serve` is the
+/// one place that reconstruction happens, from these indices.
 #[derive(Debug, Default)]
 pub(crate) struct Admission {
     /// Spans to forward to [`Allocator::stage`](super::Allocator::stage) —
     /// no producer identity, or genuinely the next sequence in their
     /// producer's line.
-    pub(crate) admitted: Vec<CommittedSpan>,
+    pub(crate) admitted: Vec<(usize, CommittedSpan)>,
     /// Spans whose sequence exactly repeats what already committed. No new
     /// offset is assigned; this *is* the answer — the transparent-success
     /// case a real duplicate must produce (`ADR-0031` point 2).
-    pub(crate) replayed: Vec<(TopicId, PartitionId, Assignment)>,
+    pub(crate) replayed: Vec<(usize, TopicId, PartitionId, Assignment)>,
     /// Spans excluded entirely: not forwarded to `stage`, and not answered
     /// with an offset.
-    pub(crate) rejected: Vec<(TopicId, PartitionId, RejectReason)>,
+    pub(crate) rejected: Vec<(usize, TopicId, PartitionId, RejectReason)>,
 }
 
 /// What one span's sequence, checked against `current`, decides.
@@ -62,6 +76,7 @@ pub(crate) struct Admission {
 /// same action, which read to `clippy::match_same_arms` as one arm three
 /// times — a real report, not a false positive, once the *why* and the
 /// *what to do* are two separate steps instead of one match doing both.
+#[derive(Clone, Copy)]
 enum Decision {
     /// Genuinely the next sequence — or the first one a fresh line ever
     /// sees.
@@ -150,9 +165,9 @@ impl Allocator {
         // topic, so a key borrowing it would still be live across the move.
         let mut running: HashMap<(ProducerId, TopicId, PartitionId), ProducerState> =
             HashMap::new();
-        for span in spans {
+        for (index, span) in spans.into_iter().enumerate() {
             let Some(identity) = span.producer() else {
-                admission.admitted.push(span);
+                admission.admitted.push((index, span));
                 continue;
             };
             let key = (identity.id(), span.topic().clone(), span.partition());
@@ -171,36 +186,60 @@ impl Allocator {
                 identity.epoch(),
                 span.record_count(),
             );
-            match decision {
-                Decision::Admit => {
-                    let state = ProducerState::provisional(
-                        identity.epoch(),
-                        identity.sequence(),
-                        span.record_count(),
-                    );
-                    running.insert(key, state);
-                    admission.admitted.push(span);
-                }
-                Decision::Replay(state) => {
-                    admission.replayed.push((
-                        span.topic().clone(),
-                        span.partition(),
-                        Assignment::new(
-                            span.topic().clone(),
-                            span.partition(),
-                            state.base_offset,
-                            state.record_count,
-                        ),
-                    ));
-                }
-                Decision::Reject(reason) => {
-                    admission
-                        .rejected
-                        .push((span.topic().clone(), span.partition(), reason));
-                }
-            }
+            record_decision(&mut admission, &mut running, key, (index, span), &decision);
         }
         admission
+    }
+}
+
+/// Records what `classify` decided about one span — split out of `admit`'s
+/// own loop (`too-many-lines`), on `classify`'s own precedent one function
+/// over: the *what to do* is worth separating from the *why*, once both
+/// stopped being one match doing both.
+fn record_decision(
+    admission: &mut Admission,
+    running: &mut HashMap<(ProducerId, TopicId, PartitionId), ProducerState>,
+    key: (ProducerId, TopicId, PartitionId),
+    (index, span): (usize, CommittedSpan),
+    decision: &Decision,
+) {
+    match *decision {
+        Decision::Admit => {
+            // ⚠️ `identity` is re-read from `span` rather than threaded in
+            // as a separate argument: it would be the sixth, past
+            // `clippy.toml`'s five-argument threshold, and `span.producer()`
+            // is `Some` on every path that reaches here — `admit`'s own
+            // early `continue` for `None` never calls this at all.
+            let identity = span.producer().map(|identity| {
+                ProducerState::provisional(
+                    identity.epoch(),
+                    identity.sequence(),
+                    span.record_count(),
+                )
+            });
+            if let Some(state) = identity {
+                running.insert(key, state);
+            }
+            admission.admitted.push((index, span));
+        }
+        Decision::Replay(state) => {
+            admission.replayed.push((
+                index,
+                span.topic().clone(),
+                span.partition(),
+                Assignment::new(
+                    span.topic().clone(),
+                    span.partition(),
+                    state.base_offset,
+                    state.record_count,
+                ),
+            ));
+        }
+        Decision::Reject(reason) => {
+            admission
+                .rejected
+                .push((index, span.topic().clone(), span.partition(), reason));
+        }
     }
 }
 
@@ -260,8 +299,9 @@ mod tests {
             admission.replayed.is_empty(),
             "the fixture's own commit must not be a replay"
         );
+        let admitted: Vec<CommittedSpan> = admission.admitted.into_iter().map(|(_, s)| s).collect();
         let staged = allocator
-            .stage(object(), admission.admitted)
+            .stage(object(), admitted)
             .expect("a fresh allocator always has room");
         allocator.apply(staged);
     }
@@ -291,7 +331,7 @@ mod tests {
         assert!(admission.admitted.is_empty());
         assert_eq!(
             admission.rejected,
-            vec![(topic(), partition(), RejectReason::OutOfOrder)]
+            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
         );
     }
 
@@ -311,7 +351,8 @@ mod tests {
         let admission = allocator.admit(vec![span_from(1, 0, 2)]);
         assert!(admission.admitted.is_empty(), "no new offset is assigned");
         assert_eq!(admission.replayed.len(), 1);
-        let (t, p, assignment) = &admission.replayed[0];
+        let (index, t, p, assignment) = &admission.replayed[0];
+        assert_eq!(*index, 0);
         assert_eq!((t, p), (&topic(), &partition()));
         assert_eq!(assignment.base_offset(), oqueue_core::Offset::ZERO);
     }
@@ -326,7 +367,7 @@ mod tests {
         assert!(admission.replayed.is_empty());
         assert_eq!(
             admission.rejected,
-            vec![(topic(), partition(), RejectReason::Duplicate)]
+            vec![(0, topic(), partition(), RejectReason::Duplicate)]
         );
     }
 
@@ -338,7 +379,7 @@ mod tests {
         assert!(admission.admitted.is_empty());
         assert_eq!(
             admission.rejected,
-            vec![(topic(), partition(), RejectReason::OutOfOrder)]
+            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
         );
     }
 
@@ -361,7 +402,7 @@ mod tests {
         assert!(admission.admitted.is_empty());
         assert_eq!(
             admission.rejected,
-            vec![(topic(), partition(), RejectReason::OutOfOrder)]
+            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
         );
     }
 
@@ -391,7 +432,7 @@ mod tests {
         let admission = allocator.admit(vec![span_from(1, 5, 1), span_from(2, 0, 1)]);
         assert_eq!(
             admission.rejected,
-            vec![(topic(), partition(), RejectReason::OutOfOrder)],
+            vec![(0, topic(), partition(), RejectReason::OutOfOrder)],
             "producer 1's gap"
         );
         assert_eq!(admission.admitted.len(), 1, "producer 2's fresh span");
@@ -445,7 +486,7 @@ mod tests {
         let admission = allocator.admit(vec![span_from(1, 1, 1), span_from(1, 0, 1)]);
         assert_eq!(
             admission.rejected,
-            vec![(topic(), partition(), RejectReason::OutOfOrder)]
+            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
         );
         assert_eq!(
             admission.admitted.len(),

@@ -13,7 +13,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use crate::allocator::Allocator;
-use crate::commit::CommitAck;
+use crate::commit::{CommitAck, SpanOutcome};
 use crate::error::CoordinatorError;
 use oqueue_core::{
     CommitVersion, CommittedSpan, CoordinatorEpoch, MaterializedIndex, MetadataEntry, MetadataLog,
@@ -71,6 +71,18 @@ pub struct CoordinatorLoop {
     pub(crate) requests: mpsc::Receiver<Request>,
     pub(crate) deltas: broadcast::Sender<MetadataEntry>,
     pub(crate) published: watch::Sender<Option<CommitVersion>>,
+    /// The version this coordinator last actually applied, tracked here
+    /// rather than read back from `index.applied_upto()` — `M11.6`.
+    ///
+    /// ⚠️ **The index is a cache anyone may drop**, `publish`'s own doc
+    /// says so, so `applied_upto()` can lag behind what the allocator has
+    /// truly committed. An exact replay (`ADR-0031` point 2) needs a
+    /// watermark that is *never* behind the original commit it is
+    /// answering for — a stale one would let a session's own later fetch
+    /// proceed before the index has actually folded the record it is
+    /// asking read-your-writes for. This field is updated in the same
+    /// synchronous step as `Allocator::apply`, so it cannot lag.
+    pub(crate) last_committed: Option<CommitVersion>,
 }
 
 impl CoordinatorLoop {
@@ -105,47 +117,76 @@ impl CoordinatorLoop {
 
     /// Admit → assign → journal → ack, in that order and no other.
     ///
-    /// ⚠️ **`admission.replayed`/`.rejected` are always empty today** —
-    /// nothing in this workspace yet constructs a [`CommittedSpan`] carrying
-    /// a producer identity (`M11.5` is what first makes one), so
-    /// `Allocator::admit` can only ever take its no-identity branch here.
-    /// ⚠️ **Refused, not asserted, if that ever stops being true**
-    /// (`M11.3`, on `M10.17`'s own precedent against trusting "provably
-    /// safe today" silently — the lesson that precedent actually teaches,
-    /// not a panic dressed as a trip-wire): a `debug_assert!` here would
-    /// unwind this shard's *whole* serializing loop over one producer's
-    /// ordinary retry, taking every other producer's in-flight commit down
-    /// with it, and a release build would silently drop the very spans
-    /// this mechanism exists to report correctly. `M11.6` replaces
-    /// [`CoordinatorError::ProducerSequenceUnsupported`] with real
-    /// per-`(topic, partition)` reporting once a caller can reach this.
+    /// ⚠️ **A replayed or rejected span never reaches `stage` or the
+    /// journal** (`ADR-0031` point 2) — only spans `Allocator::admit`
+    /// actually admitted do. If admission left nothing to stage at all (an
+    /// all-replay or all-reject commit), staging and journaling are skipped
+    /// entirely rather than committing zero spans for a version nobody
+    /// needed. `M11.6` is what first makes any of the three outcomes other
+    /// than "admitted" reachable — before it, `Allocator::admit` could only
+    /// take its no-identity branch, and this whole function reduced to the
+    /// single `stage`/journal/apply path unconditionally.
     async fn serve(
         &mut self,
         object: ObjectKey,
         spans: Vec<CommittedSpan>,
     ) -> Result<CommitAck, CoordinatorError> {
+        let total = spans.len();
         let admission = self.allocator.admit(spans);
-        if !admission.replayed.is_empty() || !admission.rejected.is_empty() {
-            return Err(CoordinatorError::ProducerSequenceUnsupported {
-                rejected: admission.rejected.len(),
-                replayed: admission.replayed.len(),
-            });
+        // ⚠️ Built by sorting on the original index rather than by filling a
+        // pre-sized slot array: `Allocator::admit` partitions every index
+        // into exactly one of its three buckets by the shape of its own
+        // loop (one `enumerate`d span, one push, every iteration), so a
+        // concatenate-then-sort can never need a "this index was somehow
+        // missing" fallback to fabricate — a violated partition shows up as
+        // the wrong length or the wrong order, not a value invented here.
+        let mut outcomes: Vec<(usize, SpanOutcome)> = Vec::with_capacity(total);
+        for (index, _topic, _partition, assignment) in admission.replayed {
+            outcomes.push((index, SpanOutcome::Assigned(assignment)));
         }
-        let staged = self
-            .allocator
-            .stage(object, admission.admitted)
-            .map_err(CoordinatorError::Unassignable)?;
-        // ⚠️ Journaled before the allocator takes the position, so a refusal
-        // leaves the line exactly where it was. The reverse order would leave a
-        // gap that nothing later could fill.
-        self.log
-            .append(core::slice::from_ref(staged.entry()))
-            .await
-            .map_err(CoordinatorError::Journal)?;
-        let entry = staged.entry().clone();
-        let (version, assignments) = self.allocator.apply(staged);
-        self.publish(entry).await;
-        Ok(CommitAck::new(version, self.epoch, assignments))
+        for (index, _topic, _partition, reason) in admission.rejected {
+            outcomes.push((index, SpanOutcome::Rejected(reason)));
+        }
+        let (admitted_indices, admitted_spans): (Vec<usize>, Vec<CommittedSpan>) =
+            admission.admitted.into_iter().unzip();
+
+        let (version, epoch) = if admitted_spans.is_empty() {
+            (
+                self.last_committed.unwrap_or(CommitVersion::ZERO),
+                self.epoch,
+            )
+        } else {
+            let staged = self
+                .allocator
+                .stage(object, admitted_spans)
+                .map_err(CoordinatorError::Unassignable)?;
+            // ⚠️ Journaled before the allocator takes the position, so a
+            // refusal leaves the line exactly where it was. The reverse
+            // order would leave a gap that nothing later could fill.
+            self.log
+                .append(core::slice::from_ref(staged.entry()))
+                .await
+                .map_err(CoordinatorError::Journal)?;
+            let entry = staged.entry().clone();
+            let (version, assignments) = self.allocator.apply(staged);
+            self.last_committed = Some(version);
+            self.publish(entry).await;
+            for (index, assignment) in admitted_indices.into_iter().zip(assignments) {
+                outcomes.push((index, SpanOutcome::Assigned(assignment)));
+            }
+            (version, self.epoch)
+        };
+
+        outcomes.sort_by_key(|(index, _)| *index);
+        let outcomes: Vec<SpanOutcome> = outcomes.into_iter().map(|(_, outcome)| outcome).collect();
+        let assignments: Vec<_> = outcomes
+            .iter()
+            .filter_map(|outcome| match outcome {
+                SpanOutcome::Assigned(assignment) => Some(assignment.clone()),
+                SpanOutcome::Rejected(_) => None,
+            })
+            .collect();
+        Ok(CommitAck::new(version, epoch, assignments, outcomes))
     }
 
     /// Folds the committed entry into the local index, then tells everyone.

@@ -27,7 +27,6 @@ use oqueue_core::{Error, MaterializedIndex};
 /// | [`Unassignable`](Self::Unassignable) | Never — the arithmetic will not change. |
 /// | [`Journal`](Self::Journal) | The inner error's class decides. |
 /// | [`ReplayRequired`](Self::ReplayRequired) | Never — a startup fault, not a request fault. |
-/// | [`ProducerSequenceUnsupported`](Self::ProducerSequenceUnsupported) | Never — provably unreachable until `M11.5`. |
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CoordinatorError {
     /// The coordinator's serializing loop is no longer accepting commits.
@@ -57,30 +56,6 @@ pub enum CoordinatorError {
     /// offsets the refused attempt would have had.
     #[error("the assignment could not be journaled: {0}")]
     Journal(#[source] Error),
-
-    /// A span's idempotent-producer sequence was replayed or refused, and
-    /// nothing yet reports that outcome per span.
-    ///
-    /// ⚠️ **Provably unreachable today, and refused rather than trusted
-    /// silently** (`M11.3`, on `M10.17`'s own precedent against exactly that
-    /// trust). Nothing in this workspace yet constructs a `CommittedSpan`
-    /// carrying a producer identity — `M11.5` is what first makes one — so
-    /// `Allocator::admit` can only take its no-identity branch until then.
-    /// `M11.6` replaces this variant with real per-`(topic, partition)`
-    /// reporting; until it lands, the whole commit is refused rather than
-    /// silently dropping the spans that were replayed or rejected, or
-    /// panicking the shard's whole serializing loop over one producer's
-    /// retry.
-    #[error(
-        "a producer's sequence could not be reported per span yet \
-         ({rejected} rejected, {replayed} replayed) — M11.6"
-    )]
-    ProducerSequenceUnsupported {
-        /// How many spans `Allocator::admit` rejected.
-        rejected: usize,
-        /// How many spans `Allocator::admit` resolved as an exact replay.
-        replayed: usize,
-    },
 
     /// The log handed to [`Coordinator::open`](crate::Coordinator::open)
     /// already holds entries.

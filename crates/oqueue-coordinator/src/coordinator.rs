@@ -158,6 +158,7 @@ impl Coordinator {
                 requests,
                 deltas,
                 published,
+                last_committed: None,
             },
             IndexReader::new(index),
         ))

@@ -77,6 +77,16 @@ pub const UNSUPPORTED_COMPRESSION_TYPE: i16 = 76;
 /// clients surface an unlisted `InitProducerId` code as a fatal error to
 /// the application rather than retrying it.
 pub const INVALID_REQUEST: i16 = 42;
+/// A produced sequence number skips ahead of what this producer's line
+/// expects next (45) — `M11.6`, `oqueue-coordinator`'s
+/// `RejectReason::OutOfOrder` mapped to the wire.
+pub const OUT_OF_ORDER_SEQUENCE_NUMBER: i16 = 45;
+/// A produced sequence number repeats one already recorded, but the batch it
+/// names is not the one that was recorded (46).
+///
+/// A stale retry, not the transparent-success replay case — `M11.6`,
+/// `RejectReason::Duplicate` mapped to the wire.
+pub const DUPLICATE_SEQUENCE_NUMBER: i16 = 46;
 
 #[cfg(test)]
 mod tests {
@@ -131,9 +141,24 @@ mod tests {
             super::UNKNOWN_TOPIC_ID,
             ResponseError::UnknownTopicId.code()
         );
-        assert_eq!(super::INVALID_REQUEST, ResponseError::InvalidRequest.code());
         // NONE is the protocol's "no error" sentinel, which the dependency
         // represents as the absence of a ResponseError (code 0).
         assert_eq!(super::NONE, 0);
+    }
+
+    /// ⚠️ **Split out so the first differential test stays under fifty
+    /// lines** (`code-structure.md`), not a claim these codes are checked
+    /// differently — same oracle, same reasoning, added by `M11.4`/`M11.6`.
+    #[test]
+    fn the_idempotent_producer_codes_match_the_dependency() {
+        assert_eq!(super::INVALID_REQUEST, ResponseError::InvalidRequest.code());
+        assert_eq!(
+            super::OUT_OF_ORDER_SEQUENCE_NUMBER,
+            ResponseError::OutOfOrderSequenceNumber.code()
+        );
+        assert_eq!(
+            super::DUPLICATE_SEQUENCE_NUMBER,
+            ResponseError::DuplicateSequenceNumber.code()
+        );
     }
 }

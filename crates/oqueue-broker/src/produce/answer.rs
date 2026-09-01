@@ -14,13 +14,14 @@
 use crate::cluster::FlushError;
 use oqueue_codec::error_codes;
 use oqueue_codec::produce::ProduceResponsePartition;
+use oqueue_coordinator::RejectReason;
 
 /// Where one requested partition's answer comes from.
 pub(crate) enum Slot {
     /// Refused before anything was written; this is its error code.
     Refused(i16),
-    /// Pushed into the bundle as its `n`th region, so the `n`th assignment in
-    /// the ack is its base offset.
+    /// Pushed into the bundle as its `n`th region, so the `n`th entry in the
+    /// flush's own outcomes answers it.
     Pushed(usize),
 }
 
@@ -30,6 +31,31 @@ pub(crate) struct PartitionSlot {
     pub(crate) slot: Slot,
 }
 
+/// What a successful flush decided about one pushed region — `M11.6`, once
+/// a rejected producer sequence stopped meaning "the whole flush failed"
+/// (`ADR-0031` point 2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PushOutcome {
+    /// A real, journalled position.
+    Assigned(i64),
+    /// Excluded by `Allocator::admit`, and the wire code to answer with —
+    /// already translated from `RejectReason` here rather than in
+    /// `produce/mod.rs`'s own `flush`, so this module stays the one place
+    /// that chooses a Kafka error code from something else.
+    Refused(i16),
+}
+
+impl PushOutcome {
+    /// A gap or a stale duplicate, mapped to the two codes `M11.md` task 6
+    /// names — `oqueue-coordinator`'s own `RejectReason` doc points here.
+    pub(crate) const fn from_rejection(reason: RejectReason) -> Self {
+        Self::Refused(match reason {
+            RejectReason::OutOfOrder => error_codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
+            RejectReason::Duplicate => error_codes::DUPLICATE_SEQUENCE_NUMBER,
+        })
+    }
+}
+
 /// One partition's answer: its own refusal, or the offset the commit gave it.
 ///
 /// ⚠️ **A failed flush refuses every partition that was in it**, and with the
@@ -37,17 +63,23 @@ pub(crate) struct PartitionSlot {
 /// `NOT_ENOUGH_REPLICAS` — the code a Kafka client already retries — while a
 /// commit that did not journal is `LEADER_NOT_AVAILABLE`, which sends the
 /// client to `Metadata` and back. Neither is `NONE` with a guessed offset.
+///
+/// ⚠️ **A *successful* flush can still refuse one partition and not
+/// another** (`M11.6`) — a rejected producer sequence is excluded from the
+/// commit by `Allocator::admit` before it ever reaches the journal, so the
+/// flush this partition shared with others still lands; only this one
+/// region's own outcome says so.
 pub(crate) fn answer(
     slot: &PartitionSlot,
-    flushed: Result<&Vec<i64>, &FlushError>,
+    flushed: Result<&Vec<PushOutcome>, &FlushError>,
 ) -> ProduceResponsePartition {
     let (error_code, base_offset) = match (&slot.slot, flushed) {
         (Slot::Refused(code), _) => (*code, UNASSIGNED),
-        (Slot::Pushed(nth), Ok(offsets)) => offsets
-            .get(*nth)
-            .map_or((error_codes::UNKNOWN_SERVER_ERROR, UNASSIGNED), |offset| {
-                (error_codes::NONE, *offset)
-            }),
+        (Slot::Pushed(nth), Ok(outcomes)) => match outcomes.get(*nth) {
+            Some(PushOutcome::Assigned(offset)) => (error_codes::NONE, *offset),
+            Some(PushOutcome::Refused(code)) => (*code, UNASSIGNED),
+            None => (error_codes::UNKNOWN_SERVER_ERROR, UNASSIGNED),
+        },
         (Slot::Pushed(_), Err(FlushError::Store(_))) => {
             (error_codes::NOT_ENOUGH_REPLICAS, UNASSIGNED)
         }

@@ -13,7 +13,9 @@
 #![allow(clippy::expect_used)]
 
 use crate::support::{object, partition, span, start, topic};
-use oqueue_coordinator::{Coordinator, CoordinatorError, UNASSIGNED_OFFSET};
+use oqueue_coordinator::{
+    Coordinator, CoordinatorError, RejectReason, SpanOutcome, UNASSIGNED_OFFSET,
+};
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, FakeMaterializedIndex,
     FakeMetadataLog, FaultMetadataLog, LogFaults, MaterializedIndex, MetadataEntry, MetadataLog,
@@ -291,49 +293,111 @@ fn producer_span(id: i64, sequence: i32, records: u32) -> CommittedSpan {
     )
 }
 
-/// ⚠️ **`M11.3`'s own interim scope**: `Allocator::admit` can already
-/// replay or reject a producer's sequence, but nothing wires either outcome
-/// to a caller yet — `M11.6`'s job. Until then the whole commit is refused
-/// rather than silently dropping the affected spans or panicking the
-/// shard's serializing loop over one producer's ordinary retry
-/// (`CoordinatorError::ProducerSequenceUnsupported`'s own doc).
+/// ⚠️ **`ADR-0031` point 2's transparent-success case, `M11.6`.** An exact
+/// replay resolves without ever reaching `stage` or the journal, and answers
+/// as an ordinary success naming the recorded offset — not the interim
+/// refusal `M11.3` shipped until a caller could report a per-span outcome.
 #[tokio::test]
-async fn a_replayed_or_rejected_span_is_refused_rather_than_silently_answered() {
+async fn an_exact_replay_answers_success_with_the_recorded_offset() {
     let log = Arc::new(FakeMetadataLog::new());
-    let (coordinator, driver) = start(log).await;
+    let (coordinator, driver) = start(log.clone()).await;
 
-    coordinator
+    let first = coordinator
         .commit(object(0), vec![producer_span(1, 0, 2)])
         .await
         .expect("the first sequence commits normally");
+    assert_eq!(first.base_offset(&topic(), partition()), 0);
 
-    // An exact replay of the same sequence: `Allocator::admit` resolves it
-    // without ever reaching `stage`, and `serve` cannot yet report that
-    // per span.
-    let replay_err = coordinator
+    let replay = coordinator
         .commit(object(1), vec![producer_span(1, 0, 2)])
         .await
-        .expect_err("a replay is refused, not silently re-acknowledged");
+        .expect("a replay is an ordinary success, not a refusal");
     assert_eq!(
-        replay_err,
-        CoordinatorError::ProducerSequenceUnsupported {
-            rejected: 0,
-            replayed: 1,
-        }
+        replay.outcomes(),
+        first.outcomes(),
+        "the same span, answered the same way, both times"
+    );
+    assert_eq!(replay.base_offset(&topic(), partition()), 0);
+    assert_eq!(
+        replay.version(),
+        first.version(),
+        "nothing new was committed, so the version does not move"
+    );
+    assert_eq!(
+        log.read_from(CommitVersion::ZERO, 16)
+            .await
+            .expect("the log reads back")
+            .len(),
+        1,
+        "the replay never reached the journal"
     );
 
-    // A genuine gap: `Allocator::admit` rejects it outright.
-    let reject_err = coordinator
-        .commit(object(2), vec![producer_span(1, 9, 1)])
+    drop(coordinator);
+    driver
         .await
-        .expect_err("a gap is refused");
+        .expect("the loop ends when its last handle drops");
+}
+
+/// A genuine sequence gap is named per span, without failing what would
+/// otherwise be an entirely empty commit.
+#[tokio::test]
+async fn a_rejected_span_is_named_without_reaching_the_journal() {
+    let log = Arc::new(FakeMetadataLog::new());
+    let (coordinator, driver) = start(log.clone()).await;
+
+    let ack = coordinator
+        .commit(object(0), vec![producer_span(1, 9, 1)])
+        .await
+        .expect("a rejection is an ordinary answer, not a refused commit");
     assert_eq!(
-        reject_err,
-        CoordinatorError::ProducerSequenceUnsupported {
-            rejected: 1,
-            replayed: 0,
-        }
+        ack.outcomes(),
+        &[SpanOutcome::Rejected(RejectReason::OutOfOrder)]
     );
+    assert!(
+        ack.assignments().is_empty(),
+        "a rejected span gets no offset"
+    );
+    assert_eq!(
+        log.read_from(CommitVersion::ZERO, 16)
+            .await
+            .expect("the log reads back")
+            .len(),
+        0,
+        "an all-rejected commit never reaches the journal"
+    );
+
+    drop(coordinator);
+    driver
+        .await
+        .expect("the loop ends when its last handle drops");
+}
+
+/// ⚠️ **The property `M11.3`'s own admission-layer test already proved, now
+/// checked through the public `Coordinator::commit` this milestone exists to
+/// wire it to.** One producer's rejected gap must not cost a different
+/// producer's legitimate span, in the same bundled commit, its real offset.
+#[tokio::test]
+async fn one_producers_rejection_does_not_cost_anothers_real_offset() {
+    let log = Arc::new(FakeMetadataLog::new());
+    let (coordinator, driver) = start(log).await;
+
+    let ack = coordinator
+        .commit(
+            object(0),
+            vec![producer_span(1, 9, 1), producer_span(2, 0, 3)],
+        )
+        .await
+        .expect("one rejection does not fail the whole commit");
+    assert_eq!(
+        ack.outcomes()[0],
+        SpanOutcome::Rejected(RejectReason::OutOfOrder),
+        "producer 1's gap"
+    );
+    let SpanOutcome::Assigned(assignment) = &ack.outcomes()[1] else {
+        panic!("producer 2's legitimate first span must be admitted");
+    };
+    assert_eq!(assignment.base_offset().get(), 0);
+    assert_eq!(ack.assignments(), std::slice::from_ref(assignment));
 
     drop(coordinator);
     driver

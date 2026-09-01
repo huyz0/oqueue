@@ -386,6 +386,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/error_codes.rs|OFFSET_NOT_AVAILABLE"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_COMPRESSION_TYPE"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|INVALID_REQUEST"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|OUT_OF_ORDER_SEQUENCE_NUMBER"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|DUPLICATE_SEQUENCE_NUMBER"]="Kafka's own error code, the protocol fixes it"
   # --- batch.rs: RecordBatch v2's fixed layout
   ["crates/oqueue-codec/src/batch.rs|BATCH_HEADER_LEN"]="RecordBatch v2's fixed header length"
   ["crates/oqueue-codec/src/batch.rs|CRC_COVERAGE_START"]="RecordBatch v2's fixed CRC coverage offset"
