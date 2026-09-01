@@ -1,6 +1,6 @@
 //! What one entry in the metadata log is.
 
-use crate::{ByteRange, CoordinatorEpoch, ObjectKey, PartitionId, TopicId};
+use crate::{ByteRange, CoordinatorEpoch, ObjectKey, PartitionId, ProducerIdentity, TopicId};
 
 /// One `(topic, partition)`'s share of a committed object.
 ///
@@ -15,22 +15,32 @@ pub struct CommittedSpan {
     partition: PartitionId,
     record_count: u32,
     bytes: ByteRange,
+    producer: Option<ProducerIdentity>,
 }
 
 impl CommittedSpan {
     /// Builds a span.
+    ///
+    /// ⚠️ **`producer` is `None` for an ordinary, non-idempotent produce**
+    /// (`ADR-0031`) — the wire's own `-1` sentinel decodes to `None`, never to
+    /// a `ProducerIdentity` with sentinel-shaped fields. A `Some` is what
+    /// lets `Allocator::admit` (`oqueue-coordinator`) fold this span's
+    /// sequence into `producer_state` on replay; a `None` costs nothing and
+    /// leaves no producer state to reconstruct.
     #[must_use]
     pub const fn new(
         topic: TopicId,
         partition: PartitionId,
         record_count: u32,
         bytes: ByteRange,
+        producer: Option<ProducerIdentity>,
     ) -> Self {
         Self {
             topic,
             partition,
             record_count,
             bytes,
+            producer,
         }
     }
 
@@ -70,6 +80,13 @@ impl CommittedSpan {
     #[must_use]
     pub const fn bytes(&self) -> ByteRange {
         self.bytes
+    }
+
+    /// The idempotent-producer identity this span was committed under, if
+    /// any.
+    #[must_use]
+    pub const fn producer(&self) -> Option<ProducerIdentity> {
+        self.producer
     }
 }
 

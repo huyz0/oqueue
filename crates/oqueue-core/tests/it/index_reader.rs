@@ -34,6 +34,7 @@ fn commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
                 partition(),
                 records,
                 ByteRange::bounded(0, bytes).expect("a non-empty range"),
+                None,
             )],
         },
     )

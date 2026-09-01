@@ -224,7 +224,7 @@ mod tests {
     }
 
     fn span(records: u32) -> CommittedSpan {
-        CommittedSpan::new(topic(), partition(), records, ByteRange::Full)
+        CommittedSpan::new(topic(), partition(), records, ByteRange::Full, None)
     }
 
     fn object() -> ObjectKey {
@@ -244,6 +244,7 @@ mod tests {
             PartitionId::new(0).expect("a valid partition"),
             1,
             ByteRange::Full,
+            None,
         );
         let staged = allocator
             .stage(

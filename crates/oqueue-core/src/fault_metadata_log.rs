@@ -227,6 +227,7 @@ mod tests {
                     partition,
                     1,
                     crate::ByteRange::Full,
+                    None,
                 )],
             },
         )

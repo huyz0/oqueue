@@ -55,7 +55,13 @@ fn entry(version: u64) -> MetadataEntry {
         CommitVersion::new(version),
         oqueue_core::MetadataRecord::BatchCommitted {
             object: ObjectKey::new(format!("obj-{version}")).expect("a valid key"),
-            spans: vec![CommittedSpan::new(topic(), partition(), 1, ByteRange::Full)],
+            spans: vec![CommittedSpan::new(
+                topic(),
+                partition(),
+                1,
+                ByteRange::Full,
+                None,
+            )],
         },
     )
 }

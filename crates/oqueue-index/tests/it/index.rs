@@ -55,6 +55,7 @@ pub fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataE
                 partition(part),
                 records,
                 ByteRange::Full,
+                None,
             )],
         },
     )
@@ -73,6 +74,7 @@ pub fn sized_commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
                 partition(0),
                 records,
                 ByteRange::bounded(0, bytes).expect("a non-empty range"),
+                None,
             )],
         },
     )
@@ -144,12 +146,14 @@ mod contract {
                         partition(0),
                         2,
                         ByteRange::bounded(0, 64).expect("a valid region"),
+                        None,
                     ),
                     CommittedSpan::new(
                         topic("payments"),
                         partition(0),
                         3,
                         ByteRange::bounded(64, 96).expect("a valid region"),
+                        None,
                     ),
                 ],
             },

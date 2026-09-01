@@ -39,6 +39,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
                 partition(0),
                 records,
                 ByteRange::Full,
+                None,
             )],
         },
     )
@@ -300,6 +301,7 @@ fn sized(version: u64, records: u32, bytes: u64) -> MetadataEntry {
                 partition(0),
                 records,
                 ByteRange::bounded(0, bytes).expect("a non-empty range"),
+                None,
             )],
         },
     )

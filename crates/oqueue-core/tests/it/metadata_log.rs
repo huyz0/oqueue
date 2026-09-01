@@ -41,6 +41,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
         PartitionId::new(0).expect("a valid partition"),
         records,
         ByteRange::Full,
+        None,
     );
     MetadataEntry::new(
         CommitVersion::new(version),
@@ -55,7 +56,9 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
 mod conformance {
     use super::{block_on, commit};
     use oqueue_core::{
-        CommitVersion, CoordinatorEpoch, Error, MetadataEntry, MetadataLog, MetadataRecord,
+        ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, MetadataEntry,
+        MetadataLog, MetadataRecord, ObjectKey, PartitionId, ProducerEpoch, ProducerId,
+        ProducerIdentity, TopicId,
     };
 
     /// What was appended reads back, in the order it was appended.
@@ -214,6 +217,34 @@ mod conformance {
         let read = block_on(log.read_from(CommitVersion::ZERO, 10)).expect("read succeeds");
         assert_eq!(read, vec![entry]);
     }
+
+    /// ⚠️ `ADR-0031` point 4: a span's idempotent-producer identity is what
+    /// lets `Allocator::apply` reconstruct `producer_state` from the log on
+    /// restart, so the log carrying it at all — not just an ordinary `None`
+    /// span — is the property this row exists to prove.
+    pub(super) fn a_producer_identity_round_trips<L: MetadataLog>(log: &L) {
+        let span = CommittedSpan::new(
+            TopicId::new("orders").expect("a valid topic"),
+            PartitionId::new(0).expect("a valid partition"),
+            2,
+            ByteRange::Full,
+            Some(ProducerIdentity::new(
+                ProducerId::new(7).expect("a valid producer id"),
+                ProducerEpoch::ZERO,
+                0,
+            )),
+        );
+        let entry = MetadataEntry::new(
+            CommitVersion::new(1),
+            MetadataRecord::BatchCommitted {
+                object: ObjectKey::new("obj-producer").expect("a valid key"),
+                spans: vec![span],
+            },
+        );
+        block_on(log.append(std::slice::from_ref(&entry))).expect("accepted");
+        let read = block_on(log.read_from(CommitVersion::ZERO, 10)).expect("read succeeds");
+        assert_eq!(read, vec![entry]);
+    }
 }
 
 /// Every case above, against the in-memory fake.
@@ -236,6 +267,7 @@ fn the_fake_satisfies_the_conformance_suite() {
     conformance::last_version_follows_the_appends(&FakeMetadataLog::new());
     conformance::an_empty_append_is_a_no_op(&FakeMetadataLog::new());
     conformance::an_epoch_change_round_trips(&FakeMetadataLog::new());
+    conformance::a_producer_identity_round_trips(&FakeMetadataLog::new());
 }
 
 /// The seam is `dyn`-compatible: `bin/oqueue` must be able to hold an

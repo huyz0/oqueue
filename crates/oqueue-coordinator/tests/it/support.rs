@@ -35,7 +35,7 @@ pub(crate) fn object(n: usize) -> ObjectKey {
 }
 
 pub(crate) fn span(records: u32) -> CommittedSpan {
-    CommittedSpan::new(topic(), partition(), records, ByteRange::Full)
+    CommittedSpan::new(topic(), partition(), records, ByteRange::Full, None)
 }
 
 /// A span of a *bundled* object: a real region rather than the whole of it.
@@ -49,6 +49,7 @@ pub(crate) fn region(name: &str, partition: i32, records: u32, at: u64) -> Commi
         PartitionId::new(partition).expect("a valid partition"),
         records,
         ByteRange::bounded(at, 16).expect("a non-empty range"),
+        None,
     )
 }
 

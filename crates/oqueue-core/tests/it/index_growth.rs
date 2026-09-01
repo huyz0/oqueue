@@ -35,6 +35,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
                 partition(0),
                 records,
                 ByteRange::Full,
+                None,
             )],
         },
     )
@@ -60,7 +61,9 @@ fn the_entry_count_follows_every_span_folded() {
             MetadataRecord::BatchCommitted {
                 object: ObjectKey::new("bundle".to_owned()).expect("a valid key"),
                 spans: (0..4)
-                    .map(|p| CommittedSpan::new(topic("orders"), partition(p), 1, ByteRange::Full))
+                    .map(|p| {
+                        CommittedSpan::new(topic("orders"), partition(p), 1, ByteRange::Full, None)
+                    })
                     .collect(),
             },
         )])
@@ -141,6 +144,7 @@ proptest! {
                             partition(*part),
                             *records,
                             ByteRange::Full,
+                            None,
                         )],
                     },
                 )])

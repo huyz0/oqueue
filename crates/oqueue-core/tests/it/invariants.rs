@@ -157,6 +157,7 @@ mod kills_surviving_mutants {
     use super::{
         Error, ObjectKey, Offset, PartitionId, ProducerEpoch, ProducerId, Timestamp, TopicId,
     };
+    use oqueue_core::{ByteRange, CommittedSpan, ProducerIdentity};
 
     #[test]
     fn accessors_return_what_was_constructed() {
@@ -170,6 +171,42 @@ mod kills_surviving_mutants {
         assert_eq!(Timestamp::from_millis(9).expect("valid").as_millis(), 9);
         assert_eq!(ProducerId::new(11).expect("valid").get(), 11);
         assert_eq!(ProducerEpoch::new(3).expect("valid").get(), 3);
+    }
+
+    /// ⚠️ **`ProducerIdentity`'s own three accessors, and `CommittedSpan`'s
+    /// `producer()` — mutation testing found each unguarded**: an accessor
+    /// mutated to a constant (`sequence -> 0`) or `producer()` mutated to
+    /// always answer `None` both survived every other test in the tree,
+    /// because `CommittedSpan`/`MetadataEntry`'s derived `PartialEq` compares
+    /// the raw field directly and never calls the accessor at all — a
+    /// round-trip test proves the *field* survives a log, not that the
+    /// *accessor* reads it back.
+    #[test]
+    fn producer_identity_accessors_return_what_was_constructed() {
+        let id = ProducerId::new(11).expect("valid");
+        let epoch = ProducerEpoch::new(3).expect("valid");
+        let identity = ProducerIdentity::new(id, epoch, 42);
+        assert_eq!(identity.id(), id);
+        assert_eq!(identity.epoch(), epoch);
+        assert_eq!(identity.sequence(), 42);
+
+        let span = CommittedSpan::new(
+            TopicId::new("orders").expect("valid"),
+            PartitionId::new(0).expect("valid"),
+            2,
+            ByteRange::Full,
+            Some(identity),
+        );
+        assert_eq!(span.producer(), Some(identity));
+
+        let bare = CommittedSpan::new(
+            TopicId::new("orders").expect("valid"),
+            PartitionId::new(0).expect("valid"),
+            2,
+            ByteRange::Full,
+            None,
+        );
+        assert_eq!(bare.producer(), None);
     }
 
     #[test]

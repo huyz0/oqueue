@@ -35,6 +35,7 @@ fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataEntry
                 partition(part),
                 records,
                 ByteRange::Full,
+                None,
             )],
         },
     )

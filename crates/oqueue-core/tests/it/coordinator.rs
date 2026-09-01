@@ -365,7 +365,7 @@ proptest! {
     ) {
         let spans: Vec<CommittedSpan> = counts
             .iter()
-            .map(|&c| CommittedSpan::new(a_topic(), a_partition(), c, ByteRange::Full))
+            .map(|&c| CommittedSpan::new(a_topic(), a_partition(), c, ByteRange::Full, None))
             .collect();
 
         let mut bases = Vec::with_capacity(spans.len());
@@ -390,8 +390,8 @@ proptest! {
     fn spans_differing_only_in_count_are_different_records(a in any::<u32>(), b in any::<u32>()) {
         prop_assume!(a != b);
         prop_assert_ne!(
-            CommittedSpan::new(a_topic(), a_partition(), a, ByteRange::Full),
-            CommittedSpan::new(a_topic(), a_partition(), b, ByteRange::Full)
+            CommittedSpan::new(a_topic(), a_partition(), a, ByteRange::Full, None),
+            CommittedSpan::new(a_topic(), a_partition(), b, ByteRange::Full, None)
         );
     }
 
@@ -442,6 +442,7 @@ fn a_commit_record_carries_spans_and_the_object_it_came_from() {
             a_partition(),
             3,
             ByteRange::Full,
+            None,
         )],
     };
     match record {

@@ -243,6 +243,11 @@ impl BundleBuilder {
                     region.partition,
                     region.record_count,
                     region.bytes,
+                    // ⚠️ `Region` carries no producer identity yet — `M11.5`
+                    // threads it from the decoded `RecordBatch` through the
+                    // bundler; until then every span this builder seals is an
+                    // ordinary, non-idempotent produce.
+                    None,
                 )
             })
             .collect();
