@@ -15,8 +15,9 @@
 use crate::support::{object, partition, span, start, topic};
 use oqueue_coordinator::{Coordinator, CoordinatorError, UNASSIGNED_OFFSET};
 use oqueue_core::{
-    CommitVersion, CoordinatorEpoch, Error, FakeMaterializedIndex, FakeMetadataLog,
-    FaultMetadataLog, LogFaults, MaterializedIndex, MetadataEntry, MetadataLog, PartitionId,
+    ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, FakeMaterializedIndex,
+    FakeMetadataLog, FaultMetadataLog, LogFaults, MaterializedIndex, MetadataEntry, MetadataLog,
+    PartitionId, ProducerEpoch, ProducerId, ProducerIdentity,
 };
 use std::sync::Arc;
 
@@ -273,4 +274,69 @@ async fn a_transient_journal_failure_hands_the_index_back_to_be_retried_with() {
         .expect("and it works");
     drop(coordinator);
     driver.await.expect("the loop ends");
+}
+
+/// A span carrying a producer identity, for `M11.3`'s interim refusal.
+fn producer_span(id: i64, sequence: i32, records: u32) -> CommittedSpan {
+    CommittedSpan::new(
+        topic(),
+        partition(),
+        records,
+        ByteRange::Full,
+        Some(ProducerIdentity::new(
+            ProducerId::new(id).expect("a valid producer id"),
+            ProducerEpoch::ZERO,
+            sequence,
+        )),
+    )
+}
+
+/// ⚠️ **`M11.3`'s own interim scope**: `Allocator::admit` can already
+/// replay or reject a producer's sequence, but nothing wires either outcome
+/// to a caller yet — `M11.6`'s job. Until then the whole commit is refused
+/// rather than silently dropping the affected spans or panicking the
+/// shard's serializing loop over one producer's ordinary retry
+/// (`CoordinatorError::ProducerSequenceUnsupported`'s own doc).
+#[tokio::test]
+async fn a_replayed_or_rejected_span_is_refused_rather_than_silently_answered() {
+    let log = Arc::new(FakeMetadataLog::new());
+    let (coordinator, driver) = start(log).await;
+
+    coordinator
+        .commit(object(0), vec![producer_span(1, 0, 2)])
+        .await
+        .expect("the first sequence commits normally");
+
+    // An exact replay of the same sequence: `Allocator::admit` resolves it
+    // without ever reaching `stage`, and `serve` cannot yet report that
+    // per span.
+    let replay_err = coordinator
+        .commit(object(1), vec![producer_span(1, 0, 2)])
+        .await
+        .expect_err("a replay is refused, not silently re-acknowledged");
+    assert_eq!(
+        replay_err,
+        CoordinatorError::ProducerSequenceUnsupported {
+            rejected: 0,
+            replayed: 1,
+        }
+    );
+
+    // A genuine gap: `Allocator::admit` rejects it outright.
+    let reject_err = coordinator
+        .commit(object(2), vec![producer_span(1, 9, 1)])
+        .await
+        .expect_err("a gap is refused");
+    assert_eq!(
+        reject_err,
+        CoordinatorError::ProducerSequenceUnsupported {
+            rejected: 1,
+            replayed: 0,
+        }
+    );
+
+    drop(coordinator);
+    driver
+        .await
+        .expect("the loop ends when its last handle drops");
 }

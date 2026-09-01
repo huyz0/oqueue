@@ -103,15 +103,37 @@ impl CoordinatorLoop {
         }
     }
 
-    /// Assign → journal → ack, in that order and no other.
+    /// Admit → assign → journal → ack, in that order and no other.
+    ///
+    /// ⚠️ **`admission.replayed`/`.rejected` are always empty today** —
+    /// nothing in this workspace yet constructs a [`CommittedSpan`] carrying
+    /// a producer identity (`M11.5` is what first makes one), so
+    /// `Allocator::admit` can only ever take its no-identity branch here.
+    /// ⚠️ **Refused, not asserted, if that ever stops being true**
+    /// (`M11.3`, on `M10.17`'s own precedent against trusting "provably
+    /// safe today" silently — the lesson that precedent actually teaches,
+    /// not a panic dressed as a trip-wire): a `debug_assert!` here would
+    /// unwind this shard's *whole* serializing loop over one producer's
+    /// ordinary retry, taking every other producer's in-flight commit down
+    /// with it, and a release build would silently drop the very spans
+    /// this mechanism exists to report correctly. `M11.6` replaces
+    /// [`CoordinatorError::ProducerSequenceUnsupported`] with real
+    /// per-`(topic, partition)` reporting once a caller can reach this.
     async fn serve(
         &mut self,
         object: ObjectKey,
         spans: Vec<CommittedSpan>,
     ) -> Result<CommitAck, CoordinatorError> {
+        let admission = self.allocator.admit(spans);
+        if !admission.replayed.is_empty() || !admission.rejected.is_empty() {
+            return Err(CoordinatorError::ProducerSequenceUnsupported {
+                rejected: admission.rejected.len(),
+                replayed: admission.replayed.len(),
+            });
+        }
         let staged = self
             .allocator
-            .stage(object, spans)
+            .stage(object, admission.admitted)
             .map_err(CoordinatorError::Unassignable)?;
         // ⚠️ Journaled before the allocator takes the position, so a refusal
         // leaves the line exactly where it was. The reverse order would leave a

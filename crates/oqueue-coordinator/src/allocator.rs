@@ -8,12 +8,46 @@
 // `test_executor`.
 #![allow(clippy::redundant_pub_crate)]
 
+mod admission;
+
 use crate::commit::Assignment;
 use oqueue_core::{
     CommitVersion, CommittedSpan, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,
-    Result, TopicId,
+    ProducerEpoch, ProducerId, Result, TopicId,
 };
 use std::collections::HashMap;
+
+/// What `stage` recorded the last time this `(producer, topic, partition)`
+/// committed — read to decide the next commit, never mutated until a journal
+/// append actually lands (`ADR-0031` point 1).
+///
+/// ⚠️ **Fields readable by `allocator::admission` without accessors.** A
+/// child module sees its parent's private items by Rust's own visibility
+/// rule, and a getter for each of four fields used only inside this crate
+/// would be ceremony `admission.rs`'s own doc explains is unneeded.
+#[derive(Debug, Clone, Copy)]
+struct ProducerState {
+    epoch: ProducerEpoch,
+    sequence: i32,
+    base_offset: Offset,
+    record_count: u32,
+}
+
+impl ProducerState {
+    /// An admitted span's state, before its real offset is known.
+    ///
+    /// ⚠️ `base_offset: Offset::ZERO` is a placeholder `admission.rs`'s own
+    /// `running` map never reads for its offset — only `stage` assigns the
+    /// real one, staging the corrected value `apply` actually persists.
+    const fn provisional(epoch: ProducerEpoch, sequence: i32, record_count: u32) -> Self {
+        Self {
+            epoch,
+            sequence,
+            base_offset: Offset::ZERO,
+            record_count,
+        }
+    }
+}
 
 /// A commit that has been assigned a position but not yet journaled.
 ///
@@ -28,6 +62,7 @@ pub(crate) struct Staged {
     entry: MetadataEntry,
     assignments: Vec<Assignment>,
     ends: Vec<(TopicId, PartitionId, Offset)>,
+    producer_ends: Vec<((ProducerId, TopicId, PartitionId), ProducerState)>,
     next_version: CommitVersion,
 }
 
@@ -50,6 +85,7 @@ impl Staged {
 pub(crate) struct Allocator {
     next_version: CommitVersion,
     end_offsets: HashMap<TopicId, HashMap<PartitionId, Offset>>,
+    producer_state: HashMap<(ProducerId, TopicId, PartitionId), ProducerState>,
 }
 
 /// ⚠️ Renders how far the version line has reached, never the partitions it
@@ -66,16 +102,19 @@ impl core::fmt::Debug for Allocator {
                 "partitions",
                 &self.end_offsets.values().map(HashMap::len).sum::<usize>(),
             )
+            .field("producers", &self.producer_state.len())
             .finish()
     }
 }
 
 impl Allocator {
-    /// A fresh line: version zero, every partition at [`Offset::ZERO`].
+    /// A fresh line: version zero, every partition at [`Offset::ZERO`], no
+    /// producer has been seen.
     pub(crate) fn new() -> Self {
         Self {
             next_version: CommitVersion::ZERO,
             end_offsets: HashMap::new(),
+            producer_state: HashMap::new(),
         }
     }
 
@@ -100,6 +139,14 @@ impl Allocator {
         // ~1,000 partitions in a topic, so "how many pairs" has no small bound
         // to lean on.
         let mut running: HashMap<(&TopicId, PartitionId), Offset> = HashMap::new();
+        // ⚠️ **Every span here already passed `admit`** — the caller's
+        // responsibility, not this function's to re-check — so a span
+        // carrying a producer identity is, by construction, either the
+        // first sequence a line has ever seen or genuinely the next one.
+        // What is computed here is *where* that sequence lands, which
+        // `admit` could not know without assigning the offset itself.
+        let mut producer_ends: Vec<((ProducerId, TopicId, PartitionId), ProducerState)> =
+            Vec::new();
 
         for span in &spans {
             let key = (span.topic(), span.partition());
@@ -123,6 +170,17 @@ impl Allocator {
                 base,
                 span.record_count(),
             ));
+            if let Some(identity) = span.producer() {
+                producer_ends.push((
+                    (identity.id(), span.topic().clone(), span.partition()),
+                    ProducerState {
+                        epoch: identity.epoch(),
+                        sequence: identity.sequence(),
+                        base_offset: base,
+                        record_count: span.record_count(),
+                    },
+                ));
+            }
             running.insert(key, next);
         }
 
@@ -139,6 +197,7 @@ impl Allocator {
             ),
             assignments,
             ends,
+            producer_ends,
             next_version: self.next_version.advance(1)?,
         })
     }
@@ -154,6 +213,9 @@ impl Allocator {
                 .entry(topic)
                 .or_default()
                 .insert(partition, end);
+        }
+        for (key, state) in staged.producer_ends {
+            self.producer_state.insert(key, state);
         }
         self.next_version = staged.next_version;
         (staged.entry.version(), staged.assignments)
