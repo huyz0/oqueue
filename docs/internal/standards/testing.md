@@ -151,6 +151,85 @@ sockets under a real hyper stack — its `axum` and `grpc` examples show hyper
 running on its `tokio::net` drop-in — but nothing in `M1` needs that, and
 adopting it would mean the transitive-patching problem all over again.
 
+## Deterministic simulation: the schedule, and what a seed actually reproduces
+
+⚠️ **This section is `M10`'s finding**, closing the "open for everything else"
+rule 26 carried since `M1.22` — the object-store seam above answers *what an
+S3 answers*; this answers *what order the broker's own concurrency runs in*,
+which is a different question with a different mechanism (`ADR-0028`).
+
+**The mechanism: `--cfg tokio_unstable` plus `Builder::rng_seed`, not a runtime
+swap and not `biased;`.** `tokio` draws a `select!`'s branch order from a
+per-runtime RNG that no seed reaches by default — measured, 200 iterations of
+a two-armed `select!` with both arms ready split 102/98 under a plain
+`#[tokio::test(start_paused = true)]`. `Builder::rng_seed` reaches that RNG
+directly: two runtimes built from one seed produce identical branch-pick
+sequences, a third seed diverges. `biased;` on the broker's own `select!`
+sites was measured too and rejected — it is 200/0, but at the cost of three
+client-visible behaviour changes on the serving path (`session.rs` and
+`park.rs` both put a deadline-check arm first, so the keyword alone makes each
+prefer staleness or timeout over a commit that landed in the same poll).
+Buying determinism by changing what a client can observe is the wrong trade in
+that direction. `oqueue_testkit::run_seeded` is the one caller in this
+workspace of `Builder::rng_seed`; a test reaching for reproducibility uses it,
+the same way `virtual_time.rs` and every seeded broker test in this milestone
+does — not a hand-built `Runtime`.
+
+**The harness is three pieces, in three crates, by what each depends on**
+(`ADR-0027`) — a reader looking for "the simulation" finds a third of it in
+any one place:
+
+- **`oqueue-testkit`** (sans-I/O, `oqueue-core` and nothing else): the seed
+  and the paused runtime (`seed.rs`), a `Schedule`/`Step` generator and a
+  deletion-only reducer (`schedule.rs`), and the three invariants — offsets
+  gap-free, the cache never ahead of durability (NFR-21), the high watermark
+  never ahead of servability (`invariants.rs`) — checked against an
+  `Observation` a caller assembled, never against a system this crate can
+  reach itself.
+- **`oqueue-store`'s `tests/it/sim/`**: the deterministic S3 — an
+  `HttpService`/`HttpConnector` answering from a `HashMap`, held to the same
+  conformance suite every real backend runs, plus injectable faults (a 503
+  storm, a race planted inside a conditional write's window, a per-key delete
+  refusal, a paused response). It is the only crate that depends on
+  `object_store`, so this is the seam's only consumer.
+- **`oqueue-broker`'s `tests/it/`**: the broker-level runs — a written
+  sequence of faults (`invariants.rs`) and a generated one (`generated.rs`,
+  drawn from a `Schedule` and reduced by `shrink` on failure) — plus the one
+  worked example reachable without a `[lib]`: `bin/oqueue`'s accept loop
+  noticing a dead coordinator rather than serving past it.
+
+⚠️ **Two things a recorded seed does not survive, and a corpus entry has to
+carry both** (`ADR-0028`'s Consequences): `RngSeed::from_bytes` hashes with
+`std::collections::hash_map::DefaultHasher`, whose output std documents as
+unstable across releases, and `select!`'s branch RNG is equally unpinned
+behind `tokio_unstable` — so a `rust-toolchain.toml` bump (routine under
+`build.md` rule 1) or a `tokio` patch remaps every recorded seed to a
+different schedule, with **no compile error and no failing test**. A stored
+`u64` means "this schedule" only against the toolchain and `tokio` version it
+was recorded under; `tests/seeds/corpus.tsv` carries both pins beside every
+seed for exactly this reason, and `scripts/seed-corpus.sh` warns rather than
+fails when they drift, because failing on a toolchain bump would make routine
+maintenance impossible.
+
+⚠️ **And the flag is not free on the shipped binary, which an earlier draft of
+`ADR-0028` said it was.** `[build] rustflags` applies to every profile, and
+`cfg(tokio_unstable)` is not API-only inside `tokio`: both schedulers build a
+`TaskMeta` and dispatch poll-start/poll-stop hooks on every poll under that
+cfg, and `cfg_unstable_metrics!` swaps in real `SchedulerMetrics` plus
+histograms. **Nothing in this project has measured that cost on the serving
+path**, so a later latency regression must not be ruled out on the strength of
+a "no behaviour change" claim — `M14` is where it would be measured, against
+release-profile numbers rather than a debug build's.
+
+⚠️ **What this does not buy, the same shape as the transport seam's own
+limit.** A seeded schedule decides *branch order* and, since `M10.12`, *which
+steps a generated run takes* — it does not make every choice point contended.
+`park.rs`'s two `select!` arms are never both ready in the workload `M10.12`
+built, because one produce's commit always wakes the watch before the paused
+clock has reason to advance to a parked fetch's deadline; `M10.32` is open for
+the workload that would change that. A seed reproducing a run is not the same
+claim as a seed exploring every interleaving that run could take.
+
 ## Isolation: fakes, not mocks
 
 3. **Prefer a fake over a mock.** A fake is a working implementation with
@@ -267,11 +346,32 @@ adopting it would mean the transitive-patching problem all over again.
     blind spot.
 26. **Deterministic simulation for cluster-level behaviour.** Node failure,
     message reordering, partitions, and clock skew are not reachable by unit
-    tests, and a failing seed is a complete replayable reproduction. ⚠️ **How**
-    is settled for object-store I/O and open for everything else — see
-    "Deterministic simulation: the answer is a transport seam, not a runtime
-    swap" above (`M1.22`), which found the `cfg`-swapped-runtime approach this
-    rule was written assuming is not available here.
+    tests, and a failing seed is a complete replayable reproduction. ⚠️ **How
+    is settled for both halves this rule needs, and this row is where "open
+    for everything else" closes.** Object-store I/O: see "Deterministic
+    simulation: the answer is a transport seam, not a runtime swap" above
+    (`M1.22`), which found the `cfg`-swapped-runtime approach this rule was
+    written assuming is not available for that half. Branch order and
+    generated schedules: see "Deterministic simulation: the schedule, and
+    what a seed actually reproduces" above (`M10`, `ADR-0027`, `ADR-0028`) —
+    `--cfg tokio_unstable` plus `Builder::rng_seed`, which *is* a
+    `cfg`-swapped runtime, just not the one `madsim` would have swapped, and
+    not one that changes crate structure. ⚠️ **What that buys is branch order
+    and the schedule that surrounds it — a kill, per `M10.13`'s worked
+    example (`bin/oqueue`'s accept loop noticing a dead coordinator loop,
+    aborted rather than merely gone quiescent), and a pause, per `M10.8`'s**
+    — not the other three nouns above. ⚠️ **`M10.9`'s crash points are
+    storage and journal faults against a *living* coordinator, deliberately**
+    — its own file says so — so a kill is neither what it injects nor what it
+    measures.
+    **Message reordering and clock skew are not built and nothing in this
+    repository schedules them**; a future milestone that needs either starts
+    from nothing. **Partitions and the lease-loss shape of node failure are
+    deferred, by name, in `roadmap.md`'s deferral table**: the
+    agent-coordinator partition to `M7` (there is no network between them to
+    cut until a follower's index is a cache, which is `M7`'s), and lease
+    expiry as an injected fault to `M6` (`M10.8`'s pause is the shape; `M6`
+    supplies the lease it needs a subject).
 27. **A conformance suite for every `ObjectStore` implementation**, recording
     which backends it has been run against. ⚠️ Conditional-write behaviour stays
     marked unverified until it has run against real S3.
