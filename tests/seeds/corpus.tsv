@@ -1,0 +1,30 @@
+# The seed corpus: schedules that once broke something, replayed on every push.
+#
+# ⚠️ **A seed alone is not a reproduction** (`ADR-0028`). `RngSeed::from_bytes`
+# hashes with `DefaultHasher`, whose output std documents as unstable across
+# releases, and `select!`'s `thread_rng_n` is equally unpinned behind
+# `tokio_unstable` — so a toolchain bump or a `tokio` patch remaps every seed
+# here to a different schedule, with no compile error and no failing test.
+# ⚠️ **That is why each row carries the versions it was recorded under**, and
+# why `scripts/seed-corpus.sh` says so out loud when they no longer match: an
+# entry whose pin has drifted still runs, and no longer reaches the
+# interleaving it was recorded for.
+#
+# ⚠️ **Empty of failures is the honest state, not a broken file.** Nothing has
+# failed under a seed yet; the corpus exists so that the first thing that does
+# cannot come back, and the machinery is checked by `--self-test` rather than
+# by pretending an entry exists. `M10.12`'s shrinking is what will make entries
+# small enough to be worth keeping.
+#
+# ⚠️ **Sharding is expected before v1** — doc 19 §9.2 prices the same growth
+# for mutation testing. When replaying the corpus stops fitting a CI leg, the
+# answer is shards, not a shorter corpus.
+#
+# Columns, tab-separated:
+#   seed        the u64 handed to the harness
+#   toolchain   the rustc version the schedule was recorded under
+#   tokio       the tokio version it was recorded under
+#   found       what it caught, in a few words
+#   fixed_by    the commit or task that closed it
+#
+#seed	toolchain	tokio	found	fixed_by

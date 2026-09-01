@@ -11,5 +11,6 @@ mod matrix;
 mod reads;
 mod reap;
 mod roundtrip;
+mod seeded;
 mod support;
 mod virtual_time;

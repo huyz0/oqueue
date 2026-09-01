@@ -212,7 +212,11 @@ docker volume create oqueue-cargo-registry >/dev/null
 docker volume create oqueue-target >/dev/null
 # ⚠️ Created host-side first: a bind source docker has to invent is created
 # root-owned, and a root-owned `target/review` breaks `review.sh` afterwards.
-mkdir -p "$REPO/target/review" "$REPO/target/pre-commit-home"
+# ⚠️ `target/seeds` for the same reason as `target/review` (`M10.11`): the
+# sweep prints the path it filed a failing seed at, and inside the named volume
+# that path is empty on the host — a developer follows the message and
+# concludes nothing was filed.
+mkdir -p "$REPO/target/review" "$REPO/target/seeds" "$REPO/target/pre-commit-home"
 
 # ⚠️ **Asked, not remembered.** A named volume is created root-owned, and with
 # `--user` below an unwritable one makes every build fail on a permission error
@@ -305,11 +309,14 @@ exec docker run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
   -v oqueue-cargo-registry:/usr/local/cargo/registry \
   -v oqueue-target:/work/target \
   -v "$REPO/target/review:/work/target/review" \
+  -v "$REPO/target/seeds:/work/target/seeds" \
   -v "$REPO/target/pre-commit-home:$REPO/target/pre-commit-home" \
   ${GITCONFIG_ARGS[@]+"${GITCONFIG_ARGS[@]}"} \
   -e HOME=/tmp/home \
   -e PRE_COMMIT_HOME="$REPO/target/pre-commit-home" \
   -e OQUEUE_RUN_ID="$RUN_ID" \
+  ${OQUEUE_SEED:+-e OQUEUE_SEED="$OQUEUE_SEED"} \
+  ${SWEEP_SEEDS:+-e SWEEP_SEEDS="$SWEEP_SEEDS"} \
   ${SKIP:+-e SKIP="$SKIP"} \
   -e CARGO_BUILD_JOBS="$CARGO_JOBS" \
   -w /work \

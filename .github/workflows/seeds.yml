@@ -1,0 +1,36 @@
+# The nightly seed sweep — `M10.11`. The corpus itself is replayed on every
+# push by `gates.yml`; this is the search that finds new entries for it.
+#
+# ⚠️ Scheduled AND dispatchable, for the reason `fuzz.yml` gives: a cron-only
+# job that breaks stays broken invisibly until someone happens to look.
+#
+# ⚠️ **The artifact is uploaded even when the sweep is red**, which is the only
+# arrangement that is any use: a failing seed that exists only in a log line is
+# a seed nobody adds to the corpus.
+name: seeds
+
+on:
+  schedule:
+    # 04:23 UTC daily — off-peak, and not the same minute as fuzz.yml, so a
+    # slow night does not queue the two against each other.
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sweep random seeds
+        run: bash scripts/seed-sweep.sh
+      - name: Upload any failing seed
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: failing-seeds
+          path: target/seeds/
+          if-no-files-found: ignore

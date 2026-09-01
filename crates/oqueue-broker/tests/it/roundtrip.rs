@@ -122,6 +122,43 @@ pub(crate) async fn fetch(
     fetch_now(dispatcher, broker, topic, offset).await
 }
 
+/// A `Fetch` that parks: `max_wait_ms` of patience, waiting for a commit.
+///
+/// ⚠️ **This is what reaches a `select!`**, and `fetch_now` is not: at
+/// `max_wait_ms = 0`, `park.rs` returns on its own deadline check before the
+/// `select!` at `park.rs:146` is ever polled. A seeded run only means anything
+/// where the schedule has a choice to make (`ADR-0028`), and this is the one
+/// choice on the read path.
+pub(crate) fn parked_fetch_frame(
+    broker: &Broker,
+    topic: &str,
+    offset: i64,
+    wait_ms: i32,
+) -> Vec<u8> {
+    let mut request = FetchRequest::default();
+    request.max_wait_ms = wait_ms;
+    request.min_bytes = 1;
+    let mut t = FetchTopic::default();
+    t.topic_id = broker.cluster.topic_id(topic).expect("a hosted topic");
+    let mut p = FetchPartition::default();
+    p.partition = 0;
+    p.fetch_offset = offset;
+    p.partition_max_bytes = 1 << 20;
+    t.partitions.push(p);
+    request.topics.push(t);
+    let mut body = Vec::new();
+    request.encode(&mut body, FETCH_VERSION).expect("encodes");
+    framed(ApiKey::Fetch, FETCH_VERSION, &body)
+}
+
+/// Decodes a `Fetch` reply frame.
+pub(crate) fn fetch_response_of(reply: &[u8]) -> FetchResponse {
+    let mut rest = body_of(reply, true);
+    let response = FetchResponse::decode(&mut rest, FETCH_VERSION).expect("decodes");
+    assert!(rest.is_empty());
+    response
+}
+
 /// A `Fetch` that will not wait: one look, one answer.
 pub(crate) async fn fetch_now(
     dispatcher: &Dispatcher,

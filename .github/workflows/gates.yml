@@ -359,6 +359,21 @@ jobs:
             grep '^SKIPPED_CASES ' /tmp/negative.out; exit 1
           fi
 
+      # `M10.11`: the seed corpus, replayed on every push. ⚠️ **Here rather
+      # than in `.pre-commit-config.yaml`**, because replaying it costs a
+      # `cargo test` per entry and `check-budget.sh` holds the pre-commit suite
+      # to ten seconds — a corpus that grew would start failing the budget
+      # rather than the thing it is watching. ⚠️ **And the corpus starts empty
+      # of failures**, so `--self-test` is what keeps this step from being a
+      # green tick over a reader nobody has exercised.
+      # ⚠️ `if: always()`, for the reason the negative-suite step two above
+      # gives (`M1.26`): a job that stops at the first failure never learns
+      # whether the corpus also regressed, and an unrelated red step would
+      # hide the one thing this corpus exists to detect.
+      - name: Replay the seed corpus
+        if: always()
+        run: bash scripts/seed-corpus.sh --self-test
+
       # ⚠️ **`check-milestone-review.sh` is deliberately NOT a step here**, and
       # the first version of `M0.30` wired it in before review measured what
       # that does. It is a *completion* gate: `review.md` rule 11 says it

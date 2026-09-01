@@ -38,8 +38,13 @@
 //! that silently stopped checking would fail.
 
 #![allow(clippy::expect_used)]
+// ⚠️ `pub` here is `pub(crate)` in effect — see `roundtrip.rs`. `unreachable_pub`
+// and `redundant_pub_crate` each refuse what the other asks for, and neither
+// can tell a test binary's shared module from a library's.
+#![allow(unreachable_pub)]
+#![allow(clippy::redundant_pub_crate)]
 
-use crate::roundtrip::{fetch_now, produce, produce_frame};
+use crate::roundtrip::{fetch_now, fetch_response_of, parked_fetch_frame, produce, produce_frame};
 use crate::support::{Broker, broker};
 use oqueue_broker::{Dispatcher, Handler as _, HandlerResponse};
 use oqueue_codec::error_codes::{LEADER_NOT_AVAILABLE, OFFSET_OUT_OF_RANGE};
@@ -47,13 +52,32 @@ use oqueue_core::{FaultConfig, LogFaults, StormKind};
 use oqueue_testkit::{Invariants, Observation};
 use std::sync::Arc;
 
-/// The seed this run is described by.
+/// The seed this run is described by, from `OQUEUE_SEED` or a fixed default.
 ///
-/// ⚠️ **Fixed rather than drawn**, because nothing in this run is random yet:
-/// the steps below are a written sequence. It is here so a violation reports
-/// something replayable, and so the day the sequence *is* generated the
-/// reporting does not have to change.
-const SEED: u64 = 10;
+/// ⚠️ **Read from the environment so the corpus and the sweep can drive it**
+/// (`M10.11`) — a seed is an *input*, not a threshold, so non-negotiable 2 is
+/// not in play: nothing passes or fails because of its value.
+///
+/// ⚠️ **And what it varies today is the schedule, not the sequence.** The steps
+/// below are written down rather than generated, so a seed changes only what
+/// `ADR-0028` seeds — `tokio`'s branch order — which is why the sweep is a
+/// search over interleavings rather than over workloads. `M10.12` is where a
+/// generated schedule would come from.
+/// ⚠️ **A set-but-unparseable value panics rather than falling back.** An
+/// earlier version wrote `.ok().and_then(..).unwrap_or(10)`, so
+/// `OQUEUE_SEED=abc` — or a corpus row whose seed does not fit a `u64` — ran
+/// the *default* schedule and reported the row as replayed. A green tick over
+/// a schedule nobody visited is the failure this whole row exists to prevent.
+pub fn seed() -> u64 {
+    std::env::var("OQUEUE_SEED").map_or(10, |raw| {
+        raw.parse().unwrap_or_else(|_| {
+            panic!(
+                "OQUEUE_SEED={raw} is not a u64, and silently running another \
+                 schedule would report a replay that did not happen"
+            )
+        })
+    })
+}
 
 /// How many fetches one observation will spend before calling it a loop.
 ///
@@ -216,7 +240,7 @@ impl Run {
     fn new(broker: &Broker) -> Self {
         Self {
             dispatcher: Dispatcher::new(Arc::clone(&broker.cluster)),
-            invariants: Invariants::for_seed(SEED),
+            invariants: Invariants::for_seed(seed()),
             acked: None,
             orphans: 0,
         }
@@ -275,8 +299,22 @@ async fn a_refused_look_is_declined(run: &Run, broker: &Broker) {
 /// produces — healthy, stormed, healed, journal-refused, healthy — each
 /// followed by an observation, plus one observation the harness declines to
 /// take.
-#[tokio::test]
-async fn the_three_invariants_hold_at_every_step_of_a_faulted_run() {
+/// ⚠️ **`run_seeded`, not `#[tokio::test]`, and that is the whole of what
+/// makes a seed mean anything.** An earlier version read `OQUEUE_SEED` and
+/// handed it only to `Invariants::for_seed`, which uses it to *label* a
+/// failure — so every seed executed the identical schedule, the nightly sweep
+/// was thirty-two repetitions of one run, and any number it filed had no
+/// causal relation to what failed. `ADR-0028` seeds `tokio`'s branch order
+/// through `Builder::rng_seed`, and `oqueue_testkit::run_seeded` is the only
+/// thing in this workspace that calls it.
+#[test]
+fn the_three_invariants_hold_at_every_step_of_a_faulted_run() {
+    oqueue_testkit::run_seeded(seed(), || async {
+        the_run().await;
+    });
+}
+
+pub async fn the_run() {
     let broker = broker(&["orders"]).await;
     let mut run = Run::new(&broker);
 
@@ -301,12 +339,13 @@ async fn the_three_invariants_hold_at_every_step_of_a_faulted_run() {
     broker.log.set_faults(LogFaults::default());
     run.step(&broker).await;
 
+    a_parked_fetch_races_a_commit(&broker, &mut run).await;
     a_refused_look_is_declined(&run, &broker).await;
 
     assert_eq!(
         run.invariants.steps(),
-        6,
-        "the in-flight look plus five produces — a run that checked fewer \
+        7,
+        "the in-flight look, five produces and the raced one — a run that checked fewer \
          times than it acted is the end-of-run check this row exists to replace"
     );
     assert_eq!(
@@ -315,9 +354,9 @@ async fn the_three_invariants_hold_at_every_step_of_a_faulted_run() {
     );
     assert_eq!(
         run.acked,
-        Some(7),
-        "four flushes were acknowledged — the in-flight one and three of the \
-         five steps — at two records each, so the last offset is 7"
+        Some(9),
+        "five flushes were acknowledged — the in-flight one, three of the five \
+         steps, and the one the parked fetch raced — at two records each"
     );
     // ⚠️ **The fixture fact the durability reading rests on.** Five objects:
     // the four acknowledged flushes — the in-flight one and three steps — plus
@@ -326,7 +365,7 @@ async fn the_three_invariants_hold_at_every_step_of_a_faulted_run() {
     // between the two failing steps and the reason both are in the run.
     assert_eq!(
         broker.store.inner().len(),
-        5,
+        6,
         "one object per flush, and a refused commit still leaves its object"
     );
 }
@@ -384,4 +423,48 @@ async fn in_flight_is_not_visible(broker: &Broker, invariants: &mut Invariants) 
     let HandlerResponse::Reply(_) = writing.await.expect("the produce task lives") else {
         panic!("the produce answers");
     };
+}
+
+/// How long a parked fetch is willing to wait, in virtual milliseconds.
+///
+/// ⚠️ **Long enough that the deadline is not a foregone conclusion and short
+/// enough that a lost wakeup is a failure rather than a hang.** Under
+/// `run_seeded`'s paused clock this costs no real time, so the number is about
+/// which branch of `park.rs`'s `select!` can win, not about duration.
+const PARK_MS: i32 = 50;
+
+/// A fetch parked at the high watermark while a produce commits underneath it.
+///
+/// ⚠️ **This is the only place in the run where the seed decides anything**,
+/// and without it the whole row is machinery over a constant. Review measured
+/// the previous state: the run made **zero** draws from `tokio`'s seeded RNG,
+/// because `fetch_now` sends `max_wait_ms = 0` and `park.rs` returns on its own
+/// deadline check before reaching the `select!`, `session.rs` returns before
+/// its own, and `connection.rs`'s is not on the `Dispatcher` path. So every
+/// seed executed one identical schedule and the sweep was thirty-two
+/// repetitions of it.
+///
+/// ⚠️ **Both outcomes are legal and neither is asserted.** The parked fetch may
+/// see the commit or may time out with nothing — that is exactly the choice
+/// `select!` makes, and pinning either would be pinning one seed. What is
+/// asserted is that the invariants hold whichever way it goes, which is what a
+/// seeded harness is for.
+async fn a_parked_fetch_races_a_commit(broker: &Broker, run: &mut Run) {
+    let at = i64::from(u32::try_from(run.acked.map_or(0, |last| last + 1)).unwrap_or(0));
+    let frame = parked_fetch_frame(broker, "orders", at, PARK_MS);
+    let parked = {
+        let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
+        tokio::spawn(async move { dispatcher.handle(frame).await })
+    };
+    run.step(broker).await;
+
+    let HandlerResponse::Reply(reply) = parked.await.expect("the parked task lives") else {
+        panic!("a fetch answers");
+    };
+    let response = fetch_response_of(&reply);
+    let partition = &response.responses[0].partitions[0];
+    assert_eq!(
+        partition.error_code, 0,
+        "a parked fetch that loses its race answers empty, never an error"
+    );
 }

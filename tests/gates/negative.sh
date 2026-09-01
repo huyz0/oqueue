@@ -739,6 +739,105 @@ invoke_sans_io_virtual_clock_in_src() {
   bash "$1/scripts/check-sans-io.sh"
 }
 
+# ⚠️ **The corpus reader, watched to fail** (`testing.md` rule 20a). Both
+# fixtures hold only *invalid* rows, so no `cargo test` runs: the point is the
+# reader's refusals, and a fixture with a replayable seed would make this case
+# cost a build to prove a parse.
+# ⚠️ **The sweep's failure path, watched to fail** (`testing.md` rule 20a). Its
+# whole deliverable *is* that path — the artifact and the non-zero exit — and
+# without a case here, deleting the `printf` that writes the artifact leaves
+# every gate in this repository green while a red night files nothing.
+#
+# ⚠️ **A stub `cargo` on `PATH`**, so the case costs a second rather than a
+# build: the sweep's contract is "a run that fails becomes an artifact", and
+# what makes the run fail is not the subject.
+# ⚠️ **The build-vs-run distinction, watched to fail.** Deleting the sweep's
+# `--no-run` guard leaves the artifact case green — measured — because that
+# case's stub answers `--no-run` with success and can only exercise the guard's
+# passing side. Here the stub fails the build, and a sweep without the guard
+# files a random seed as a failing schedule on a tree that does not compile.
+setup_seed_sweep_blames_the_build() {
+  local dir; dir="$(new_scratch seed-sweep-build)"
+  copy_gate "$dir" seed-sweep.sh
+  mkdir -p "$dir/stub"
+  cat > "$dir/stub/cargo" <<'EOF'
+#!/usr/bin/env bash
+echo "error: expected one of `;`, found `not`" >&2
+exit 101
+EOF
+  chmod +x "$dir/stub/cargo"
+  printf 'name = "tokio"\nversion = "9.9.9"\n' > "$dir/Cargo.lock"
+  (cd "$dir" && git add -A && git commit -q -m "M10.11: a tree that does not build")
+  printf '%s\n' "$dir"
+}
+invoke_seed_sweep_blames_the_build() {
+  local dir="$1" rc=0
+  ( cd "$dir" && PATH="$dir/stub:$PATH" SWEEP_SEEDS=1 bash "$dir/scripts/seed-sweep.sh" ) || rc=$?
+  # ⚠️ **No artifact**, which is the guard's whole point: a seed filed here
+  # names a schedule that never ran.
+  compgen -G "$dir/target/seeds/failing-*.tsv" > /dev/null && return 0
+  return "$rc"
+}
+
+setup_seed_sweep_files_the_artifact() {
+  local dir; dir="$(new_scratch seed-sweep-artifact)"
+  copy_gate "$dir" seed-sweep.sh
+  mkdir -p "$dir/stub"
+  cat > "$dir/stub/cargo" <<'EOF'
+#!/usr/bin/env bash
+# --no-run builds; anything else is the run this sweep is looking at.
+for arg in "$@"; do [[ "$arg" == "--no-run" ]] && exit 0; done
+echo "a consumer can see offset 3 with only Some(1) durable" >&2
+exit 1
+EOF
+  chmod +x "$dir/stub/cargo"
+  printf 'name = "tokio"\nversion = "9.9.9"\n' > "$dir/Cargo.lock"
+  (cd "$dir" && git add -A && git commit -q -m "M10.11: a sweep whose runs fail")
+  printf '%s\n' "$dir"
+}
+invoke_seed_sweep_files_the_artifact() {
+  local dir="$1" rc=0
+  # ⚠️ One seed, so the case is one stubbed run rather than thirty-two.
+  ( cd "$dir" && PATH="$dir/stub:$PATH" SWEEP_SEEDS=1 bash "$dir/scripts/seed-sweep.sh" ) || rc=$?
+  # ⚠️ **The artifact is checked, not just the exit code.** Deleting the
+  # `printf` that writes it leaves the sweep exiting non-zero with the same
+  # message, so a case that looked only at the status would stay green while
+  # the deliverable vanished. Returning 0 here is what makes this suite report
+  # "failed to fail".
+  local artifact
+  artifact="$(compgen -G "$dir/target/seeds/failing-*.tsv" || true)"
+  [[ -n "$artifact" ]] || return 0
+  # ⚠️ **The `found` column too, not just the file.** The extraction patterns
+  # are hand-copied from `Violation`'s `Display`, with nothing coupling them —
+  # a reworded arm silently returns every sweep to a column that says only
+  # "look in the log", which is the transcription this row exists to end.
+  grep -q "a consumer can see" "$artifact" || return 0
+  return "$rc"
+}
+
+setup_seed_corpus_unpinned() {
+  local dir; dir="$(new_scratch seed-corpus-unpinned)"
+  copy_gate "$dir" seed-corpus.sh
+  mkdir -p "$dir/tests/seeds"
+  printf '#seed\ttoolchain\ttokio\tfound\tfixed_by\n7\t\t\tno pin\tnobody\n' \
+    > "$dir/tests/seeds/corpus.tsv"
+  (cd "$dir" && git add -A && git commit -q -m "M10.11: a seed with no versions")
+  printf '%s\n' "$dir"
+}
+invoke_seed_corpus_unpinned() {
+  bash "$1/scripts/seed-corpus.sh"
+}
+
+setup_seed_corpus_missing() {
+  local dir; dir="$(new_scratch seed-corpus-missing)"
+  copy_gate "$dir" seed-corpus.sh
+  (cd "$dir" && git add -A && git commit -q -m "M10.11: no corpus at all")
+  printf '%s\n' "$dir"
+}
+invoke_seed_corpus_missing() {
+  bash "$1/scripts/seed-corpus.sh"
+}
+
 check_sans_io_allows_virtual_clock() {
   local dir; dir="$(new_scratch sans-io-virtual-clock)"
   copy_gate "$dir" check-sans-io.sh
@@ -2820,6 +2919,18 @@ run_case "check-sans-io.sh (a wall clock beside a virtual one)" \
   setup_sans_io_wall_clock invoke_sans_io_wall_clock \
   "a real clock read"
 check_sans_io_allows_virtual_clock
+run_case "seed-corpus.sh (a seed with no recorded versions)" \
+  setup_seed_corpus_unpinned invoke_seed_corpus_unpinned \
+  "records no toolchain or tokio version"
+run_case "seed-corpus.sh (no corpus file)" \
+  setup_seed_corpus_missing invoke_seed_corpus_missing \
+  "no corpus at"
+run_case "seed-sweep.sh (a failing seed becomes an artifact)" \
+  setup_seed_sweep_files_the_artifact invoke_seed_sweep_files_the_artifact \
+  "add it to tests/seeds/corpus.tsv"
+run_case "seed-sweep.sh (a tree that does not build blames no seed)" \
+  setup_seed_sweep_blames_the_build invoke_seed_sweep_blames_the_build \
+  "no seed is implicated"
 run_case "check-sans-io.sh (a runtime clock in shipped code)" \
   setup_sans_io_virtual_clock_in_src invoke_sans_io_virtual_clock_in_src \
   "a real clock read"
