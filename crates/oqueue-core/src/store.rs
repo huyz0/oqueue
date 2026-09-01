@@ -246,6 +246,13 @@ impl FakeObjectStore {
         DelayedThen::new(polls, || ())
     }
 
+    /// Waits out [`FaultConfig::put_latency_polls`] — `put` only, additional
+    /// to [`Self::delay`], never consulted by `get` or `delete`.
+    fn put_delay(&self) -> DelayedThen<(), impl FnOnce()> {
+        let polls = self.faults().put_latency_polls;
+        DelayedThen::new(polls, || ())
+    }
+
     /// If a storm is active and has calls remaining, consumes one and
     /// returns its error; otherwise leaves the config untouched.
     fn take_storm_error(&self) -> Option<Error> {
@@ -354,6 +361,7 @@ impl ObjectStore for FakeObjectStore {
     ) -> BoxFuture<'a, Result<ObjectMeta>> {
         Box::pin(async move {
             self.delay().await;
+            self.put_delay().await;
             if let Some(err) = self.take_storm_error() {
                 return Err(err);
             }

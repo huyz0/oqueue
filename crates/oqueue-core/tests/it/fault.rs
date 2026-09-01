@@ -79,6 +79,50 @@ fn zero_latency_polls_adds_no_extra_polls() {
     assert_eq!(pending_count, 0);
 }
 
+/// `put_latency_polls` delays `put` only — `get` and `delete` are unaffected
+/// (`M10.31`). This is the property `latency_polls` alone cannot give a
+/// caller: a way to hold one `put` in flight while an observing `get` runs
+/// at its ordinary speed.
+#[test]
+fn put_latency_polls_delays_put_and_nothing_else() {
+    let store = FakeObjectStore::with_faults(FaultConfig {
+        put_latency_polls: 5,
+        ..FaultConfig::default()
+    });
+    let k = key("topics/orders/0/put-only-slow.seg");
+
+    let (result, pending_count) = poll_count(store.put(&k, vec![1], None));
+    result.expect("put still succeeds, just later");
+    assert_eq!(pending_count, 5, "put pays the put-only delay");
+
+    let (result, pending_count) = poll_count(store.get(&k, ByteRange::Full));
+    result.expect("get succeeds");
+    assert_eq!(pending_count, 0, "get is not delayed by a put-only fault");
+}
+
+/// The two latency knobs are additive, not exclusive — a caller that wants
+/// `put` slower than everything else sets both.
+#[test]
+fn latency_polls_and_put_latency_polls_add_on_a_put() {
+    let store = FakeObjectStore::with_faults(FaultConfig {
+        latency_polls: 3,
+        put_latency_polls: 4,
+        ..FaultConfig::default()
+    });
+    let k = key("topics/orders/0/doubly-slow.seg");
+
+    let (result, pending_count) = poll_count(store.put(&k, vec![1], None));
+    result.expect("put still succeeds, just later");
+    assert_eq!(pending_count, 7, "both delays are paid, in either order");
+
+    let (result, pending_count) = poll_count(store.get(&k, ByteRange::Full));
+    result.expect("get succeeds");
+    assert_eq!(
+        pending_count, 3,
+        "get pays only the uniform delay, not the put-only one"
+    );
+}
+
 /// A storm fails exactly its configured count of calls, across any mix of
 /// `get`/`put`/`delete`, then the fake goes back to succeeding.
 #[test]

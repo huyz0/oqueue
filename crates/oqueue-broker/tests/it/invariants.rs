@@ -326,13 +326,40 @@ fn the_three_invariants_hold_at_every_step_of_a_faulted_run() {
     });
 }
 
+/// ⚠️ **`M10.31`'s whole point, proved directly**: `in_flight_is_not_visible`
+/// entered *after* the log already holds a flush — see that function's own
+/// doc for why `put_latency_polls` makes this reachable. `the_run` still
+/// enters the window once, at the first produce, since retrofitting a second
+/// entry changes that fixture's own cross-checked arithmetic; this stands on
+/// its own instead.
+#[test]
+fn the_in_flight_window_is_visible_after_the_log_already_holds_data() {
+    oqueue_testkit::run_seeded(seed(), || async {
+        let broker = broker(&["orders"]).await;
+        let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
+        let mut invariants = Invariants::for_seed(seed());
+
+        // Settle one flush first, so the log is not empty.
+        let response = produce(&dispatcher, &broker, &["orders"]).await;
+        assert_eq!(response.responses[0].partition_responses[0].error_code, 0);
+        let settled = observe(&dispatcher, &broker, 0)
+            .await
+            .expect("an unfaulted fetch always observes");
+        invariants.check(&settled).unwrap_or_else(|b| panic!("{b}"));
+
+        // A second PUT in flight, observed mid-flight, over the first flush.
+        in_flight_is_not_visible(&broker, &mut invariants, 0).await;
+        assert_eq!(broker.store.inner().len(), 2, "both flushes landed");
+    });
+}
+
 pub async fn the_run() {
     let broker = broker(&["orders"]).await;
     let mut run = Run::new(&broker);
 
     // ⚠️ **First, while the log is still empty**, which is the only moment the
     // in-flight window can be entered — see that function's own note.
-    in_flight_is_not_visible(&broker, &mut run.invariants).await;
+    in_flight_is_not_visible(&broker, &mut run.invariants, 0).await;
     run.step(&broker).await;
 
     broker.store.inner().set_faults(FaultConfig {
@@ -382,29 +409,22 @@ pub async fn the_run() {
     );
 }
 
-/// Observes while a PUT is still in flight.
+/// Observes while a PUT is still in flight — at any point in a run, not just
+/// while the log is empty. This is the window `NFR-21` names.
 ///
-/// ⚠️ **This is the window `NFR-21` names**, and no other observation in this
-/// run is in it: `step` awaits its produce to completion, and the produce path
-/// flushes inline, so every other look is at a settled state.
-///
-/// ⚠️ **It only works while the log is empty, and review measured why.**
-/// `FaultConfig::latency_polls` delays *every* store call, so a look taken
-/// while a PUT pends has its own GETs delayed too — and since the fake wakes
-/// itself on each `Pending`, the produce lands during the observation's own
-/// fetches and the "in-flight" look reports a settled state. Against an empty
-/// log the observation needs **no** GET (FR-12: a fetch at the high watermark
-/// issues none), so it is not delayed and the window is real. ⚠️ **That is a
-/// limit of the knob, not a property of the system**: a PUT-only pause would
-/// let this be checked mid-run as well, and `M10.31` is the row for it.
-///
-/// So a broker serving from an in-memory buffer before its bytes were durable
-/// fails here and nowhere else — at the first produce only.
-async fn in_flight_is_not_visible(broker: &Broker, invariants: &mut Invariants) {
+/// ⚠️ **`put_latency_polls`, not `latency_polls`** (`M10.31`, from `M10.10`,
+/// which measured the gap). `latency_polls` delays every store call, so an
+/// in-flight look's own GETs get delayed too, and the fake's self-waking
+/// `Pending` lets the produce land during those fetches. An empty log needed
+/// **no** GET (FR-12) and escaped this, which is why `M10.10` could only
+/// enter the window once, at the first produce. `put_latency_polls` delays
+/// only the `put`, so the observation's GETs run at ordinary speed regardless.
+async fn in_flight_is_not_visible(broker: &Broker, invariants: &mut Invariants, orphans: i64) {
     broker.store.inner().set_faults(FaultConfig {
-        latency_polls: 200,
+        put_latency_polls: 200,
         ..FaultConfig::default()
     });
+    let before = broker.store.inner().len();
     let frame = produce_frame(broker, "orders");
     let writing = {
         let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
@@ -414,17 +434,14 @@ async fn in_flight_is_not_visible(broker: &Broker, invariants: &mut Invariants) 
     for _ in 0..2 {
         tokio::task::yield_now().await;
     }
-    // ⚠️ **Asserted, because "in flight" is the whole claim and two earlier
-    // versions of this were not.** With `latency_polls: 8` and four yields the
-    // write had already landed by the time the look was taken — measured — so
-    // the observation was of a settled state wearing the name of a window.
-    assert!(
-        broker.store.inner().is_empty(),
-        "the PUT has landed already, so this look is not in flight and the \
-         window NFR-21 names is not being entered"
+    // ⚠️ A length delta, not `is_empty()` — `M10.10`'s own check assumed one.
+    assert_eq!(
+        broker.store.inner().len(),
+        before,
+        "the PUT has landed already, so this look is not in flight"
     );
     let looking = Dispatcher::new(Arc::clone(&broker.cluster));
-    let at = observe(&looking, broker, 0)
+    let at = observe(&looking, broker, orphans)
         .await
         .expect("the fetch is not what was slowed");
     invariants

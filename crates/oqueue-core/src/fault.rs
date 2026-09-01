@@ -64,6 +64,23 @@ pub struct FaultConfig {
     /// documents: a caller cannot treat a failed `put` as proof of absence,
     /// because the object may have landed anyway.
     pub crash_after_put_before_ack: u32,
+    /// Every `put` call additionally returns [`Poll::Pending`] this many
+    /// times before resolving — on top of, not instead of, [`latency_polls`]
+    /// — while `get` and `delete` are unaffected.
+    ///
+    /// ⚠️ **`latency_polls` cannot do this alone** (`M10.31`, from `M10.10`,
+    /// which measured the gap). It delays every store call uniformly, so an
+    /// observation taken while a `put` is pending has its own `get`s delayed
+    /// by the identical mechanism — and since each delayed call wakes itself
+    /// on every `Poll::Pending`, the executor lets the `put` advance while
+    /// the observation's own `get` is still pending, so by the time the
+    /// observation resolves the `put` has already landed. A bound on `put`
+    /// alone lets a caller hold one operation in flight while everything
+    /// else — an observing `get`, in particular — runs at its ordinary
+    /// speed, which is what an "in-flight" look actually needs to mean.
+    ///
+    /// [`latency_polls`]: FaultConfig::latency_polls
+    pub put_latency_polls: u32,
 }
 
 /// Resolves by evaluating `f`, after returning [`Poll::Pending`] `remaining`
