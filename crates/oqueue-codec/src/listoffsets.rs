@@ -111,8 +111,12 @@ pub fn decode_request(body: &[u8], version: i16) -> Result<ListOffsetsRequest<'_
 /// One topic's answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ListOffsetsResponseTopic<'a> {
-    /// The topic name, echoed.
-    pub name: Option<&'a str>,
+    /// The topic name, echoed. ⚠️ **`&'a str`, not `Option`** (`M3.41`): the
+    /// response schema writes it at *every* advertised version, so there is
+    /// no version at which a null is legal and no fallback for the encoder
+    /// to need. A caller with no name to echo is a caller that should not be
+    /// building this response at all.
+    pub name: &'a str,
     /// One entry per requested partition, in order.
     pub partitions: Vec<ListOffsetsResponsePartition>,
 }
@@ -147,13 +151,10 @@ pub fn encode_response(out: &mut Vec<u8>, version: i16, resp: &ListOffsetsRespon
     }
     put_array_len(out, flexible, Some(resp.topics.len()));
     for topic in &resp.topics {
-        // ⚠️ **Non-nullable in the response schema** (`M3.40`), so
-        // the writer is the one that cannot express a null. What
-        // reaches here is always `Some`, because the handler refuses a
-        // null request name — three handlers had to learn that
-        // separately. If one ever forgets, this frames a topic no
-        // client will match rather than a body no client can read.
-        put_string(out, flexible, topic.name.unwrap_or_default());
+        // ⚠️ **Non-nullable in the response schema, and now in the type**
+        // (`M3.40`, `M3.41`). `topic.name` is `&'a str`, not `Option`, so
+        // there is nothing here to resolve and nothing to default.
+        put_string(out, flexible, topic.name);
         put_array_len(out, flexible, Some(topic.partitions.len()));
         for partition in &topic.partitions {
             put_i32(out, partition.index);
@@ -279,7 +280,7 @@ mod tests {
         for version in VERSIONS {
             let response = ListOffsetsResponse {
                 topics: vec![ListOffsetsResponseTopic {
-                    name: Some("orders"),
+                    name: "orders",
                     partitions: vec![
                         ListOffsetsResponsePartition {
                             index: 0,

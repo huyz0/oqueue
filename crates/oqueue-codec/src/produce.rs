@@ -17,7 +17,7 @@ use crate::flex::{
     TaggedFields, put_array_len, put_nullable_string, put_string, put_tagged_fields,
     read_array_len, read_nullable_string, read_tagged_fields,
 };
-use crate::metadata::{TopicId, read_topic_id};
+use crate::metadata::{TopicId, TopicIdentity, read_topic_id};
 use crate::wire::{Cursor, DecodeError, put_i16, put_i32, put_i64};
 
 /// The fields of a `Produce` request this broker acts on.
@@ -130,10 +130,8 @@ pub struct ProduceResponse<'a> {
 /// One topic in a `Produce` response.
 #[derive(Debug, Clone)]
 pub struct ProduceResponseTopic<'a> {
-    /// The topic name, echoed below v13.
-    pub name: Option<&'a str>,
-    /// The topic id, echoed from v13.
-    pub topic_id: TopicId,
+    /// The name below v13, the id from it — never both, never neither.
+    pub identity: TopicIdentity<'a>,
     /// The per-partition outcomes.
     pub partitions: Vec<ProduceResponsePartition>,
 }
@@ -164,17 +162,23 @@ pub fn encode_response(out: &mut Vec<u8>, version: i16, resp: &ProduceResponse<'
 
     put_array_len(out, flexible, Some(resp.topics.len()));
     for topic in &resp.topics {
-        if version <= 12 {
-            // ⚠️ **Non-nullable in the response schema** (`M3.40`), so
-            // the writer is the one that cannot express a null. What
-            // reaches here is always `Some`, because the handler refuses a
-            // null request name — three handlers had to learn that
-            // separately. If one ever forgets, this frames a topic no
-            // client will match rather than a body no client can read.
-            put_string(out, flexible, topic.name.unwrap_or_default());
-        }
-        if version >= 13 {
-            out.extend_from_slice(&topic.topic_id);
+        // ⚠️ **The variant is the only thing decided here, and it is decided
+        // by the caller, not by this encoder** (`M3.41`). There is no
+        // `Option` to resolve and nothing to default: a `Name` at v13 or an
+        // `Id` below it is a caller error a debug build catches rather than a
+        // silent empty string on the wire.
+        match &topic.identity {
+            TopicIdentity::Name(name) => {
+                debug_assert!(version <= 12, "a name identity above v13, which has none");
+                put_string(out, flexible, name);
+            }
+            TopicIdentity::Id(id) => {
+                debug_assert!(
+                    version >= 13,
+                    "an id identity below v13, which has no id field"
+                );
+                out.extend_from_slice(id);
+            }
         }
 
         put_array_len(out, flexible, Some(topic.partitions.len()));
@@ -216,6 +220,7 @@ mod tests {
         ProduceResponse, ProduceResponsePartition, ProduceResponseTopic, decode_request,
         encode_response,
     };
+    use crate::metadata::TopicIdentity;
 
     const VERSIONS: [i16; 11] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
 
@@ -271,30 +276,56 @@ mod tests {
 
     /// The `ADR-0019` oracle: our response bytes decode under the dependency's
     /// `ProduceResponse` at every version, carrying the assigned offset.
+    ///
+    /// ⚠️ **The identity is built per version, not once and reused** — `M3.41`.
+    /// A single `ProduceResponseTopic` sharing one `name`/`topic_id` pair
+    /// across every version in the loop is exactly what let the old encoder's
+    /// `unwrap_or_default()` go untested: the value was always present, so
+    /// nothing this test did could distinguish "resolved from `Some`" from
+    /// "resolved from a default". Building `TopicIdentity` per version, and
+    /// asserting the dependency actually decoded the name or the id this test
+    /// sent, is what pins it — reverting the encoder's `match` to something
+    /// that ignores the variant fails on the boundary this loop crosses.
     #[test]
     fn our_response_decodes_under_the_dependency() {
         use kafka_protocol::messages::ProduceResponse as KpResponse;
         use kafka_protocol::protocol::Decodable;
 
-        let resp = ProduceResponse {
-            topics: vec![ProduceResponseTopic {
-                name: Some("t"),
-                topic_id: [9u8; 16],
-                partitions: vec![ProduceResponsePartition {
-                    index: 2,
-                    error_code: 0,
-                    base_offset: 42,
-                }],
-            }],
-        };
-
         for version in VERSIONS {
+            let identity = if version <= 12 {
+                TopicIdentity::Name("t")
+            } else {
+                TopicIdentity::Id([9u8; 16])
+            };
+            let resp = ProduceResponse {
+                topics: vec![ProduceResponseTopic {
+                    identity,
+                    partitions: vec![ProduceResponsePartition {
+                        index: 2,
+                        error_code: 0,
+                        base_offset: 42,
+                    }],
+                }],
+            };
             let mut out = Vec::new();
             encode_response(&mut out, version, &resp);
             let mut cursor = &out[..];
             let decoded = KpResponse::decode(&mut cursor, version)
                 .unwrap_or_else(|e| panic!("v{version}: oracle decode failed: {e}"));
             assert!(cursor.is_empty(), "v{version}: whole body consumed");
+            if version <= 12 {
+                assert_eq!(
+                    decoded.responses[0].name.as_str(),
+                    "t",
+                    "v{version}: the name this test sent, not a default"
+                );
+            } else {
+                assert_eq!(
+                    decoded.responses[0].topic_id,
+                    uuid::Uuid::from_bytes([9u8; 16]),
+                    "v{version}: the id this test sent"
+                );
+            }
             let part = &decoded.responses[0].partition_responses[0];
             assert_eq!(part.index, 2, "v{version}");
             assert_eq!(part.error_code, 0, "v{version}");

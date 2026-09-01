@@ -20,7 +20,7 @@ use crate::flex::{
     TaggedFields, put_array_len, put_string, put_tagged_fields, read_array_len,
     read_nullable_string, read_tagged_fields,
 };
-use crate::metadata::{TopicId, read_topic_id};
+use crate::metadata::{TopicId, TopicIdentity, read_topic_id};
 use crate::wire::{Cursor, DecodeError, put_i16, put_i32, put_i64};
 
 /// The fields of a `Fetch` request this broker acts on.
@@ -228,10 +228,8 @@ pub struct FetchResponse<'a> {
 /// One topic in a `Fetch` response.
 #[derive(Debug, Clone)]
 pub struct FetchResponseTopic<'a> {
-    /// The topic name, echoed through v12.
-    pub name: Option<&'a str>,
-    /// The topic id, echoed from v13.
-    pub topic_id: TopicId,
+    /// The name through v12, the id from v13 — never both, never neither.
+    pub identity: TopicIdentity<'a>,
     /// The per-partition outcomes.
     pub partitions: Vec<FetchResponsePartition<'a>>,
 }
@@ -270,17 +268,20 @@ pub fn encode_response(out: &mut Vec<u8>, version: i16, resp: &FetchResponse<'_>
 
     put_array_len(out, flexible, Some(resp.topics.len()));
     for topic in &resp.topics {
-        if version <= 12 {
-            // ⚠️ **Non-nullable in the response schema** (`M3.40`), so
-            // the writer is the one that cannot express a null. What
-            // reaches here is always `Some`, because the handler refuses a
-            // null request name — three handlers had to learn that
-            // separately. If one ever forgets, this frames a topic no
-            // client will match rather than a body no client can read.
-            put_string(out, flexible, topic.name.unwrap_or_default());
-        }
-        if version >= 13 {
-            out.extend_from_slice(&topic.topic_id);
+        // ⚠️ **The variant is the only thing decided here** (`M3.41`) — see
+        // `produce.rs`'s identical match for the reasoning.
+        match &topic.identity {
+            TopicIdentity::Name(name) => {
+                debug_assert!(version <= 12, "a name identity above v13, which has none");
+                put_string(out, flexible, name);
+            }
+            TopicIdentity::Id(id) => {
+                debug_assert!(
+                    version >= 13,
+                    "an id identity below v13, which has no id field"
+                );
+                out.extend_from_slice(id);
+            }
         }
 
         put_array_len(out, flexible, Some(topic.partitions.len()));
@@ -331,170 +332,4 @@ fn put_nullable_bytes(out: &mut Vec<u8>, flexible: bool, value: Option<&[u8]>) {
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-
-    use super::{
-        FetchResponse, FetchResponsePartition, FetchResponseTopic, decode_request, encode_response,
-    };
-
-    const VERSIONS: [i16; 14] = [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
-
-    /// The `ADR-0019` oracle: our request decoder reads what the dependency's
-    /// encoder wrote — isolation level, topic addressing, and each
-    /// partition's fetch offset — at every advertised version, including
-    /// versions that carry a fetch session and forgotten-topics list.
-    #[test]
-    fn our_request_decode_matches_the_dependency() {
-        use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
-        use kafka_protocol::messages::{FetchRequest as KpRequest, TopicName};
-        use kafka_protocol::protocol::{Encodable, StrBytes};
-
-        for version in VERSIONS {
-            let mut kp = KpRequest::default();
-            kp.isolation_level = 1;
-            kp.session_id = 7; // exercised, then ignored -- sessions declined
-            let mut topic = FetchTopic::default();
-            if version >= 13 {
-                topic.topic_id = uuid::Uuid::from_u128(0x1234);
-            } else {
-                topic.topic = TopicName(StrBytes::from_static_str("t"));
-            }
-            let mut partition = FetchPartition::default();
-            partition.partition = 3;
-            partition.fetch_offset = 100;
-            partition.partition_max_bytes = 1 << 20;
-            topic.partitions.push(partition);
-            kp.topics.push(topic);
-            let mut bytes = Vec::new();
-            kp.encode(&mut bytes, version).expect("dependency encodes");
-
-            let ours = decode_request(&bytes, version).expect("ours decodes");
-            assert_eq!(ours.isolation_level, 1, "v{version}");
-            assert_eq!(ours.topics.len(), 1, "v{version}");
-            assert_eq!(ours.topics[0].partitions.len(), 1, "v{version}");
-            let part = &ours.topics[0].partitions[0];
-            assert_eq!(part.index, 3, "v{version}");
-            assert_eq!(part.fetch_offset, 100, "v{version}");
-            assert_eq!(part.partition_max_bytes, 1 << 20, "v{version}");
-            if version >= 13 {
-                assert_eq!(
-                    ours.topics[0].topic_id,
-                    uuid::Uuid::from_u128(0x1234).into_bytes(),
-                    "v{version}"
-                );
-            } else {
-                assert_eq!(ours.topics[0].name, Some("t"), "v{version}");
-            }
-        }
-    }
-
-    /// The same, with a non-empty `forgotten_topics_data` (v7+): the decoder
-    /// must walk past it correctly to reach the real topics and the tail.
-    #[test]
-    fn a_forgotten_topics_list_is_correctly_skipped() {
-        use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic, ForgottenTopic};
-        use kafka_protocol::messages::{FetchRequest as KpRequest, TopicName};
-        use kafka_protocol::protocol::{Encodable, StrBytes};
-
-        for version in [7i16, 12, 17] {
-            let mut kp = KpRequest::default();
-            kp.isolation_level = 0;
-            let mut forgotten = ForgottenTopic::default();
-            if version >= 13 {
-                forgotten.topic_id = uuid::Uuid::from_u128(0xDEAD);
-            } else {
-                forgotten.topic = TopicName(StrBytes::from_static_str("old"));
-            }
-            forgotten.partitions = vec![1, 2];
-            kp.forgotten_topics_data.push(forgotten);
-
-            let mut topic = FetchTopic::default();
-            if version >= 13 {
-                topic.topic_id = uuid::Uuid::from_u128(0x1234);
-            } else {
-                topic.topic = TopicName(StrBytes::from_static_str("t"));
-            }
-            let mut partition = FetchPartition::default();
-            partition.partition = 0;
-            partition.fetch_offset = 5;
-            partition.partition_max_bytes = 1 << 20;
-            topic.partitions.push(partition);
-            kp.topics.push(topic);
-
-            let mut bytes = Vec::new();
-            kp.encode(&mut bytes, version).expect("encodes");
-            let ours = decode_request(&bytes, version).expect("decodes past forgotten_topics");
-            assert_eq!(ours.topics.len(), 1, "v{version}");
-            assert_eq!(ours.topics[0].partitions[0].fetch_offset, 5, "v{version}");
-        }
-    }
-
-    /// The `ADR-0019` oracle: our response bytes decode under the
-    /// dependency's `FetchResponse` at every version, carrying the records
-    /// bytes verbatim.
-    #[test]
-    fn our_response_decodes_under_the_dependency() {
-        use kafka_protocol::messages::FetchResponse as KpResponse;
-        use kafka_protocol::protocol::Decodable;
-
-        let records = b"opaque-batch-bytes";
-        let resp = FetchResponse {
-            topics: vec![FetchResponseTopic {
-                name: Some("t"),
-                topic_id: [9u8; 16],
-                partitions: vec![FetchResponsePartition {
-                    index: 0,
-                    error_code: 0,
-                    high_watermark: 42,
-                    last_stable_offset: 42,
-                    log_start_offset: 0,
-                    records: Some(records),
-                }],
-            }],
-        };
-
-        for version in VERSIONS {
-            let mut out = Vec::new();
-            encode_response(&mut out, version, &resp);
-            let mut cursor = &out[..];
-            let decoded = KpResponse::decode(&mut cursor, version)
-                .unwrap_or_else(|e| panic!("v{version}: oracle decode failed: {e}"));
-            assert!(cursor.is_empty(), "v{version}: whole body consumed");
-            let part = &decoded.responses[0].partitions[0];
-            assert_eq!(part.error_code, 0, "v{version}");
-            assert_eq!(part.high_watermark, 42, "v{version}");
-            assert_eq!(part.last_stable_offset, 42, "v{version}");
-            assert_eq!(part.records.as_deref(), Some(&records[..]), "v{version}");
-        }
-    }
-
-    /// ⚠️ **The request's own `max_bytes` is read at every advertised version**,
-    /// and the assertion that matters is the *second* one: a decoder that got
-    /// this field's position wrong would still return a plausible number here
-    /// and mis-frame the isolation level after it.
-    #[test]
-    fn the_request_max_bytes_is_read_and_leaves_the_next_field_framed() {
-        use kafka_protocol::messages::FetchRequest as KpRequest;
-        use kafka_protocol::protocol::Encodable;
-
-        for version in VERSIONS {
-            let mut kp = KpRequest::default();
-            if version <= 14 {
-                kp.replica_id = kafka_protocol::messages::BrokerId(-1);
-            }
-            kp.isolation_level = i8::from(version >= 4);
-            kp.max_bytes = 4_096;
-            let mut bytes = Vec::new();
-            kp.encode(&mut bytes, version).expect("dependency encodes");
-
-            let ours = decode_request(&bytes, version).expect("ours decodes");
-            assert_eq!(ours.max_bytes, 4_096, "v{version}");
-            assert_eq!(
-                ours.isolation_level,
-                i8::from(version >= 4),
-                "v{version}: the field after it is still framed right"
-            );
-        }
-    }
-}
+mod tests;

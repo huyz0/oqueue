@@ -23,6 +23,30 @@ use crate::wire::{Cursor, DecodeError, put_bool, put_i16, put_i32};
 /// A topic id on the wire: 16 opaque bytes (nil below v10).
 pub type TopicId = [u8; 16];
 
+/// How a response topic identifies itself at the version being encoded.
+///
+/// ⚠️ **`M3.41`'s shape decision, not a rename.** `Produce` and `Fetch` echo a
+/// name below v13 and an id from v13 — above that boundary there genuinely is
+/// no name, which `name: Option<&str>` and `topic_id: TopicId` as two
+/// separate fields did not say: nothing stopped a caller from filling both,
+/// or neither, and the encoder resolved the gap with
+/// `topic.name.unwrap_or_default()` — a silent empty string a client can read
+/// and cannot match, which is `M3.40`'s whole defect one call site later.
+/// A sum type makes "exactly one, and which one is the caller's decision, not
+/// the encoder's fallback" the only thing this type can hold.
+///
+/// ⚠️ **Not `ListOffsets`' shape.** Its response name is legal at *every*
+/// advertised version, so there is no version at which the field is absent —
+/// `&'a str` alone says that; a two-variant enum here would let a caller
+/// construct the wrong one for no version this protocol has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopicIdentity<'a> {
+    /// Echoed below v13.
+    Name(&'a str),
+    /// Echoed from v13.
+    Id(TopicId),
+}
+
 /// The fields of a `Metadata` request this broker acts on.
 ///
 /// Which topics (`None` = all), and whether to auto-create missing ones. The

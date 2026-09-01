@@ -117,9 +117,21 @@ pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) ->
     let response = ListOffsetsResponse {
         topics: outcomes
             .iter()
-            .map(|topic| ListOffsetsResponseTopic {
-                name: topic.name.as_deref(),
-                partitions: topic.partitions.clone(),
+            // ⚠️ **`filter_map`, not `expect`** (`M3.41`, `region.rs`'s own
+            // precedent for the same shape). The early `Close` a few lines up
+            // already refused any request whose topic name was `None`, so
+            // every `TopicOutcome` reaching this point was built from a name
+            // that exists — but a panic here would still be one refactor away
+            // from being reachable, and `error-handling.md` does not carry an
+            // exception for "proven safe today". Named as unreachable rather
+            // than asserted: a topic that somehow had no name is dropped from
+            // the reply, not a crash of the connection carrying every other
+            // topic's answer.
+            .filter_map(|topic| {
+                Some(ListOffsetsResponseTopic {
+                    name: topic.name.as_deref()?,
+                    partitions: topic.partitions.clone(),
+                })
             })
             .collect(),
     };

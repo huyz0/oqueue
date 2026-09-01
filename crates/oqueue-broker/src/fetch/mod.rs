@@ -45,6 +45,7 @@ use oqueue_codec::fetch::{
     FetchResponse, FetchResponsePartition, FetchResponseTopic, decode_request,
 };
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
+use oqueue_codec::metadata::TopicIdentity;
 use park::read_or_park;
 use partition::PartitionOutcome;
 pub(crate) use pass::{read_all, watermarks};
@@ -100,21 +101,35 @@ pub(crate) async fn handle(
     let response = FetchResponse {
         topics: outcomes
             .iter()
-            .map(|t| FetchResponseTopic {
-                name: t.name.as_deref(),
-                topic_id: t.topic_id,
-                partitions: t
-                    .partitions
-                    .iter()
-                    .map(|p| FetchResponsePartition {
-                        index: p.index,
-                        error_code: p.error_code,
-                        high_watermark: p.high_watermark,
-                        last_stable_offset: p.last_stable_offset,
-                        log_start_offset: p.log_start_offset,
-                        records: Some(&p.records),
-                    })
-                    .collect(),
+            // ⚠️ **`filter_map`, not `expect`** (`M3.41`, `region.rs`'s own
+            // precedent). The guard above already refused any request whose
+            // topic name was `None` at a version that needs one, so a
+            // `Name(None)` here cannot happen — and a panic one refactor away
+            // from being reachable is what `error-handling.md` forbids even
+            // for a proven-safe path. Named as unreachable rather than
+            // asserted: dropped from the reply, not a crash of the
+            // connection carrying every other topic's answer.
+            .filter_map(|t| {
+                let identity = if version <= 12 {
+                    TopicIdentity::Name(t.name.as_deref()?)
+                } else {
+                    TopicIdentity::Id(t.topic_id)
+                };
+                Some(FetchResponseTopic {
+                    identity,
+                    partitions: t
+                        .partitions
+                        .iter()
+                        .map(|p| FetchResponsePartition {
+                            index: p.index,
+                            error_code: p.error_code,
+                            high_watermark: p.high_watermark,
+                            last_stable_offset: p.last_stable_offset,
+                            log_start_offset: p.log_start_offset,
+                            records: Some(&p.records),
+                        })
+                        .collect(),
+                })
             })
             .collect(),
     };

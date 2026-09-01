@@ -32,6 +32,7 @@ use answer::{PartitionSlot, Slot, answer};
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
+use oqueue_codec::metadata::TopicIdentity;
 use oqueue_codec::produce::{ProduceResponse, ProduceResponseTopic, decode_request};
 use oqueue_core::{BundleBuilder, PartitionId, TopicId};
 use std::collections::HashSet;
@@ -139,14 +140,28 @@ pub(crate) async fn handle(
     let response = ProduceResponse {
         topics: outcomes
             .iter()
-            .map(|topic| ProduceResponseTopic {
-                name: topic.name.as_deref(),
-                topic_id: topic.topic_id,
-                partitions: topic
-                    .partitions
-                    .iter()
-                    .map(|p| answer(p, flushed.as_ref()))
-                    .collect(),
+            // ⚠️ **`filter_map`, not `expect`** (`M3.41`, `region.rs`'s own
+            // precedent). `unanswerable` above already refused any request
+            // whose topic name was `None` at a version that needs one, so a
+            // `Name(None)` here cannot happen — and a panic one refactor away
+            // from being reachable is what `error-handling.md` forbids even
+            // for a proven-safe path. Named as unreachable rather than
+            // asserted: dropped from the reply, not a crash of the
+            // connection carrying every other topic's answer.
+            .filter_map(|topic| {
+                let identity = if version <= 12 {
+                    TopicIdentity::Name(topic.name.as_deref()?)
+                } else {
+                    TopicIdentity::Id(topic.topic_id)
+                };
+                Some(ProduceResponseTopic {
+                    identity,
+                    partitions: topic
+                        .partitions
+                        .iter()
+                        .map(|p| answer(p, flushed.as_ref()))
+                        .collect(),
+                })
             })
             .collect(),
     };
