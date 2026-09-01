@@ -8,6 +8,8 @@ Test harness and data generators. **No fakes.**
 
 Because the property tests and the conformance suites need seeded generators and a common harness, and duplicating those across ten crates would guarantee they drift.
 
+⚠️ **One of three pieces of `ADR-0027`'s simulation harness.** This crate holds the seed, the schedule and the invariants; the other two are `oqueue-store`'s simulated S3 (`crates/oqueue-store/tests/it/sim.rs`) and the simulated socket in `crates/oqueue-broker/tests/`.
+
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
