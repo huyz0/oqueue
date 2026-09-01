@@ -225,13 +225,30 @@ mkdir -p "$REPO/target/review" "$REPO/target/seeds" "$REPO/target/pre-commit-hom
 # chown happened and not *for whom*, so a second developer on the same host, or
 # the same one after a uid change, skipped the chown and got EACCES from every
 # cargo invocation — the failure this is here to prevent.
-for v in oqueue-cargo-registry oqueue-target; do
-  if ! docker run --rm -u "$HOST_UID:$HOST_GID" -v "$v:/v" "$IMAGE" \
-        test -w /v 2>/dev/null; then
-    docker run --rm -u 0 -v "$v:/v" "$IMAGE" \
-      chown -R "$HOST_UID:$HOST_GID" /v >/dev/null
-  fi
-done
+#
+# ⚠️ **One container, not one per volume** (`ADR-0029`): the common case —
+# both volumes already owned by this uid, true on every run after the first —
+# used to pay a full container start twice for a `test -w` each, measured at
+# ~380 ms apiece against this image. Checking both mount points in one run
+# halves that; the fallback below still chowns each volume that actually
+# needs it, so a first-run or uid-changed host is no worse off than before.
+if ! docker run --rm -u "$HOST_UID:$HOST_GID" \
+      -v oqueue-cargo-registry:/a -v oqueue-target:/b "$IMAGE" \
+      sh -c 'test -w /a && test -w /b' 2>/dev/null; then
+  # ⚠️ **Re-probed per volume here, not chowned unconditionally.** The
+  # combined check above only says *one or both* failed, and a blanket
+  # `chown -R` on a volume that was already fine pays a recursive walk over
+  # however many gigabytes of cached crates or build output it holds — found
+  # by review, which built two throwaway volumes, root-owned one, and
+  # measured the unconditional version re-chowning the other for nothing.
+  for v in oqueue-cargo-registry oqueue-target; do
+    if ! docker run --rm -u "$HOST_UID:$HOST_GID" -v "$v:/v" "$IMAGE" \
+          test -w /v 2>/dev/null; then
+      docker run --rm -u 0 -v "$v:/v" "$IMAGE" \
+        chown -R "$HOST_UID:$HOST_GID" /v >/dev/null
+    fi
+  done
+fi
 
 # ⚠️ **A unique id per invocation, because a container's pgid is always 1.**
 # `lib.sh` keys a timing row by process group and `check-budget.sh` groups on
