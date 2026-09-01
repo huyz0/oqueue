@@ -87,6 +87,10 @@ pub const OUT_OF_ORDER_SEQUENCE_NUMBER: i16 = 45;
 /// A stale retry, not the transparent-success replay case — `M11.6`,
 /// `RejectReason::Duplicate` mapped to the wire.
 pub const DUPLICATE_SEQUENCE_NUMBER: i16 = 46;
+/// A producer's epoch is older than the one this broker has on record for
+/// its id (47) — a zombie, not something a retry could mend. `M11.7`,
+/// `RejectReason::StaleEpoch` mapped to the wire.
+pub const INVALID_PRODUCER_EPOCH: i16 = 47;
 
 #[cfg(test)]
 mod tests {
@@ -159,6 +163,10 @@ mod tests {
         assert_eq!(
             super::DUPLICATE_SEQUENCE_NUMBER,
             ResponseError::DuplicateSequenceNumber.code()
+        );
+        assert_eq!(
+            super::INVALID_PRODUCER_EPOCH,
+            ResponseError::InvalidProducerEpoch.code()
         );
     }
 }

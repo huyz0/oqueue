@@ -298,4 +298,6 @@ fn one_partition(
 }
 
 #[cfg(test)]
+mod idempotent;
+#[cfg(test)]
 pub(crate) mod tests;

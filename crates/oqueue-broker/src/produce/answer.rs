@@ -46,12 +46,14 @@ pub(crate) enum PushOutcome {
 }
 
 impl PushOutcome {
-    /// A gap or a stale duplicate, mapped to the two codes `M11.md` task 6
-    /// names — `oqueue-coordinator`'s own `RejectReason` doc points here.
+    /// A gap, a stale duplicate, or a zombie epoch — the two codes `M11.md`
+    /// task 6 names plus `M11.7`'s own, all mapped from
+    /// `oqueue-coordinator`'s `RejectReason`, whose own doc points here.
     pub(crate) const fn from_rejection(reason: RejectReason) -> Self {
         Self::Refused(match reason {
             RejectReason::OutOfOrder => error_codes::OUT_OF_ORDER_SEQUENCE_NUMBER,
             RejectReason::Duplicate => error_codes::DUPLICATE_SEQUENCE_NUMBER,
+            RejectReason::StaleEpoch => error_codes::INVALID_PRODUCER_EPOCH,
         })
     }
 }

@@ -216,6 +216,41 @@ async fn opening_over_a_log_that_already_holds_entries_refuses() {
     );
 }
 
+/// ⚠️ **`M11.7`, `ADR-0031` point 5's `CoordinatorEpoch` half.** A second
+/// coordinator is what a zombie *coordinator* scenario needs to exist at
+/// all — and `Coordinator::open` already refuses one over any non-empty
+/// log, unconditionally, before it could ever answer a sequence check any
+/// more than it could assign an offset. `M6` is what elects a genuine
+/// replacement (`coordinator_epoch.rs`'s own doc); until then, a log
+/// carrying producer-sequence history is refused open exactly the same as
+/// one carrying only offsets — the same `ReplayRequired` this file's own
+/// `opening_over_a_log_that_already_holds_entries_refuses` already proves,
+/// checked here against a log a producer-bearing commit actually built.
+#[tokio::test]
+async fn a_log_carrying_producer_sequence_history_refuses_a_second_coordinator_too() {
+    let log = Arc::new(FakeMetadataLog::new());
+    let (coordinator, driver) = start(log.clone()).await;
+    coordinator
+        .commit(object(0), vec![producer_span(1, 0, 2)])
+        .await
+        .expect("the commit lands");
+    drop(coordinator);
+    driver.await.expect("the loop ends");
+
+    let rejected = Coordinator::open(
+        log,
+        Box::new(FakeMaterializedIndex::new()),
+        CoordinatorEpoch::ZERO,
+    )
+    .await
+    .expect_err("a non-empty log refuses a second coordinator, sequence history or not");
+
+    assert_eq!(
+        rejected.error(),
+        &CoordinatorError::ReplayRequired { last_version: 0 }
+    );
+}
+
 /// ⚠️ **A transient log read is the case this matters for.** `ReplayRequired`
 /// is `Never`-retryable, so a caller holding it changes course; a `Journal`
 /// error wrapping [`Error::Transient`] is the one where the right move is to
@@ -280,6 +315,12 @@ async fn a_transient_journal_failure_hands_the_index_back_to_be_retried_with() {
 
 /// A span carrying a producer identity, for `M11.3`'s interim refusal.
 fn producer_span(id: i64, sequence: i32, records: u32) -> CommittedSpan {
+    producer_span_at(id, ProducerEpoch::ZERO, sequence, records)
+}
+
+/// The same, at a chosen epoch — `M11.7`'s zombie/bump tests need one other
+/// than zero.
+fn producer_span_at(id: i64, epoch: ProducerEpoch, sequence: i32, records: u32) -> CommittedSpan {
     CommittedSpan::new(
         topic(),
         partition(),
@@ -287,7 +328,7 @@ fn producer_span(id: i64, sequence: i32, records: u32) -> CommittedSpan {
         ByteRange::Full,
         Some(ProducerIdentity::new(
             ProducerId::new(id).expect("a valid producer id"),
-            ProducerEpoch::ZERO,
+            epoch,
             sequence,
         )),
     )
@@ -398,6 +439,53 @@ async fn one_producers_rejection_does_not_cost_anothers_real_offset() {
     };
     assert_eq!(assignment.base_offset().get(), 0);
     assert_eq!(ack.assignments(), std::slice::from_ref(assignment));
+
+    drop(coordinator);
+    driver
+        .await
+        .expect("the loop ends when its last handle drops");
+}
+
+/// ⚠️ **`M11.7`, `ADR-0031` point 5: a zombie is named without reaching the
+/// journal**, on `a_rejected_span_is_named_without_reaching_the_journal`'s
+/// own precedent — a stale epoch is excluded by `Allocator::admit` exactly
+/// as a sequence gap is, never staged, never journaled.
+#[tokio::test]
+async fn a_zombie_epoch_is_named_without_reaching_the_journal() {
+    let log = Arc::new(FakeMetadataLog::new());
+    let (coordinator, driver) = start(log.clone()).await;
+
+    // Some other incarnation of producer 1 already bumped past epoch 0.
+    coordinator
+        .commit(
+            object(0),
+            vec![producer_span_at(
+                1,
+                ProducerEpoch::new(1).expect("valid"),
+                0,
+                2,
+            )],
+        )
+        .await
+        .expect("the bump's own genuine first send commits normally");
+
+    // This sender is still at epoch 0 — a zombie.
+    let ack = coordinator
+        .commit(object(1), vec![producer_span(1, 1, 1)])
+        .await
+        .expect("a zombie is an ordinary answer, not a refused commit");
+    assert_eq!(
+        ack.outcomes(),
+        &[SpanOutcome::Rejected(RejectReason::StaleEpoch)]
+    );
+    assert_eq!(
+        log.read_from(CommitVersion::ZERO, 16)
+            .await
+            .expect("the log reads back")
+            .len(),
+        1,
+        "the zombie's commit never reached the journal"
+    );
 
     drop(coordinator);
     driver

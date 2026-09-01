@@ -35,13 +35,19 @@ const fn next_sequence(last: i32) -> i32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectReason {
     /// The sequence skips ahead of what this producer's line expects next —
-    /// a real gap, or (for now) an epoch that does not match the one on
-    /// record. `M11.7` owns turning the epoch half of this into fencing.
+    /// a real gap, including a legitimate epoch bump whose own first
+    /// sequence is not zero.
     OutOfOrder,
     /// The sequence repeats the last accepted one, but this span's own
     /// record count does not match what was recorded for it — the same
     /// sequence claiming to be a different batch.
     Duplicate,
+    /// The epoch is older than the one on record — a zombie: some other
+    /// incarnation of this producer already moved the line past what this
+    /// sender knows about. `M11.7`, `ADR-0031` point 5. Real Kafka's own
+    /// `INVALID_PRODUCER_EPOCH`, not an ordinary gap: a bumped epoch is not
+    /// something a retry could ever mend.
+    StaleEpoch,
 }
 
 /// What [`Allocator::admit`] decided about every span it was handed, each
@@ -118,24 +124,47 @@ fn classify(
         // its line at sequence zero, the shape a client's first send after
         // `InitProducerId` always has.
         None if sequence == 0 => Decision::Admit,
-        // ⚠️ Every remaining arm requires the recorded epoch to match —
-        // `M11.7` owns the real fencing rules (a bumped epoch resets the
-        // line to zero; a stale one is a zombie); until then a mismatch of
-        // either direction falls through to the catch-all refusal below,
-        // same as a genuine gap.
-        Some(state) if state.epoch == epoch && sequence == next_sequence(state.sequence) => {
-            Decision::Admit
+        // ⚠️ **A zombie** (`M11.7`, `ADR-0031` point 5's producer-epoch
+        // half): an epoch older than the one on record means some other
+        // incarnation of this producer already moved the line past what
+        // this sender knows about — real Kafka's own
+        // `INVALID_PRODUCER_EPOCH`, not an ordinary gap, because a bumped
+        // epoch is not something a retry could ever mend. Checked before
+        // the equal-epoch arms below, and it must be: without this arm a
+        // stale epoch and a stale sequence would be indistinguishable, and
+        // a client fenced for one reason would be told to fix the other.
+        Some(state) if epoch < state.epoch => Decision::Reject(RejectReason::StaleEpoch),
+        // **A legitimate bump.** A higher epoch is a fresh `InitProducerId`
+        // incarnation of the same producer id — real Kafka resets the
+        // sequence line to zero on every bump, so this is exactly the
+        // `None` arm's own rule, restated for a line that has history
+        // instead of none. Only M11.4's non-transactional path mints an
+        // epoch at all today, always zero, so a real bump needs FR-15
+        // (deferred) to ever be sent by a well-behaved client — this arm
+        // exists for the malformed or adversarial one, `security.md`
+        // rule 3's "never trust it" applied to a header field like any
+        // other.
+        Some(state) if epoch > state.epoch => {
+            if sequence == 0 {
+                Decision::Admit
+            } else {
+                Decision::Reject(RejectReason::OutOfOrder)
+            }
         }
-        Some(state) if !provisional && state.epoch == epoch && sequence == state.sequence => {
+        // ⚠️ Every remaining arm is reached only when `epoch == state.epoch`
+        // — the two arms above already excluded both mismatch directions —
+        // so it is not restated as a guard here.
+        Some(state) if sequence == next_sequence(state.sequence) => Decision::Admit,
+        Some(state) if !provisional && sequence == state.sequence => {
             if record_count == state.record_count {
                 Decision::Replay(state)
             } else {
                 Decision::Reject(RejectReason::Duplicate)
             }
         }
-        // A gap, a stale sequence, an epoch mismatch, or a same-bundle
-        // repeat with no real offset to answer from — the safe default is
-        // to refuse rather than to guess or invent one.
+        // A gap, a stale sequence, or a same-bundle repeat with no real
+        // offset to answer from — the safe default is to refuse rather
+        // than to guess or invent one.
         None | Some(_) => Decision::Reject(RejectReason::OutOfOrder),
     }
 }
@@ -244,254 +273,4 @@ fn record_decision(
 }
 
 #[cfg(test)]
-mod tests {
-    // A panic in a test harness is the test failing, which is what it is for.
-    #![allow(clippy::expect_used)]
-
-    use super::RejectReason;
-    use crate::allocator::Allocator;
-    use oqueue_core::{
-        ByteRange, CommittedSpan, ObjectKey, PartitionId, ProducerEpoch, ProducerId,
-        ProducerIdentity, TopicId,
-    };
-
-    fn topic() -> TopicId {
-        TopicId::new("t".to_owned()).expect("a valid topic id")
-    }
-
-    fn partition() -> PartitionId {
-        PartitionId::new(0).expect("a valid partition")
-    }
-
-    fn object() -> ObjectKey {
-        ObjectKey::new("o".to_owned()).expect("a valid object key")
-    }
-
-    fn producer(id: i64) -> ProducerId {
-        ProducerId::new(id).expect("a valid producer id")
-    }
-
-    fn identity(id: i64, sequence: i32) -> ProducerIdentity {
-        ProducerIdentity::new(producer(id), ProducerEpoch::ZERO, sequence)
-    }
-
-    fn span_from(id: i64, sequence: i32, records: u32) -> CommittedSpan {
-        CommittedSpan::new(
-            topic(),
-            partition(),
-            records,
-            ByteRange::Full,
-            Some(identity(id, sequence)),
-        )
-    }
-
-    /// Drives one span all the way through `admit` → `stage` → `apply`, so a
-    /// later `admit` call in the same test sees genuinely committed state —
-    /// not a hand-built fixture standing in for it.
-    fn commit(allocator: &mut Allocator, span: CommittedSpan) {
-        let admission = allocator.admit(vec![span]);
-        assert!(
-            admission.rejected.is_empty(),
-            "the fixture's own commit must not be rejected: {:?}",
-            admission.rejected
-        );
-        assert!(
-            admission.replayed.is_empty(),
-            "the fixture's own commit must not be a replay"
-        );
-        let admitted: Vec<CommittedSpan> = admission.admitted.into_iter().map(|(_, s)| s).collect();
-        let staged = allocator
-            .stage(object(), admitted)
-            .expect("a fresh allocator always has room");
-        allocator.apply(staged);
-    }
-
-    #[test]
-    fn a_span_with_no_producer_identity_is_always_admitted() {
-        let allocator = Allocator::new();
-        let span = CommittedSpan::new(topic(), partition(), 1, ByteRange::Full, None);
-        let admission = allocator.admit(vec![span]);
-        assert_eq!(admission.admitted.len(), 1);
-        assert!(admission.replayed.is_empty());
-        assert!(admission.rejected.is_empty());
-    }
-
-    #[test]
-    fn a_producers_first_ever_span_is_admitted_at_sequence_zero() {
-        let allocator = Allocator::new();
-        let admission = allocator.admit(vec![span_from(1, 0, 1)]);
-        assert_eq!(admission.admitted.len(), 1);
-        assert!(admission.rejected.is_empty());
-    }
-
-    #[test]
-    fn a_producers_first_span_at_a_nonzero_sequence_is_rejected() {
-        let allocator = Allocator::new();
-        let admission = allocator.admit(vec![span_from(1, 5, 1)]);
-        assert!(admission.admitted.is_empty());
-        assert_eq!(
-            admission.rejected,
-            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
-        );
-    }
-
-    #[test]
-    fn the_next_sequence_after_a_committed_one_is_admitted() {
-        let mut allocator = Allocator::new();
-        commit(&mut allocator, span_from(1, 0, 2));
-        let admission = allocator.admit(vec![span_from(1, 1, 3)]);
-        assert_eq!(admission.admitted.len(), 1);
-        assert!(admission.rejected.is_empty());
-    }
-
-    #[test]
-    fn an_exact_replay_answers_the_recorded_offset_without_a_new_one() {
-        let mut allocator = Allocator::new();
-        commit(&mut allocator, span_from(1, 0, 2));
-        let admission = allocator.admit(vec![span_from(1, 0, 2)]);
-        assert!(admission.admitted.is_empty(), "no new offset is assigned");
-        assert_eq!(admission.replayed.len(), 1);
-        let (index, t, p, assignment) = &admission.replayed[0];
-        assert_eq!(*index, 0);
-        assert_eq!((t, p), (&topic(), &partition()));
-        assert_eq!(assignment.base_offset(), oqueue_core::Offset::ZERO);
-    }
-
-    #[test]
-    fn a_replay_whose_record_count_does_not_match_is_a_duplicate_not_a_replay() {
-        let mut allocator = Allocator::new();
-        commit(&mut allocator, span_from(1, 0, 2));
-        // Same sequence, different record count: not the same batch.
-        let admission = allocator.admit(vec![span_from(1, 0, 99)]);
-        assert!(admission.admitted.is_empty());
-        assert!(admission.replayed.is_empty());
-        assert_eq!(
-            admission.rejected,
-            vec![(0, topic(), partition(), RejectReason::Duplicate)]
-        );
-    }
-
-    #[test]
-    fn a_sequence_gap_is_rejected_as_out_of_order() {
-        let mut allocator = Allocator::new();
-        commit(&mut allocator, span_from(1, 0, 2));
-        let admission = allocator.admit(vec![span_from(1, 5, 1)]);
-        assert!(admission.admitted.is_empty());
-        assert_eq!(
-            admission.rejected,
-            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
-        );
-    }
-
-    #[test]
-    fn a_mismatched_epoch_is_rejected() {
-        let mut allocator = Allocator::new();
-        commit(&mut allocator, span_from(1, 0, 2));
-        let span = CommittedSpan::new(
-            topic(),
-            partition(),
-            1,
-            ByteRange::Full,
-            Some(ProducerIdentity::new(
-                producer(1),
-                ProducerEpoch::new(1).expect("valid"),
-                1,
-            )),
-        );
-        let admission = allocator.admit(vec![span]);
-        assert!(admission.admitted.is_empty());
-        assert_eq!(
-            admission.rejected,
-            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
-        );
-    }
-
-    /// ⚠️ **The load-bearing case, tested directly rather than through two
-    /// billion real commits** (`Allocator::seeded`'s own precedent for
-    /// "reaching a boundary is not a fixture, it is a geological era"): real
-    /// Kafka wraps a producer's sequence from `i32::MAX` back to `0` rather
-    /// than overflowing, and `wrapping_add(1)` would give `i32::MIN`
-    /// instead — rejecting every legitimate producer that has sent more
-    /// than two billion batches to one partition.
-    #[test]
-    fn sequence_wraps_from_i32_max_back_to_zero() {
-        assert_eq!(super::next_sequence(i32::MAX), 0);
-        assert_eq!(super::next_sequence(0), 1);
-        assert_eq!(super::next_sequence(41), 42);
-    }
-
-    /// ⚠️ **The round-1 review defect this row exists to fix**: one
-    /// producer's rejection must not block a different producer's span in
-    /// the same bundled commit from being admitted.
-    #[test]
-    fn one_producers_rejection_does_not_block_anothers_admission() {
-        let allocator = Allocator::new();
-        // Producer 1's first span is a genuine gap (no prior state, sequence
-        // 5): rejected. Producer 2's is a legitimate first span in the same
-        // bundle: admitted, untouched by producer 1's own outcome.
-        let admission = allocator.admit(vec![span_from(1, 5, 1), span_from(2, 0, 1)]);
-        assert_eq!(
-            admission.rejected,
-            vec![(0, topic(), partition(), RejectReason::OutOfOrder)],
-            "producer 1's gap"
-        );
-        assert_eq!(admission.admitted.len(), 1, "producer 2's fresh span");
-        assert!(admission.replayed.is_empty());
-    }
-
-    /// ⚠️ **The blocking defect round 1 review found and reproduced**: the
-    /// same producer sending the same sequence *twice within one bundle*
-    /// must not report the second occurrence's offset from the first's
-    /// still-provisional (`Offset::ZERO`-placeholder) state — it must be
-    /// refused instead, never answered with a wrong position.
-    #[test]
-    fn a_same_bundle_exact_repeat_is_refused_not_answered_with_a_placeholder() {
-        let mut allocator = Allocator::new();
-        // Ten records already committed on this partition by another
-        // producer, so offset zero is provably the wrong answer for
-        // anything replayed here.
-        commit(
-            &mut allocator,
-            CommittedSpan::new(topic(), partition(), 10, ByteRange::Full, None),
-        );
-        let admission = allocator.admit(vec![span_from(5, 0, 3), span_from(5, 0, 3)]);
-        assert_eq!(admission.admitted.len(), 1, "the first occurrence");
-        assert!(
-            admission.replayed.is_empty(),
-            "the second must not fabricate an offset from a provisional entry"
-        );
-        assert_eq!(admission.rejected.len(), 1, "the second is refused");
-    }
-
-    /// A producer's own two spans in one bundle are checked against each
-    /// other, not only against what was already committed — the second must
-    /// see the first's newly-admitted sequence.
-    #[test]
-    fn a_producers_two_spans_in_one_bundle_are_sequential() {
-        let allocator = Allocator::new();
-        let admission = allocator.admit(vec![span_from(1, 0, 1), span_from(1, 1, 1)]);
-        assert_eq!(admission.admitted.len(), 2, "both are genuinely in order");
-        assert!(admission.rejected.is_empty());
-    }
-
-    /// The reverse of the above: a bundle presenting a producer's own two
-    /// spans **out of order** rejects the first (a gap — the producer has no
-    /// prior state, so sequence 1 is not its first) and admits the second on
-    /// its own merits (sequence 0 *is* a legitimate first span) — proving
-    /// the first's rejection was never recorded into `running` for the
-    /// second to inherit.
-    #[test]
-    fn a_producers_two_spans_in_one_bundle_out_of_order_rejects_only_the_gap() {
-        let allocator = Allocator::new();
-        let admission = allocator.admit(vec![span_from(1, 1, 1), span_from(1, 0, 1)]);
-        assert_eq!(
-            admission.rejected,
-            vec![(0, topic(), partition(), RejectReason::OutOfOrder)]
-        );
-        assert_eq!(
-            admission.admitted.len(),
-            1,
-            "sequence 0 is a legitimate first span"
-        );
-    }
-}
+mod tests;
