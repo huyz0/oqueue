@@ -110,7 +110,11 @@ fi
 
 # --- the rule ----------------------------------------------------------------
 
-if [[ ! "$subject" =~ ^(M-?[0-9]+\.[0-9]+)(,\ *M-?[0-9]+\.[0-9]+)*:\ .+ ]]; then
+# ⚠️ **`[a-z]?` added by `M10.33`**, matching `lib.sh`'s `known_task_ids`'s own
+# widening — a subject naming `M10.18a` used to fail here before it ever
+# reached the `known_task_ids` membership check below, on a row the backlog
+# already carried.
+if [[ ! "$subject" =~ ^(M-?[0-9]+\.[0-9]+[a-z]?)(,\ *M-?[0-9]+\.[0-9]+[a-z]?)*:\ .+ ]]; then
   fail "commit subject must start with a backlog task ID, then ': '"
   note "got:      $subject"
   note "expected: M-1.6: add the commit-message gate"
@@ -133,7 +137,7 @@ for id in $ids; do
   # ⚠️ `-F`, and a here-string rather than `printf | grep`. `-F` is
   # defense in depth rather than a live bug here — `$id` can only be
   # something the subject regex above already matched
-  # (`M-?[0-9]+\.[0-9]+`), so it never carries a regex metacharacter the
+  # (`M-?[0-9]+\.[0-9]+[a-z]?`), so it never carries a regex metacharacter the
   # way a hand-written review artifact's `task_id` could — but the
   # here-string is a real fix: `grep -qx` exits at the first match,
   # `printf`'s remaining write can then SIGPIPE, and `pipefail` reports

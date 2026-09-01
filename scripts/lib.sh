@@ -243,6 +243,17 @@ _backlog_from_index() {
 
 # Every task ID this repository knows about, one per line, from the backlog.
 # The backlog is the single source; a gate that keeps its own list drifts.
+#
+# ⚠️ **`[a-z]?` added by `M10.33`.** `M10.0`'s own three-way split of `M3.42`
+# ("one row per gate script, because three scripts is three commits") named
+# two of the rows `M10.18a` and `M10.18b` — the established convention this
+# backlog already uses for a dissolved row's siblings, `M3.41`/`M3.42`/`M3.43`
+# and their own predecessors. Without the suffix here, `M10.18a` matched
+# neither this function nor `open_task_ids` below: `known_task_ids` returned
+# nothing for it, `check-reviewed.sh` refused a verdict recorded against a
+# genuinely open, correctly-formatted row with "which the backlog does not
+# list", and the row could not be closed at all until this line changed —
+# found by trying to commit against it, not by inspection.
 known_task_ids() {
   local backlog; backlog="$(_backlog_from_index)"
   [[ -n "$backlog" ]] || return 0
@@ -252,7 +263,7 @@ known_task_ids() {
   # dies with no output at all — and the `[[ -n "$known" ]]` guard written for
   # exactly that case is never reached. A *missing* backlog returned 0 and was
   # handled gracefully, so the two empty states behaved oppositely.
-  grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' <<< "$backlog" | tr -d '|' | tr -d ' ' || true
+  grep -oE '^\| (M-?[0-9]+\.[0-9]+[a-z]?) \|' <<< "$backlog" | tr -d '|' | tr -d ' ' || true
 }
 
 # Task IDs whose backlog row is not yet `done`.
@@ -265,9 +276,9 @@ known_task_ids() {
 open_task_ids() {
   local backlog; backlog="$(_backlog_from_index)"
   [[ -n "$backlog" ]] || return 0
-  grep -E '^\| M-?[0-9]+\.[0-9]+ \|' <<< "$backlog" \
+  grep -E '^\| M-?[0-9]+\.[0-9]+[a-z]? \|' <<< "$backlog" \
     | grep -vE '\|[[:space:]]*done[[:space:]]*\|[[:space:]]*$' \
-    | grep -oE '^\| (M-?[0-9]+\.[0-9]+) \|' | tr -d '|' | tr -d ' ' || true
+    | grep -oE '^\| (M-?[0-9]+\.[0-9]+[a-z]?) \|' | tr -d '|' | tr -d ' ' || true
 }
 
 # The milestone HEAD is working in: the most recent commit whose subject names a
