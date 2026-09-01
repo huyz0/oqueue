@@ -14,24 +14,33 @@
 //! close it; `M10.15` is where such a leg would live, and until then this
 //! sentence is the record that it does not exist.
 //!
-//! ⚠️ **Three windows, four enumerated faults, and the difference matters.**
-//! The middle window has *two* causes a client can tell apart: the store lost
-//! the acknowledgement after a durable write (`FlushError::Store`, answered
-//! `NOT_ENOUGH_REPLICAS`) and the journal refused the position
-//! (`FlushError::Commit`, answered `LEADER_NOT_AVAILABLE`). ⚠️ **This file
-//! enumerated only the second for a round**, which would have handed `M10.15`
-//! a leg asserting a code the broker does not send for FR-10's canonical
-//! crash — the one `crash_after_put_before_ack` produces and
-//! `m3-complete.sh`'s FR-10 leg already runs.
+//! ⚠️ **Three windows, five enumerated faults, and the difference matters.**
+//! The middle window has *three* causes a client can tell apart, not by luck
+//! but because each leaves something different behind: the store lost the
+//! acknowledgement after a durable write (`FlushError::Store`, answered
+//! `NOT_ENOUGH_REPLICAS`), the journal refused the position
+//! (`FlushError::Commit`, answered `LEADER_NOT_AVAILABLE`), and the broker
+//! itself is gone before either of those — no code at all (`M10.30`). ⚠️
+//! **This file enumerated only the first of the middle window's causes for a
+//! round**, which would have handed `M10.15` a leg asserting a code the
+//! broker does not send for FR-10's canonical crash — the one
+//! `crash_after_put_before_ack` produces and `m3-complete.sh`'s FR-10 leg
+//! already runs. ⚠️ **A third cause in an existing window is a different gap
+//! from a fourth window**, and `m10-complete.sh`'s own leg only counts
+//! `Cluster::flush`'s `.await` points — it would not have caught this one,
+//! because nothing about a broker dying between an existing pair of await
+//! points changes how many there are.
 //!
-//! ⚠️ **They are not four severities of the same thing.** They differ in what
+//! ⚠️ **They are not five severities of the same thing.** They differ in what
 //! survives, and a broker that treated any two alike would be right about one
-//! of them by luck: nothing; an object nothing references, twice over for two
-//! different reasons; and records a client will send again.
+//! of them by luck: nothing; an object nothing references, three times over
+//! for three different reasons; and records a client will send again.
 
 #![allow(clippy::expect_used)]
 // ⚠️ `pub` here is `pub(crate)` in effect — see `roundtrip.rs`.
 #![allow(unreachable_pub)]
+
+mod broker_died;
 
 use crate::roundtrip::{fetch, produce, produce_frame};
 use crate::support::{Broker, broker};
@@ -58,6 +67,21 @@ enum CrashPoint {
     /// `NOT_ENOUGH_REPLICAS` and the world is left as if the journal had
     /// refused.
     BetweenPutAndCommitAckLost,
+    /// The object is durable and the broker itself is gone before the commit
+    /// — a *third* cause of this window, not a fourth `.await` in a new one.
+    ///
+    /// ⚠️ **`M10.30`, from `M10.29`'s own finding that the tree already
+    /// produces this.** The two causes above both leave a *living* broker
+    /// that answers something — `NOT_ENOUGH_REPLICAS` or
+    /// `LEADER_NOT_AVAILABLE`. This one has nobody left to answer at all:
+    /// `ADR-0005` guarantee 2's added clause is the `put` future dropped
+    /// after the object landed, and here the broker's own handler task is
+    /// what gets dropped, aborted mid-flight the way a process death would
+    /// leave it. `error_code: None` for the same reason `AfterCommitBeforeAck`
+    /// has one — no reply is ever built — but `position_journalled: false`
+    /// is what tells the two apart: this window is before the commit, that
+    /// one is after.
+    BetweenPutAndCommitBrokerDied,
     /// The position is journalled and the client never heard.
     AfterCommitBeforeAck,
 }
@@ -114,6 +138,17 @@ impl CrashPoint {
             },
             Self::BetweenPutAndCommitAckLost => Aftermath {
                 error_code: Some(NOT_ENOUGH_REPLICAS),
+                object_written: true,
+                position_journalled: false,
+                records_readable: false,
+            },
+            Self::BetweenPutAndCommitBrokerDied => Aftermath {
+                // ⚠️ **No code, definitional rather than measured, the same
+                // way `AfterCommitBeforeAck`'s is** — the handler task is
+                // aborted, so nothing here builds a reply to *not* answer
+                // wrongly. What distinguishes this from that point is
+                // `position_journalled: false`.
+                error_code: None,
                 object_written: true,
                 position_journalled: false,
                 records_readable: false,
@@ -176,6 +211,14 @@ async fn inject_and_produce(point: CrashPoint, broker: &Broker) -> Option<i16> {
                     .error_code,
             )
         }
+        // ⚠️ **Not dispatched here.** This point needs a store that can hang
+        // a `put` after it writes, which `broker`'s own `FakeObjectStore` has
+        // no fault for — see `crash_the_broker_after_the_put_lands`'s own doc
+        // for why that fault does not live there. `crash_at` special-cases
+        // this variant before it ever reaches this function.
+        CrashPoint::BetweenPutAndCommitBrokerDied => {
+            unreachable!("crash_at handles this point directly, on its own cluster")
+        }
         CrashPoint::AfterCommitBeforeAck => {
             kill_the_client_once_committed(broker).await;
             None
@@ -191,6 +234,14 @@ async fn inject_and_produce(point: CrashPoint, broker: &Broker) -> Option<i16> {
 /// window is the reply not arriving. That is the whole difficulty of that
 /// point and the reason it is not one of the middle two.
 async fn crash_at(point: CrashPoint, broker: &Broker) -> Aftermath {
+    // ⚠️ **Its own cluster, checked before anything below.** Every other
+    // point reads `broker`'s own store and log afterwards; this one's
+    // injection cannot use `broker`'s store at all (see
+    // `crash_the_broker_after_the_put_lands`'s doc), so it builds and
+    // inspects a wholly separate one and returns without touching `broker`.
+    if point == CrashPoint::BetweenPutAndCommitBrokerDied {
+        return broker_died::crash_the_broker_after_the_put_lands().await;
+    }
     let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
     let error_code = inject_and_produce(point, broker).await;
 
@@ -373,5 +424,19 @@ async fn a_lost_put_ack_leaves_the_same_world_under_a_different_code() {
     assert_eq!(
         crash_at(CrashPoint::BetweenPutAndCommitAckLost, &broker).await,
         CrashPoint::BetweenPutAndCommitAckLost.expected()
+    );
+}
+
+/// ⚠️ **A third cause in the middle window, not a fourth `.await`** (`M10.30`).
+/// The two causes above both leave a living broker that answers something;
+/// this one leaves nobody to answer at all, which is what `error_code: None`
+/// alongside `position_journalled: false` distinguishes it from both its
+/// neighbours in this file.
+#[tokio::test]
+async fn the_broker_dying_after_the_put_leaves_an_unreferenced_object_and_no_answer() {
+    let broker = broker(&["orders"]).await;
+    assert_eq!(
+        crash_at(CrashPoint::BetweenPutAndCommitBrokerDied, &broker).await,
+        CrashPoint::BetweenPutAndCommitBrokerDied.expected()
     );
 }

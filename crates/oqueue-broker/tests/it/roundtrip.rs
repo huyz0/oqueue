@@ -30,7 +30,7 @@ use oqueue_codec::apikey::ApiKey;
 use oqueue_core::Operation;
 use std::sync::Arc;
 
-const PRODUCE_VERSION: i16 = 13;
+pub(crate) const PRODUCE_VERSION: i16 = 13;
 pub(crate) const FETCH_VERSION: i16 = 13;
 
 /// A full request frame: header at the API's header version, then `body`.
