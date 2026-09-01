@@ -147,6 +147,7 @@ declare -A NOT_A_PARSER=(
   [oqueue-codec::error_codes]="protocol constants; parses nothing"
   [oqueue-codec::apiversions]="encode-only by design -- the ApiVersions request body is informational and never decoded (see the module doc)"
   [oqueue-codec::fetch::tests]="M10.17's split-out test module for fetch.rs; #[cfg(test)] only, no production build carries it"
+  [oqueue-codec::records::tests]="M10.19's split-out test module for records.rs; #[cfg(test)] only, no production build carries it"
   # --- oqueue-core. The object format's reader is bundle_footer, which has a
   # target; everything else is a newtype, a seam, a fake, or a policy.
   [oqueue-core::lib]="the module root; declares, parses nothing"
@@ -163,6 +164,7 @@ declare -A NOT_A_PARSER=(
   [oqueue-core::fault_metadata_log]="a MetadataLog decorator for tests; delegates, parses nothing"
   [oqueue-core::index_reader]="a read-only view over a MaterializedIndex; forwards four methods"
   [oqueue-core::index_state]="folds MetadataEntry values this process built, never bytes off a wire"
+  [oqueue-core::index_state::page]="M10.20's split-out read surface: pages IndexedBatch values the fold already produced, parses no bytes of its own"
   [oqueue-core::key]="key material types"
   [oqueue-core::key_layout]="object-key naming rules; builds strings, parses none"
   [oqueue-core::materialized_index]="a trait and its fake; the fold is over typed entries"
@@ -210,6 +212,7 @@ declare -A COVERED_BY_REQUEST=(
 declare -A TARGET_CRATE=(
   [batch]="oqueue-codec"
   [compress]="oqueue-codec"
+  [count_records]="oqueue-codec"
   [flex]="oqueue-codec"
   [frame]="oqueue-codec"
   [records]="oqueue-codec"
@@ -230,7 +233,13 @@ declare -A TARGET_CRATE=(
 # `::` and `$t` structurally cannot. Unset here means "covers the module named
 # after the target itself", which is every target so far; an entry lets a
 # future target's bin name differ from the module path it drives.
-declare -A TARGET_MODULE=()
+declare -A TARGET_MODULE=(
+  # `M10.20`: `count_records` moved to its own `records::count` submodule in
+  # the same commit that gave it this target, so the bin name and the module
+  # path it covers differ from the start -- the exact case `M10.18`'s comment
+  # above named as a future need, not a hypothetical one.
+  [count_records]="records::count"
+)
 for t in "${targets[@]}"; do
   if [[ -z "${TARGET_CRATE[$t]:-}" ]]; then
     fail "fuzz target '$t' names no crate in TARGET_CRATE, so no module can be matched to it"

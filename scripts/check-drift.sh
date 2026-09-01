@@ -316,7 +316,10 @@ declare -A RUST_BOUNDS=(
   ["crates/oqueue-broker/src/fetch/deadline.rs|MAX_PARK_MS"]="60_000"
   # How many batches one index page may name, and how many entries a partition
   # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
-  ["crates/oqueue-core/src/index_state.rs|MAX_BATCHES_PER_PAGE"]="64"
+  # `M10.20`: moved from `index_state.rs` to its own `index_state/page.rs`
+  # when `Page` (which this bounds) got its own file, the natural cut from
+  # the fold beside it.
+  ["crates/oqueue-core/src/index_state/page.rs|MAX_BATCHES_PER_PAGE"]="64"
   ["crates/oqueue-core/src/index_state.rs|TAIL_WINDOW_ENTRIES"]="128"
   # How many commits may queue behind the single serialization point. Raising
   # it turns a durable engine's commit latency into seconds of queueing against
@@ -361,7 +364,9 @@ declare -A RUST_BOUNDS=(
 # `oqueue-codec/src/error_codes.rs` alone has 14.
 declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/fetch/partition.rs|OFFSET_UNSET"]="the protocol's unset-offset sentinel"
-  ["crates/oqueue-codec/src/records.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
+  # `M10.20`: moved from `records.rs` to its own `records/count.rs` when
+  # `count_records` (the only reader of this constant) got its own file.
+  ["crates/oqueue-codec/src/records/count.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
   ["crates/oqueue-core/src/bundle.rs|BUNDLE_FORMAT_VERSION"]="this object format's version number"
   ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"

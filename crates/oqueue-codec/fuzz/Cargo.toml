@@ -87,6 +87,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "count_records"
+path = "fuzz_targets/count_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "compress"
 path = "fuzz_targets/compress.rs"
 test = false
