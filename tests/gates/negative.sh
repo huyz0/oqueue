@@ -1561,6 +1561,335 @@ invoke_hot_path_bench_leftover() {
   bash "$1/scripts/check-hot-path-bench.sh"
 }
 
+# --- check-hot-path-bench.sh: the roadmap file is missing, so an allowlist
+# reason can never expire (`M3.36`'s own expiry mechanism, unproven until
+# now) ------------------------------------------------------------------
+setup_hot_path_bench_no_roadmap() {
+  local dir; dir="$(new_scratch hot-path-bench-no-roadmap)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/crates/oqueue-x/src"
+  # No docs/internal/product/roadmap.md at all -- the branch this fixture
+  # plants. All eight of NOT_YET_BUILT's real names, verbatim, for the reason
+  # every other fixture in this group gives: a shorter table makes an
+  # unrelated entry "stale" and the gate fails on that instead.
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M3.36: no roadmap.md exists, so no excuse can ever expire")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_no_roadmap() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
+# --- check-hot-path-bench.sh: a roadmap row does not end in '|', so its
+# state cell cannot be located -------------------------------------------
+#
+# ⚠️ **Isolated on M5, not M14.** Every `NOT_YET_BUILT` entry the real script
+# carries owes M14, so breaking M14's own row here would also make every
+# entry read "owes 'M14', which … does not list" -- the branch the
+# owes-unlisted case below pins, not this one. M5 is listed in the table but
+# owed by nothing, so corrupting its row trips exactly one failure.
+setup_hot_path_bench_row_no_pipe() {
+  local dir; dir="$(new_scratch hot-path-bench-row-no-pipe)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/src"
+  # M5's row has no trailing '|' -- legal GFM, one hand-edit away, and the
+  # exact case `awk -F'|' '{print $(NF-1)}'` cannot answer without it.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started
+| 2 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | — | 1 | `x` | not started |
+ROADMAP
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M3.36: a roadmap row with no trailing pipe hides its own state")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_row_no_pipe() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
+# --- check-hot-path-bench.sh: a roadmap state outside the vocabulary -------
+#
+# ⚠️ **Fires on M14 on purpose, and the cascade that follows is real, not a
+# fixture bug.** Every NOT_YET_BUILT entry owes M14; once M14's state cannot
+# be read, `MILESTONE_STATE["M14"]` is never set and every entry also reports
+# "owes 'M14', which … does not list" -- the same outcome an actually
+# unreadable roadmap has on every excuse that depends on it. The primary
+# pin below is present in the output alongside that cascade, not instead of
+# it.
+setup_hot_path_bench_bad_state() {
+  local dir; dir="$(new_scratch hot-path-bench-bad-state)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/src"
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started |
+| 2 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | — | 1 | `x` | paused |
+ROADMAP
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M3.36: a roadmap state outside complete/in progress/not started")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_bad_state() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
+# --- check-hot-path-bench.sh: the same milestone id listed twice -----------
+#
+# ⚠️ **The first row wins, and this fixture's second row's state is chosen so
+# that wins cleanly.** `MILESTONE_STATE` is set from the first M14 row it
+# sees and never overwritten, so as long as that first row's state is a real,
+# open one ("not started"), the duplicate is the only thing that fails --
+# unlike the bad-state case above, nothing here cascades into the
+# owes-unlisted branch.
+setup_hot_path_bench_duplicate_id() {
+  local dir; dir="$(new_scratch hot-path-bench-duplicate-id)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/src"
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started |
+| 2 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | — | 1 | `x` | not started |
+| 3 | [M14](milestones/M14.md) | Performance and cost validation, copied | non-functional | — | 1 | `x` | complete |
+ROADMAP
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M3.36: a roadmap id listed twice, second row silently ignored")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_duplicate_id() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
+# --- check-hot-path-bench.sh: a roadmap with no milestone rows at all ------
+setup_hot_path_bench_no_milestones() {
+  local dir; dir="$(new_scratch hot-path-bench-no-milestones)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/src"
+  # A real file, present and readable, but with no row matching
+  # `^\| *[0-9]+ *\| *\[M` -- the shape a rewrite that dropped the numbered
+  # list, or renamed the ID column, would produce.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+# Roadmap
+
+Nothing here yet.
+ROADMAP
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M3.36: a roadmap.md with no milestone rows at all")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_no_milestones() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
+# --- check-hot-path-bench.sh: an allowlist entry owes a milestone the
+# roadmap does not list at all (as opposed to lists-but-complete, which the
+# expired-excuse case above already pins) ---------------------------------
+setup_hot_path_bench_owes_unlisted() {
+  local dir; dir="$(new_scratch hot-path-bench-owes-unlisted)"
+  copy_gate "$dir" check-hot-path-bench.sh
+  mkdir -p "$dir/docs/internal/standards" "$dir/docs/internal/product" \
+    "$dir/crates/oqueue-x/src"
+  # M14 -- the milestone every real NOT_YET_BUILT entry owes -- is simply
+  # absent, rather than present-and-broken. Only M5 is listed.
+  cat > "$dir/docs/internal/product/roadmap.md" <<'ROADMAP'
+| # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
+|---|---|---|---|---|---|---|---|
+| 1 | [M5](milestones/M5.md) | Compaction and retention | functional | — | 1 | `x` | not started |
+ROADMAP
+  cat > "$dir/docs/internal/standards/performance.md" <<'EOF'
+## Hot-path benchmarks
+
+18. **Every hot path has a benchmark**, added with the code rather than after
+    it. The hot paths, and each one's benchmark obligation:
+
+    | Path | Benchmark |
+    |---|---|
+    | RecordBatch encode / decode | `bench-micro`, gated |
+    | CRC-32C over representative sizes | `bench-micro`, gated + known-answer test |
+    | Varint decode (and the paths that avoid it) | `bench-micro`, gated |
+    | Offset→object index lookup | `bench-micro`, gated |
+    | Buffer allocation and pooling | `bench-micro` + heap profile |
+    | Produce path end to end | `bench-macro`, report only |
+    | Fetch: tail (cached) and cold (ranged GET) | `bench-macro`, report only |
+    | Compaction throughput | `bench-macro`, report only |
+
+19. **A hot path without a benchmark is an unmeasured claim.**
+EOF
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-x"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-x/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-x"
+version = "0.1.0"
+edition = "2021"
+EOF
+  echo 'pub fn f() {}' > "$dir/crates/oqueue-x/src/lib.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M3.36: an allowlist entry owes a milestone the roadmap never lists")
+  printf '%s\n' "$dir"
+}
+invoke_hot_path_bench_owes_unlisted() {
+  bash "$1/scripts/check-hot-path-bench.sh"
+}
+
 # --- check-portability.sh: a vendor-syntax line in AGENTS.md ---------------
 setup_portability() {
   local dir; dir="$(new_scratch portability)"
@@ -2972,7 +3301,13 @@ run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readm
 # than one kind.** ⚠️ **Re-measured at `M3.35`**, which gave this gate a
 # milestone-expiry property and a fourth case: the counts below are that
 # task's, and the population is now four `check-hot-path-bench.sh` cases
-# rather than three. A measurement in a comment is a fact with a date on it,
+# rather than three. ⚠️ **Re-measured again at `M10.18b`**, which gave the
+# `M3.36` expiry mechanism six negative cases of its own — the population is
+# now ten `check-hot-path-bench.sh` cases: the original four plus
+# no-roadmap, row-no-pipe, bad-state, duplicate-id, no-milestones, and
+# owes-unlisted, all pinned below since three of the six cascade into a
+# second kind of failure by construction (see each fixture's own comment).
+# A measurement in a comment is a fact with a date on it,
 # and this one has been re-taken twice. So rule 20a requires a pin for that one, and the other
 # eight carry a pin the rule does not require: harmless extra specificity, and
 # cheap insurance for the day one of those gates grows a property, but not an
@@ -3001,6 +3336,18 @@ run_case "check-hot-path-bench.sh (leftover entry)" setup_hot_path_bench_leftove
   "NOT_YET_BUILT still lists"
 run_case "check-hot-path-bench.sh (expired excuse)" setup_hot_path_bench_expired invoke_hot_path_bench_expired \
   "which is complete"
+run_case "check-hot-path-bench.sh (no roadmap)" setup_hot_path_bench_no_roadmap invoke_hot_path_bench_no_roadmap \
+  "roadmap.md not found; NOT_YET_BUILT reasons cannot be checked against it"
+run_case "check-hot-path-bench.sh (row with no trailing pipe)" setup_hot_path_bench_row_no_pipe invoke_hot_path_bench_row_no_pipe \
+  "does not end in '|', so its state cell cannot be located"
+run_case "check-hot-path-bench.sh (state outside the vocabulary)" setup_hot_path_bench_bad_state invoke_hot_path_bench_bad_state \
+  "has state 'paused', which is not one of complete/in progress/not started"
+run_case "check-hot-path-bench.sh (duplicate milestone id)" setup_hot_path_bench_duplicate_id invoke_hot_path_bench_duplicate_id \
+  "lists 'M14' more than once, so its state is whichever row came last"
+run_case "check-hot-path-bench.sh (no milestone rows at all)" setup_hot_path_bench_no_milestones invoke_hot_path_bench_no_milestones \
+  "lists no milestones, so no NOT_YET_BUILT reason can be checked"
+run_case "check-hot-path-bench.sh (owes a milestone the roadmap never lists)" setup_hot_path_bench_owes_unlisted invoke_hot_path_bench_owes_unlisted \
+  "which docs/internal/product/roadmap.md does not list"
 # ⚠️ The two **pre-existing** portability cases carry an `expect` since `M0.24`
 # gave the gate a fourth property: their fixtures name no script, so they trip
 # check 3's inspected-nothing guard as a *second* problem, and deleting check 1
