@@ -54,6 +54,20 @@ pub enum Error {
         got: i64,
     },
 
+    /// A producer id was negative.
+    #[error("producer id must not be negative, got {got}")]
+    NegativeProducerId {
+        /// The rejected value.
+        got: i64,
+    },
+
+    /// A producer epoch was negative.
+    #[error("producer epoch must not be negative, got {got}")]
+    NegativeProducerEpoch {
+        /// The rejected value.
+        got: i16,
+    },
+
     /// Offset arithmetic was asked to move backwards.
     ///
     /// ⚠️ Distinct from [`Error::NegativeOffset`], and the distinction is the

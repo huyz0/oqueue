@@ -62,6 +62,8 @@ impl Error {
             | Self::NegativePartitionId { .. }
             | Self::NegativeOffset { .. }
             | Self::NegativeOffsetDelta { .. }
+            | Self::NegativeProducerId { .. }
+            | Self::NegativeProducerEpoch { .. }
             | Self::OffsetOverflow { .. }
             | Self::CommitVersionOverflow { .. }
             | Self::NonMonotonicCommitVersion { .. }

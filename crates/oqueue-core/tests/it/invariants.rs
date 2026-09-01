@@ -15,7 +15,9 @@
 // panic here means the generator is wrong, not the code under test.
 #![allow(clippy::expect_used)]
 
-use oqueue_core::{Error, ObjectKey, Offset, PartitionId, Timestamp, TopicId};
+use oqueue_core::{
+    Error, ObjectKey, Offset, PartitionId, ProducerEpoch, ProducerId, Timestamp, TopicId,
+};
 use proptest::prelude::*;
 
 proptest! {
@@ -51,6 +53,30 @@ proptest! {
             Err(e) => {
                 prop_assert!(value < 0);
                 prop_assert_eq!(e, Error::NegativeOffset { got: value });
+            }
+        }
+    }
+
+    /// No `i64` produces a negative `ProducerId`.
+    #[test]
+    fn producer_id_is_never_negative(value in any::<i64>()) {
+        match ProducerId::new(value) {
+            Ok(id) => prop_assert!(id.get() >= 0),
+            Err(e) => {
+                prop_assert!(value < 0);
+                prop_assert_eq!(e, Error::NegativeProducerId { got: value });
+            }
+        }
+    }
+
+    /// No `i16` produces a negative `ProducerEpoch`.
+    #[test]
+    fn producer_epoch_is_never_negative(value in any::<i16>()) {
+        match ProducerEpoch::new(value) {
+            Ok(epoch) => prop_assert!(epoch.get() >= 0),
+            Err(e) => {
+                prop_assert!(value < 0);
+                prop_assert_eq!(e, Error::NegativeProducerEpoch { got: value });
             }
         }
     }
@@ -128,7 +154,9 @@ fn offset_add_at_the_boundary_errors_rather_than_wrapping() {
 /// `M0.5` was right that a round trip alone would have constrained nothing.
 /// Both are needed.
 mod kills_surviving_mutants {
-    use super::{Error, ObjectKey, Offset, PartitionId, Timestamp, TopicId};
+    use super::{
+        Error, ObjectKey, Offset, PartitionId, ProducerEpoch, ProducerId, Timestamp, TopicId,
+    };
 
     #[test]
     fn accessors_return_what_was_constructed() {
@@ -140,6 +168,8 @@ mod kills_surviving_mutants {
         assert_eq!(PartitionId::new(7).expect("valid").get(), 7);
         assert_eq!(Offset::new(42).expect("valid").get(), 42);
         assert_eq!(Timestamp::from_millis(9).expect("valid").as_millis(), 9);
+        assert_eq!(ProducerId::new(11).expect("valid").get(), 11);
+        assert_eq!(ProducerEpoch::new(3).expect("valid").get(), 3);
     }
 
     #[test]
@@ -152,6 +182,8 @@ mod kills_surviving_mutants {
         assert_eq!(PartitionId::new(7).expect("valid").to_string(), "7");
         assert_eq!(Offset::new(42).expect("valid").to_string(), "42");
         assert_eq!(Timestamp::from_millis(9).expect("valid").to_string(), "9ms");
+        assert_eq!(ProducerId::new(11).expect("valid").to_string(), "11");
+        assert_eq!(ProducerEpoch::new(3).expect("valid").to_string(), "3");
     }
 
     /// ⚠️ Zero is the boundary every `< 0` guard turns on, and `< ` mutated to
@@ -161,6 +193,9 @@ mod kills_surviving_mutants {
         assert_eq!(PartitionId::new(0).expect("zero is a partition").get(), 0);
         assert_eq!(Offset::new(0).expect("zero is an offset").get(), 0);
         assert_eq!(Timestamp::from_millis(0).expect("epoch").as_millis(), 0);
+        assert_eq!(ProducerId::new(0).expect("zero is a producer id").get(), 0);
+        assert_eq!(ProducerEpoch::new(0).expect("zero is an epoch").get(), 0);
+        assert_eq!(ProducerEpoch::ZERO.get(), 0);
         let start = Offset::new(5).expect("valid");
         assert_eq!(
             start.add(0).map(Offset::get),
@@ -180,6 +215,14 @@ mod kills_surviving_mutants {
         assert_eq!(
             Timestamp::from_millis(-1),
             Err(Error::NegativeTimestamp { got: -1 })
+        );
+        assert_eq!(
+            ProducerId::new(-1),
+            Err(Error::NegativeProducerId { got: -1 })
+        );
+        assert_eq!(
+            ProducerEpoch::new(-1),
+            Err(Error::NegativeProducerEpoch { got: -1 })
         );
     }
 }
