@@ -12,7 +12,9 @@
 #![forbid(unsafe_code)]
 
 pub mod invariants;
+pub mod schedule;
 pub mod seed;
 
 pub use invariants::{Broken, Invariants, Observation, Violation};
+pub use schedule::{Schedule, Step, shrink};
 pub use seed::{run_seeded, seeded_runtime};

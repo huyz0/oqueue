@@ -38,9 +38,23 @@ async fn arms(n: usize) -> String {
 /// honesty of the row.** `park.rs`'s two arms are never ready *together* in
 /// this workload — the commit wakes the watch before the paused clock has any
 /// reason to advance to the deadline — so the branch order changes and the
-/// outcome does not. What a seed buys today is that the harness is *positioned*
-/// on a choice; what it does not yet buy is a workload where the choice is
-/// observable, and `M10.12`'s generated schedule is where that comes from.
+/// outcome does not. ⚠️ **`M10.12` gave the seed a *workload* to choose
+/// (`generated.rs`'s `Schedule`), and that is a different thing from making
+/// `park.rs`'s branch choice observable.** Two seeds now draw different steps
+/// and can produce different `orphans`/`checks` — true today, and asserted
+/// nowhere: `generated.rs`'s tests constrain what each *step* does, not that
+/// two *seeds* diverge, so a regression that made step execution
+/// seed-insensitive while `Schedule::draw` kept drawing distinct step lists —
+/// exactly the split `M10.11`'s review found once, a seed changing something
+/// positional and nothing observable — would pass silently. Recorded rather
+/// than fixed, since adding that assertion is scope this row did not carry.
+/// ⚠️ **And regardless of whether it is pinned**, the two arms of one
+/// `select!` racing one commit are still never both ready, whatever schedule
+/// surrounds them — that is what this sentence is actually about, and it is
+/// still true after `M10.12`. Closing it needs a workload where the race is
+/// genuinely contended — concurrent produces against one parked fetch, say —
+/// which `M10.32` receives rather than leaving unowned the way `M10.11`'s own
+/// version of this gap was.
 #[test]
 fn the_run_consumes_the_seeded_rng() {
     let after = oqueue_testkit::run_seeded(seed(), || async {

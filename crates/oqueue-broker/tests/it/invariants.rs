@@ -97,7 +97,11 @@ const FETCH_BUDGET: usize = 64;
 /// ⚠️ **The watermark is taken from the first answer.** It is the number a
 /// client acts on, and taking it from the last would compare an advertisement
 /// made after the reads against reads made before it.
-async fn observe(dispatcher: &Dispatcher, broker: &Broker, orphans: i64) -> Option<Observation> {
+pub async fn observe(
+    dispatcher: &Dispatcher,
+    broker: &Broker,
+    orphans: i64,
+) -> Option<Observation> {
     // ⚠️ **Sampled before the reads, not after.** The comparison is
     // `visible <= durable`, so a durability figure taken *later* than the
     // offsets it is compared against is the lenient ordering: a write that was
@@ -208,7 +212,7 @@ fn offsets_in(records: &bytes::Bytes) -> Vec<i64> {
 /// every batch by one produces `[1,2,3,4]`, which has no gap. Review's
 /// suggested mutation is exactly that shape, and without this it fails on an
 /// unrelated assertion or not at all.
-fn starts_at_the_beginning(at: &Observation) {
+pub fn starts_at_the_beginning(at: &Observation) {
     if let Some(&first) = at.visible_offsets.first() {
         assert_eq!(
             first, 0,
@@ -227,27 +231,35 @@ fn starts_at_the_beginning(at: &Observation) {
 /// `code-structure.md`'s fifty. The bundle is also the honest shape: `acked`
 /// and `orphans` are facts *about this run* that only make sense beside the
 /// checker they feed.
-struct Run {
-    dispatcher: Dispatcher,
-    invariants: Invariants,
+pub struct Run {
+    pub dispatcher: Dispatcher,
+    pub invariants: Invariants,
     /// The highest offset any produce was told had been accepted.
-    acked: Option<i64>,
+    pub acked: Option<i64>,
     /// Objects that landed and were never named by a commit.
-    orphans: i64,
+    pub orphans: i64,
+    /// How many times a parked fetch has actually raced a commit.
+    ///
+    /// ⚠️ **Exists for `generated.rs`'s `RacedProduce` test.** A `RacedProduce`
+    /// arm gutted to an ordinary produce is otherwise invisible from outside
+    /// this file — both outcomes are legal, so no assertion here can tell them
+    /// apart — and this is the one fact only the real path produces.
+    pub races: u32,
 }
 
 impl Run {
-    fn new(broker: &Broker) -> Self {
+    pub fn new(broker: &Broker) -> Self {
         Self {
             dispatcher: Dispatcher::new(Arc::clone(&broker.cluster)),
             invariants: Invariants::for_seed(seed()),
             acked: None,
             orphans: 0,
+            races: 0,
         }
     }
 
     /// Produces one batch, then observes — and checks, if it could observe.
-    async fn step(&mut self, broker: &Broker) {
+    pub async fn step(&mut self, broker: &Broker) {
         let response = produce(&self.dispatcher, broker, &["orders"]).await;
         let partition = &response.responses[0].partition_responses[0];
         if partition.error_code == 0 {
@@ -449,7 +461,8 @@ const PARK_MS: i32 = 50;
 /// `select!` makes, and pinning either would be pinning one seed. What is
 /// asserted is that the invariants hold whichever way it goes, which is what a
 /// seeded harness is for.
-async fn a_parked_fetch_races_a_commit(broker: &Broker, run: &mut Run) {
+pub async fn a_parked_fetch_races_a_commit(broker: &Broker, run: &mut Run) {
+    run.races += 1;
     let at = i64::from(u32::try_from(run.acked.map_or(0, |last| last + 1)).unwrap_or(0));
     let frame = parked_fetch_frame(broker, "orders", at, PARK_MS);
     let parked = {
