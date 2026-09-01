@@ -143,7 +143,13 @@ cd "$REPO_ROOT"
 # right remedy here rather than the rename `FILE_LINE_LIMIT` took. The choice
 # is per-constant: rename when the name is simply wrong — `LIMIT` became
 # `FILE_LINE_LIMIT` — and widen when the naming convention has a genuine gap.
-THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor|_ms(ecs?)?[0-9]*([^a-z0-9]|$)|_secs?(onds?)?[0-9]*([^a-z0-9]|$)|_days?([^a-z0-9]|$)'
+#
+# ⚠️ **`_timeouts?` added by `M10.18a`.** `SERVE_LIMITS.idle_timeout` is this
+# gap's own named example: a `Duration` field named for exactly what it is,
+# missing from a pattern that already had `_ms`, `_secs` and `_days`. The same
+# widening `M1.35` made for `_days` applies here — a threshold is a threshold
+# whatever unit or field shape names it.
+THRESHOLD_RE='threshold|_limit|_budget|_ceiling|_floor|_timeouts?([^a-z0-9]|$)|_ms(ecs?)?[0-9]*([^a-z0-9]|$)|_secs?(onds?)?[0-9]*([^a-z0-9]|$)|_days?([^a-z0-9]|$)'
 
 # Rust environment reads, plus the shell idiom for reading one with a
 # fallback default. `\$\{[A-Za-z_][A-Za-z0-9_]*:[-=]` matches `${FOO:-...}`
@@ -287,6 +293,14 @@ fi
 # hundred lines up, where two of `m0-complete.sh`'s seven rows were wrong across
 # two drafts for the same reason.
 declare -A RUST_BOUNDS=(
+  # ⚠️ `M10.18a`: the type widening that added `f32|f64|Duration` to the
+  # candidate scan found this one on the first run. `object_store`'s backoff
+  # multiplier, kept equal to `RetryPolicy`'s own doubling by the comment
+  # beside it -- neither direction is safe: raising it makes the vendor retry
+  # faster than the policy's own retry-budget arithmetic assumes, and
+  # lowering it makes the two curves diverge the other way. A change here is
+  # a decision about `ADR-0008`'s translation, not a tuning knob.
+  ["crates/oqueue-store/src/retry.rs|BACKOFF_BASE"]="2.0"
   # How many object-storage reads one parked `Fetch` may make. Raising it lets
   # a client's read volume be set by somebody else's write rate.
   ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"
@@ -328,50 +342,89 @@ declare -A RUST_BOUNDS=(
   # takes back to service.
   ["crates/oqueue-coordinator/src/serve.rs|REBUILD_PAGE_ENTRIES"]="1024"
 )
-# ⚠️ **Files whose numeric constants are not thresholds at all**, each with its
-# reason — the shape `fuzz.sh`'s decoder enumeration uses, and for the same
-# purpose: without it the map above is a list that can be emptied in silence.
-# Measured before writing this: deleting all eight of the first draft's entries
-# left the gate printing `ok  Rust bounds match the pin map (0 pinned)`, which
-# is verbatim the defect this file's own header records for `NFR_CONSTANTS` two
-# hundred lines up, reproduced by the section written to close it.
-declare -A NOT_A_BOUND_FILE=(
-  ["crates/oqueue-codec/src/error_codes.rs"]="Kafka's own error codes; the protocol fixes every value"
-  ["crates/oqueue-codec/src/batch.rs"]="RecordBatch v2's fixed layout -- header length, CRC offsets, magic"
-  ["crates/oqueue-codec/src/listoffsets.rs"]="the protocol's earliest/latest timestamp sentinels"
-  ["crates/oqueue-codec/src/metadata.rs"]="the protocol's authorized-operations sentinel"
-  ["crates/oqueue-codec/src/produce.rs"]="the protocol's log-append-time sentinel"
-  ["crates/oqueue-codec/src/varint.rs"]="the widest legal varint and varlong, fixed by the encoding"
-  ["crates/oqueue-core/src/key_layout.rs"]="FNV-1a's basis and prime, fixed by the algorithm"
-  ["crates/oqueue-broker/src/listoffsets.rs"]="a protocol sentinel and the advertised version this handler serves"
-  ["crates/oqueue-broker/src/produce/answer.rs"]="the unassigned-offset sentinel a refusal answers with"
-  ["crates/oqueue-coordinator/src/commit.rs"]="the unassigned-offset sentinel, beside the type that returns it"
-)
-# ⚠️ Individual constants in files that also hold real bounds.
+# ⚠️ **`M10.18a`: no more file-wide exemptions.** This used to be
+# `NOT_A_BOUND_FILE`, a *file* on the left of `=`, and `M3.42`'s finding was
+# exact: a file exempted because its one constant is a protocol sentinel
+# stays exempted the moment a second, genuine threshold is added to it,
+# because the check below only ever asked "is this file exempt", never "is
+# this constant". `produce.rs` is the row's own example -- one sentinel
+# today, and nothing would have stopped a retry count or a buffer size
+# shipping beside it unreviewed. Every entry below is now `file|CONST_NAME`,
+# the same key shape a file that holds both real bounds and sentinels
+# already used -- there is no longer a second, coarser mechanism to fall
+# back to.
+#
+# ⚠️ **Still measured before writing, on the old file-wide map's own
+# precedent**: deleting every row below and running the scan is what
+# enumerated exactly which constants exist in each of these files, rather
+# than trusting the old file-level comment's word for "one constant" --
+# `oqueue-codec/src/error_codes.rs` alone has 14.
 declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/fetch/partition.rs|OFFSET_UNSET"]="the protocol's unset-offset sentinel"
   ["crates/oqueue-codec/src/records.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
   ["crates/oqueue-core/src/bundle.rs|BUNDLE_FORMAT_VERSION"]="this object format's version number"
   ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
+  # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
+  ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|OFFSET_OUT_OF_RANGE"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|CORRUPT_MESSAGE"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|UNKNOWN_TOPIC_OR_PARTITION"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|INVALID_REQUIRED_ACKS"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_VERSION"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_FOR_MESSAGE_FORMAT"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|INVALID_RECORD"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|UNKNOWN_TOPIC_ID"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|NOT_ENOUGH_REPLICAS"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|LEADER_NOT_AVAILABLE"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|UNKNOWN_SERVER_ERROR"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|OFFSET_NOT_AVAILABLE"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_COMPRESSION_TYPE"]="Kafka's own error code, the protocol fixes it"
+  # --- batch.rs: RecordBatch v2's fixed layout
+  ["crates/oqueue-codec/src/batch.rs|BATCH_HEADER_LEN"]="RecordBatch v2's fixed header length"
+  ["crates/oqueue-codec/src/batch.rs|CRC_COVERAGE_START"]="RecordBatch v2's fixed CRC coverage offset"
+  ["crates/oqueue-codec/src/batch.rs|CRC_OFFSET"]="RecordBatch v2's fixed CRC field offset"
+  ["crates/oqueue-codec/src/batch.rs|MAGIC_V2"]="the format's magic byte, fixed by the version it names"
+  # --- listoffsets.rs (codec): the protocol's timestamp sentinels
+  ["crates/oqueue-codec/src/listoffsets.rs|LATEST_TIMESTAMP"]="the protocol's latest-timestamp sentinel"
+  ["crates/oqueue-codec/src/listoffsets.rs|EARLIEST_TIMESTAMP"]="the protocol's earliest-timestamp sentinel"
+  ["crates/oqueue-codec/src/metadata.rs|AUTHORIZED_OPERATIONS_OMITTED"]="the protocol's authorized-operations sentinel"
+  ["crates/oqueue-codec/src/produce.rs|LOG_APPEND_TIME_UNSET"]="the protocol's log-append-time sentinel"
+  # --- varint.rs: fixed by the encoding
+  ["crates/oqueue-codec/src/varint.rs|MAX_VARINT_BYTES"]="the widest legal varint, fixed by the encoding"
+  ["crates/oqueue-codec/src/varint.rs|MAX_VARLONG_BYTES"]="the widest legal varlong, fixed by the encoding"
+  # --- key_layout.rs: FNV-1a's own constants
+  ["crates/oqueue-core/src/key_layout.rs|OFFSET_BASIS"]="FNV-1a's basis, fixed by the algorithm"
+  ["crates/oqueue-core/src/key_layout.rs|PRIME"]="FNV-1a's prime, fixed by the algorithm"
+  # --- oqueue-broker/src/listoffsets.rs: a sentinel, and a test's own version literal
+  ["crates/oqueue-broker/src/listoffsets.rs|UNSET"]="a protocol sentinel"
+  ["crates/oqueue-broker/src/listoffsets.rs|VERSION"]="a test's own advertised-version literal, inside #[cfg(test)] mod tests -- not a production bound, and the file-path exclusion below only catches a tests/ directory, not an inline test module"
+  ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
+  ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )
 rust_violations=0
 # ⚠️ **Every numeric constant in the tree is a candidate**, so a new bound
 # cannot ship unpinned and unmentioned. Tests are excluded: a fixture's step
 # count is nobody's threshold, and requiring a reason for each would make this
 # list noise.
+#
+# ⚠️ **`Duration|f32|f64` added by `M10.18a`.** The type list was integers
+# only, so `oqueue-store/src/retry.rs`'s `BACKOFF_BASE: f64 = 2.0` -- a real
+# tuning constant -- was invisible to this scan the whole time it existed,
+# found only once the type list was widened to look. `Duration` closes the
+# other half: a bare `const X: Duration = ...` now counts as a candidate the
+# same way an integer one does.
 while IFS= read -r decl; do
   file="${decl%%:*}"
   name="${decl##*:}"
   [[ "$file" == *"/tests/"* || "$file" == *"/fuzz/"* ]] && continue
-  [[ -n "${NOT_A_BOUND_FILE[$file]:-}" ]] && continue
   [[ -n "${NOT_A_BOUND[$file|$name]:-}" ]] && continue
   [[ -n "${RUST_BOUNDS[$file|$name]+x}" ]] && continue
   fail "$file: const $name is neither pinned in RUST_BOUNDS nor recorded as not a bound"
   note "a numeric constant this project chose is a threshold; add its value, or say why it is not one"
   rust_violations=$((rust_violations + 1))
 done < <(git ls-files '*.rs' 2>/dev/null | xargs grep -HE \
-  "^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?const [A-Z][A-Z0-9_]*[[:space:]]*:[[:space:]]*(u8|u16|u32|u64|usize|i8|i16|i32|i64|isize)[[:space:]]*=" 2>/dev/null \
+  "^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?const [A-Z][A-Z0-9_]*[[:space:]]*:[[:space:]]*(u8|u16|u32|u64|usize|i8|i16|i32|i64|isize|f32|f64|Duration|std::time::Duration|core::time::Duration)[[:space:]]*=" 2>/dev/null \
   | sed -E 's|^([^:]+):.*const ([A-Z0-9_]+).*|\1:\2|' | sort -u || true)
 for key in "${!RUST_BOUNDS[@]}"; do
   file="${key%%|*}"
@@ -418,6 +471,97 @@ for key in "${!RUST_BOUNDS[@]}"; do
 done
 if (( rust_violations == 0 )); then
   ok "Rust bounds match the pin map (${#RUST_BOUNDS[@]} pinned)"
+fi
+
+# ── Struct-literal fields: `SERVE_LIMITS.idle_timeout`'s own gap ───────────
+#
+# ⚠️ **`M10.18a`'s named example, and widening the type list above does not
+# reach it.** `const SERVE_LIMITS: ConnectionLimits = ConnectionLimits {
+# idle_timeout: ..., ... };` declares a *struct*-typed const, so no entry in
+# the scalar type alternation above will ever match its opening line — the
+# threshold is not the const's own type, it is a field three lines inside the
+# literal. `MAX_PARK_MS`'s own pin row says the file's `idle_timeout` must
+# stay above it, and until this section existed nothing connected that
+# sentence to a gate a reader could run.
+#
+# ⚠️ **A second, narrower scan rather than a general parser** — this file's
+# own header already says why: "closing that gap needs a real parser and is
+# not this task's job." What this catches is the shape this workspace
+# actually writes: a `const NAME: Type = Type {` opening line, one field per
+# line until a bare `};` closes it. A struct literal written any other way
+# (nested braces, multiple fields per line) is outside what this can see, and
+# that limit is a fact about this section rather than a promise about every
+# shape Rust allows.
+# ⚠️ **Empty today, deliberately kept rather than omitted.** `SERVE_LIMITS`'s
+# other two fields, `max_frame` and `max_in_flight`, do not match
+# `THRESHOLD_RE` at all -- they never reach this map, so an entry for either
+# would claim a check happened where the field-name filter above already
+# decided the question. The map exists for the day a struct field's name
+# *does* look like a threshold and genuinely is not one.
+declare -A NOT_A_STRUCT_FIELD_BOUND=()
+declare -A STRUCT_FIELD_BOUNDS=(
+  # ⚠️ **`idle_timeout`, not exempted.** This is the row's own example: a
+  # `Duration` field whose value must stay above `MAX_PARK_MS`
+  # (`crates/oqueue-broker/src/fetch/deadline.rs`'s own pinned `60_000`).
+  # Raising it is safe; lowering it below that ceiling reintroduces the
+  # defect `the_idle_timeout_outlasts_the_longest_park` exists to catch --
+  # this pin is what makes that relationship visible to `check-drift.sh`
+  # itself, not only to a `cargo test` run.
+  ["bin/oqueue/src/serve.rs|SERVE_LIMITS|idle_timeout"]="std::time::Duration::from_mins(2)"
+)
+struct_violations=0
+while IFS= read -r open_line; do
+  file="${open_line%%:*}"
+  rest="${open_line#*:}"
+  const_name="$(sed -E 's/^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?const ([A-Z][A-Z0-9_]*).*/\3/' <<< "$rest")"
+  [[ "$file" == *"/tests/"* || "$file" == *"/fuzz/"* ]] && continue
+  # Everything from the opening `{` to the first bare `};` after it.
+  body="$(awk -v start="$const_name" '
+    $0 ~ ("const " start ":") { found=1 }
+    found { print }
+    found && /^[[:space:]]*};[[:space:]]*$/ { exit }
+  ' "$file" 2>/dev/null || true)"
+  while IFS= read -r field_line; do
+    field="$(sed -E 's/^[[:space:]]*([a-z_][a-z0-9_]*):.*/\1/' <<< "$field_line")"
+    [[ "$field" == "$field_line" ]] && continue # no field: value shape on this line
+    printf '%s\n' "$field" | grep -qEi "$THRESHOLD_RE" || continue
+    key="$file|$const_name|$field"
+    [[ -n "${NOT_A_STRUCT_FIELD_BOUND[$key]:-}" ]] && continue
+    [[ -n "${STRUCT_FIELD_BOUNDS[$key]+x}" ]] && continue
+    fail "$file: const $const_name field '$field' looks like a threshold and is neither pinned nor recorded as not a bound"
+    note "a struct-literal const can hide a threshold behind a type alternation cannot see -- name it here"
+    struct_violations=$((struct_violations + 1))
+  done <<< "$body"
+done < <(git ls-files '*.rs' 2>/dev/null | xargs grep -HE \
+  "^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?const [A-Z][A-Z0-9_]*[[:space:]]*:[[:space:]]*[A-Za-z][A-Za-z0-9_:]*[[:space:]]*=.*\{[[:space:]]*\$" 2>/dev/null || true)
+for key in "${!STRUCT_FIELD_BOUNDS[@]}"; do
+  file="${key%%|*}"
+  rest="${key#*|}"
+  const_name="${rest%%|*}"
+  field="${rest##*|}"
+  want="${STRUCT_FIELD_BOUNDS[$key]}"
+  if [[ ! -f "$file" ]]; then
+    fail "$file does not exist, so $const_name.$field cannot be pinned"
+    struct_violations=$((struct_violations + 1))
+    continue
+  fi
+  got="$(sed -nE "/const ${const_name}:/,/^[[:space:]]*\};/p" "$file" \
+    | grep -E "^[[:space:]]*${field}[[:space:]]*:" | head -1 || true)"
+  got="${got#*:}"
+  got="${got%%,*}"
+  got="$(sed -E 's/^[[:space:]]+|[[:space:]]+$//g' <<< "$got")"
+  if [[ -z "$got" ]]; then
+    fail "$file does not declare a field '$field' on const $const_name"
+    note "renaming a field is fine; renaming it without moving this entry is not"
+    struct_violations=$((struct_violations + 1))
+  elif [[ "$got" != "$want" ]]; then
+    fail "$file: $const_name.$field is '$got'; check-drift.sh holds '$want'"
+    note "changing it means changing this entry in the same commit, which is a diff someone reviews"
+    struct_violations=$((struct_violations + 1))
+  fi
+done
+if (( struct_violations == 0 )); then
+  ok "struct-literal bounds match the pin map (${#STRUCT_FIELD_BOUNDS[@]} pinned)"
 fi
 
 finish
