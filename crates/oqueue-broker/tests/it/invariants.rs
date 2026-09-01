@@ -30,12 +30,14 @@
 //! invariant is about — a pending PUT, a refused commit, a storm — which is
 //! `M10.10`'s "across a run, not at its end" in the concrete.
 //!
-//! ⚠️ **And an observation the harness cannot take is skipped, not guessed.** A
-//! fetch the store refuses comes back with an error code and no records, which
-//! read as "end of the log" reports a watermark violation against a broker
-//! doing nothing wrong — measured by review. `observe` returns `None` there,
-//! and the run asserts how many observations were genuinely taken so a harness
-//! that silently stopped checking would fail.
+//! ⚠️ **And an observation the harness cannot take is skipped, not guessed.**
+//! A refused fetch read as "end of the log" reports a violation against a
+//! broker doing nothing wrong — measured by review. `observe` returns `None`
+//! there, and the run asserts how many observations it genuinely took.
+//!
+//! ⚠️ **`overlap.rs` is a sibling, not a second concept** (`M10.32`,
+//! `code-structure.md`'s 500-line limit). Two produces genuinely overlapping
+//! one park is still this file's own claim, checked the same way.
 
 #![allow(clippy::expect_used)]
 // ⚠️ `pub` here is `pub(crate)` in effect — see `roundtrip.rs`. `unreachable_pub`
@@ -46,6 +48,7 @@
 
 use crate::roundtrip::{fetch_now, fetch_response_of, parked_fetch_frame, produce, produce_frame};
 use crate::support::{Broker, broker};
+use kafka_protocol::messages::produce_response::PartitionProduceResponse;
 use oqueue_broker::{Dispatcher, Handler as _, HandlerResponse};
 use oqueue_codec::error_codes::{LEADER_NOT_AVAILABLE, OFFSET_OUT_OF_RANGE};
 use oqueue_core::{FaultConfig, LogFaults, StormKind};
@@ -81,8 +84,8 @@ pub fn seed() -> u64 {
 
 /// How many fetches one observation will spend before calling it a loop.
 ///
-/// ⚠️ **Bounded, so a broker that answered the same records forever fails this
-/// file rather than hanging the suite** inside `check-budget.sh`'s ceiling.
+/// ⚠️ **Bounded**, so a broker answering the same records forever fails this
+/// file rather than hanging the suite inside `check-budget.sh`'s ceiling.
 const FETCH_BUDGET: usize = 64;
 
 /// What the world looks like to a client right now, or `None` if it could not
@@ -172,18 +175,13 @@ fn durable_through(broker: &Broker, orphans: i64) -> Option<i64> {
 
 /// The offsets a fetch answered with, in the order served.
 ///
-/// ⚠️ **The offsets, not a count, and the first version returned a count.**
-/// `visible_offsets` was then built as `(0..count)`, which makes "gap-free"
-/// true by fabrication — review proved it by making the coordinator skip every
-/// other offset and watching the run stay green. The checker's own field doc
-/// says exactly this ("a count cannot tell 0,1,2 from 0,1,3") and the driver
-/// was doing the thing it warns about.
+/// ⚠️ **The offsets, not a count.** A count-then-`(0..count)` reconstruction
+/// makes "gap-free" true by fabrication — review proved it by making the
+/// coordinator skip every other offset and watching the run stay green.
 ///
 /// ⚠️ **Two decoders, each authoritative for its own part.** A `records` field
-/// holds *concatenated* batches and `RecordBatchDecoder` decodes one — handed
-/// the whole field it reports "not enough bytes". So batch boundaries come
-/// from `oqueue_codec`'s framing, this repository's own subject, and the
-/// records inside each batch from the dependency (`ADR-0017`).
+/// holds *concatenated* batches, so batch boundaries come from `oqueue_codec`'s
+/// own framing and the records inside each from the dependency (`ADR-0017`).
 fn offsets_in(records: &bytes::Bytes) -> Vec<i64> {
     use kafka_protocol::records::RecordBatchDecoder;
     let mut at = 0_usize;
@@ -205,13 +203,11 @@ fn offsets_in(records: &bytes::Bytes) -> Vec<i64> {
 /// The run's own fixture property: this log starts empty, so a reader that
 /// fetched from zero must be served from zero.
 ///
-/// ⚠️ **Here rather than in the checker, because it is not an invariant.** A
-/// log whose first readable offset is not zero is perfectly legal in general —
-/// retention has run — and is a defect *in this run*, which starts from
-/// nothing. ⚠️ **And gap-freeness does not cover it**: a stamp that shifted
-/// every batch by one produces `[1,2,3,4]`, which has no gap. Review's
-/// suggested mutation is exactly that shape, and without this it fails on an
-/// unrelated assertion or not at all.
+/// ⚠️ **Here rather than in the checker, because it is not an invariant** — a
+/// nonzero first offset is legal in general (retention has run) and a defect
+/// only *in this run*. ⚠️ **And gap-freeness does not cover it**: a stamp
+/// shifted by one produces `[1,2,3,4]`, which has no gap — review's suggested
+/// mutation, and without this it fails on an unrelated assertion or not at all.
 pub fn starts_at_the_beginning(at: &Observation) {
     if let Some(&first) = at.visible_offsets.first() {
         assert_eq!(
@@ -238,12 +234,12 @@ pub struct Run {
     pub acked: Option<i64>,
     /// Objects that landed and were never named by a commit.
     pub orphans: i64,
-    /// How many times a parked fetch has actually raced a commit.
+    /// How many times a parked fetch has actually raced a commit — one or
+    /// two of them, `RacedProduce` and `overlap`'s step alike.
     ///
-    /// ⚠️ **Exists for `generated.rs`'s `RacedProduce` test.** A `RacedProduce`
-    /// arm gutted to an ordinary produce is otherwise invisible from outside
-    /// this file — both outcomes are legal, so no assertion here can tell them
-    /// apart — and this is the one fact only the real path produces.
+    /// ⚠️ **Exists for `generated.rs`'s gutting tests.** Either arm gutted to
+    /// an ordinary produce is otherwise invisible from outside this file, and
+    /// this is the one fact only the real path produces.
     pub races: u32,
 }
 
@@ -261,21 +257,29 @@ impl Run {
     /// Produces one batch, then observes — and checks, if it could observe.
     pub async fn step(&mut self, broker: &Broker) {
         let response = produce(&self.dispatcher, broker, &["orders"]).await;
-        let partition = &response.responses[0].partition_responses[0];
+        self.absorb(&response.responses[0].partition_responses[0]);
+        if let Some(at) = observe(&self.dispatcher, broker, self.orphans).await {
+            starts_at_the_beginning(&at);
+            self.invariants
+                .check(&at)
+                .unwrap_or_else(|broken| panic!("{broken}"));
+        }
+    }
+
+    /// Folds one produce's answer into `acked`/`orphans` — split out so
+    /// `overlap`'s two-produce race can fold both without duplicating what
+    /// counts as accepted or orphaned. ⚠️ **`max`, not overwrite**: needed
+    /// once a caller folds two, so the higher offset survives fold order.
+    pub(crate) fn absorb(&mut self, partition: &PartitionProduceResponse) {
         if partition.error_code == 0 {
-            self.acked = Some(partition.base_offset + RECORDS_PER_FLUSH - 1);
+            let at = partition.base_offset + RECORDS_PER_FLUSH - 1;
+            self.acked = Some(self.acked.map_or(at, |prev| prev.max(at)));
         }
         // ⚠️ **The client's own code, not the broker's internals.**
         // `LEADER_NOT_AVAILABLE` from a produce means the bytes landed and the
         // position did not, which is precisely an object carrying no offsets.
         if partition.error_code == LEADER_NOT_AVAILABLE {
             self.orphans += 1;
-        }
-        if let Some(at) = observe(&self.dispatcher, broker, self.orphans).await {
-            starts_at_the_beginning(&at);
-            self.invariants
-                .check(&at)
-                .unwrap_or_else(|broken| panic!("{broken}"));
         }
     }
 }
@@ -456,28 +460,24 @@ async fn in_flight_is_not_visible(broker: &Broker, invariants: &mut Invariants, 
 
 /// How long a parked fetch is willing to wait, in virtual milliseconds.
 ///
-/// ⚠️ **Long enough that the deadline is not a foregone conclusion and short
-/// enough that a lost wakeup is a failure rather than a hang.** Under
-/// `run_seeded`'s paused clock this costs no real time, so the number is about
-/// which branch of `park.rs`'s `select!` can win, not about duration.
-const PARK_MS: i32 = 50;
+/// ⚠️ **Short enough that a lost wakeup is a failure rather than a hang.**
+/// Under `run_seeded`'s paused clock this costs no real time.
+pub(crate) const PARK_MS: i32 = 50;
 
 /// A fetch parked at the high watermark while a produce commits underneath it.
 ///
-/// ⚠️ **This is the only place in the run where the seed decides anything**,
-/// and without it the whole row is machinery over a constant. Review measured
-/// the previous state: the run made **zero** draws from `tokio`'s seeded RNG,
-/// because `fetch_now` sends `max_wait_ms = 0` and `park.rs` returns on its own
-/// deadline check before reaching the `select!`, `session.rs` returns before
-/// its own, and `connection.rs`'s is not on the `Dispatcher` path. So every
-/// seed executed one identical schedule and the sweep was thirty-two
-/// repetitions of it.
+/// ⚠️ **The only place in the written run where a `select!` is even
+/// reached** — `fetch_now`'s `max_wait_ms = 0` returns before `park.rs`'s,
+/// and `session.rs`'s and `connection.rs`'s are off the `Dispatcher` path
+/// entirely. Without this step the seed decides nothing and the sweep is
+/// repetitions of one schedule.
 ///
-/// ⚠️ **Both outcomes are legal and neither is asserted.** The parked fetch may
-/// see the commit or may time out with nothing — that is exactly the choice
-/// `select!` makes, and pinning either would be pinning one seed. What is
-/// asserted is that the invariants hold whichever way it goes, which is what a
-/// seeded harness is for.
+/// ⚠️ **Not a genuine race, correcting this doc's own prior claim**
+/// (`M10.32`, measured directly). One serialized produce always commits
+/// before the deadline can elapse, so the commit wins every time and the
+/// timeout branch below is dead code this step can never reach.
+/// `overlap::two_produces_race_one_parked_fetch` is where two produces
+/// genuinely overlap a park instead of one serializing under it.
 pub async fn a_parked_fetch_races_a_commit(broker: &Broker, run: &mut Run) {
     run.races += 1;
     let at = i64::from(u32::try_from(run.acked.map_or(0, |last| last + 1)).unwrap_or(0));

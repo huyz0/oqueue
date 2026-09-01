@@ -18,6 +18,7 @@
 use crate::invariants::{
     Run, a_parked_fetch_races_a_commit, observe, seed, starts_at_the_beginning,
 };
+use crate::overlap::two_produces_race_one_parked_fetch;
 use crate::support::{Broker, broker};
 use oqueue_core::{FaultConfig, LogFaults, StormKind};
 use oqueue_testkit::{Schedule, Step, shrink};
@@ -45,6 +46,7 @@ async fn execute(schedule: &Schedule, broker: &Broker) -> Outcome {
         match *step {
             Step::Produce => run.step(broker).await,
             Step::RacedProduce => a_parked_fetch_races_a_commit(broker, &mut run).await,
+            Step::OverlappingProduce => two_produces_race_one_parked_fetch(broker, &mut run).await,
             Step::StormStore => broker.store.inner().set_faults(FaultConfig {
                 storm: Some((StormKind::Transient, 1)),
                 ..FaultConfig::default()
@@ -150,6 +152,25 @@ fn raced_produce_actually_races() {
     let schedule = Schedule::of(vec![Step::RacedProduce, Step::RacedProduce]);
     let outcome = oqueue_testkit::run_seeded(0, || execute_fresh(&schedule));
     assert_eq!(outcome.races, 2, "two RacedProduce steps must race twice");
+}
+
+/// ⚠️ **`OverlappingProduce` writes two objects, and `races` alone cannot
+/// tell it apart from a fallback to `RacedProduce`'s one produce** — both
+/// increment the same counter. The object count is the fact only the real
+/// path (two produces, not one) leaves behind.
+#[test]
+fn overlapping_produce_actually_writes_twice() {
+    let objects = oqueue_testkit::run_seeded(0, || async {
+        let broker = broker(&["orders"]).await;
+        let schedule = Schedule::of(vec![Step::OverlappingProduce]);
+        execute(&schedule, &broker).await;
+        broker.store.inner().len()
+    });
+    assert_eq!(
+        objects, 2,
+        "one OverlappingProduce step must write two objects — a fallback to \
+         a single produce would write only one"
+    );
 }
 
 /// ⚠️ **The reducer, over real runs rather than a synthetic predicate.**

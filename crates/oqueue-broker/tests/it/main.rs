@@ -9,6 +9,7 @@ mod faults;
 mod generated;
 mod invariants;
 mod matrix;
+mod overlap;
 mod reads;
 mod reap;
 mod roundtrip;

@@ -31,9 +31,21 @@ use core::fmt;
 pub enum Step {
     /// Produce one batch and observe.
     Produce,
-    /// Park a fetch and produce underneath it — the one step whose outcome a
-    /// schedule choice can decide.
+    /// Park a fetch and produce underneath it, serialized — see
+    /// [`Step::OverlappingProduce`]'s own doc for why this step alone cannot
+    /// make a schedule choice decide anything (`M10.32`, measured).
     RacedProduce,
+    /// Park a fetch and race **two** produces against it, spawned together
+    /// rather than serialized.
+    ///
+    /// ⚠️ **What `RacedProduce` cannot be, corrected rather than replaced**
+    /// (`M10.32`). `RacedProduce`'s one produce always commits before the
+    /// park's deadline can elapse, so its outcome decides nothing a schedule
+    /// choice could vary. Two produces spawned together make which one the
+    /// coordinator and the watch see first a genuine question of how the two
+    /// tasks interleave — the corpus's own `M10.12` row named this as what
+    /// would close the gap it left open.
+    OverlappingProduce,
     /// Make the next store call fail before writing.
     StormStore,
     /// Make the journal refuse every commit, until a [`Step::Heal`].
@@ -55,9 +67,10 @@ impl Step {
     /// nobody put here would silently never be drawn — a generator quietly
     /// covering less than it claims, which is the failure mode a harness can
     /// least afford.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::Produce,
         Self::RacedProduce,
+        Self::OverlappingProduce,
         Self::StormStore,
         Self::RefuseJournal,
         Self::Heal,
@@ -260,9 +273,10 @@ mod tests {
     fn a_known_seed_draws_a_known_schedule() {
         assert_eq!(
             Schedule::draw(7, 8).to_string(),
-            "Heal,StormStore,Produce,Produce,Look,Heal,Look,Heal",
-            "the generator's arithmetic changed, and every recorded seed now \
-             names a different run"
+            "RefuseJournal,OverlappingProduce,OverlappingProduce,Produce,\
+             RacedProduce,Heal,Produce,Look",
+            "the generator's arithmetic or Step::ALL's length changed, and \
+             every recorded seed now names a different run"
         );
     }
 
