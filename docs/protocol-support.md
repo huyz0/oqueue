@@ -92,10 +92,14 @@ unadvertised version has no response the client would parse, and outside
   it *fetched*** — usually nothing, because a read the store refused pulled
   nothing; but a read that pulled a whole bundle and then could not use it
   spent exactly what a successful one would. ⚠️ **And it does not take the
-  response's once-per-response exemption with it**, so *some* partition still
-  makes progress: the exemption is one over-the-line read per **response**, and
-  a failed read no longer consumes it, so it passes to the first partition that
-  can use it. ⚠️ **Partitions after that one can still come back empty** when
+  response's once-per-response exemption with it**: the exemption is one
+  over-the-line read per **response**, and a failed read no longer consumes
+  it, so it passes to the first partition that *can* use it — a guarantee
+  about that one mechanism, not about the response as a whole. Once the
+  failure cap below is spent, a partition whose object this request has not
+  already touched is refused before it ever reaches the exemption, so a
+  response can still end with no partition making progress at all.
+  ⚠️ **Partitions after that one can still come back empty** when
   the budget is gone — the ordinary bound, which every client handles by
   polling again, and which both the Java consumer and librdkafka plan for by
   rotating the order they list partitions in. ⚠️ **What stops a failing partition being repeated for free is not
@@ -103,8 +107,12 @@ unadvertised version has no response the client would parse, and outside
   names one partition's slice of a shared bundle, so a frame naming twenty
   partitions of one flush still issues twenty ranged GETs of that object, and
   what the cache stops is the *same* read being repeated — and after **two**
-  failed object reads the rest of the request is refused *without asking the
-  store at all*. ⚠️ **That last part is client-visible and worth planning
+  failed object reads, any partition naming an object this request has not
+  already touched is refused *without asking the store at all*. ⚠️ **A
+  partition whose object is already in hand — a success, or one of the two
+  failures itself — is still answered from that cache**, cap or no cap; the
+  refusal is for objects the cache has never seen. ⚠️ **That last part is
+  client-visible and worth planning
   for**: a consumer polling ten partitions of which two hold reaped objects
   can be answered `OFFSET_NOT_AVAILABLE` for the other eight. ⚠️ **Which
   partitions are refused depends on the order the frame lists them in** —
@@ -121,8 +129,11 @@ unadvertised version has no response the client would parse, and outside
   read answers `OFFSET_OUT_OF_RANGE` — ⚠️ **on the first miss, with no refresh
   and no retry**, because in a single-node broker the index a fetch reads *is*
   the coordinator's own and nothing removes an entry from it, so a second read
-  would consult provably identical state and pay a second GET for the same
-  answer. Doc 12 §4.6 asks for a coordinator round trip before this answer and
+  would consult provably identical state and answer identically — not because
+  it would cost a second GET (the object cache remembers a failure for the
+  life of the request, so a retry against the same object is free), but
+  because there is nothing a round trip to *this* index could learn that the
+  first read did not already know. Doc 12 §4.6 asks for a coordinator round trip before this answer and
   `M7` is where it becomes real work, on a follower whose index is a cache and
   whose 404 is genuinely ambiguous. Never an empty partition, which is what a consumer
   reads as "I am caught up" while records it had not read are being deleted

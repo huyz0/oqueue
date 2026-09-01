@@ -5,8 +5,9 @@
 //! bytes come back; everything here asks how many GETs were issued to produce
 //! them — and every defect this row shipped and had caught lived in the gap.
 //! A read charged in bytes returned cannot bound the objects it downloaded to
-//! return them; a read that failed is charged nothing at all, so no byte
-//! number bounds it either.
+//! return them; and a read the store refuses outright is charged nothing at
+//! all, so no byte number bounds *that* GET either — `faults.rs` is where a
+//! failure that did pull real bytes gets its own charge asserted.
 //!
 //! ⚠️ **These tests count `Operation::Get`, not records.** An assertion about
 //! what came back is satisfied by a broker that fetched a hundred times more

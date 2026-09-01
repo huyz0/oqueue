@@ -87,7 +87,10 @@ impl Cluster {
             // than a small `max_bytes` — the read never stops, and the charge
             // the caller applies afterwards is too late to have stopped it.
             // The `max` is what makes one expression cover both tiers: a tail
-            // read's range *is* its batch, so it reports no separate fetch.
+            // read's range *is* its batch on the success path, so `fetched`
+            // and `records.len()` agree there — but `one_batch` still reports
+            // a real, separate fetch cost on the *failure* path (`M3.37`),
+            // which is what stops a stamp failure being charged nothing.
             let over = fetched.max(records.len() as u64) >= allowance.bytes;
             if over && !(records.is_empty() && allowance.may_overshoot) {
                 break;
@@ -246,9 +249,12 @@ impl Cluster {
     /// is nothing to refresh.** The index a fetch reads is the coordinator's
     /// own — the same object, in the same process, folded before the ack — and
     /// nothing in `M3` ever removes an entry from it. So a second read would
-    /// consult provably identical state and pay a second GET for the same
-    /// answer, which is why there is no retry here rather than a retry that
-    /// re-reads a cache and calls it a round trip.
+    /// consult provably identical state and answer identically — not because
+    /// it would cost a second GET (`FetchedObjects` remembers a failure for
+    /// the life of the request, so a retry against the same object is free),
+    /// but because there is nothing a round trip to *this* index could learn
+    /// that the first read did not already know. There is no retry here
+    /// rather than a retry that re-reads a cache and calls it a round trip.
     ///
     /// ⚠️ **`M7` is where the refresh becomes real work**: a follower's index
     /// *is* a cache, its 404 may mean "my index is behind" rather than
@@ -305,8 +311,13 @@ impl Cluster {
 /// before `M3.22`, a per-pass one after it, and is a per-request one now.
 ///
 /// ⚠️ **Failures are bounded separately** — see
-/// [`MAX_FAILED_FETCHES_PER_REQUEST`], because a failed read is charged no
-/// bytes and so cannot be bounded by a byte budget at all.
+/// [`MAX_FAILED_FETCHES_PER_REQUEST`]. A failed read is charged what it
+/// *fetched*, same as `ReadFailure` below — usually nothing, because a
+/// store refusal pulls nothing, but a GET that succeeded and then could not
+/// be used (a parse or stamp failure past the store) spends exactly what a
+/// successful read would. What a byte budget cannot bound is the *count*: a
+/// request naming many distinct objects the store refuses outright can drive
+/// an unbounded number of near-zero-byte GETs, which is what this cap stops.
 #[derive(Debug, Default)]
 pub struct FetchedObjects {
     seen: HashMap<(ObjectKey, RangeKey), Result<Vec<u8>, Error>>,
@@ -342,15 +353,20 @@ pub struct ReadFailure {
 
 /// How many of one request's object reads may *fail* before it stops asking.
 ///
-/// ⚠️ **Failures need their own bound because they cost no bytes.** A healthy
-/// read is bounded by the byte budget — it fetched something, so it is charged
-/// for it. A failed read fetched nothing and is charged nothing, deliberately,
-/// so that one fault cannot blank the healthy partitions behind it; and the
-/// object cache only stops the *same* object being asked for twice. A frame
-/// naming sixty-four partitions in sixty-four different bundles therefore
-/// bought sixty-four GETs against a store that was failing all of them — the
-/// broker reading *hardest* exactly when the store is least able to serve it,
-/// and rising with the fan-out of the client's own subscription.
+/// ⚠️ **Failures need their own bound because a store refusal need not cost
+/// bytes.** A healthy read is bounded by the byte budget — it fetched
+/// something, so it is charged for it. A read the store refuses outright
+/// pulls nothing and is charged nothing — deliberately, so that one fault
+/// cannot blank the healthy partitions behind it — and the object cache only
+/// stops the *same* object being asked for twice. A frame naming sixty-four
+/// partitions in sixty-four different bundles therefore bought sixty-four
+/// GETs against a store that was failing all of them — the broker reading
+/// *hardest* exactly when the store is least able to serve it, and rising
+/// with the fan-out of the client's own subscription. ⚠️ **Not every
+/// failure is this cheap** — a read that pulled a whole bundle and then
+/// could not use it spends exactly what a successful one would, see
+/// `ReadFailure` — but this cap bounds the *count* of failures either way,
+/// which a byte budget alone cannot.
 ///
 /// ⚠️ **Two, because the second is the one that carries information.** The
 /// first failure could be a blip; a second distinct object failing in the same

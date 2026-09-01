@@ -2,10 +2,15 @@
 //!
 //! ⚠️ **Its own file because a failure is bounded by something else.** A
 //! healthy read is bounded by bytes: it fetched something, so it is charged for
-//! it, and `reads.rs` asserts that. A read that fetched nothing is charged
-//! nothing — deliberately, so one fault cannot blank the healthy partitions
-//! behind it — which leaves it bounded by the object cache and the failure cap
-//! instead, and nothing here can be stated in bytes at all.
+//! it, and `reads.rs` asserts that. A read the store refuses outright fetched
+//! nothing and is charged nothing — deliberately, so one fault cannot blank
+//! the healthy partitions behind it — which leaves it bounded by the object
+//! cache and the failure cap instead. ⚠️ **Not every failure here is that
+//! cheap**: `a_failed_parse_leaves_the_exemption_for_the_partition_behind_it`
+//! below pulls a whole bundle from a store that answered honestly, and only
+//! the parse after it fails — the budget is spent exactly as a successful
+//! read would spend it, and what this file asserts for that case is the
+//! *exemption* surviving, not a byte count of zero.
 //!
 //! ⚠️ **Both tiers, and separately.** A tail read fails in the stamp and a
 //! history read in the footer: two call sites, which have to charge and count
@@ -24,11 +29,11 @@ use oqueue_broker::Dispatcher;
 use oqueue_core::{FaultConfig, ObjectStore, Operation, StormKind};
 use std::sync::Arc;
 
-/// ⚠️ **A store that is failing is asked less, not more.** A failed read
-/// fetched nothing and is charged nothing — deliberately, so one fault cannot
-/// blank the healthy partitions behind it — and the object cache only stops
-/// the *same* object being asked for twice. Distinct partitions in distinct
-/// bundles escape both, so a frame naming thirty-two of them against a sick
+/// ⚠️ **A store that is failing is asked less, not more.** A read the store
+/// refuses outright fetched nothing and is charged nothing — deliberately,
+/// so one fault cannot blank the healthy partitions behind it — and the
+/// object cache only stops the *same* object being asked for twice. Distinct
+/// partitions in distinct bundles escape both, so a frame naming thirty-two of them against a sick
 /// store bought thirty-two GETs for a `max_bytes` of one: the read rate rising
 /// with the client's subscription fan-out, precisely when the store is least
 /// able to serve it, and repeating on every poll.
@@ -74,12 +79,13 @@ async fn a_failing_store_is_not_asked_once_per_partition_named() {
     }
 }
 
-/// ⚠️ **One partition's fault does not blank the partitions behind it.** A
-/// read that failed fetched nothing, so charging it a share of the budget
-/// would spend the response on bytes nobody has — and the healthy partitions
-/// after it would be framed `NONE` with no records, which every client reads
-/// as "nothing was written". That is doc 12 §4.6's silent wrongness produced
-/// by the bound written to prevent it.
+/// ⚠️ **One partition's fault does not blank the partitions behind it.** The
+/// store refuses this partition's GET outright, so it fetched nothing and
+/// charging it a share of the budget would spend the response on bytes
+/// nobody has — and the healthy partitions after it would be framed `NONE`
+/// with no records, which every client reads as "nothing was written". That
+/// is doc 12 §4.6's silent wrongness produced by the bound written to
+/// prevent it.
 #[tokio::test]
 async fn one_partitions_fault_does_not_starve_the_healthy_ones_behind_it() {
     let names = ["a", "b", "c", "d"];

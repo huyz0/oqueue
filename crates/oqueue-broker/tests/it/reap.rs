@@ -59,8 +59,12 @@ async fn an_object_the_index_still_names_but_the_store_has_reaped_is_out_of_rang
     // ⚠️ **One GET, and no retry** — measured rather than asserted. In this
     // broker the index a fetch reads *is* the coordinator's, and nothing
     // removes entries from it, so a second read would consult provably
-    // identical state and pay a second GET for the same answer. `M7`'s
-    // follower is where a refresh becomes real work.
+    // identical state and answer identically — not because it would cost a
+    // second GET (the object cache remembers a failure for the life of the
+    // request, so a retry against the same object is free), but because
+    // there is nothing a round trip to *this* index could learn that the
+    // first read did not already know. `M7`'s follower is where a refresh
+    // becomes real work, on an index that actually can learn something new.
     assert_eq!(
         broker.store.counts().count(Operation::Get) - before,
         1,
