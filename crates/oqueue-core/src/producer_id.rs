@@ -31,6 +31,16 @@ use crate::{Error, Result};
 pub struct ProducerId(i64);
 
 impl ProducerId {
+    /// The sentinel identity `oqueue_broker`'s minting path falls back to if
+    /// its own computed value ever failed [`new`](Self::new) — which the
+    /// mint's own masking makes unreachable, but a fallback beats a panic
+    /// (`error-handling.md` rule 1) and every other newtype in this crate
+    /// answers the same "what if the impossible happens" question with a
+    /// real value rather than a `.unwrap()`. Not a claim that `0` is unused:
+    /// nothing here reserves it, the same way `ProducerEpoch::ZERO` names an
+    /// ordinary epoch rather than a reserved one.
+    pub const ZERO: Self = Self(0);
+
     /// Builds a producer id.
     ///
     /// # Errors

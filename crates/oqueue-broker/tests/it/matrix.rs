@@ -12,7 +12,8 @@ use crate::support::broker;
 use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
 use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
 use kafka_protocol::messages::{
-    ApiVersionsRequest, FetchRequest, MetadataRequest, ProduceRequest, RequestHeader, TopicName,
+    ApiVersionsRequest, FetchRequest, InitProducerIdRequest, MetadataRequest, ProduceRequest,
+    RequestHeader, TopicName,
 };
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
 use oqueue_broker::{Cluster, Dispatcher, Handler, HandlerResponse};
@@ -55,6 +56,20 @@ fn list_offsets_body(out: &mut Vec<u8>, version: i16) {
     partition.timestamp = -1;
     topic.partitions.push(partition);
     request.topics.push(topic);
+    request.encode(out, version).expect("encodes");
+}
+
+/// Non-transactional: the only case `M11.4` mints a real identity for, so
+/// it is the one this matrix must find served.
+///
+/// ⚠️ **Its own function for the same reason as `list_offsets_body`**: the
+/// `minimal_body` match stays under fifty lines. ⚠️ The dependency's own
+/// `Default` for `transactional_id` is `Some("")`, not `None` — set
+/// explicitly or this becomes the refused, transactional case instead.
+fn init_producer_id_body(out: &mut Vec<u8>, version: i16) {
+    let mut request = InitProducerIdRequest::default();
+    request.transactional_id = None;
+    request.transaction_timeout_ms = 30_000;
     request.encode(out, version).expect("encodes");
 }
 
@@ -106,6 +121,7 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
             request.topics.push(topic);
             request.encode(&mut body, version).expect("encodes");
         }
+        ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
     }
     body
 }
@@ -151,6 +167,11 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
             kafka_protocol::messages::FetchResponse::decode(&mut rest, version)
                 .expect("Fetch reply decodes");
             0
+        }
+        ApiKey::InitProducerId => {
+            kafka_protocol::messages::InitProducerIdResponse::decode(&mut rest, version)
+                .expect("InitProducerId reply decodes")
+                .error_code
         }
     };
     assert!(

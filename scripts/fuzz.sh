@@ -202,6 +202,7 @@ declare -A COVERED_BY_REQUEST=(
   [oqueue-codec::produce]="request"
   [oqueue-codec::fetch]="request"
   [oqueue-codec::listoffsets]="request"
+  [oqueue-codec::init_producer_id]="request"
 )
 # ⚠️ **Which crate each target speaks for** (`M3.28`), because a bare module
 # name stopped being unique the moment a second crate was scanned: without

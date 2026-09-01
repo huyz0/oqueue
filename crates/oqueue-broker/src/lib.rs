@@ -32,6 +32,7 @@ pub mod dispatch;
 pub mod fetch;
 mod flush;
 mod ingest;
+mod init_producer_id;
 pub mod listoffsets;
 pub mod metadata;
 pub mod produce;

@@ -64,6 +64,19 @@ pub const OFFSET_NOT_AVAILABLE: i16 = 78;
 /// allocated from. Decompression is `M8`'s, alongside the region header's
 /// `alg` field (doc 10 #40).
 pub const UNSUPPORTED_COMPRESSION_TYPE: i16 = 76;
+/// The request is not one this broker can honour at all (42).
+///
+/// ⚠️ **`InitProducerId`'s transactional refusal, `M11.4`** — chosen over
+/// `TRANSACTIONAL_ID_AUTHORIZATION_FAILED` (53), which the dependency
+/// documents as non-retriable too but which claims an authorization system
+/// this broker does not have; a client told "authorization failed" for a
+/// feature that was never checked is the doc 13 §8 inversion by another
+/// door. This code's own dependency description — "the message was sent to
+/// an incompatible broker" — is exactly what a transactional producer
+/// talking to a non-transactional one is, and both the Java and librdkafka
+/// clients surface an unlisted `InitProducerId` code as a fatal error to
+/// the application rather than retrying it.
+pub const INVALID_REQUEST: i16 = 42;
 
 #[cfg(test)]
 mod tests {
@@ -118,6 +131,7 @@ mod tests {
             super::UNKNOWN_TOPIC_ID,
             ResponseError::UnknownTopicId.code()
         );
+        assert_eq!(super::INVALID_REQUEST, ResponseError::InvalidRequest.code());
         // NONE is the protocol's "no error" sentinel, which the dependency
         // represents as the absence of a ResponseError (code 0).
         assert_eq!(super::NONE, 0);

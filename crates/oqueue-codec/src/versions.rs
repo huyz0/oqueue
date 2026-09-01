@@ -34,7 +34,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 5] = [
+pub static ADVERTISED: [Advertised; 6] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -70,6 +70,21 @@ pub static ADVERTISED: [Advertised; 5] = [
         max: 3,
         flexible_from: Some(3),
     },
+    Advertised {
+        // ⚠️ **Through v4, not the dependency's v5 ceiling.** v5 adds
+        // `enable_2_pc`/`keep_prepared_txn`, both "Supported API versions:
+        // none" in the schema (a future KIP's placeholder, not yet wire-
+        // active at any version) — advertising it would promise nothing
+        // this broker's decoder does not already serve at v4. `M11.4`
+        // is non-transactional only (FR-15, deferred); `producer_id`/
+        // `producer_epoch` (v3+) are decoded and ignored rather than
+        // gating the floor, since a client presenting them for a fresh,
+        // non-transactional init is answered the same as one that does not.
+        api_key: ApiKey::InitProducerId,
+        min: 0,
+        max: 4,
+        flexible_from: Some(2),
+    },
 ];
 
 /// The advertised row for `api_key`, or `None` for an API this broker does
@@ -94,8 +109,9 @@ mod tests {
     use super::{ADVERTISED, Advertised, advertised_for, supports};
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
-        ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse, ListOffsetsRequest,
-        ListOffsetsResponse, MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
+        ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse,
+        InitProducerIdRequest, InitProducerIdResponse, ListOffsetsRequest, ListOffsetsResponse,
+        MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -131,6 +147,10 @@ mod tests {
                     ApiKey::ApiVersions => (
                         ApiVersionsRequest::header_version(version),
                         ApiVersionsResponse::header_version(version),
+                    ),
+                    ApiKey::InitProducerId => (
+                        InitProducerIdRequest::header_version(version),
+                        InitProducerIdResponse::header_version(version),
                     ),
                 };
                 assert_eq!(
@@ -181,6 +201,7 @@ mod tests {
                 ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
+                ApiKey::InitProducerId => pin::<InitProducerIdRequest>(row),
             }
         }
     }
@@ -207,6 +228,7 @@ mod tests {
                 ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
+                ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),
             }
         }
     }

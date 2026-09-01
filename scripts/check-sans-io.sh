@@ -140,6 +140,11 @@ STORE_DIR="crates/oqueue-store"
 # remedy making things worse.
 REAL_CLOCK_EXEMPT=(
   "crates/oqueue-broker/src/writer_id.rs"
+  # `M11.4`: `InitProducerId`'s minting path, on `WriterId::mint`'s own
+  # exemption above -- a faked clock is shared by every broker a test
+  # builds, which would make two identities collide exactly where a test
+  # means to prove they do not.
+  "crates/oqueue-broker/src/init_producer_id.rs"
   # ⚠️ The test that measures the premise the rule rests on: proving a 600 s
   # virtual timeout costs no wall clock *is* a wall-clock measurement.
   "crates/oqueue-broker/tests/it/virtual_time.rs"

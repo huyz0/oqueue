@@ -31,6 +31,8 @@ pub enum ApiKey {
     Metadata = 3,
     /// `ApiVersions` (18).
     ApiVersions = 18,
+    /// `InitProducerId` (22).
+    InitProducerId = 22,
 }
 
 impl ApiKey {
@@ -51,6 +53,7 @@ impl ApiKey {
             2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
             18 => Some(Self::ApiVersions),
+            22 => Some(Self::InitProducerId),
             _ => None,
         }
     }
@@ -98,15 +101,16 @@ mod tests {
             ApiKey::ListOffsets,
             ApiKey::Metadata,
             ApiKey::ApiVersions,
+            ApiKey::InitProducerId,
         ] {
             assert_eq!(ApiKey::from_i16(key.as_i16()), Some(key));
         }
         // Keys Kafka defines but this broker does not serve. ⚠️ `2` was here
-        // until `M3.21`, which added `ListOffsets`: a key moving
-        // from this list to the one above is what serving a new API looks
-        // like, and leaving it in both is how the round trip above starts
-        // lying.
-        for unserved in [10, 22, -1, 32512] {
+        // until `M3.21`, which added `ListOffsets`, and `22` was here until
+        // `M11.4`, which added `InitProducerId`: a key moving from this
+        // list to the one above is what serving a new API looks like, and
+        // leaving it in both is how the round trip above starts lying.
+        for unserved in [10, 20, -1, 32512] {
             assert_eq!(ApiKey::from_i16(unserved), None);
         }
     }
