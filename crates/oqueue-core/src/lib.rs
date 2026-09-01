@@ -81,7 +81,7 @@ mod store;
 mod test_executor;
 mod topic;
 
-pub use bundle::{BUNDLE_FORMAT_VERSION, BundleBuilder, Region, RegionAlg, Sealed};
+pub use bundle::{BUNDLE_FORMAT_VERSION, BundleBuilder, PushedRecords, Region, RegionAlg, Sealed};
 pub use bundle_footer::parse_footer;
 pub use bundle_name::BundleNamer;
 pub use byte_range::ByteRange;

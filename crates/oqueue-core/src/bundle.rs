@@ -7,7 +7,7 @@
 // the lint that disagrees is the one allowed.
 #![allow(clippy::redundant_pub_crate)]
 
-use crate::{ByteRange, CommittedSpan, Error, PartitionId, Result, TopicId};
+use crate::{ByteRange, CommittedSpan, Error, PartitionId, ProducerIdentity, Result, TopicId};
 
 /// The format version this crate writes, and the only one it reads.
 ///
@@ -139,6 +139,35 @@ impl Region {
 pub struct BundleBuilder {
     payload: Vec<u8>,
     regions: Vec<Region>,
+    // ⚠️ **Parallel to `regions`, not a field on it.** `Region` is the
+    // object's own on-disk footer shape (`encode_footer`/`parse_footer`
+    // round-trip it byte for byte); a producer's identity is `ADR-0031`'s
+    // metadata-log concern, not the object format's, so it rides beside
+    // `regions` — pushed in lockstep by `push` — rather than widening what a
+    // reader parses back out of the object's own bytes. `seal` zips the two
+    // to build each `CommittedSpan`.
+    producers: Vec<Option<ProducerIdentity>>,
+}
+
+/// What one produce contributes to the span [`BundleBuilder::push`] will
+/// build: how many records, and — for an idempotent producer — whose
+/// sequence they extend.
+///
+/// ⚠️ **Grouped so `push` stays at `clippy.toml`'s five-argument threshold**,
+/// the same reason [`ProducerIdentity`] itself groups three fields
+/// (`producer_identity.rs`) — not an invented split: both fields here are
+/// exactly what [`CommittedSpan::new`] needs beyond a region's topic,
+/// partition and byte range, so this is "the `CommittedSpan`-bound facts one
+/// push supplies" as against `push`'s other two arguments, which are the
+/// region's own addressing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PushedRecords {
+    /// The record count, floored at one — the offsets this batch will
+    /// occupy.
+    pub count: u32,
+    /// `None` for an ordinary produce; `Some` for one `M11`'s allocator can
+    /// deduplicate.
+    pub producer: Option<ProducerIdentity>,
 }
 
 impl BundleBuilder {
@@ -148,6 +177,7 @@ impl BundleBuilder {
         Self {
             payload: Vec::new(),
             regions: Vec::new(),
+            producers: Vec::new(),
         }
     }
 
@@ -163,7 +193,7 @@ impl BundleBuilder {
     /// read from is a region whose `ByteRange` cannot be built, and admitting
     /// one would put a zero-length range in a footer for a reader to trip over.
     ///
-    /// [`Error::EmptyRegion`] if `record_count` is zero. Bytes that advance no
+    /// [`Error::EmptyRegion`] if `pushed.count` is zero. Bytes that advance no
     /// offsets are bytes nothing can ever read.
     ///
     /// [`Error::BundleTooLarge`] if the topic name will not fit the footer's
@@ -173,9 +203,13 @@ impl BundleBuilder {
         &mut self,
         topic: TopicId,
         partition: PartitionId,
-        record_count: u32,
+        pushed: PushedRecords,
         records: &[u8],
     ) -> Result<()> {
+        let PushedRecords {
+            count: record_count,
+            producer,
+        } = pushed;
         if topic.as_str().len() > MAX_TOPIC_NAME_LEN {
             return Err(Error::BundleTooLarge);
         }
@@ -198,6 +232,7 @@ impl BundleBuilder {
             // ⚠️ `M3` writes exactly this. `M8` is where a caller chooses.
             alg: RegionAlg::None,
         });
+        self.producers.push(producer);
         Ok(())
     }
 
@@ -237,17 +272,14 @@ impl BundleBuilder {
         let spans = self
             .regions
             .iter()
-            .map(|region| {
+            .zip(&self.producers)
+            .map(|(region, producer)| {
                 CommittedSpan::new(
                     region.topic.clone(),
                     region.partition,
                     region.record_count,
                     region.bytes,
-                    // ⚠️ `Region` carries no producer identity yet — `M11.5`
-                    // threads it from the decoded `RecordBatch` through the
-                    // bundler; until then every span this builder seals is an
-                    // ordinary, non-idempotent produce.
-                    None,
+                    *producer,
                 )
             })
             .collect();

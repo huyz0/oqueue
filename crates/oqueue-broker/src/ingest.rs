@@ -16,15 +16,20 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use oqueue_codec::attributes::Compression;
-use oqueue_codec::batch::{BatchError, crc_coverage, decode_batch_header, stored_crc};
+use oqueue_codec::batch::{BatchError, BatchHeader, crc_coverage, decode_batch_header, stored_crc};
 use oqueue_codec::error_codes;
 use oqueue_codec::records::count_records;
+use oqueue_core::{ProducerEpoch, ProducerId, ProducerIdentity};
 
-/// What one verified batch is worth: how many records it carries.
+/// What one verified batch is worth: how many records it carries, and the
+/// idempotent-producer identity it claims, if any.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Verified {
     /// The record count, floored at one — the offsets this batch will occupy.
     pub(crate) records: u32,
+    /// `None` for an ordinary produce; `Some` for one `M11`'s allocator can
+    /// deduplicate.
+    pub(crate) producer: Option<ProducerIdentity>,
 }
 
 /// Judges `batch`, returning the Kafka error code to refuse it with.
@@ -115,16 +120,61 @@ pub(crate) fn verify(batch: &[u8]) -> Result<Verified, i16> {
     {
         return Err(error_codes::INVALID_RECORD);
     }
-    Ok(Verified { records: counted })
+    let producer = producer_identity(&header).map_err(|()| error_codes::INVALID_RECORD)?;
+    Ok(Verified {
+        records: counted,
+        producer,
+    })
+}
+
+/// The batch header's idempotent-producer triple, or `None` for an ordinary
+/// produce — `M11.5`.
+///
+/// ⚠️ **`producer_id == -1` is the sentinel, checked first and alone.** Every
+/// other -1 this project uses means "absent" (`M11.1`/`M11.2`'s own
+/// convention, and real Kafka's own wire shape: a non-idempotent client sends
+/// all three fields at -1 together). Checking `producer_id` first means a
+/// garbage epoch or sequence on an otherwise ordinary, non-idempotent produce
+/// can never refuse it — those two fields are meaningless without an id.
+///
+/// # Errors
+///
+/// `Err(())` if `producer_id` is present (not -1) but `producer_epoch` is
+/// negative and not itself the -1 sentinel — a combination no real client
+/// sends, refused rather than guessed at (`security.md` rule 3's discipline
+/// applied to a field this broker had never validated before).
+fn producer_identity(header: &BatchHeader) -> Result<Option<ProducerIdentity>, ()> {
+    if header.producer_id == -1 {
+        return Ok(None);
+    }
+    let id = ProducerId::new(header.producer_id).map_err(|_| ())?;
+    let epoch = ProducerEpoch::new(header.producer_epoch).map_err(|_| ())?;
+    Ok(Some(ProducerIdentity::new(id, epoch, header.base_sequence)))
 }
 
 #[cfg(test)]
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::verify;
+    use super::{producer_identity, verify};
     use crate::testing::{golden_batch, golden_batch_of};
+    use oqueue_codec::batch::BatchHeader;
     use oqueue_codec::error_codes;
+    use oqueue_core::{ProducerEpoch, ProducerId, ProducerIdentity};
+
+    /// Rewrites `batch`'s producer fields at their fixed header offsets
+    /// (`producer_id` 43..51, `producer_epoch` 51..53, `base_sequence`
+    /// 53..57 — `batch.rs`'s own layout table) and recomputes the CRC, the
+    /// same in-place-rewrite-then-recompute shape
+    /// `a_record_count_the_batch_does_not_hold_is_refused` already uses.
+    fn with_producer_fields(mut batch: Vec<u8>, id: i64, epoch: i16, sequence: i32) -> Vec<u8> {
+        batch[43..51].copy_from_slice(&id.to_be_bytes());
+        batch[51..53].copy_from_slice(&epoch.to_be_bytes());
+        batch[53..57].copy_from_slice(&sequence.to_be_bytes());
+        let crc = oqueue_checksum::crc32c(&batch[21..]);
+        batch[17..21].copy_from_slice(&crc.to_be_bytes());
+        batch
+    }
 
     #[test]
     fn a_golden_batch_verifies_and_reports_its_record_count() {
@@ -279,5 +329,74 @@ mod tests {
             verify(&[0; 60]),
             Err(error_codes::UNSUPPORTED_FOR_MESSAGE_FORMAT)
         );
+    }
+
+    /// ⚠️ **`-1` is the sentinel, checked alone.** A non-idempotent client's
+    /// batch (real `RecordBatchEncoder` output, unmutated) still carries no
+    /// producer identity — `M11.5`'s "unaffected byte-for-byte" claim, now
+    /// checked rather than assumed.
+    #[test]
+    fn an_ordinary_batch_carries_no_producer_identity() {
+        let header = BatchHeader {
+            producer_id: -1,
+            producer_epoch: -1,
+            base_sequence: -1,
+            ..header_of(&golden_batch())
+        };
+        assert_eq!(producer_identity(&header), Ok(None));
+        assert_eq!(
+            verify(&golden_batch())
+                .expect("golden batch verifies")
+                .producer,
+            None
+        );
+    }
+
+    /// ⚠️ **A real triple round-trips into `Some`.** This is the thread
+    /// `M11.5` exists to build: the header's raw `i64`/`i16`/`i32` become a
+    /// typed `ProducerIdentity`, byte for byte.
+    #[test]
+    fn a_real_producer_triple_decodes_to_some() {
+        let header = BatchHeader {
+            producer_id: 7,
+            producer_epoch: 2,
+            base_sequence: 5,
+            ..header_of(&golden_batch())
+        };
+        let expected = ProducerIdentity::new(
+            ProducerId::new(7).expect("non-negative"),
+            ProducerEpoch::new(2).expect("non-negative"),
+            5,
+        );
+        assert_eq!(producer_identity(&header), Ok(Some(expected)));
+
+        let batch = with_producer_fields(golden_batch(), 7, 2, 5);
+        assert_eq!(verify(&batch).expect("verifies").producer, Some(expected));
+    }
+
+    /// ⚠️ **A present id with an impossible epoch is refused, not guessed
+    /// at.** No real client sends `producer_id >= 0` alongside a negative,
+    /// non-sentinel `producer_epoch` — `security.md` rule 3's discipline,
+    /// applied to a header field this broker had never validated before
+    /// `M11.5`.
+    #[test]
+    fn a_present_id_with_an_impossible_epoch_is_refused() {
+        let header = BatchHeader {
+            producer_id: 7,
+            producer_epoch: -2,
+            base_sequence: 5,
+            ..header_of(&golden_batch())
+        };
+        assert_eq!(producer_identity(&header), Err(()));
+
+        let batch = with_producer_fields(golden_batch(), 7, -2, 5);
+        assert_eq!(verify(&batch), Err(error_codes::INVALID_RECORD));
+    }
+
+    /// The real, decoded header of `batch` — so the hand-built
+    /// [`BatchHeader`] literals above vary only the fields each test is
+    /// actually about, not every field the format happens to carry.
+    fn header_of(batch: &[u8]) -> BatchHeader {
+        oqueue_codec::batch::decode_batch_header(batch).expect("golden batch decodes")
     }
 }

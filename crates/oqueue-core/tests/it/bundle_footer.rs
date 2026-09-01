@@ -23,8 +23,8 @@
 #![allow(unreachable_pub)]
 
 use oqueue_core::{
-    BUNDLE_FORMAT_VERSION, BundleBuilder, ByteRange, Error, PartitionId, RegionAlg, TopicId,
-    parse_footer,
+    BUNDLE_FORMAT_VERSION, BundleBuilder, ByteRange, Error, PartitionId, PushedRecords, RegionAlg,
+    TopicId, parse_footer,
 };
 
 fn topic(name: &str) -> TopicId {
@@ -47,7 +47,10 @@ pub fn four_topics() -> BundleBuilder {
             .push(
                 topic(name),
                 partition(0),
-                n + 1,
+                PushedRecords {
+                    count: n + 1,
+                    producer: None,
+                },
                 &vec![b'a' + u8::try_from(n).expect("four fits"); 16 + n as usize],
             )
             .expect("a non-empty region");
@@ -228,7 +231,15 @@ fn an_unknown_format_version_is_refused() {
 fn an_unknown_region_algorithm_is_refused_rather_than_defaulted() {
     let mut bundle = BundleBuilder::new();
     bundle
-        .push(topic("orders"), partition(0), 1, b"records")
+        .push(
+            topic("orders"),
+            partition(0),
+            PushedRecords {
+                count: 1,
+                producer: None,
+            },
+            b"records",
+        )
         .expect("a non-empty region");
     let sealed = bundle.seal().expect("a region was pushed");
     let mut payload = sealed.into_payload();
@@ -306,7 +317,15 @@ pub fn three_regions() -> Vec<u8> {
         ("shipments", &b"ccccccccccc"[..]),
     ] {
         bundle
-            .push(topic(name), partition(0), 1, records)
+            .push(
+                topic(name),
+                partition(0),
+                PushedRecords {
+                    count: 1,
+                    producer: None,
+                },
+                records,
+            )
             .expect("a non-empty region");
     }
     bundle.seal().expect("regions were pushed").into_payload()

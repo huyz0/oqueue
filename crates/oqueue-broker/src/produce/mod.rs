@@ -34,7 +34,7 @@ use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_codec::metadata::TopicIdentity;
 use oqueue_codec::produce::{ProduceResponse, ProduceResponseTopic, decode_request};
-use oqueue_core::{BundleBuilder, PartitionId, TopicId};
+use oqueue_core::{BundleBuilder, PartitionId, PushedRecords, TopicId};
 use std::collections::HashSet;
 
 /// The bundle this request is filling, and what is already in it.
@@ -253,10 +253,11 @@ fn one_partition(
     // commit, which is after this object is written. `Cluster::read` is where
     // the assigned offset is stamped in, and the CRC never covered those
     // twelve bytes (doc 18 §4.4), so neither end recomputes anything.
-    match pending
-        .bundle
-        .push(topic_id, partition, verified.records, records)
-    {
+    let pushed = PushedRecords {
+        count: verified.records,
+        producer: verified.producer,
+    };
+    match pending.bundle.push(topic_id, partition, pushed, records) {
         Ok(()) => Slot::Pushed(nth),
         // Only a region this handler could not have built: an empty range, a
         // zero record count, or a topic name past the format's ceiling. None

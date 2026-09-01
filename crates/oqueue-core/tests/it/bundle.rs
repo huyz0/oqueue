@@ -12,7 +12,7 @@
 
 use oqueue_core::{
     BundleBuilder, BundleNamer, ByteRange, CountingObjectStore, Error, FakeObjectStore, ObjectKey,
-    ObjectStore, Operation, PartitionId, TopicId, parse_footer,
+    ObjectStore, Operation, PartitionId, PushedRecords, TopicId, parse_footer,
 };
 use std::future::Future;
 use std::pin::Pin;
@@ -52,11 +52,32 @@ fn four_topics() -> BundleBuilder {
             .push(
                 topic(name),
                 partition(0),
-                n + 1,
+                PushedRecords {
+                    count: n + 1,
+                    producer: None,
+                },
                 &vec![b'a' + u8::try_from(n).expect("four fits"); 16 + n as usize],
             )
             .expect("a non-empty region");
     }
+    bundle
+}
+
+/// A bundle holding one topic's one record — the per-topic-object shape this
+/// format exists to replace.
+fn solo(name: &str) -> BundleBuilder {
+    let mut bundle = BundleBuilder::new();
+    bundle
+        .push(
+            topic(name),
+            partition(0),
+            PushedRecords {
+                count: 1,
+                producer: None,
+            },
+            b"records",
+        )
+        .expect("a non-empty region");
     bundle
 }
 
@@ -118,11 +139,11 @@ fn bundling_four_topics_costs_one_store_call_where_four_objects_cost_four() {
         .into_iter()
         .enumerate()
     {
-        let mut one = BundleBuilder::new();
-        one.push(topic(name), partition(0), 1, b"records")
-            .expect("a non-empty region");
+        let payload = solo(name)
+            .seal()
+            .expect("a region was pushed")
+            .into_payload();
         let key = ObjectKey::new(format!("solo-{n}")).expect("a valid key");
-        let payload = one.seal().expect("a region was pushed").into_payload();
         block_on(unbundled.put(&key, payload, None)).expect("the object lands");
     }
 
@@ -163,10 +184,26 @@ fn regions_carve_the_payload_into_disjoint_bounded_ranges() {
 fn a_region_names_the_bytes_that_were_pushed_for_it() {
     let mut bundle = BundleBuilder::new();
     bundle
-        .push(topic("orders"), partition(0), 1, b"orders-records")
+        .push(
+            topic("orders"),
+            partition(0),
+            PushedRecords {
+                count: 1,
+                producer: None,
+            },
+            b"orders-records",
+        )
         .expect("a non-empty region");
     bundle
-        .push(topic("payments"), partition(3), 1, b"payments")
+        .push(
+            topic("payments"),
+            partition(3),
+            PushedRecords {
+                count: 1,
+                producer: None,
+            },
+            b"payments",
+        )
         .expect("a non-empty region");
     let sealed = bundle.seal().expect("regions were pushed");
 
@@ -194,7 +231,15 @@ fn the_builder_reports_how_many_regions_it_holds() {
 
     for (n, name) in ["orders", "payments", "shipments"].into_iter().enumerate() {
         bundle
-            .push(topic(name), partition(0), 1, b"records")
+            .push(
+                topic(name),
+                partition(0),
+                PushedRecords {
+                    count: 1,
+                    producer: None,
+                },
+                b"records",
+            )
             .expect("a non-empty region");
         assert_eq!(bundle.len(), n + 1);
         assert!(!bundle.is_empty());
@@ -209,7 +254,15 @@ fn record_counts_survive_the_footer_exactly() {
     let mut bundle = BundleBuilder::new();
     for (name, count) in [("orders", 1_u32), ("payments", 9), ("shipments", 4096)] {
         bundle
-            .push(topic(name), partition(0), count, b"records")
+            .push(
+                topic(name),
+                partition(0),
+                PushedRecords {
+                    count,
+                    producer: None,
+                },
+                b"records",
+            )
             .expect("a non-empty region");
     }
     let sealed = bundle.seal().expect("regions were pushed");
@@ -240,6 +293,64 @@ fn record_counts_survive_the_footer_exactly() {
     );
 }
 
+/// ⚠️ **A producer identity rides with its own span, not the object's
+/// footer** — `M11.5`. `Region` is the on-disk shape [`parse_footer`] reads
+/// back; a producer identity is `ADR-0031`'s metadata-log concern and must
+/// not widen it. So this checks both halves: `sealed.spans()` carries what
+/// each `push` was given, in the same order, mixed `Some`/`None` and all —
+/// while a footer round trip still returns the same [`Region`]s
+/// `record_counts_survive_the_footer_exactly` already pins, unaffected.
+#[test]
+fn a_producer_identity_rides_with_its_span_not_the_footer() {
+    use oqueue_core::{ProducerEpoch, ProducerId, ProducerIdentity};
+
+    let alice = ProducerIdentity::new(
+        ProducerId::new(7).expect("non-negative"),
+        ProducerEpoch::new(0).expect("non-negative"),
+        3,
+    );
+    let mut bundle = BundleBuilder::new();
+    bundle
+        .push(
+            topic("orders"),
+            partition(0),
+            PushedRecords {
+                count: 1,
+                producer: Some(alice),
+            },
+            b"records",
+        )
+        .expect("a non-empty region");
+    bundle
+        .push(
+            topic("payments"),
+            partition(0),
+            PushedRecords {
+                count: 1,
+                producer: None,
+            },
+            b"records",
+        )
+        .expect("a non-empty region");
+    let sealed = bundle.seal().expect("regions were pushed");
+
+    assert_eq!(
+        sealed
+            .spans()
+            .iter()
+            .map(oqueue_core::CommittedSpan::producer)
+            .collect::<Vec<_>>(),
+        vec![Some(alice), None],
+        "in push order, one identity per span"
+    );
+
+    // Unaffected: the footer round trip still returns the same regions a
+    // reader without any of this milestone's changes would have gotten.
+    let read =
+        parse_footer(sealed.payload(), sealed.payload().len() as u64).expect("the footer parses");
+    assert_eq!(read.len(), 2);
+}
+
 /// ⚠️ A topic name too long for the footer's length field is refused **at
 /// push**, before any bytes are copied — a truncated name would have a reader
 /// parse a different topic's records under a name it recognises.
@@ -248,13 +359,29 @@ fn a_topic_name_too_long_for_the_footer_is_refused() {
     let mut bundle = BundleBuilder::new();
     let longest = "t".repeat(usize::from(u16::MAX));
     bundle
-        .push(topic(&longest), partition(0), 1, b"records")
+        .push(
+            topic(&longest),
+            partition(0),
+            PushedRecords {
+                count: 1,
+                producer: None,
+            },
+            b"records",
+        )
         .expect("exactly the longest name the field holds is fine");
 
     let too_long = "t".repeat(usize::from(u16::MAX) + 1);
     assert_eq!(
         bundle
-            .push(topic(&too_long), partition(0), 1, b"records")
+            .push(
+                topic(&too_long),
+                partition(0),
+                PushedRecords {
+                    count: 1,
+                    producer: None
+                },
+                b"records"
+            )
             .err(),
         Some(Error::BundleTooLarge)
     );
@@ -281,12 +408,30 @@ fn an_empty_bundle_is_refused_rather_than_written() {
 fn a_region_with_no_bytes_or_no_records_is_refused_at_push() {
     let mut bundle = BundleBuilder::new();
     assert_eq!(
-        bundle.push(topic("orders"), partition(0), 1, b"").err(),
+        bundle
+            .push(
+                topic("orders"),
+                partition(0),
+                PushedRecords {
+                    count: 1,
+                    producer: None
+                },
+                b""
+            )
+            .err(),
         Some(Error::EmptyByteRange)
     );
     assert_eq!(
         bundle
-            .push(topic("orders"), partition(0), 0, b"records")
+            .push(
+                topic("orders"),
+                partition(0),
+                PushedRecords {
+                    count: 0,
+                    producer: None
+                },
+                b"records"
+            )
             .err(),
         Some(Error::EmptyRegion)
     );
