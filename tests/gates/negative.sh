@@ -696,10 +696,18 @@ invoke_sans_io() {
 # need watching: a genuine wall-clock read in a library crate still fails, and
 # a line carrying *both* a virtual read and a real one still fails — a first
 # version filtered the whole line and let the second walk through.
+#
+# ⚠️ **`crates/oqueue-core/tests/mixed.rs` only** (`M10.27`). A first version
+# also planted `src/lib.rs` with its own, unrelated `SystemTime::now()` —
+# which fails the gate on its own merit regardless of whether `mixed.rs`'s
+# line survives correctly, so a `scan_clock` reverted to the whole-line
+# filter this case exists to catch still exited non-zero and the case stayed
+# green. Verified directly: with only `src/lib.rs`'s reads removed, a
+# whole-line-filter `scan_clock` reports `ok` against this fixture; the
+# planted `src/lib.rs` was what had been masking it.
 setup_sans_io_wall_clock() {
   local dir; dir="$(new_scratch sans-io-wall-clock)"
   copy_gate "$dir" check-sans-io.sh
-  mkdir -p "$dir/crates/oqueue-core/src"
   # ⚠️ **One line holding both**, which is what distinguishes deleting the
   # virtual *token* from filtering the whole line: a line filter drops this
   # line and the wall-clock read with it.
@@ -707,11 +715,6 @@ setup_sans_io_wall_clock() {
   cat > "$dir/crates/oqueue-core/tests/mixed.rs" <<'EOF'
 pub fn both() -> (tokio::time::Instant, std::time::SystemTime) {
     (tokio::time::Instant::now(), std::time::SystemTime::now())
-}
-EOF
-  cat > "$dir/crates/oqueue-core/src/lib.rs" <<'EOF'
-pub async fn nap() {
-    tokio::time::sleep(std::time::SystemTime::now().elapsed().unwrap()).await;
 }
 EOF
   (cd "$dir" && git add -A && git commit -q -m "M10.6: a wall clock beside a virtual one")
@@ -736,6 +739,30 @@ EOF
   printf '%s\n' "$dir"
 }
 invoke_sans_io_virtual_clock_in_src() {
+  bash "$1/scripts/check-sans-io.sh"
+}
+
+# ⚠️ **`*/tests/*` matches `tests` as *any* path component, not just the
+# crate-root tree the licence is for** (`M10.27`). This plants the exact shape
+# that widened it: a *nested* `src/tests/` directory, which — unless
+# `#[cfg(test)]`-gated, which this fixture deliberately is not — compiles into
+# the shipped library. Before the anchor, this took the same tests/-tree
+# exemption a genuine integration test gets and the virtual-clock deletion hid
+# a real one; after it, `crates/[^/]*/tests/*` requires exactly one path
+# component between `crates/` and `/tests/`, which `src/tests` is not.
+setup_sans_io_nested_tests_dir_in_src() {
+  local dir; dir="$(new_scratch sans-io-nested-tests-dir)"
+  copy_gate "$dir" check-sans-io.sh
+  mkdir -p "$dir/crates/oqueue-core/src/tests"
+  cat > "$dir/crates/oqueue-core/src/tests/mod.rs" <<'EOF'
+pub fn started() -> tokio::time::Instant {
+    tokio::time::Instant::now()
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M10.27: a runtime clock in a nested src/tests/ directory")
+  printf '%s\n' "$dir"
+}
+invoke_sans_io_nested_tests_dir_in_src() {
   bash "$1/scripts/check-sans-io.sh"
 }
 
@@ -855,6 +882,31 @@ EOF
     ok "check-sans-io.sh allows a tokio::time read, which a paused run controls"
   else
     fail "check-sans-io.sh flags tokio::time::Instant::now(), which is virtual"
+  fi
+}
+
+# ⚠️ **The same licence, spelled the way a real test would** (`M10.27`).
+# `use tokio::time::Instant;` plus a bare `Instant::now()` is the idiom, and
+# only stripping the fully-qualified form before this row left it flagged
+# under a remedy ("inject `Clock`") that does not apply — the same gap
+# `REAL_CLOCK_RE`'s own `use std::time::Instant` coverage already closed on
+# the real-clock side.
+check_sans_io_allows_virtual_clock_via_bare_import() {
+  local dir; dir="$(new_scratch sans-io-virtual-clock-bare-import)"
+  copy_gate "$dir" check-sans-io.sh
+  mkdir -p "$dir/crates/oqueue-core/tests"
+  cat > "$dir/crates/oqueue-core/tests/paused.rs" <<'EOF'
+use tokio::time::Instant;
+
+pub fn started() -> Instant {
+    Instant::now()
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M10.27: a virtual clock read via a bare import")
+  if bash "$dir/scripts/check-sans-io.sh" >/dev/null 2>&1; then
+    ok "check-sans-io.sh allows a bare Instant::now() imported from tokio::time"
+  else
+    fail "check-sans-io.sh flags a bare tokio::time::Instant::now(), which is virtual"
   fi
 }
 
@@ -3248,6 +3300,7 @@ run_case "check-sans-io.sh (a wall clock beside a virtual one)" \
   setup_sans_io_wall_clock invoke_sans_io_wall_clock \
   "a real clock read"
 check_sans_io_allows_virtual_clock
+check_sans_io_allows_virtual_clock_via_bare_import
 run_case "seed-corpus.sh (a seed with no recorded versions)" \
   setup_seed_corpus_unpinned invoke_seed_corpus_unpinned \
   "records no toolchain or tokio version"
@@ -3262,6 +3315,9 @@ run_case "seed-sweep.sh (a tree that does not build blames no seed)" \
   "no seed is implicated"
 run_case "check-sans-io.sh (a runtime clock in shipped code)" \
   setup_sans_io_virtual_clock_in_src invoke_sans_io_virtual_clock_in_src \
+  "a real clock read"
+run_case "check-sans-io.sh (a runtime clock in a nested src/tests/ directory)" \
+  setup_sans_io_nested_tests_dir_in_src invoke_sans_io_nested_tests_dir_in_src \
   "a real clock read"
 run_case "check-sans-io.sh (a clock the broker's seeded runs cannot control)" \
   setup_sans_io_broker_clock invoke_sans_io_broker_clock \

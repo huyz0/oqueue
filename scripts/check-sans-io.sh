@@ -205,17 +205,48 @@ scan_real_clock() {
 # library crate deriving a sleep from the wall clock, walked straight through
 # a gate it had been failing. Removing just the virtual read and matching what
 # is left keeps the rest of the line in scope.
+#
+# ⚠️ **The bare form too, when a `use` brings it into scope** (`M10.27`).
+# Deleting only `tokio::time::Instant::now()` leaves `use tokio::time::Instant;`
+# plus a bare `Instant::now()` flagged under a remedy ("inject `Clock`") that
+# does not apply to a construct `ADR-0028`'s paused runtime already makes
+# deterministic — the same gap `REAL_CLOCK_RE`'s own header describes for the
+# `std::time::Instant` side, mirrored here rather than re-discovered. The
+# import regex covers the same three spans that one names: a plain `use`, a
+# braced list, and a nested `use tokio::{time::Instant, ..}`.
+TOKIO_INSTANT_USE_RE='(tokio::time::[^;]*\bInstant\b|tokio::\{[^;]*time::[^;]*\bInstant\b)'
 scan_clock() {
-  local f="$1" matches lineno
-  # ⚠️ **The exemption is for a `tests/` tree only.** A paused runtime is a
-  # *test* construct; production never pauses, so a `tokio::time::Instant::now()`
-  # in a library crate's `src/` is a real clock read and stays flagged. A first
-  # version applied the deletion everywhere, which let a coordinator read the
-  # runtime clock in shipped code and pass — a strict weakening of
-  # non-negotiable 5, for a problem whose only instance was one test file.
-  if [[ "$f" == */tests/* ]]; then
-    matches="$(sed -E 's/tokio::time::Instant::now\(\)//g' "$f" 2>/dev/null \
-      | grep -nE "$CLOCK_RE" || true)"
+  local f="$1" matches lineno strip rest crate tail
+  # ⚠️ **The exemption is for a `tests/` tree only, anchored at the crate
+  # root** (`M10.27` narrowed this from `*/tests/*`, which matches `tests` as
+  # *any* path component: `crates/oqueue-core/src/tests/foo.rs` — a nested
+  # directory compiled into the shipped library unless `#[cfg(test)]`-gated —
+  # took the same exemption a genuine integration-test tree gets. A paused
+  # runtime is a *test* construct; production never pauses, so a
+  # `tokio::time::Instant::now()` in a library crate's `src/` is a real clock
+  # read and stays flagged. A first version applied the deletion everywhere,
+  # which let a coordinator read the runtime clock in shipped code and pass —
+  # a strict weakening of non-negotiable 5, for a problem whose only instance
+  # was one test file.
+  #
+  # ⚠️ **Parameter expansion, not `[^/]*` in the glob.** The obvious-looking
+  # `crates/[^/]*/tests/*` still matched `crates/oqueue-core/src/tests/x.rs`:
+  # a bracket expression is exactly one character in glob syntax, and the
+  # bare `*` right after it is its own, separately unrestricted token — so
+  # `[^/]*` means "one non-slash character, then anything", not "a run of
+  # non-slash characters", and the trailing `*` swallows the `/src` a reader
+  # would expect the class to exclude. Found by testing the pattern directly
+  # rather than trusting it read correctly. Stripping the one `crates/<crate>/`
+  # component by parameter expansion instead has no such ambiguity to read.
+  rest="${f#crates/}"
+  crate="${rest%%/*}"
+  tail="${rest#"$crate"/}"
+  if [[ "$tail" == tests/* ]]; then
+    strip='s/tokio::time::Instant::now\(\)//g'
+    if grep -qE "$TOKIO_INSTANT_USE_RE" "$f" 2>/dev/null; then
+      strip="$strip"'; s/\bInstant::now\(\)//g'
+    fi
+    matches="$(sed -E "$strip" "$f" 2>/dev/null | grep -nE "$CLOCK_RE" || true)"
   else
     matches="$(grep -nE "$CLOCK_RE" "$f" 2>/dev/null || true)"
   fi
