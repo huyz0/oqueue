@@ -71,6 +71,55 @@ fi
 # distinguish: nothing reachable from stored bytes may panic either, and `M5`
 # rewrites the objects `M3` wrote.
 DECODER_CRATES=(oqueue-codec oqueue-core)
+# ⚠️ **`M10.18`: every workspace crate is triaged, not just the two that
+# happened to be decoders when this list was written.** `DECODER_CRATES` used
+# to be the whole of it — a crate that started parsing untrusted bytes and was
+# never added here was invisible to this gate, with no failure and no note.
+# `NOT_A_DECODER_CRATE` is the other half of the same enumeration
+# `NOT_A_PARSER` already does per-module: every crate this workspace declares
+# must be in exactly one of the two, checked against `Cargo.toml`'s own member
+# list below rather than a second hand-written count that could itself drift.
+declare -A NOT_A_DECODER_CRATE=(
+  [oqueue-buf]="refcounted slices and pooling; moves bytes, does not parse their structure"
+  [oqueue-checksum]="CRC-32C over caller-provided bytes -- a fold with one code path per input length, not a decoder with a shape to get wrong"
+  [oqueue-index]="MemoryIndex and its applier fold typed MetadataRecord values this process built or a MetadataLog handed it -- no byte-level decoder yet. ⚠️ testing.md rule 24 names this crate as the *next* target once index search over corrupt blobs exists; this entry is why that addition will not be silently missed -- see the check below"
+  [oqueue-store]="S3/GCS backends over object_store; the only parsing here is ObjectStorePath::parse on keys this process constructed, not bytes a remote party sent -- the HTTP response parsing is object_store's own, outside this workspace"
+  [oqueue-coordinator]="sequencing and recovery over typed MetadataRecord values; MetadataLog is a trait with only in-memory fakes today, so there is no wire form to decode"
+  [oqueue-crypto]="AEAD and envelope encryption scaffolding; no decrypt/decode path is wired to anything yet (grep confirms zero decrypt/from_bytes/parse calls)"
+  [oqueue-compact]="compaction planning arithmetic over sizes and counts this process already holds"
+  [oqueue-broker]="the I/O shell. Its one byte-level read is connection.rs's 4-byte frame-length prefix (i32::from_be_bytes, which cannot panic) followed by an explicit bound check against max_frame *before* the body is allocated -- security.md rules 1-2's discipline, already in place. Everything past that bound is oqueue-codec's own decoders, covered by the request target"
+  [oqueue-testkit]="test harness and data generators; runs in tests, never on a production input path"
+  [oqueue]="bin/oqueue's package name, not its directory name -- the composition root; every parse it needs is a downstream crate's"
+)
+# `Cargo.toml`'s own `members` list, so a workspace member this array does not
+# yet know about is a mismatch the loop below reports rather than a crate
+# neither array mentions and nobody notices.
+#
+# ⚠️ **`[a-z0-9_-]+`, not `[a-z-]+`.** Review measured the narrower class
+# silently drops any member whose directory name carries a digit or
+# underscore -- `"crates/oqueue-v2"` matches neither alternative and produces
+# zero output, so that crate never reaches `workspace_crates` and the triage
+# loop never iterates over it. The gate would print its "every crate is
+# triaged" `ok` having never considered the new one -- the exact
+# invisible-crate failure this row exists to close, reintroduced one level up
+# by the pattern meant to close it. Cargo crate-name characters are the full
+# set here.
+mapfile -t workspace_crates < <(
+  grep -oE '"crates/[a-z0-9_-]+"|"bin/[a-z0-9_-]+"' "$REPO_ROOT/Cargo.toml" |
+    tr -d '"' | sed 's#.*/##' | sort
+)
+for crate in "${workspace_crates[@]}"; do
+  in_decoder=0
+  for d in "${DECODER_CRATES[@]}"; do [[ "$d" == "$crate" ]] && in_decoder=1; done
+  if (( in_decoder )); then
+    continue
+  fi
+  if [[ -z "${NOT_A_DECODER_CRATE[$crate]:-}" ]]; then
+    fail "workspace crate '$crate' is in neither DECODER_CRATES nor NOT_A_DECODER_CRATE"
+    note "a new crate is unaccounted for until one of the two says why"
+  fi
+done
+ok "every workspace crate is triaged as a decoder or has a stated reason it is not"
 # ⚠️ **Every module, not a clever subset, and `M3.28` tried the subset first.**
 # Its first version selected modules by grepping each file for a `pub fn`
 # taking `&[u8]`, on the theory that a decoder is a function handed bytes it
@@ -97,6 +146,7 @@ declare -A NOT_A_PARSER=(
   [oqueue-codec::emit]="the byte writers wire.rs re-exports; nothing here reads untrusted input"
   [oqueue-codec::error_codes]="protocol constants; parses nothing"
   [oqueue-codec::apiversions]="encode-only by design -- the ApiVersions request body is informational and never decoded (see the module doc)"
+  [oqueue-codec::fetch::tests]="M10.17's split-out test module for fetch.rs; #[cfg(test)] only, no production build carries it"
   # --- oqueue-core. The object format's reader is bundle_footer, which has a
   # target; everything else is a newtype, a seam, a fake, or a policy.
   [oqueue-core::lib]="the module root; declares, parses nothing"
@@ -167,6 +217,20 @@ declare -A TARGET_CRATE=(
   [varint]="oqueue-codec"
   [bundle_footer]="oqueue-core"
 )
+# ⚠️ **`M10.18`: which module a target actually covers, when the bin name
+# cannot say it.** The matching loop below used to compare a target's own name
+# against the module path directly, which works only because every target so
+# far covers a *top-level* module. A nested one -- `chunk::single_flight`, or
+# `testing.md` rule 24's `oqueue-index` search-over-corrupt-blobs target,
+# which would live under a `search` module -- has a `::` in its path, and a
+# Cargo `[[bin]]` name cannot hold one; `cargo fuzz new` would refuse to
+# create a target literally named `chunk::single_flight`. So a nested module
+# could be *covered* by a real target and this script would still report it
+# missing, because `$t == $module` can never be true when `$module` contains
+# `::` and `$t` structurally cannot. Unset here means "covers the module named
+# after the target itself", which is every target so far; an entry lets a
+# future target's bin name differ from the module path it drives.
+declare -A TARGET_MODULE=()
 for t in "${targets[@]}"; do
   if [[ -z "${TARGET_CRATE[$t]:-}" ]]; then
     fail "fuzz target '$t' names no crate in TARGET_CRATE, so no module can be matched to it"
@@ -189,7 +253,11 @@ for crate in "${DECODER_CRATES[@]}"; do
     [[ -n "${COVERED_BY_REQUEST[$crate::$module]:-}" ]] && continue
     found=0
     for t in "${targets[@]}"; do
-      [[ "$t" == "$module" && "${TARGET_CRATE[$t]}" == "$crate" ]] && found=1
+      # `TARGET_MODULE[$t]:-$t`: unset means the target covers the module
+      # named after itself -- every target today -- and set is the escape
+      # hatch a nested module needs, since its own path cannot be the bin name.
+      covers="${TARGET_MODULE[$t]:-$t}"
+      [[ "$covers" == "$module" && "${TARGET_CRATE[$t]}" == "$crate" ]] && found=1
     done
     if (( ! found )); then
       fail "decoder module '$crate::$module' has no fuzz target and no allowlist reason"
