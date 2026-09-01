@@ -400,9 +400,13 @@ So the streaming writer is **not** among the deferrals M3 discharges in its own 
 ## M10 — Deterministic simulation and fault injection
 
 The harness that makes every later milestone's failure claims testable: seeded
-schedules, injected latency and faults, and **pauses and partitions rather than
-only kills**. Doc 13 §8 records that every metastable finding in the reference
-system came from pauses.
+schedules, injected latency and faults, and **store failures and refusals
+rather than only kills**. Doc 13 §8 records that every metastable finding in
+the reference system came from pauses. ⚠️ **Not "pauses and partitions"**,
+which this sentence said until `M10.34`: `M10.0` deferred the only partition
+the plan enumerated to `M7`, and `M10`'s own broker-level `Schedule` draws
+`StormStore` and `RefuseJournal`, never a `Pause` step — `Fault::Pause` exists
+only one layer below, in the simulated S3 `M10.8` builds.
 
 ## M9 — Authentication, authorization, and tenant isolation
 
