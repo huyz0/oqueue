@@ -1152,6 +1152,32 @@ invoke_milestone_review() {
   bash "$1/scripts/check-milestone-review.sh" --milestone M-1
 }
 
+# --- check-milestone-review.sh: a lettered task id commit no review
+# artifact covers ------------------------------------------------------------
+#
+# ⚠️ **Pins the fix M10's closing review found and five separate copies of
+# the same bug had already cost three discovery passes** (`M10.33`-`M10.35`):
+# `milestone_subject_re`'s `\.[0-9]+[,:]` has no room for a trailing letter,
+# so a commit subject like `M-1.1a: ...` matched nothing and
+# `milestone_commits` silently excluded it -- not a wrong verdict on the
+# commit, an *absent* one, so the gate reported full coverage over a
+# milestone whose lettered-id commit it never enumerated at all. Without
+# `[a-z]?` this case would report `ok` on a broken artifact, which is
+# exactly the failure `negative.sh` exists to catch.
+setup_milestone_review_lettered_id() {
+  local dir; dir="$(new_scratch milestone-review-lettered-id)"
+  copy_gate "$dir" check-milestone-review.sh
+  mkdir -p "$dir/docs/internal/product"
+  cat > "$dir/docs/internal/product/backlog.md" <<'EOF'
+| M-1.1a | a real, lettered task | some criterion | done |
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M-1.1a: a lettered subject with no covering review artifact")
+  printf '%s\n' "$dir"
+}
+invoke_milestone_review_lettered_id() {
+  bash "$1/scripts/check-milestone-review.sh" --milestone M-1
+}
+
 # --- check-milestone-review.sh: a milestone whose every commit is review
 # bookkeeping ---------------------------------------------------------------
 #
@@ -3330,6 +3356,8 @@ run_case "check-unsafe.sh (non-UTF-8 file doesn't suppress a real violation)" se
 run_case "check-reviewed.sh"            setup_reviewed            invoke_reviewed
 run_case "check-reviewed.sh (regex task_id)" setup_reviewed_regex_task_id invoke_reviewed_regex_task_id
 run_case "check-milestone-review.sh"    setup_milestone_review    invoke_milestone_review
+run_case "check-milestone-review.sh (lettered task id)" \
+  setup_milestone_review_lettered_id invoke_milestone_review_lettered_id
 run_case "check-milestone-review.sh (every commit is review bookkeeping)" \
   setup_milestone_review_bookkeeping invoke_milestone_review_bookkeeping \
   "all of them milestone-review bookkeeping"
