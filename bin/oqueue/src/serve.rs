@@ -240,6 +240,8 @@ fn advertised_identity(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::{SERVE_LIMITS, advertised_identity};
+    use oqueue_core::ObjectStore;
+    use std::sync::Arc;
 
     fn addr(spec: &str) -> std::net::SocketAddr {
         spec.parse().expect("a literal this test wrote")
@@ -321,5 +323,63 @@ mod tests {
         assert!(warning.contains("lost when this process exits"));
         assert_eq!(super::durability_warning("S3Store"), None);
         assert_eq!(super::durability_warning("GcsStore"), None);
+    }
+
+    /// `M10.13`: the worked example. `docs/researches/13-coordinator-recovery.md`
+    /// §"Metastable failure via lease expiry" and this file's own comments both
+    /// name the failure class — a broker whose coordinator loop has died but
+    /// keeps accepting connections, answering every produce
+    /// `LEADER_NOT_AVAILABLE` "while looking healthy" — and until this test,
+    /// nothing reproduced it.
+    ///
+    /// ⚠️ **The cheap half, per `M10.md`'s own row: no crate change.**
+    /// `bin/oqueue` has no `[lib]`, so `accept_loop` is reachable only from a
+    /// `#[cfg(test)] mod` in this file — the simulated harness in `sim`/
+    /// `generated.rs` cannot reach it, and extracting a lib to let it in is
+    /// the cost `ADR-0027` deferred until this row made it visible. Every type
+    /// `build_cluster` composes is a normal (non-dev) dependency already, so
+    /// this constructs the same cluster the binary does, with fakes.
+    #[tokio::test]
+    async fn the_accept_loop_notices_a_dead_coordinator_rather_than_serving_past_it() {
+        let store: Arc<dyn ObjectStore> = Arc::new(oqueue_core::FakeObjectStore::new());
+        let (cluster, serving) = super::build_cluster("h".to_owned(), 1, store)
+            .await
+            .expect("an empty fixture composes");
+        let serving = tokio::spawn(serving.run());
+
+        // ⚠️ **Aborted, not left to finish on its own** — an idle coordinator
+        // loop never returns, so this is the only way to reach the failure
+        // this test is for: a *dead* loop, not a quiescent one.
+        serving.abort();
+        while !serving.is_finished() {
+            tokio::task::yield_now().await;
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("the OS hands out an ephemeral port");
+        let cluster = Arc::new(cluster);
+
+        // ⚠️ **No timeout wrapped around this, deliberately verified rather
+        // than assumed safe.** `serving` has already finished, so `select!`'s
+        // `joined` arm is ready on the very first poll; `listener.accept()`
+        // never resolves because nothing connects, and `reap_tick` is a
+        // minute out. A version of `accept_loop` that dropped the `joined`
+        // arm — the defect this whole row exists to catch — leaves this
+        // *hanging* rather than failing: nothing in `.pre-commit-config.yaml`,
+        // `.githooks/`, or `gates.yml` wraps `cargo test` in a timeout, so
+        // `check-budget.sh` never runs to report a slow suite — the commit
+        // just never returns, which a developer notices by a different route
+        // than a red gate. Recorded here so a reader does not credit the
+        // budget check with a backstop it does not have.
+        let result = super::accept_loop(listener, cluster, serving, SERVE_LIMITS).await;
+
+        let error = result.expect_err("a dead coordinator loop must end the accept loop");
+        assert_eq!(
+            error.to_string(),
+            "the coordinator loop failed: task 1 was cancelled",
+            "the reader needs to know it was the coordinator, not merely that \
+             something failed"
+        );
     }
 }
