@@ -242,7 +242,11 @@ TEXT
   printf '\n'
 
   printf '## The tasks, from the backlog\n\n'
-  backlog_rows="$(grep -E "^\| ${MS//./\\.}\.[0-9]+ \|" "$BACKLOG" || true)"
+  # ⚠️ **`[a-z]?` -- the fifth copy of `M10.33`'s fix, found by M10's own
+  # closing review** (`M10.35`). Without it a lettered row (`M10.18a`,
+  # `M10.18b`) matches nothing here and the packet silently omits it, with no
+  # warning -- unlike the all-empty case two lines below, which does warn.
+  backlog_rows="$(grep -E "^\| ${MS//./\\.}\.[0-9]+[a-z]? \|" "$BACKLOG" || true)"
   if [[ -z "$backlog_rows" ]]; then
     printf '⚠️ **No task rows for %s in %s.**\n' "$MS" "$BACKLOG"
     warn "no backlog rows for $MS; the packet says so"

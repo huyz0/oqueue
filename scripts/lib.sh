@@ -352,6 +352,15 @@ milestone_commits() {
 # in check-milestone-review.sh and milestone-review.sh), and every
 # operator-facing claim about which commits count is true only while the
 # copies agree. Works against `%H` and `%h` alike -- both are `[0-9a-f]+`.
+#
+# ⚠️ **`[a-z]?` added by the M10 closing review, the fourth copy of `M10.33`'s
+# fix.** `known_task_ids`/`open_task_ids` here and `check-commit-msg.sh`'s
+# subject pattern were widened for a lettered task id (`M10.18a`, `M10.18b`);
+# this one was not, so `M10.18a: ...` and `M10.18b: ...` never matched and
+# `milestone_commits` silently excluded both from every milestone they were
+# ever in -- a gap the closing review that reads `milestone_commits`' own
+# output could not see, because the exclusion happens before that output
+# exists.
 milestone_subject_re() {
-  printf '^[0-9a-f]+ %s\\.[0-9]+[,:]' "${1//./\\.}"
+  printf '^[0-9a-f]+ %s\\.[0-9]+[a-z]?[,:]' "${1//./\\.}"
 }
