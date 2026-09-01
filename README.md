@@ -19,8 +19,10 @@ A Kafka-protocol-compatible message broker in Rust that uses object storage
 > M15's) — and M2's completion: a hand-rolled Kafka wire protocol codec
 > (`ADR-0019`) a real client can produce and fetch against — and M3's: the
 > coordinator, where offsets are sequenced and a reader resolves them through
-> an index rather than by listing anything. M10, in progress, is the
-> deterministic simulation harness every later failure claim is verified by.
+> an index rather than by listing anything — and M10's: the deterministic
+> simulation harness every later failure claim is verified by. M11, in
+> progress, is idempotent producers — deduplicating a retried batch by
+> sequence number, which `enable.idempotence=true` needs by default.
 >
 > What is here is worth reading if you are interested in the design space:
 > ~110,000 words of cited research on object-storage-native streaming, and an
@@ -145,7 +147,8 @@ workspace standard in
 | M1 | Object store seam and conformance suite | complete |
 | M2 | Kafka wire protocol: produce and fetch | complete |
 | M3 | Coordinator: offset sequencing and the index | complete |
-| M10 | Deterministic simulation and fault injection | in progress |
+| M10 | Deterministic simulation and fault injection | complete |
+| M11 | Idempotent producers | in progress |
 | M4 | Consumer groups | not started |
 | M5 | Compaction and retention | not started |
 | M6 | Recovery and failover | not started |
@@ -163,8 +166,8 @@ because there is no implementation to contribute to — the development system
 that reviews changes is finished (M-1), the workspace and its crates are built
 (M0), the object store seam has real backends (M1), the Kafka wire protocol
 is a real client's produce and fetch against (M2), the coordinator sequences
-offsets and indexes them (M3), and M10, the deterministic simulation harness,
-is in progress.
+offsets and indexes them (M3), M10's deterministic simulation harness verifies
+every later failure claim, and M11, idempotent producers, is in progress.
 
 ## License
 

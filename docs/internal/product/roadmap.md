@@ -69,10 +69,10 @@ original ten did not reach a shippable v1. Sequence:
 | 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | see `backlog.md` ⚠️ | `scripts/gates/m1-complete.sh` | complete |
 | 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | see `backlog.md` ⚠️ | `scripts/gates/m2-complete.sh` | complete |
 | 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | see `backlog.md` ⚠️ | `scripts/gates/m3-complete.sh` | complete |
-| 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | see `backlog.md` ⚠️ | `scripts/gates/m10-complete.sh` | in progress |
+| 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | see `backlog.md` ⚠️ | `scripts/gates/m10-complete.sh` | complete |
 | 7 | [M9](milestones/M9.md) | Authentication, authorization, tenant isolation | feature | M2, M3 | 16 | `scripts/gates/m9-complete.sh` | not started |
 | 8 | [M4](milestones/M4.md) | Consumer groups | functional | M3, M9 | 17 | `scripts/gates/m4-complete.sh` | not started |
-| 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | not started |
+| 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | in progress |
 | 10 | [M5](milestones/M5.md) | Compaction and retention | functional | M3, M10 | 20 | `scripts/gates/m5-complete.sh` | not started |
 | 11 | [M6](milestones/M6.md) | Recovery and failover | non-functional | M3, M10 | 16 | `scripts/gates/m6-complete.sh` | not started |
 | 12 | [M7](milestones/M7.md) | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | not started |
@@ -91,7 +91,11 @@ decorative — an empty cell halts the loop.
 ⚠️ **Depends-on is not the same as the order.** M11 depends only on M3 and could
 be pulled ahead of M4; it sits at slot 9 because idempotence is worth less than
 consumer groups, not because it is blocked. The column says what is *possible*,
-the number says what is *chosen*.
+the number says what is *chosen* — by whoever is choosing. ⚠️ **Exercised
+2026-09-02**: M11 opened directly after M10, ahead of M9 and M4 at slots 7 and
+8, on explicit direction rather than this table's own default. The slot number
+is not renumbered — it still states the plan's own priority — and this is the
+possible-but-not-chosen case the column exists to distinguish from blocked.
 
 ⚠️ **M-1 is well over the 20-task limit** `sdd.md` now states, and still
 moving. It accumulated the planning work, the defects its own gates found,
