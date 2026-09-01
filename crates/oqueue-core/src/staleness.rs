@@ -235,22 +235,39 @@ impl CacheState {
 
     /// Whether this cache may answer `mode`, and why not if it may not.
     ///
-    /// ⚠️ **The order of the checks is the design**, and it is three tiers.
+    /// ⚠️ **The order of the checks is the design**, and it is four tiers.
     /// The epoch fence comes first, for **every** mode, because it is the
     /// *cheapest* check that can say the contents are wrong rather than old —
     /// a cache from a rewound line can be arbitrarily far ahead by version and
     /// must still not answer, and a cache from a departed epoch means the
-    /// *agent* is not the incarnation it believes it is. ⚠️ **It is not the
-    /// only such check, and this said it was until `M3.37`**: the version tier
-    /// returns [`CacheFromAnOlderEpoch`](RefreshReason::CacheFromAnOlderEpoch),
-    /// which also discards, and it sits *below* the silence breaker — see
-    /// `M3.43`, which is the row that owns that ordering. [`Linearizable`](ReadMode::Linearizable)
+    /// *agent* is not the incarnation it believes it is. [`Linearizable`](ReadMode::Linearizable)
     /// is answered next, because no cache may serve one and every remaining
-    /// question is about how good a cache is. The silence breaker comes third
-    /// and applies to every mode that does read the cache,
-    /// [`Stale`](ReadMode::Stale) included, because no version comparison can
-    /// tell a current cache from one whose push stream died. Only then is the
-    /// version question asked at all.
+    /// question is about how good a cache is.
+    ///
+    /// ⚠️ **The newer-epoch discard comes third, ahead of the silence
+    /// breaker** (`M10.19`, from `M3.43`). It used to sit in the version tier,
+    /// below the breaker, which meant a cache silent past the limit whose
+    /// caller presented a watermark from a newer epoch was told
+    /// [`PushStreamSilent`](RefreshReason::PushStreamSilent) — "go refresh
+    /// this cache" — when [`CacheFromAnOlderEpoch`](RefreshReason::CacheFromAnOlderEpoch)
+    /// — "discard it, your coordinator moved on" — is the fact this cache
+    /// actually needs told. A newer epoch on the watermark is evidence about
+    /// the *cache's own incarnation*, exactly like the epoch fence above it,
+    /// which is why it now sits beside that fence rather than beside the
+    /// version compare it otherwise resembles. ⚠️ **Unreachable today for the
+    /// same reason the silence breaker itself is**: `Cluster::cache_state`
+    /// hardcodes `silent_for_ms` to zero (M3's broker index *is* the
+    /// coordinator's, folded before the ack by the only writer), so the two
+    /// conditions this reordering distinguishes can never both hold until
+    /// `M7`'s follower gives a cache a way to actually go silent. Fixed now
+    /// rather than left for that milestone because the value is a pure
+    /// function of its three fields and the property is provable today by
+    /// construction, with no follower required.
+    ///
+    /// The silence breaker comes fourth and applies to every mode that does
+    /// read the cache, [`Stale`](ReadMode::Stale) included, because no
+    /// version comparison can tell a current cache from one whose push stream
+    /// died. Only then is the rest of the version question asked at all.
     ///
     /// ⚠️ **`Ok(())` is the only way to serve from cache**, and every other
     /// path names a reason. There is deliberately no boolean: a `false` at a
@@ -302,6 +319,25 @@ impl CacheState {
         if matches!(mode, ReadMode::Linearizable) {
             return Err(RefreshReason::Authoritative);
         }
+        // ⚠️ **Promoted above the silence breaker** (`M10.19`, from `M3.43`):
+        // a *newer* epoch on the watermark is the one piece of evidence a
+        // reader-side cache has that its own coordinator is the departed
+        // one, which is a fact about this cache's incarnation — the same
+        // kind of fact the epoch fence above answers, not a freshness
+        // question the breaker below exists to settle. Answering it as
+        // "the cache is current and correct" is exactly backwards, and
+        // answering it as "merely silent, go refresh" is only slightly less
+        // so: both leave a cache in place that should be discarded outright.
+        // `CoordinatorEpoch` is `Ord`, so the direction is a comparison
+        // rather than an inequality.
+        if let ReadMode::AtLeast(want) = mode
+            && want.epoch() > self.epoch
+        {
+            return Err(RefreshReason::CacheFromAnOlderEpoch {
+                watermark: want.epoch().get(),
+                cache: self.epoch.get(),
+            });
+        }
         // H4's breaker, and it is in front of every mode that reads the cache,
         // `Stale` included: a cache that is current and one whose push stream
         // died hold the same version, and only elapsed silence separates them.
@@ -317,18 +353,9 @@ impl CacheState {
             ReadMode::Stale => Ok(()),
             // `ADR-0023`: a version compare happens only between versions from
             // one line. A watermark carried across a rebalance is
-            // incomparable, not behind.
-            // ⚠️ **A *newer* epoch is the one piece of evidence a reader-side
-            // cache has that its own coordinator is the departed one**, and
-            // answering it as "the cache is current and correct" is exactly
-            // backwards. `CoordinatorEpoch` is `Ord`, so the direction is a
-            // comparison rather than an inequality.
-            ReadMode::AtLeast(want) if want.epoch() > self.epoch => {
-                Err(RefreshReason::CacheFromAnOlderEpoch {
-                    watermark: want.epoch().get(),
-                    cache: self.epoch.get(),
-                })
-            }
+            // incomparable, not behind. The `> self.epoch` direction is
+            // answered above, ahead of the silence breaker; only the `<`
+            // direction (an older, incomparable watermark) is left here.
             ReadMode::AtLeast(want) if want.epoch() != self.epoch => {
                 Err(RefreshReason::WatermarkFromAnotherEpoch {
                     watermark: want.epoch().get(),

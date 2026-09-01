@@ -170,6 +170,40 @@ proptest! {
         );
     }
 
+    /// ⚠️ **The newer-epoch discard outranks the silence breaker** (`M10.19`,
+    /// from `M3.43`). Before this fix a cache silent past the limit answered
+    /// `PushStreamSilent` — "go refresh this cache" — to a caller presenting
+    /// a watermark from a newer epoch, which is exactly the one piece of
+    /// evidence this cache's own coordinator has departed and it should be
+    /// discarded outright, not refreshed in place. Both conditions are pure
+    /// functions of `CacheState`'s three fields, so the property holds
+    /// without a follower to make the silence real — see `M3.43`'s own note
+    /// that this ordering is unreachable today because `Cluster::cache_state`
+    /// hardcodes `silent_for_ms` to zero, which this test does not: it builds
+    /// `CacheState::new` directly, the only way to exercise the ordering
+    /// before `M7`'s follower exists.
+    #[test]
+    fn a_newer_epoch_outranks_silence_even_past_the_staleness_limit(
+        cache_epoch in 0_u64..u64::MAX,
+        version in any::<u64>(),
+        silent in (MAX_METADATA_STALENESS_MS + 1)..=u64::MAX,
+    ) {
+        let epoch = CoordinatorEpoch::new(cache_epoch);
+        let cache = CacheState::new(epoch, Some(CommitVersion::new(version)), silent);
+        let newer = SessionWatermark::new(
+            CoordinatorEpoch::new(cache_epoch + 1),
+            CommitVersion::new(version),
+        );
+        prop_assert_eq!(
+            cache.admits(ReadMode::AtLeast(newer), epoch),
+            Err(RefreshReason::CacheFromAnOlderEpoch {
+                watermark: cache_epoch + 1,
+                cache: cache_epoch,
+            }),
+            "a departed coordinator must be discarded, not merely refreshed"
+        );
+    }
+
     /// ⚠️ **The epoch fence is in front of `Linearizable` too**, and the
     /// distinction is what makes that right: a cache from a departed epoch
     /// says *this agent* is not the incarnation it believes it is, which is a

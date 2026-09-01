@@ -16,7 +16,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use oqueue_codec::attributes::Compression;
-use oqueue_codec::batch::{crc_coverage, decode_batch_header, stored_crc};
+use oqueue_codec::batch::{BatchError, crc_coverage, decode_batch_header, stored_crc};
 use oqueue_codec::error_codes;
 use oqueue_codec::records::count_records;
 
@@ -36,7 +36,7 @@ pub(crate) struct Verified {
 pub(crate) fn verify(batch: &[u8]) -> Result<Verified, i16> {
     let header = match decode_batch_header(batch) {
         Ok(header) => header,
-        Err(oqueue_codec::batch::BatchError::WrongMagic { .. }) => {
+        Err(BatchError::WrongMagic { .. }) => {
             return Err(error_codes::UNSUPPORTED_FOR_MESSAGE_FORMAT);
         }
         Err(_) => return Err(error_codes::CORRUPT_MESSAGE),
@@ -81,7 +81,25 @@ pub(crate) fn verify(batch: &[u8]) -> Result<Verified, i16> {
     // the same object forever while the watermark advertised records that do
     // not exist. `M2` trusted the field, which was harmless against a stub and
     // is not against a durable log.
-    let counted = count_records(batch).map_err(|_| error_codes::CORRUPT_MESSAGE)?;
+    // ⚠️ **Every `count_records` error answers `INVALID_RECORD`, not
+    // `CORRUPT_MESSAGE`** (`M10.19`, from `M3.43`). This walk only runs after
+    // the CRC above has already verified the bytes, so whatever it finds
+    // wrong — a body below the format's own minimum, a length that does not
+    // fit in `usize`, a record whose declared length runs past the batch — is
+    // a malformation the CRC vouches was sent exactly this way, not
+    // corruption a retry could ever fix. `CORRUPT_MESSAGE` is what every
+    // `count_records` error collapsed to before this fix, and the Java
+    // producer and librdkafka both retry it — so a client re-sent
+    // byte-identical bytes until `delivery.timeout.ms` expired for a batch
+    // that could never become valid. The three structurally identical
+    // refusals beside this one (a zero-count batch below, and the two
+    // claim-mismatch checks that follow) already answer `INVALID_RECORD`; an
+    // earlier version of this fix matched `RecordTooShort` alone and left its
+    // siblings `LengthOutOfBounds` and `UnexpectedEof` on `CORRUPT_MESSAGE`,
+    // which review caught as the same defect one variant over — nothing about
+    // *which* decode error fired changes whether the CRC already vouched for
+    // the bytes.
+    let counted = count_records(batch).map_err(|_| error_codes::INVALID_RECORD)?;
     if counted == 0 {
         // ⚠️ Refused, not floored to one — which is what `M2` did. A batch with
         // no records occupying an offset is a hole in the log: a consumer that
@@ -177,6 +195,60 @@ mod tests {
         assert_eq!(verified.records, 2);
         let one = verify(&golden_batch_of(&[b"solo"])).expect("one record");
         assert_eq!(one.records, 1);
+    }
+
+    /// ⚠️ **Every `count_records` error answers `INVALID_RECORD`**
+    /// (`M10.19`, from `M3.43`). Before this fix every one collapsed to
+    /// `CORRUPT_MESSAGE`, which the Java producer and librdkafka both retry —
+    /// so a client re-sent a batch that could never become valid until
+    /// `delivery.timeout.ms` expired. The CRC here is real and recomputed, so
+    /// this is not the corrupt-bytes case `a_corrupt_crc_is_refused` pins;
+    /// the record itself is simply shorter than the format allows.
+    #[test]
+    fn a_record_below_the_formats_minimum_fails_the_send_rather_than_being_retried() {
+        let mut buf = golden_batch();
+        buf.truncate(61); // BATCH_HEADER_LEN, duplicated rather than imported:
+        // `ingest.rs` deliberately does not depend on `oqueue-codec`'s
+        // internals beyond what `verify` already imports.
+        buf.push(5 << 1); // zigzag varint length = 5, one below the floor of 6
+        buf.extend_from_slice(&[0, 0, 0, 0, 0]);
+        let declared = i32::try_from(buf.len() - 12).expect("small");
+        buf[8..12].copy_from_slice(&declared.to_be_bytes());
+        let crc = oqueue_checksum::crc32c(&buf[21..]);
+        buf[17..21].copy_from_slice(&crc.to_be_bytes());
+        assert_eq!(
+            verify(&buf),
+            Err(error_codes::INVALID_RECORD),
+            "a permanent malformation must not be told to the client as \
+             worth retrying"
+        );
+    }
+
+    /// ⚠️ **A different `count_records` error, same answer.** Review of this
+    /// row's first draft found it matched `RecordTooShort` alone and left its
+    /// siblings on `CORRUPT_MESSAGE` — the same defect one `DecodeError`
+    /// variant over, since nothing about *which* decode error fired changes
+    /// whether the CRC already vouched for the bytes. A record whose declared
+    /// length runs past the batch is the sibling that finding named — the
+    /// exact `DecodeError` variant this particular malformed length raises
+    /// is `count_records`'s to choose; what this test pins is that whichever
+    /// one it is, `verify` no longer tells the difference from
+    /// `RecordTooShort`.
+    #[test]
+    fn a_record_length_past_the_batch_fails_the_send_rather_than_being_retried() {
+        let mut buf = golden_batch();
+        buf.truncate(61); // BATCH_HEADER_LEN
+        buf.push(0xFE); // a length varint that runs past whatever follows it
+        let declared = i32::try_from(buf.len() - 12).expect("small");
+        buf[8..12].copy_from_slice(&declared.to_be_bytes());
+        let crc = oqueue_checksum::crc32c(&buf[21..]);
+        buf[17..21].copy_from_slice(&crc.to_be_bytes());
+        assert_eq!(
+            verify(&buf),
+            Err(error_codes::INVALID_RECORD),
+            "a length running past the batch is as permanent a malformation \
+             as a body below the floor"
+        );
     }
 
     /// ⚠️ **What cannot be counted is refused.** A compressed batch's records
