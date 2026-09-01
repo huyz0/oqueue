@@ -31,6 +31,10 @@ impl Cluster {
     /// caller that drops it after the commit was queued may see no ack for a
     /// commit that happened, which is the case a client retry re-produces and
     /// a duplicate results from; idempotent produce (`M11`) is what closes it.
+    /// ⚠️ **The first half is `ADR-0005` guarantee 2's own third state**
+    /// (`M10.29`): a dropped `put` future is not a resolved `Err`, and the
+    /// seam's own contract names it now rather than leaving it something
+    /// only this call site had worked out.
     ///
     /// [`Precondition`]: oqueue_core::Precondition
     /// [`Coordinator::commit`]: oqueue_coordinator::Coordinator::commit

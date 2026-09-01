@@ -15,7 +15,11 @@ untouched and stays `M15`'s (`M1.44`): no single-process fake can show that
 `Ok` survives a process death, which this ADR's own Consequences say. So
 guarantee 1's annotation below is overtaken on "no flag about durability"
 and "no case exercises the crash clause" is overtaken only for the
-injectable half; the crash clause itself is still exercised by nothing
+injectable half; the crash clause itself is still exercised by nothing;
+2026-09-02 (`M10.29`, from `M10.8`'s review): guarantee 2 gained a clause
+for a `put` future that is dropped rather than resolved — a third
+post-`put` state the original text did not name, first reasoned about at a
+call site (`flush.rs`) before this ADR caught up to it.
 Date: 2026-08-16
 Requirements: NFR-51
 
@@ -69,6 +73,28 @@ pub trait ObjectStore: Send + Sync + fmt::Debug {
    "unchanged" — the object may have landed and the acknowledgement been lost.
    A caller must not treat a failed `put` as proof of absence, and this is
    precisely the case the commit protocol turns on.
+
+   ⚠️ **A third state, added 2026-09-02 (`M10.29`, from `M10.8`'s review):
+   `put`'s future never resolving at all**, because the caller dropped it —
+   a `tokio::time::timeout` expiring around a slow response, or any other
+   cancellation. Guarantee 2 is keyed on the future *resolving* `Err`; a
+   drop gives the caller strictly less than that, because there is no `Err`
+   to read a "state unknown" warning off of, and treating a drop as an
+   instance of guarantee 2 (which `M10.8`'s row did, and this row's review
+   is what found the gap) hides that a fresh case exists at all — an audit
+   of this ADR alone, without reading a caller's own doc, would conclude
+   only two post-`put` states are possible. The rule is the same one
+   guarantee 2 states, extended rather than replaced: the object may have
+   landed, and a caller that drops the future must not treat the drop as
+   proof of absence either. `crates/oqueue-broker/src/flush.rs`'s own doc
+   is where this was first worked out concretely, ahead of the ADR
+   naming it: a `flush` future dropped after the `put` landed leaves an
+   object nothing references — garbage, not corruption, collected by
+   `M5`'s reaper — and one dropped after the commit was queued may see no
+   ack for a commit that happened, which `M11`'s idempotent produce is
+   what closes. This clause exists so a future implementor of this seam,
+   or a future caller across it, reads the complete state space here
+   rather than re-deriving it the way `flush.rs` had to.
 3. **A `get` of a key that was `put` returns exactly those bytes**, or an error.
    Never a prefix, never a different version.
 4. ⚠️ **An object is never partially visible.** A concurrent `get` sees the whole
