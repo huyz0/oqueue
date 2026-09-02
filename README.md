@@ -22,10 +22,14 @@ A Kafka-protocol-compatible message broker in Rust that uses object storage
 > an index rather than by listing anything — and M10's: the deterministic
 > simulation harness every later failure claim is verified by, and M11's:
 > idempotent producers — deduplicating a retried batch by sequence number,
-> which a real client's own `enable.idempotence` opt-in needs. M9, in
-> progress, is authentication, authorization, and tenant isolation — every
-> operation scoped to a principal, and a `Metadata` request costing
-> O(topics this principal can see) rather than O(topics that exist).
+> which a real client's own `enable.idempotence` opt-in needs — and M9's:
+> authentication, authorization, and tenant isolation — every operation
+> scoped to a principal, and a `Metadata` request costing O(topics this
+> principal can see) rather than O(topics that exist); the mechanism is
+> built and tested, and wiring it into the binary that ships is M4's own
+> task 18. M4, in progress, is consumer groups — join, sync, heartbeat,
+> rebalance, and durable committed offsets, on the classic protocol
+> (`ADR-0033`).
 >
 > What is here is worth reading if you are interested in the design space:
 > ~110,000 words of cited research on object-storage-native streaming, and an
@@ -152,8 +156,8 @@ workspace standard in
 | M3 | Coordinator: offset sequencing and the index | complete |
 | M10 | Deterministic simulation and fault injection | complete |
 | M11 | Idempotent producers | complete |
-| M9 | Authentication, authorization, tenant isolation | in progress |
-| M4 | Consumer groups | not started |
+| M9 | Authentication, authorization, tenant isolation | complete |
+| M4 | Consumer groups | in progress |
 | M5 | Compaction and retention | not started |
 | M6 | Recovery and failover | not started |
 | M7 | Metadata sharding and scale | not started |
