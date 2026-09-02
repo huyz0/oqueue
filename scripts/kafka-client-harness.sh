@@ -12,9 +12,12 @@
 #     discipline as m1-complete.sh's pinned MinIO image: an unpinned
 #     dependency means two machines can disagree while both print pass
 #
-# ⚠️ Both clients set enable.idempotence=false, by decision rather than
-# accident (M2.md's risk list): the idempotent path needs InitProducerId
-# (key 22), which is M11's. docs/protocol-support.md records it.
+# ⚠️ Both clients ran with enable.idempotence=false until M11.9, by decision
+# rather than accident (M2.md's risk list): the idempotent path needed
+# InitProducerId (key 22), which M11.4-M11.8 built. Both now run at their
+# own defaults (idempotence on) — docs/protocol-support.md no longer
+# records the limitation, and scripts/check-idempotence-enabled.sh is the
+# gate that notices if the disable ever comes back.
 #
 # Exit: 0 when every client that could run passed; non-zero when any ran
 # and failed. Prints one ok/skip line per client, and records each client

@@ -6,10 +6,14 @@ Produces three payloads, then consumes them back from offset 0 and asserts
 order and content. Exits non-zero on any failure; prints ROUND TRIP OK on
 success — the string kafka-client-harness.sh greps for.
 
-`enable.idempotence` is False by explicit decision (M2.md's risk list):
-idempotent produce needs InitProducerId (key 22), which is M11's, and
-discovering that during the first client test is the documented way this
-milestone slips. docs/protocol-support.md records the limitation.
+⚠️ **`enable.idempotence` is left at librdkafka's own default (`True`)**,
+`M11.9`'s own acceptance — `M2.md`'s risk list forced it to `False` because
+idempotent produce needed `InitProducerId` (key 22), which `M11.4`-`M11.8`
+built. Not setting it at all, rather than setting it to `True` explicitly,
+is deliberate: a client that never mentions the option is exactly the one
+this milestone's own framing names — "the default configuration of the
+most widely used Kafka client" — and pinning it here would test a
+configuration real users do not write.
 """
 
 import sys
@@ -26,7 +30,6 @@ def produce() -> None:
     producer = Producer(
         {
             "bootstrap.servers": BOOTSTRAP,
-            "enable.idempotence": False,
             "message.timeout.ms": 10000,
             "socket.timeout.ms": 5000,
         }

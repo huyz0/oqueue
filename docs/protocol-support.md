@@ -28,6 +28,7 @@ no runtime path anywhere in the workspace.
 | `ListOffsets` | 2 | 1–9 | `EARLIEST` (-2) and `LATEST` (-1) answered from the coordinator's own index, never a cache — hazard H1, whose symptom is negative consumer lag. ⚠️ A **wall-clock** timestamp is refused with `UNSUPPORTED_VERSION` (35): there is no index by time, and the nearest offset would be a silent wrong answer. ⚠️ **Not code 43**, the obvious choice — the Java consumer maps that one to a null in `offsetsForTimes`, which an application cannot tell from a truthful "nothing at or after that time". ⚠️ **A null topic name closes the connection**: the field is nullable on the request wire and not on the response wire, so there is nothing parsable to answer with. v0 is a different message (an array of offsets per partition, pre-KIP-79) and is not advertised. |
 | Metadata | 3 | 0–13 | `allow_auto_topic_creation` honoured from v4 (historical always-create below). Topic ids from v10. Single node, single partition per topic. |
 | ApiVersions | 18 | 0–3 | Answered before anything else; unsupported versions get the v0-bodied `UNSUPPORTED_VERSION` fallback with the table populated. |
+| `InitProducerId` | 22 | 0–4 | `M11.4`. A non-transactional call mints a fresh producer id at epoch zero, no coordinator round trip. A `transactional_id`-carrying call is refused with `INVALID_REQUEST` (42) — FR-15 (transactions) is deferred, not silently answered as if understood. |
 
 Anything not in the table closes the connection: an unknown api key or an
 unadvertised version has no response the client would parse, and outside
@@ -35,9 +36,16 @@ unadvertised version has no response the client would parse, and outside
 
 ## Known limitations, stated rather than discovered
 
-- **No idempotent produce.** `InitProducerId` (key 22) is milestone M11's;
-  test clients must set `enable.idempotence=false` (both harness clients
-  do). This is the explicit decision `M2.md`'s risk list demanded.
+- ⚠️ ~~**No idempotent produce**~~ — **no longer** (`M11.4`-`M11.9`).
+  `InitProducerId` (key 22) mints an identity; a retried batch is
+  deduplicated per `(producer, topic, partition)` against the recorded
+  sequence, with `OUT_OF_ORDER_SEQUENCE_NUMBER`/`DUPLICATE_SEQUENCE_NUMBER`/
+  `INVALID_PRODUCER_EPOCH` on the wire where real Kafka answers them.
+  `enable.idempotence=true`, librdkafka's own default, is what the harness
+  clients now run with unmodified. ⚠️ **Single-shard dedup only** — FR-15
+  (transactions, cross-partition atomicity) is still deferred, and a
+  `transactional_id`-carrying call is refused rather than answered as if
+  understood.
 - **No consumer groups.** `FindCoordinator`/`JoinGroup` et al. are not
   advertised; consumers must `assign()` rather than `subscribe()`.
 - ⚠️ ~~**Storage is a stub**~~ — **no longer** (`M3.14`). A produce seals one

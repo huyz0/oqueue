@@ -19,10 +19,15 @@ public final class RoundTrip {
         String topic = "harness-java";
         byte[][] payloads = {"one".getBytes(), "two".getBytes(), "three".getBytes()};
 
+        // ⚠️ `enable.idempotence`/`acks` are left at the client's own
+        // defaults (`M11.9`) — `true`/`all` since KIP-679, and no longer
+        // forced to `false`/`1` now that `InitProducerId` exists
+        // (`M11.4`-`M11.8`). Setting `acks` explicitly to anything but
+        // `all` while idempotence defaults on would throw a
+        // `ConfigException` at construction, which is exactly the
+        // incompatibility a real, unconfigured client never hits.
         Properties pp = new Properties();
         pp.put("bootstrap.servers", bootstrap);
-        pp.put("enable.idempotence", "false");
-        pp.put("acks", "1");
         pp.put("delivery.timeout.ms", "10000");
         pp.put("request.timeout.ms", "5000");
         pp.put("key.serializer", ByteArraySerializer.class.getName());

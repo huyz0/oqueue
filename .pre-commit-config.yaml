@@ -112,6 +112,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-idempotence-enabled
+        name: "M11.9, M11.md task 12: M2's enable.idempotence=false client-config workaround stays retired"
+        entry: scripts/check-idempotence-enabled.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       # The first pre-commit gate that shells out to cargo; `check-coverage`
       # and `check-mutants` follow it. ⚠️ **Not for speed** — `fail_fast` is set nowhere, so pre-commit
       # runs every hook whatever the order, and no time is saved by putting the
