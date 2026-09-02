@@ -1,0 +1,48 @@
+{
+  "commits": [
+    "fce258e53f0916ac183416ab771d5fa10c66a3ae",
+    "6bc4374e1bc485e05ce4ef1670e88ba71c5cc2a0",
+    "653f8ddc519a1c99c954c74aacd380c5dd1c66e4",
+    "869a982ac09c2fd7e7461ee011fc94c187945c91",
+    "f1f814e09f9f87394ac0669aaeb2f7f21dea3c78",
+    "bd3c502d8e1117f41376ad29fa3a71dee2c2f6a6",
+    "d38a640543bed9118f19b98870021e7930c2a2b1",
+    "c16d2189c1c04b96844a83cb84b40fb322d983b6",
+    "b6138618ca82d699ae1b3bbd9de76597a8f6c36e",
+    "68baa6141c394fecabd2ec1a5c69f55602498ccb",
+    "ac6b9545f50ea95181d0d7ca0dc67d3c1243ac0d",
+    "c527a94739be2fcaf4e52c0f27b2d14d76630757",
+    "2b4f691782977c7c28b7247d487208849430b9c0",
+    "92bab2248dabdc5c31c6e9f9c8965ae41484aa35"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/decisions/0031-idempotent-producer-state-lives-with-the-allocator.md point 4 says 'producer_id: Option<ProducerId>, producer_epoch: Option<ProducerEpoch>, sequence: Option<i32>'; compare crates/oqueue-core/src/metadata_record.rs (CommittedSpan has one field, `producer: Option<ProducerIdentity>`) and the M11.2 commit/backlog row, which explicitly made this correction but only in the backlog row, not back into the ADR. .agents/skills/adr/SKILL.md's Staleness section (citing ADR-0016) requires exactly a dated Status-line note for this situation, not silence.",
+      "id": "e220fe7534db",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "ADR-0031's own decision text still describes CommittedSpan gaining three separate optional fields, but M11.2 shipped one grouped field (ProducerIdentity), and the ADR staleness convention (a dated note on the Status line) was never applied.",
+      "task_id": "M11.14"
+    },
+    {
+      "evidence": "docs/researches/02-kafka-protocol-compatibility.md \u00a71.6: 'many modern clients (librdkafka in particular) enable the idempotent producer path by default' \u2014 disproven by M11.10/M11.11's wire capture (confluent-kafka librdkafka 2.15.0 defaults enable.idempotence to false). Compare docs/researches/README.md's own documented convention ('Watch for CORRECTION banners... doc 16 is a source-code study that invalidated several claims earlier docs took from AutoMQ's blog') and doc 16-automq-deep-dive.md's banner as precedent for how this project fixes a falsified corpus claim.",
+      "id": "8832056a3b73",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "The research corpus (upstream of the product docs per AGENTS.md) still states the disproven claim that librdkafka enables idempotence by default; M11.11 corrected every downstream product doc but never traced the claim to its root, and the corpus's own established CORRECTION-banner convention for exactly this situation was not applied.",
+      "task_id": "M11.15"
+    },
+    {
+      "evidence": "Every replay test in the tree (crates/oqueue-coordinator/tests/it/sequencing.rs::an_exact_replay_answers_success_with_the_recorded_offset, allocator/admission/tests.rs::an_exact_replay_answers_the_recorded_offset_without_a_new_one) replays at offset 0, so a mutant hardcoding the replayed base_offset would not be caught; crates/oqueue-broker/src/produce/idempotent.rs::one_topics_rejection_does_not_cost_anothers_offset_in_one_request never calls session.watermark(). Filed as M11.16 anyway since it touches the milestone's headline correctness property (FR-14) even though each half was individually disclosed as minor.",
+      "id": "30e18e59e2e3",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "Two minors M11 itself recorded in commit messages (M11.3 round 2, M11.6 round 2) as real, un-closed test-coverage gaps around the core dedup guarantee are still open at the end of the milestone.",
+      "task_id": "M11.16"
+    }
+  ],
+  "milestone": "M11",
+  "recorded_at": "2026-09-02T02:21:33Z",
+  "reviewer": "Claude Opus 5 (milestone-review subagent)",
+  "verdict": "changes-requested"
+}
