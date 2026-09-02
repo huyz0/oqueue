@@ -14,10 +14,12 @@
 #
 # ⚠️ Both clients ran with enable.idempotence=false until M11.9, by decision
 # rather than accident (M2.md's risk list): the idempotent path needed
-# InitProducerId (key 22), which M11.4-M11.8 built. Both now run at their
-# own defaults (idempotence on) — docs/protocol-support.md no longer
-# records the limitation, and scripts/check-idempotence-enabled.sh is the
-# gate that notices if the disable ever comes back.
+# InitProducerId (key 22), which M11.4-M11.8 built. Both now run with
+# idempotence explicitly on (M11.11 -- the Java client gets it from its own
+# KIP-679 default; librdkafka's own default is off, so its harness sets the
+# option itself) — docs/protocol-support.md no longer records the
+# limitation, and scripts/check-idempotence-enabled.sh is the gate that
+# notices if the disable ever comes back.
 #
 # Exit: 0 when every client that could run passed; non-zero when any ran
 # and failed. Prints one ok/skip line per client, and records each client
@@ -107,8 +109,9 @@ else
   # ⚠️ **Two of `M11.10`'s three legs, by real-client conformance — the
   # third is provably unreachable that way and is named here rather than
   # silently skipped.** "Produces successfully" is the ordinary round trip
-  # two lines up, already running with `enable.idempotence` at its default;
-  # "a duplicate-sequence test observes deduplication" is this leg. "A
+  # two lines up, running with `enable.idempotence` explicitly on (`M11.11`
+  # -- librdkafka does not default to it); "a duplicate-sequence test
+  # observes deduplication" is this leg. "A
   # fenced epoch is refused" is not reachable from any real,
   # standards-compliant *non-transactional* client: `M11.4`'s
   # `InitProducerId` handler always mints a fresh id at epoch zero for a

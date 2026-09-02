@@ -427,8 +427,10 @@ an addition rather than a rewrite.
 ## M11 — Idempotent producers
 
 Producer IDs, sequence numbers, and duplicate detection. ⚠️ Not optional in
-practice: librdkafka enables the idempotent path by default, so real clients
-reach for it whether or not the application asked.
+practice: Kafka's Java client enables the idempotent path by default since
+KIP-679, so real clients reach for it whether or not the application asked.
+⚠️ **Not librdkafka**, `M11.11` found — that client's own default is off, and
+needs an explicit `enable.idempotence=true` to reach this path at all.
 
 ## M5 — Compaction and retention
 

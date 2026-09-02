@@ -7,12 +7,15 @@
 # `M2.md`'s own risk list forced both real-client harness scripts
 # (`scripts/harness/rdkafka_roundtrip.py`, `scripts/harness/RoundTrip.java`)
 # to disable idempotent produce explicitly, since `InitProducerId` (key 22)
-# did not exist yet — librdkafka and the Java client both enable it by
-# default, so this was the one setting standing between "produces" and
-# "produces the way a client actually configured would". `M11.4`-`M11.8`
-# built the mechanism the disable was covering for; this is the gate that
-# notices if the disable ever comes back, by accident or by a merge that
-# resurrects it.
+# did not exist yet. ⚠️ **Only the Java client enables it by default**
+# (KIP-679, Kafka 3.0) — librdkafka's own default is `false` (`M11.11`
+# found this the hard way: `M11.9` believed both defaulted to on, and left
+# `rdkafka_roundtrip.py` at its ambient default, which silently never
+# called `InitProducerId` at all). Both harness scripts now set
+# `enable.idempotence: True` explicitly rather than relying on either
+# client's default. `M11.4`-`M11.8` built the mechanism the disable was
+# covering for; this is the gate that notices if the disable ever comes
+# back, by accident or by a merge that resurrects it.
 #
 # ⚠️ **Fails closed on the *setting*, not on the milestone's own name for
 # it.** A prose reference to "the enable.idempotence=false workaround" —
@@ -48,7 +51,7 @@ if (( ${#hits[@]} > 0 )); then
     note "$f"
   done
   note "M11.4-M11.8 built InitProducerId and sequence admission; a real"
-  note "client's default (idempotence on) should work against this broker"
+  note "client with enable.idempotence=true should work against this broker"
   finish
 fi
 ok "no enable.idempotence=false workaround remains in client code"

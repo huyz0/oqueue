@@ -6,14 +6,19 @@ Produces three payloads, then consumes them back from offset 0 and asserts
 order and content. Exits non-zero on any failure; prints ROUND TRIP OK on
 success — the string kafka-client-harness.sh greps for.
 
-⚠️ **`enable.idempotence` is left at librdkafka's own default (`True`)**,
-`M11.9`'s own acceptance — `M2.md`'s risk list forced it to `False` because
-idempotent produce needed `InitProducerId` (key 22), which `M11.4`-`M11.8`
-built. Not setting it at all, rather than setting it to `True` explicitly,
-is deliberate: a client that never mentions the option is exactly the one
-this milestone's own framing names — "the default configuration of the
-most widely used Kafka client" — and pinning it here would test a
-configuration real users do not write.
+⚠️ **`enable.idempotence` is set explicitly to `True`, not left ambient** —
+`M2.md`'s risk list forced it to `False` because idempotent produce needed
+`InitProducerId` (key 22), which `M11.4`-`M11.8` built; `M11.9` then removed
+the override on the belief that librdkafka defaults to idempotence on, the
+way Kafka's Java client has since KIP-679. **That belief was wrong.** A wire
+capture taken during `M11.10` showed librdkafka (confluent-kafka 2.15.0,
+this harness's pinned client) defaults `enable.idempotence` to `False`: left
+at the ambient default, this script's `RecordBatch` headers carried
+`producer_id`/`producer_epoch`/`base_sequence` of `-1` — the non-idempotent
+sentinel — and never once called `InitProducerId`, silently testing an
+ordinary produce rather than the idempotent path this milestone exists for.
+`M11.11` made the setting explicit, the way `idempotent_conformance.py`
+already did.
 """
 
 import sys
@@ -30,6 +35,9 @@ def produce() -> None:
     producer = Producer(
         {
             "bootstrap.servers": BOOTSTRAP,
+            # ⚠️ Explicit, not ambient — see the module docstring's
+            # correction. librdkafka's own default is `False`.
+            "enable.idempotence": True,
             "message.timeout.ms": 10000,
             "socket.timeout.ms": 5000,
         }

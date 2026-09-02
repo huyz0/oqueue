@@ -41,8 +41,10 @@ unadvertised version has no response the client would parse, and outside
   deduplicated per `(producer, topic, partition)` against the recorded
   sequence, with `OUT_OF_ORDER_SEQUENCE_NUMBER`/`DUPLICATE_SEQUENCE_NUMBER`/
   `INVALID_PRODUCER_EPOCH` on the wire where real Kafka answers them.
-  `enable.idempotence=true`, librdkafka's own default, is what the harness
-  clients now run with unmodified. ⚠️ **Single-shard dedup only** — FR-15
+  `enable.idempotence=true` is what the harness clients now run with — the
+  Java client's own default since KIP-679; librdkafka's default is `false`
+  (`M11.11`), so its harness sets the option explicitly rather than relying
+  on one. ⚠️ **Single-shard dedup only** — FR-15
   (transactions, cross-partition atomicity) is still deferred, and a
   `transactional_id`-carrying call is refused rather than answered as if
   understood.
