@@ -422,6 +422,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/sasl_handshake/tests.rs|VERSION"]="a test's own advertised-version literal, split into its own tests.rs file at the 500-line boundary's own precedent -- same shape as listoffsets.rs's own entry above"
   ["crates/oqueue-broker/src/sasl_authenticate/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/find_coordinator/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/find_coordinator/tests.rs|BATCHED_VERSION"]="a test's own advertised-version literal for the KIP-699 batched shape (M4.4), same shape as VERSION above"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )

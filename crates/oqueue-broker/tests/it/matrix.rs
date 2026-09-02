@@ -160,10 +160,14 @@ fn fetch_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
 /// `FindCoordinator`'s own minimal body — its own function for the same
 /// fifty-line-limit reason `list_offsets_body` is.
 fn find_coordinator_body(out: &mut Vec<u8>, version: i16) {
-    kafka_protocol::messages::FindCoordinatorRequest::default()
-        .with_key(StrBytes::from_static_str("g"))
-        .encode(out, version)
-        .expect("encodes");
+    let request = if version >= 4 {
+        kafka_protocol::messages::FindCoordinatorRequest::default()
+            .with_coordinator_keys(vec![StrBytes::from_static_str("g")])
+    } else {
+        kafka_protocol::messages::FindCoordinatorRequest::default()
+            .with_key(StrBytes::from_static_str("g"))
+    };
+    request.encode(out, version).expect("encodes");
 }
 
 /// Response header length: v0 is 4 bytes of correlation id, v1 adds the
@@ -228,9 +232,15 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
 /// `FindCoordinator`'s own decode -- its own function for the same
 /// fifty-line-limit reason `list_offsets_body` is.
 fn find_coordinator_error_code(rest: &mut &[u8], version: i16) -> i16 {
-    kafka_protocol::messages::FindCoordinatorResponse::decode(rest, version)
-        .expect("FindCoordinator reply decodes")
-        .error_code
+    let response = kafka_protocol::messages::FindCoordinatorResponse::decode(rest, version)
+        .expect("FindCoordinator reply decodes");
+    // v0-3: the top-level field. v4+: the one requested key's own entry --
+    // the top-level field does not exist on the wire past v3.
+    if version >= 4 {
+        response.coordinators[0].error_code
+    } else {
+        response.error_code
+    }
 }
 
 /// Decodes a reply this matrix does not otherwise inspect, purely to prove

@@ -67,11 +67,15 @@ pub static ADVERTISED: [Advertised; 9] = [
         flexible_from: Some(9),
     },
     Advertised {
-        // ⚠️ **Not the batched `coordinator_keys` shape** — that is v4+
-        // (KIP-699), `M4.4`'s own task. Single-key only, `M4.3`.
+        // ⚠️ v0-3 single-key (`M4.3`), v4-6 batched (KIP-699, `M4.4`) —
+        // one function, two frame shapes, `oqueue_codec::find_coordinator`'s
+        // own doc. The dependency's own ceiling is v6 and every field from
+        // v4 stays "Supported API versions: 4-6" uniformly (confirmed by
+        // reading its generated source), so there is no InitProducerId-style
+        // reason to advertise less than the full range.
         api_key: ApiKey::FindCoordinator,
         min: 0,
-        max: 3,
+        max: 6,
         flexible_from: Some(3),
     },
     Advertised {
