@@ -208,10 +208,13 @@ async fn an_unknown_key_closes_the_connection_promptly() {
 mod authorization {
     use super::{Dispatcher, HandlerResponse, dispatcher};
     use crate::sasl_authenticate::{PlainCredential, PlainCredentials};
-    use kafka_protocol::messages::{InitProducerIdRequest, RequestHeader};
-    use kafka_protocol::protocol::Encodable;
+    use kafka_protocol::messages::metadata_request::MetadataRequestTopic;
+    use kafka_protocol::messages::{
+        InitProducerIdRequest, MetadataRequest, MetadataResponse, RequestHeader, TopicName,
+    };
+    use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
     use oqueue_codec::apikey::ApiKey;
-    use oqueue_core::{Principal, Redacted};
+    use oqueue_core::{Principal, Redacted, TopicGrants, TopicId};
 
     fn framed(api_key: ApiKey, version: i16, body: &[u8]) -> Vec<u8> {
         let mut frame = Vec::new();
@@ -256,6 +259,25 @@ mod authorization {
             principal: Principal::new("alice").expect("valid"),
             password: Redacted::new("secret".to_owned()),
         }])
+    }
+
+    /// A `Metadata` request naming exactly `topic`, v12.
+    fn metadata_frame(topic: &str) -> Vec<u8> {
+        let mut body = Vec::new();
+        let mut request = MetadataRequest::default();
+        let mut entry = MetadataRequestTopic::default();
+        entry.name = Some(TopicName(StrBytes::from_string(topic.to_owned())));
+        request.topics = Some(vec![entry]);
+        request.encode(&mut body, 12).expect("encodes");
+        framed(ApiKey::Metadata, 12, &body)
+    }
+
+    fn metadata_response(out: &[u8]) -> MetadataResponse {
+        // v12 carries a v1 (tagged) response header: 5 bytes.
+        let mut rest = &out[5..];
+        let response = MetadataResponse::decode(&mut rest, 12).expect("decodes");
+        assert!(rest.is_empty());
+        response
     }
 
     /// The `credentials`-empty default (`M9.3`'s and `M9.4`'s own shipped
@@ -307,5 +329,49 @@ mod authorization {
             dispatcher.dispatch(init_producer_id_frame()).await,
             HandlerResponse::Reply(_)
         ));
+    }
+
+    /// ⚠️ **`M9.9`'s own end-to-end wiring test.** Every seam this milestone
+    /// built, driven together: `tls_terminated`, `with_credentials`,
+    /// `with_topic_grants`, a real `SaslAuthenticate` exchange, and then a
+    /// real `Metadata` request — a granted topic resolves, an ungranted one
+    /// answers `TOPIC_AUTHORIZATION_FAILED`, on the same authenticated
+    /// connection, in the same response.
+    #[tokio::test]
+    async fn a_metadata_request_after_authentication_is_scoped_by_topic_grants() {
+        let (dispatcher, fixture) = dispatcher().await;
+        fixture.cluster.ensure_topic("seen");
+        fixture.cluster.ensure_topic("unseen");
+        let mut grants = TopicGrants::new();
+        grants.grant(
+            Principal::new("alice").expect("valid"),
+            TopicId::new("seen").expect("valid"),
+        );
+        let dispatcher = Dispatcher {
+            tls: true,
+            credentials: std::sync::Arc::new(one_credential()),
+            topic_grants: std::sync::Arc::new(grants),
+            ..dispatcher
+        };
+        let auth = dispatcher
+            .dispatch(sasl_authenticate_frame("alice", "secret"))
+            .await;
+        assert!(matches!(auth, HandlerResponse::Reply(_)), "SASL succeeds");
+
+        let HandlerResponse::Reply(seen_out) = dispatcher.dispatch(metadata_frame("seen")).await
+        else {
+            panic!("expected a reply");
+        };
+        assert_eq!(metadata_response(&seen_out).topics[0].error_code, 0);
+
+        let HandlerResponse::Reply(unseen_out) =
+            dispatcher.dispatch(metadata_frame("unseen")).await
+        else {
+            panic!("expected a reply");
+        };
+        assert_eq!(
+            metadata_response(&unseen_out).topics[0].error_code,
+            oqueue_codec::error_codes::TOPIC_AUTHORIZATION_FAILED,
+        );
     }
 }

@@ -98,6 +98,12 @@ pub const UNSUPPORTED_SASL_MECHANISM: i16 = 33;
 /// pre-`M9.4` answer (no credential source configured yet) and `M9.4`'s
 /// own answer to a real, wrong credential alike.
 pub const SASL_AUTHENTICATION_FAILED: i16 = 58;
+/// An explicitly-named topic the requesting principal cannot `DESCRIBE` (29).
+///
+/// `M9.9`, one leg of `M9.1`'s verified finding against real Kafka source:
+/// the *explicitly-named* case answers this rather than the silent omission
+/// the *null-topic-array* case uses instead (`M9.10`).
+pub const TOPIC_AUTHORIZATION_FAILED: i16 = 29;
 
 #[cfg(test)]
 mod tests {
@@ -187,6 +193,15 @@ mod tests {
         assert_eq!(
             super::SASL_AUTHENTICATION_FAILED,
             ResponseError::SaslAuthenticationFailed.code()
+        );
+    }
+
+    /// `M9.9`'s authorization code, same oracle.
+    #[test]
+    fn the_topic_authorization_code_matches_the_dependency() {
+        assert_eq!(
+            super::TOPIC_AUTHORIZATION_FAILED,
+            ResponseError::TopicAuthorizationFailed.code()
         );
     }
 }

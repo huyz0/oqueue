@@ -7,6 +7,19 @@
 //! historical behaviour — creation allowed, the broker's config deciding —
 //! is what our decoder's default (`true`) expresses below v4
 //! (`oqueue_codec::metadata`).
+//!
+//! ⚠️ **`M9.9`: an explicitly-named topic is scoped, the null-topic-array
+//! case is not yet** (`M9.10`'s own row). `M9.1`'s verified finding against
+//! real Kafka source split these into two distinct shapes on purpose — an
+//! *explicitly-named* topic the principal cannot `DESCRIBE` answers
+//! `TOPIC_AUTHORIZATION_FAILED` for that entry, while "every topic" (the
+//! null array) still calls [`Cluster::topic_names`] unscoped until `M9.10`
+//! points it at the same index instead. Scoping is a no-op — every name
+//! resolves exactly as before `M9` — whenever `credentials_configured` is
+//! `false`, `oqueue_core::authorize`'s own fail-open signal reused rather
+//! than inventing a second one: no credential source configured means no
+//! connection could ever be denied by `M9.7`'s gate either, so there is
+//! nothing this handler could honestly refuse.
 
 use crate::cluster::Cluster;
 use oqueue_codec::apikey::ApiKey;
@@ -15,6 +28,22 @@ use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_codec::metadata::{
     MetadataResponse, MetadataResponseTopic, decode_request, encode_response,
 };
+use oqueue_core::{Principal, TopicGrants, TopicId};
+
+/// `M9.9`'s authorization inputs, bundled: `Metadata`'s own signature would
+/// otherwise carry three parameters that only ever travel together (`M9.7`'s
+/// principal/credentials-configured pair, plus `M9.8`'s index), past
+/// `rust-style.md`'s argument-count limit.
+pub(crate) struct AuthzContext<'a> {
+    /// This connection's authenticated identity, if any (`M9.7`'s
+    /// `Session::principal`).
+    pub(crate) principal: Option<&'a Principal>,
+    /// Whether authorization is even live on this broker — `M9.7`'s own
+    /// fail-open signal, reused rather than a second one invented here.
+    pub(crate) credentials_configured: bool,
+    /// `M9.8`'s forward index.
+    pub(crate) topic_grants: &'a TopicGrants,
+}
 
 /// Decodes, answers, encodes. `Close` only when the body cannot be
 /// decoded — a malformed request from a client that negotiated fine is a
@@ -23,8 +52,9 @@ pub(crate) fn handle(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
+    authz: &AuthzContext<'_>,
 ) -> crate::connection::HandlerResponse {
-    answer(cluster, prelude, body).map_or(
+    answer(cluster, prelude, body, authz).map_or(
         crate::connection::HandlerResponse::Close,
         crate::connection::HandlerResponse::Reply,
     )
@@ -40,7 +70,12 @@ struct ResolvedTopic {
 }
 
 /// The `Option` body `handle` wraps: `None` is the close decision.
-fn answer(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) -> Option<Vec<u8>> {
+fn answer(
+    cluster: &Cluster,
+    prelude: RequestPrelude,
+    body: &[u8],
+    authz: &AuthzContext<'_>,
+) -> Option<Vec<u8>> {
     let version = prelude.api_version;
     let request = decode_request(body, version).ok()?;
 
@@ -50,6 +85,10 @@ fn answer(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) -> Option<Vec
     let all_topics = request.topics.is_none()
         || (version == 0 && request.topics.as_ref().is_some_and(Vec::is_empty));
     let names: Option<Vec<String>> = if all_topics {
+        // ⚠️ **Not yet scoped — `M9.10`'s own case.** "Every topic" still
+        // means every topic that exists, not yet every topic this
+        // principal can see; the module doc names this a known, temporary
+        // gap rather than an oversight.
         Some(cluster.topic_names())
     } else {
         // ⚠️ A null NAME inside an entry (v10+ describe-by-topic-id) is a
@@ -65,10 +104,12 @@ fn answer(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) -> Option<Vec
     // Same policy as every other unanswerable shape: close.
     let names = names?;
 
-    let resolved: Vec<ResolvedTopic> = names
-        .into_iter()
-        .map(|name| resolve_topic(cluster, name, version, request.allow_auto_topic_creation))
-        .collect();
+    let mode = ResolveMode {
+        version,
+        all_topics,
+        allow_auto_topic_creation: request.allow_auto_topic_creation,
+    };
+    let resolved = resolve_all(cluster, names, &mode, authz);
 
     let response = MetadataResponse {
         node_id: cluster.node_id,
@@ -91,6 +132,67 @@ fn answer(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) -> Option<Vec
     encode_response_header(&mut out, ApiKey::Metadata, version, prelude.correlation_id).ok()?;
     encode_response(&mut out, version, &response);
     Some(out)
+}
+
+/// The per-response scalars `resolve_all` needs beyond `names` itself,
+/// bundled for the same argument-count reason as [`AuthzContext`].
+struct ResolveMode {
+    version: i16,
+    /// Whether `names` came from the null-topic-array case — `M9.9`'s own
+    /// authorization gate does not run for it yet (`M9.10`'s row).
+    all_topics: bool,
+    allow_auto_topic_creation: bool,
+}
+
+/// Resolves every requested name — authorized first for the
+/// explicitly-named case, `resolve_topic`'s own answer otherwise.
+fn resolve_all(
+    cluster: &Cluster,
+    names: Vec<String>,
+    mode: &ResolveMode,
+    authz: &AuthzContext<'_>,
+) -> Vec<ResolvedTopic> {
+    names
+        .into_iter()
+        .map(|name| {
+            if mode.all_topics || topic_authorized(&name, authz) {
+                resolve_topic(cluster, name, mode.version, mode.allow_auto_topic_creation)
+            } else {
+                ResolvedTopic {
+                    name,
+                    topic_id: [0u8; 16],
+                    error_code: error_codes::TOPIC_AUTHORIZATION_FAILED,
+                    partition_count: 0,
+                }
+            }
+        })
+        .collect()
+}
+
+/// Whether an explicitly-named topic may be resolved at all, before
+/// `resolve_topic` ever runs — `M9.9`'s own gate, the explicitly-named half
+/// of `M9.1`'s verified Kafka finding.
+///
+/// ⚠️ **Fails open, reusing `oqueue_core::authorize`'s own signal.** With no
+/// credential source configured, `M9.7`'s dispatcher gate could never have
+/// refused this connection either — scoping `Metadata` here without
+/// scoping `SaslAuthenticate` would be inconsistent, not more careful.
+/// ⚠️ **Fails closed on everything else**, deliberately conservative: no
+/// principal (should be unreachable — `M9.7`'s own gate already refuses an
+/// unauthenticated connection once credentials are configured) and an
+/// unconstructible topic name (an empty string; `TopicId`'s own invariant)
+/// both answer "no," never a panic or an unwrap.
+fn topic_authorized(name: &str, authz: &AuthzContext<'_>) -> bool {
+    if !authz.credentials_configured {
+        return true;
+    }
+    let Some(principal) = authz.principal else {
+        return false;
+    };
+    let Ok(topic_id) = TopicId::new(name) else {
+        return false;
+    };
+    authz.topic_grants.can_see(principal, &topic_id)
 }
 
 /// Resolves one topic: existing topics report their partitions; a missing
@@ -130,194 +232,4 @@ fn resolve_topic(
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-
-    use super::handle;
-    use crate::testing::{at, fixture};
-    use kafka_protocol::messages::metadata_request::MetadataRequestTopic;
-    use kafka_protocol::messages::{MetadataRequest, MetadataResponse, TopicName};
-    use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
-    use oqueue_codec::apikey::ApiKey;
-    use oqueue_codec::frame::RequestPrelude;
-
-    fn request_bytes(version: i16, topics: Option<Vec<&str>>, allow_create: bool) -> Vec<u8> {
-        let mut request = MetadataRequest::default();
-        request.topics = topics.map(|names| {
-            names
-                .into_iter()
-                .map(|n| {
-                    let mut t = MetadataRequestTopic::default();
-                    t.name = Some(TopicName(StrBytes::from_string(n.to_owned())));
-                    t
-                })
-                .collect()
-        });
-        request.allow_auto_topic_creation = allow_create;
-        let mut out = Vec::new();
-        request.encode(&mut out, version).expect("encodes");
-        out
-    }
-
-    fn prelude(version: i16) -> RequestPrelude {
-        RequestPrelude {
-            api_key: 3,
-            api_version: version,
-            correlation_id: 11,
-        }
-    }
-
-    /// The reply's bytes, or a panic naming the other verdict.
-    fn answered(cluster: &crate::Cluster, prelude: RequestPrelude, body: &[u8]) -> Vec<u8> {
-        match handle(cluster, prelude, body) {
-            crate::connection::HandlerResponse::Reply(out) => out,
-            other => panic!("expected a reply, got {other:?}"),
-        }
-    }
-
-    fn decode(bytes: &[u8], version: i16) -> MetadataResponse {
-        // Metadata responses: header v0 below v9, v1 (tagged) from v9.
-        let header_len = if version >= 9 { 5 } else { 4 };
-        let mut rest = &bytes[header_len..];
-        let r = MetadataResponse::decode(&mut rest, version).expect("decodes");
-        assert!(rest.is_empty());
-        r
-    }
-
-    #[tokio::test]
-    async fn v12_with_the_flag_creates_and_answers() {
-        let fixture = at("h.example", 9092, &[]).await;
-        let cluster = &fixture.cluster;
-        let body = request_bytes(12, Some(vec!["orders"]), true);
-        let out = answered(cluster, prelude(12), &body);
-        let response = decode(&out, 12);
-        assert_eq!(response.brokers.len(), 1);
-        assert_eq!(response.brokers[0].port, 9092);
-        assert_eq!(response.topics.len(), 1);
-        assert_eq!(response.topics[0].error_code, 0);
-        assert_eq!(response.topics[0].partitions.len(), 1);
-        assert_eq!(cluster.partition_count("orders"), Some(1));
-        // From v10 the topic's id rides along -- how id-addressed produce
-        // and fetch learn their targets.
-        assert_eq!(
-            response.topics[0].topic_id,
-            cluster.topic_id("orders").expect("created with an id")
-        );
-        assert_ne!(response.topics[0].topic_id, uuid::Uuid::nil());
-    }
-
-    #[tokio::test]
-    async fn v12_without_the_flag_refuses_the_missing_topic() {
-        let fixture = fixture(&[]).await;
-        let cluster = &fixture.cluster;
-        let body = request_bytes(12, Some(vec!["ghost"]), false);
-        let out = answered(cluster, prelude(12), &body);
-        let response = decode(&out, 12);
-        assert_eq!(
-            response.topics[0].error_code,
-            kafka_protocol::error::ResponseError::UnknownTopicOrPartition.code()
-        );
-        assert_eq!(
-            cluster.partition_count("ghost"),
-            None,
-            "nothing was created"
-        );
-    }
-
-    #[tokio::test]
-    async fn a_null_topic_list_answers_everything() {
-        let fixture = fixture(&[]).await;
-        let cluster = &fixture.cluster;
-        cluster.ensure_topic("a");
-        cluster.ensure_topic("b");
-        let body = request_bytes(12, None, false);
-        let out = answered(cluster, prelude(12), &body);
-        let response = decode(&out, 12);
-        let mut names: Vec<String> = response
-            .topics
-            .iter()
-            .map(|t| t.name.as_ref().expect("named").to_string())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["a", "b"]);
-    }
-
-    #[tokio::test]
-    async fn below_v4_the_wire_has_no_flag_and_creation_is_the_default() {
-        let fixture = fixture(&[]).await;
-        let cluster = &fixture.cluster;
-        // The field is not on the v1 wire at all -- the dependency's encoder
-        // refuses a non-default value there, which itself proves the claim --
-        // and the decoder defaults it true, the historical behaviour this
-        // handler inherits.
-        let body = request_bytes(1, Some(vec!["implicit"]), true);
-        let out = answered(cluster, prelude(1), &body);
-        let response = decode(&out, 1);
-        assert_eq!(response.topics[0].error_code, 0);
-        assert_eq!(cluster.partition_count("implicit"), Some(1));
-    }
-
-    #[tokio::test]
-    async fn v0_empty_array_means_all_topics() {
-        let fixture = fixture(&[]).await;
-        let cluster = &fixture.cluster;
-        cluster.ensure_topic("v0-visible");
-        let body = request_bytes(0, Some(vec![]), true);
-        let out = answered(cluster, prelude(0), &body);
-        let response = decode(&out, 0);
-        assert_eq!(response.topics.len(), 1, "v0's empty array is all-topics");
-    }
-
-    #[tokio::test]
-    async fn from_v1_an_empty_array_means_no_topics() {
-        let fixture = fixture(&[]).await;
-        let cluster = &fixture.cluster;
-        cluster.ensure_topic("hidden");
-        let body = request_bytes(12, Some(vec![]), true);
-        let out = answered(cluster, prelude(12), &body);
-        let response = decode(&out, 12);
-        assert!(response.topics.is_empty());
-    }
-
-    /// The whole route through the dispatcher — `supports()` gate, header
-    /// decode, body slice — not just the handler (round 1's review noted a
-    /// mis-slice would close every connection with nothing failing here).
-    #[tokio::test]
-    async fn metadata_routes_through_the_dispatcher() {
-        use kafka_protocol::messages::RequestHeader;
-        let fixture = at("routed.example", 7, &[]).await;
-        let cluster = std::sync::Arc::clone(&fixture.cluster);
-        let dispatcher = crate::Dispatcher::new(std::sync::Arc::clone(&cluster));
-
-        let mut request = Vec::new();
-        let mut header = RequestHeader::default();
-        header.request_api_key = 3;
-        header.request_api_version = 12;
-        header.correlation_id = 21;
-        header
-            .encode(&mut request, ApiKey::Metadata.request_header_version(12))
-            .expect("header encodes");
-        request.extend_from_slice(&request_bytes(12, Some(vec!["routed"]), true));
-
-        let out = match dispatcher.dispatch(request).await {
-            crate::connection::HandlerResponse::Reply(out) => out,
-            other => panic!("expected a reply, got {other:?}"),
-        };
-        let response = decode(&out, 12);
-        assert_eq!(response.brokers[0].host.as_str(), "routed.example");
-        assert_eq!(response.topics[0].error_code, 0);
-        assert_eq!(cluster.partition_count("routed"), Some(1));
-    }
-
-    #[tokio::test]
-    async fn the_advertised_identity_is_the_configured_one() {
-        let fixture = at("adv.example.test", 31234, &[]).await;
-        let cluster = &fixture.cluster;
-        let body = request_bytes(9, None, false);
-        let out = answered(cluster, prelude(9), &body);
-        let response = decode(&out, 9);
-        assert_eq!(response.brokers[0].host.as_str(), "adv.example.test");
-        assert_eq!(response.brokers[0].port, 31234);
-        let _ = ApiKey::Metadata;
-    }
-}
+mod tests;

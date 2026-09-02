@@ -52,6 +52,12 @@ pub struct Dispatcher {
     /// against (`ADR-0032`, `M9.4`) — empty by construction, matching
     /// `M9.3`'s own shipped "no credential source configured" state.
     credentials: std::sync::Arc<crate::sasl_authenticate::PlainCredentials>,
+    /// Which topics an authenticated principal may see in `Metadata`
+    /// (`M9.8`, `M9.9`) — empty by construction, matching `credentials`'
+    /// own default: nothing configured means nothing to consult, and
+    /// `Metadata`'s own fail-open rule (`credentials` empty) means this
+    /// field is not even read until a credential source exists.
+    topic_grants: std::sync::Arc<oqueue_core::TopicGrants>,
 }
 
 impl Dispatcher {
@@ -78,6 +84,7 @@ impl Dispatcher {
             session: crate::session::Session::default(),
             tls: false,
             credentials: std::sync::Arc::default(),
+            topic_grants: std::sync::Arc::default(),
         }
     }
 
@@ -108,6 +115,23 @@ impl Dispatcher {
         credentials: crate::sasl_authenticate::PlainCredentials,
     ) -> Self {
         self.credentials = std::sync::Arc::new(credentials);
+        self
+    }
+
+    /// Which topics an authenticated principal may see in `Metadata`
+    /// (`M9.8`, `M9.9`).
+    ///
+    /// ⚠️ **"From configuration," never invented here** — `with_credentials`'
+    /// own rule applied to a second value: reading real grants (a file, an
+    /// environment variable) is `bin/oqueue`'s job, the composition root;
+    /// this crate only carries whatever result it is handed. v1 ships no
+    /// `CreateTopics`/`DescribeAcls`/`CreateAcls`/`DeleteAcls` wire API, so
+    /// there is no live path that calls `TopicGrants::grant`/`revoke` yet —
+    /// a composer would build one once, at startup, from static
+    /// configuration.
+    #[must_use]
+    pub fn with_topic_grants(mut self, topic_grants: oqueue_core::TopicGrants) -> Self {
+        self.topic_grants = std::sync::Arc::new(topic_grants);
         self
     }
 }
@@ -170,7 +194,7 @@ impl Dispatcher {
         };
         match api_key {
             ApiKey::ListOffsets => crate::listoffsets::handle(&self.cluster, prelude, body),
-            ApiKey::Metadata => crate::metadata::handle(&self.cluster, prelude, body),
+            ApiKey::Metadata => self.metadata_handle(prelude, body),
             ApiKey::Produce => {
                 crate::produce::handle(&self.cluster, &self.session, prelude, body).await
             }
@@ -190,6 +214,25 @@ impl Dispatcher {
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
         }
+    }
+
+    /// `Metadata`'s own arm, pulled out of `dispatch`'s `match` purely to
+    /// keep that function under the fifty-line limit — building
+    /// [`crate::metadata::AuthzContext`] needs the session's current
+    /// principal bound to a local first, which the match arm's own line
+    /// budget could not absorb alongside every other API.
+    fn metadata_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::metadata::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &crate::metadata::AuthzContext {
+                principal: principal.as_ref(),
+                credentials_configured: !self.credentials.is_empty(),
+                topic_grants: &self.topic_grants,
+            },
+        )
     }
 }
 
