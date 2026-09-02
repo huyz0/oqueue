@@ -108,7 +108,7 @@ Several close analogs surfaced in [03-competitive-landscape.md](03-competitive-l
 - **Index granularity**: coarse coordinator index + in-object footer index, forced by the state arithmetic. (resolves #8)
 - **Deployment**: co-located roles, no dedicated metadata tier; a subset of nodes carry metadata shards while the majority stay purely stateless. Single binary, roles by config.
 
-**Status: working position, not a commitment.** Six items still need verification before any of it is settled — most importantly the assumption about Kafka's `Metadata` authorization-filtering implementation, which the whole design rests on. See [15](15-scale-architecture-position.md) §8.
+**Status: working position, not a commitment.** ⚠️ **Five items still need verification, not six** — the assumption this once led with, Kafka's `Metadata` authorization-filtering implementation, was the load-bearing one and is now settled: **verified 2026-09-02, `M9.1`**, against real Kafka source, both the protocol-level and implementation-level claims hold. See [15](15-scale-architecture-position.md) §8, item 1. What remains open there: WarpStream's multi-VC/shared-bucket behavior, median/max partitions per topic and the active fraction, whether the 1000-partition ceiling is hard or soft, the aggregate throughput target, and the Redpanda Cloud Topics LSM-metastore question.
 
 ---
 

@@ -1,0 +1,53 @@
+{
+  "commits": [
+    "7ce2e365984935574f69c3585358617b2a0cc5f1",
+    "df2ea917b21b791b5c90d7b19237294cbdc7198b",
+    "1a38c79596af89c9baa3ad744e33bdee2e133eda",
+    "b629251cf33d9b47f02201761abefc3b962af513",
+    "4d57463dbbc604b3baae99fb6b1b36596d66ba82",
+    "420ffe001fc2e7b06897b267cea1ea0a1dba8bc5",
+    "6e9aa9ba74f6053181721ef903b9936a08e980a9",
+    "4ac4213e993b98f4411ca205d8431b013b1bdab9",
+    "c86b519f096816d90dc37770ec4d4af6462494c9",
+    "222234f90ef2b7865e40be5ac3947b699234098c",
+    "7211557d18af4f4f74f2d05f4f73e873c434c195",
+    "eeb4068081643a94563238e4c4a1706a6271787e",
+    "859b7dc9c980ca027c8ff301e6352639764c2e5a",
+    "8d849858fb5bdb1e19ec93c5d2ca8803d09cb8d7",
+    "1e5e0c2c295f3c5fc351ca6158d87440d01be03f",
+    "0ff0e39ed29c527d7a5ae1a95a26a0331cfa20ab",
+    "139a48d78c24873f88a0692969f03e82f366ff9a",
+    "7fed881c116cc19ba4ee1eb1d31c89ec6df82cf7",
+    "3a9ea79a3c085386de51f859028b17a73733bb8f",
+    "192931107dd425eb3e2c284b32111cdd548f3a15",
+    "e115f02d526f82b1be40dffe8d9c3984f3b4b2a2"
+  ],
+  "findings": [
+    {
+      "evidence": "bin/oqueue/src/serve.rs:157, and a grep across bin/oqueue/src/*.rs for all four builder methods (zero hits). M9.3/M9.4/M9.5/M9.16's own doc comments each name reading real configuration as bin/oqueue's job, the composition root, but no M9 task was scoped to do it.",
+      "id": "60cb5e1ed35c",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "M9's own mechanism -- TLS termination, SASL/PLAIN, the per-principal forward index, and quotas -- is unreachable from the shipped binary: bin/oqueue serve's composition root still calls Dispatcher::new(cluster) with none of .tls_terminated()/.with_credentials()/.with_topic_grants()/.with_quota().",
+      "task_id": "M9.21"
+    },
+    {
+      "evidence": "docs/internal/product/milestones/M9.md, 'Decisions required first' table -- fixed in this same commit (struck through, annotated with ADR-0032), matching M1.md's object_store row and M3.md's bounded-staleness row's own precedent for how a resolved decision-table row stays in the table.",
+      "id": "79ab4eb4bc10",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "M9.md's own 'SASL mechanisms for v1' decision-table row was never marked resolved against ADR-0032, unlike the TLS-backend row two paragraphs below it."
+    },
+    {
+      "evidence": "docs/researches/10-open-questions.md line 111 versus docs/researches/15-scale-architecture-position.md \u00a78 item 1, already struck through by M9.1 -- fixed in this same commit.",
+      "id": "432d5460419f",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "docs/researches/10-open-questions.md's 'Log of resolved decisions' summary for the 2026-08-13 scale-architecture entry still said 'six items still need verification... most importantly [Kafka's Metadata authorization-filtering behavior]' after M9.1 verified exactly that item against real Kafka source."
+    }
+  ],
+  "milestone": "M9",
+  "recorded_at": "2026-09-02T17:18:27Z",
+  "reviewer": "milestone-reviewer subagent (Claude Sonnet 5)",
+  "verdict": "changes-requested"
+}
