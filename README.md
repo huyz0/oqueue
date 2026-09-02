@@ -20,9 +20,12 @@ A Kafka-protocol-compatible message broker in Rust that uses object storage
 > (`ADR-0019`) a real client can produce and fetch against — and M3's: the
 > coordinator, where offsets are sequenced and a reader resolves them through
 > an index rather than by listing anything — and M10's: the deterministic
-> simulation harness every later failure claim is verified by. M11, in
-> progress, is idempotent producers — deduplicating a retried batch by
-> sequence number, which `enable.idempotence=true` needs by default.
+> simulation harness every later failure claim is verified by, and M11's:
+> idempotent producers — deduplicating a retried batch by sequence number,
+> which a real client's own `enable.idempotence` opt-in needs. M9, in
+> progress, is authentication, authorization, and tenant isolation — every
+> operation scoped to a principal, and a `Metadata` request costing
+> O(topics this principal can see) rather than O(topics that exist).
 >
 > What is here is worth reading if you are interested in the design space:
 > ~110,000 words of cited research on object-storage-native streaming, and an
@@ -148,7 +151,8 @@ workspace standard in
 | M2 | Kafka wire protocol: produce and fetch | complete |
 | M3 | Coordinator: offset sequencing and the index | complete |
 | M10 | Deterministic simulation and fault injection | complete |
-| M11 | Idempotent producers | in progress |
+| M11 | Idempotent producers | complete |
+| M9 | Authentication, authorization, tenant isolation | in progress |
 | M4 | Consumer groups | not started |
 | M5 | Compaction and retention | not started |
 | M6 | Recovery and failover | not started |

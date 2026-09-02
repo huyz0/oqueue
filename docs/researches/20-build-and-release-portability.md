@@ -178,7 +178,7 @@ Both Linux architectures are first-class. Graviton is a plausible deployment tar
 
 ## 9. Open questions
 
-- **Which TLS backend?** `rustls` + `aws-lc-rs` (needs cmake, and NASM on Windows — irrelevant per §6) vs `ring` vs `rustls` with a pure-Rust provider. This is a build-portability decision as much as a crypto one, and it belongs with [05](05-rust-ecosystem.md)'s crate selection.
+- ~~**Which TLS backend?**~~ — **resolved 2026-08-17, `ADR-0012`: `ring`** for the default build, with `aws-lc-rs` behind a `fips` feature for `M8`'s artifact only — `docs/internal/product/decisions/0012-object-store-tls-provider.md`, struck the same way in `docs/researches/10-open-questions.md` #36 (build) by `M1.45`. This entry was never updated when that one was; both should read the same now. ⚠️ **`M1.42` found a cost the ADR itself missed**: `ring`'s build script needs a *target* `cc`, so any crate holding it drops out of the aarch64 check without one.
 - **Does `object_store`'s dependency tree cross-compile cleanly to aarch64-musl?** The four-way matrix in §7 is asserted, not verified. One CI run settles it, and it should be done before the matrix is promised.
 - **Is a `-v3` artifact worth publishing later?** Only measurement answers it, and only after runtime dispatch (§5) is in place so the comparison is meaningful.
 - **glibc floor: 2.28 or 2.34?** 2.28 covers RHEL 8, which reaches EOL in 2029. If we don't intend to support RHEL 8, 2.34 is a freer choice. A product decision, not a technical one.

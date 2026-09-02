@@ -70,9 +70,9 @@ original ten did not reach a shippable v1. Sequence:
 | 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | see `backlog.md` ⚠️ | `scripts/gates/m2-complete.sh` | complete |
 | 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | see `backlog.md` ⚠️ | `scripts/gates/m3-complete.sh` | complete |
 | 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | see `backlog.md` ⚠️ | `scripts/gates/m10-complete.sh` | complete |
-| 7 | [M9](milestones/M9.md) | Authentication, authorization, tenant isolation | feature | M2, M3 | 16 | `scripts/gates/m9-complete.sh` | not started |
+| 7 | [M9](milestones/M9.md) | Authentication, authorization, tenant isolation | feature | M2, M3 | see `backlog.md` ⚠️ | `scripts/gates/m9-complete.sh` | in progress |
 | 8 | [M4](milestones/M4.md) | Consumer groups | functional | M3, M9 | 17 | `scripts/gates/m4-complete.sh` | not started |
-| 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | in progress |
+| 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | see `backlog.md` ⚠️ | `scripts/gates/m11-complete.sh` | complete |
 | 10 | [M5](milestones/M5.md) | Compaction and retention | functional | M3, M10 | 20 | `scripts/gates/m5-complete.sh` | not started |
 | 11 | [M6](milestones/M6.md) | Recovery and failover | non-functional | M3, M10 | 16 | `scripts/gates/m6-complete.sh` | not started |
 | 12 | [M7](milestones/M7.md) | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | not started |
