@@ -1,0 +1,30 @@
+{
+  "commits": [
+    "61772338a24f12db8e8d814ca58cf595f3c80b43",
+    "7801b04bab2abb3b99ce9e9470f9b1be4c8db5bd",
+    "e1d36d09859b9ce033553a8b1c8407179bfcb12e",
+    "070efc194ea02016677ec7215d05bc3651861070"
+  ],
+  "findings": [
+    {
+      "evidence": "M11.11's commit message (2b4f691, round 2 of its own review): \"docs/internal/product/milestones/M2.md and docs/internal/product/decisions/0031-...md both still assert the disproven claim in prose ... outside this task's own enumerated fix-list ... and outside check-idempotence-enabled.sh's regex reach\". Compare current docs/internal/product/milestones/M2.md line 155 (\"librdkafka enables the idempotent path by default\") and docs/internal/product/decisions/0031-idempotent-producer-state-lives-with-the-allocator.md line 166 (\"librdkafka enables the idempotent path *by default*\") -- both unchanged since M11.11. M11.13 (6177233) harvested the doc-02 instance of the same disproven claim (M11.15) but not these two, immediately-preceding, explicitly-named ones.",
+      "id": "8410e4788062",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "M11.13's round-1 harvest (review.md rule 15, settled by ADR-0016) missed two commit-body minors M11.11's own round-2 review had explicitly disclosed one commit earlier: M2.md and ADR-0031 both still assert the disproven \"librdkafka enables idempotence by default\" claim in prose.",
+      "task_id": "M11.18"
+    },
+    {
+      "evidence": "docs/researches/02-kafka-protocol-compatibility.md line 267: \"Enabled via enable.idempotence=true (and the default in many modern client configurations)\" -- uncorrected, same document, same false generalization M11.15 fixed at line 89. M11.15's own commit message describes the fix as scoped to \"the affected bullet\" (\u00a71.6) without checking the rest of the document for the same claim.",
+      "id": "f93129fcdb18",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "M11.15's fix corrected only one of two occurrences of the disproven \"idempotence defaults on\" generalization within docs/researches/02 itself -- section 4.2 repeats the near-identical claim the section 1.6 fix left standing 178 lines later.",
+      "task_id": "M11.17"
+    }
+  ],
+  "milestone": "M11",
+  "recorded_at": "2026-09-02T02:56:28Z",
+  "reviewer": "Claude Sonnet 5 (milestone-review subagent, round 2)",
+  "verdict": "changes-requested"
+}
