@@ -38,7 +38,7 @@ pub mod metadata;
 pub mod produce;
 mod read;
 mod region;
-mod sasl_authenticate;
+pub mod sasl_authenticate;
 mod sasl_handshake;
 pub mod session;
 #[cfg(test)]
@@ -51,5 +51,6 @@ pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, 
 pub use dispatch::Dispatcher;
 pub use fetch::{Allowance, MAX_PARK_MS};
 pub use read::MAX_FAILED_FETCHES_PER_REQUEST;
+pub use sasl_authenticate::{PlainCredential, PlainCredentials};
 pub use session::Session;
 pub use writer_id::WriterId;

@@ -30,6 +30,15 @@ use oqueue_codec::versions::supports;
 pub struct Dispatcher {
     cluster: std::sync::Arc<crate::cluster::Cluster>,
     session: crate::session::Session,
+    /// Whether this connection is TLS-terminated — `ADR-0032`'s prerequisite
+    /// for `SASL/PLAIN` to ever succeed. `false` by construction
+    /// ([`Dispatcher::new`]): the honest default until a composer that
+    /// actually knows says otherwise ([`Dispatcher::tls_terminated`]).
+    tls: bool,
+    /// The `SASL/PLAIN` credentials this connection may authenticate
+    /// against (`ADR-0032`, `M9.4`) — empty by construction, matching
+    /// `M9.3`'s own shipped "no credential source configured" state.
+    credentials: std::sync::Arc<crate::sasl_authenticate::PlainCredentials>,
 }
 
 impl Dispatcher {
@@ -42,12 +51,51 @@ impl Dispatcher {
     /// read-your-writes is concerned, and sharing one would let an unrelated
     /// client's produce raise the freshness bar for everybody. Sharing the
     /// `Cluster` is the point; sharing the `Dispatcher` is not.
+    ///
+    /// ⚠️ **Not TLS-terminated, no credentials, by default.** Every one of
+    /// this workspace's existing call sites gets exactly `M9.3`'s own
+    /// shipped behaviour unchanged: `SASL/PLAIN` refuses every attempt.
+    /// [`Dispatcher::tls_terminated`]/[`Dispatcher::with_credentials`] are
+    /// additive builder steps a composer that actually knows opts into,
+    /// never a silent default this constructor could get wrong.
     #[must_use]
     pub fn new(cluster: std::sync::Arc<crate::cluster::Cluster>) -> Self {
         Self {
             cluster,
             session: crate::session::Session::default(),
+            tls: false,
+            credentials: std::sync::Arc::default(),
         }
+    }
+
+    /// Marks this dispatcher's connection as TLS-terminated.
+    ///
+    /// ⚠️ **The composer's claim, not this crate's to verify.** Whichever
+    /// listener accepted the connection (`crate::tls`'s own capability,
+    /// `M9.5`) is the one place that can honestly answer this — `M9.5`'s own
+    /// backlog row named wiring a real TLS listener into `bin/oqueue serve`
+    /// as separate, not-yet-scoped work; this method is where that answer
+    /// will land once it exists.
+    #[must_use]
+    pub const fn tls_terminated(mut self) -> Self {
+        self.tls = true;
+        self
+    }
+
+    /// The `SASL/PLAIN` credentials this dispatcher's connection may
+    /// authenticate against (`ADR-0032`).
+    ///
+    /// ⚠️ **"From configuration," never invented here.** Reading that
+    /// configuration (a file, an environment variable) is `bin/oqueue`'s
+    /// job, the composition root — this crate only carries whatever result
+    /// it is handed.
+    #[must_use]
+    pub fn with_credentials(
+        mut self,
+        credentials: crate::sasl_authenticate::PlainCredentials,
+    ) -> Self {
+        self.credentials = std::sync::Arc::new(credentials);
+        self
     }
 }
 
@@ -101,7 +149,9 @@ impl Dispatcher {
             }
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),
             ApiKey::SaslHandshake => crate::sasl_handshake::handle(prelude, body),
-            ApiKey::SaslAuthenticate => crate::sasl_authenticate::handle(prelude, body),
+            ApiKey::SaslAuthenticate => {
+                crate::sasl_authenticate::handle(prelude, body, self.tls, &self.credentials)
+            }
             // Answered above by the early return; named rather than a
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
