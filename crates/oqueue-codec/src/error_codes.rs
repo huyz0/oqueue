@@ -91,6 +91,13 @@ pub const DUPLICATE_SEQUENCE_NUMBER: i16 = 46;
 /// its id (47) — a zombie, not something a retry could mend. `M11.7`,
 /// `RejectReason::StaleEpoch` mapped to the wire.
 pub const INVALID_PRODUCER_EPOCH: i16 = 47;
+/// The `SaslHandshake` mechanism the client asked for is not one this
+/// broker enables (33) — `M9.3`; `ADR-0032`, only `PLAIN`.
+pub const UNSUPPORTED_SASL_MECHANISM: i16 = 33;
+/// A `SaslAuthenticate` exchange did not succeed (58) — `M9.3`'s own
+/// pre-`M9.4` answer (no credential source configured yet) and `M9.4`'s
+/// own answer to a real, wrong credential alike.
+pub const SASL_AUTHENTICATION_FAILED: i16 = 58;
 
 #[cfg(test)]
 mod tests {
@@ -167,6 +174,19 @@ mod tests {
         assert_eq!(
             super::INVALID_PRODUCER_EPOCH,
             ResponseError::InvalidProducerEpoch.code()
+        );
+    }
+
+    /// `M9.3`'s two SASL codes, same oracle.
+    #[test]
+    fn the_sasl_codes_match_the_dependency() {
+        assert_eq!(
+            super::UNSUPPORTED_SASL_MECHANISM,
+            ResponseError::UnsupportedSaslMechanism.code()
+        );
+        assert_eq!(
+            super::SASL_AUTHENTICATION_FAILED,
+            ResponseError::SaslAuthenticationFailed.code()
         );
     }
 }

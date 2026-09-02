@@ -100,8 +100,10 @@ impl Dispatcher {
                 crate::fetch::handle(&self.cluster, &self.session, prelude, body).await
             }
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),
+            ApiKey::SaslHandshake => crate::sasl_handshake::handle(prelude, body),
+            ApiKey::SaslAuthenticate => crate::sasl_authenticate::handle(prelude, body),
             // Answered above by the early return; named rather than a
-            // wildcard so a sixth API cannot be silently swallowed here.
+            // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
         }
     }

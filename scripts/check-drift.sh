@@ -395,6 +395,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/error_codes.rs|OUT_OF_ORDER_SEQUENCE_NUMBER"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|DUPLICATE_SEQUENCE_NUMBER"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|INVALID_PRODUCER_EPOCH"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_SASL_MECHANISM"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|SASL_AUTHENTICATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   # --- batch.rs: RecordBatch v2's fixed layout
   ["crates/oqueue-codec/src/batch.rs|BATCH_HEADER_LEN"]="RecordBatch v2's fixed header length"
   ["crates/oqueue-codec/src/batch.rs|CRC_COVERAGE_START"]="RecordBatch v2's fixed CRC coverage offset"
@@ -415,6 +417,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/listoffsets.rs|UNSET"]="a protocol sentinel"
   ["crates/oqueue-broker/src/listoffsets.rs|VERSION"]="a test's own advertised-version literal, inside #[cfg(test)] mod tests -- not a production bound, and the file-path exclusion below only catches a tests/ directory, not an inline test module"
   ["crates/oqueue-broker/src/init_producer_id.rs|VERSION"]="a test's own advertised-version literal, inside #[cfg(test)] mod tests -- same shape as listoffsets.rs's own entry above"
+  ["crates/oqueue-broker/src/sasl_handshake/tests.rs|VERSION"]="a test's own advertised-version literal, split into its own tests.rs file at the 500-line boundary's own precedent -- same shape as listoffsets.rs's own entry above"
+  ["crates/oqueue-broker/src/sasl_authenticate/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )

@@ -40,6 +40,8 @@ pub mod listoffsets;
 pub mod metadata;
 pub mod produce;
 pub mod records;
+pub mod sasl_authenticate;
+pub mod sasl_handshake;
 pub mod varint;
 pub mod versions;
 pub mod wire;

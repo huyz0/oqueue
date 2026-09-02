@@ -38,6 +38,8 @@ pub mod metadata;
 pub mod produce;
 mod read;
 mod region;
+mod sasl_authenticate;
+mod sasl_handshake;
 pub mod session;
 #[cfg(test)]
 mod testing;

@@ -13,8 +13,10 @@
 use crate::apikey::ApiKey;
 
 /// One advertised API: the version range this broker serves, and where the
-/// wire goes flexible (`None` — never — has no instance in this table yet,
-/// but `SaslHandshake` is the protocol's standing example).
+/// wire goes flexible.
+///
+/// `None` — never — is `SaslHandshake`'s own row (`M9.3`): the protocol's
+/// standing example for the case, now an instance of it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Advertised {
     /// The API this row advertises.
@@ -34,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 6] = [
+pub static ADVERTISED: [Advertised; 8] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -65,6 +67,17 @@ pub static ADVERTISED: [Advertised; 6] = [
         flexible_from: Some(9),
     },
     Advertised {
+        // ⚠️ **Never flexible, at any version** — the dependency's own
+        // `SaslHandshakeRequest::header_version` returns `1` regardless of
+        // `version` (`apikey.rs`'s own doc, `M9.3`). `flexible_from: None`
+        // is what makes that fall out of `ApiKey::is_flexible` rather than
+        // needing a second special case beside `ApiVersions`'s own.
+        api_key: ApiKey::SaslHandshake,
+        min: 0,
+        max: 1,
+        flexible_from: None,
+    },
+    Advertised {
         api_key: ApiKey::ApiVersions,
         min: 0,
         max: 3,
@@ -83,6 +96,12 @@ pub static ADVERTISED: [Advertised; 6] = [
         api_key: ApiKey::InitProducerId,
         min: 0,
         max: 4,
+        flexible_from: Some(2),
+    },
+    Advertised {
+        api_key: ApiKey::SaslAuthenticate,
+        min: 0,
+        max: 2,
         flexible_from: Some(2),
     },
 ];
@@ -112,6 +131,8 @@ mod tests {
         ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse,
         InitProducerIdRequest, InitProducerIdResponse, ListOffsetsRequest, ListOffsetsResponse,
         MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
+        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+        SaslHandshakeResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -152,6 +173,14 @@ mod tests {
                         InitProducerIdRequest::header_version(version),
                         InitProducerIdResponse::header_version(version),
                     ),
+                    ApiKey::SaslHandshake => (
+                        SaslHandshakeRequest::header_version(version),
+                        SaslHandshakeResponse::header_version(version),
+                    ),
+                    ApiKey::SaslAuthenticate => (
+                        SaslAuthenticateRequest::header_version(version),
+                        SaslAuthenticateResponse::header_version(version),
+                    ),
                 };
                 assert_eq!(
                     row.api_key.request_header_version(version),
@@ -178,7 +207,7 @@ mod tests {
         fn pin<T: HeaderVersion>(row: &Advertised) {
             let from = row
                 .flexible_from
-                .expect("every advertised API in this table has a cutover");
+                .expect("this row's cutover exists -- never-flexible rows use pin_never_flexible");
             assert_eq!(
                 T::header_version(from),
                 2,
@@ -194,14 +223,29 @@ mod tests {
                 );
             }
         }
+        // The `flexible_from: None` counterpart: every advertised version
+        // stays at header version 1, never 2 -- `SaslHandshake`'s own
+        // permanent case, pinned rather than left to `pin`'s `.expect()`.
+        fn pin_never_flexible<T: HeaderVersion>(row: &Advertised) {
+            for version in row.min..=row.max {
+                assert_eq!(
+                    T::header_version(version),
+                    1,
+                    "{:?} v{version} must never go flexible",
+                    row.api_key
+                );
+            }
+        }
         for row in &ADVERTISED {
             match row.api_key {
                 ApiKey::Produce => pin::<ProduceRequest>(row),
                 ApiKey::Fetch => pin::<FetchRequest>(row),
                 ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
+                ApiKey::SaslHandshake => pin_never_flexible::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => pin::<InitProducerIdRequest>(row),
+                ApiKey::SaslAuthenticate => pin::<SaslAuthenticateRequest>(row),
             }
         }
     }
@@ -227,8 +271,10 @@ mod tests {
                 ApiKey::Fetch => within::<FetchRequest>(row),
                 ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
+                ApiKey::SaslHandshake => within::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),
+                ApiKey::SaslAuthenticate => within::<SaslAuthenticateRequest>(row),
             }
         }
     }
@@ -265,7 +311,7 @@ mod tests {
         assert!(!supports(ApiKey::Produce, 14));
         assert!(!supports(ApiKey::ApiVersions, 4), "v4 is not advertised");
         // ⚠️ An API this broker does not serve can no longer even be named:
-        // our `ApiKey` has only the four served variants (`ADR-0019`), so
+        // our `ApiKey` has only the served variants (`ADR-0019`), so
         // every variant is in the table and the unserved case is
         // `ApiKey::from_i16` returning `None` (pinned in `apikey`), not a
         // table miss. So this asserts the table's own completeness instead.

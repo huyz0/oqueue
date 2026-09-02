@@ -43,6 +43,56 @@ pub fn read_nullable_string<'a>(
     }
 }
 
+/// A string a schema declares **non-nullable**, compact when `flexible`
+/// else legacy — [`put_string`]'s read-side counterpart.
+///
+/// `M9.3`, the same gap `put_string`'s own doc names: a field the schema
+/// cannot express as absent should not decode to one that silently is.
+///
+/// # Errors
+/// [`DecodeError::UnexpectedNull`] if the wire encodes null; otherwise as
+/// [`read_nullable_string`].
+pub fn read_string<'a>(cur: &mut Cursor<'a>, flexible: bool) -> Result<&'a str, DecodeError> {
+    let at = cur.position();
+    read_nullable_string(cur, flexible)?.ok_or(DecodeError::UnexpectedNull { at })
+}
+
+/// Bytes a schema declares **non-nullable**, compact when `flexible` else
+/// legacy (`i32`-length-prefixed). [`put_bytes`]'s read-side counterpart.
+///
+/// ⚠️ **Bounded by what remains, not a magic constant** — `compress.rs`'s
+/// own precedent for a length nothing else caps: [`Cursor::take`] inside
+/// [`Cursor::read_length_prefixed`] refuses a length past the buffer
+/// regardless, so `remaining()` is a real bound, not a formality.
+///
+/// # Errors
+/// [`DecodeError::UnexpectedNull`] if the compact encoding is null;
+/// otherwise the legacy path's [`DecodeError::NegativeLength`] /
+/// [`DecodeError::LengthOutOfBounds`] / [`DecodeError::UnexpectedEof`].
+pub fn read_bytes<'a>(cur: &mut Cursor<'a>, flexible: bool) -> Result<&'a [u8], DecodeError> {
+    if flexible {
+        let at = cur.position();
+        read_compact_nullable_bytes(cur)?.ok_or(DecodeError::UnexpectedNull { at })
+    } else {
+        let max = u64::try_from(cur.remaining()).unwrap_or(u64::MAX);
+        cur.read_length_prefixed(max)
+    }
+}
+
+/// Appends bytes a schema declares **non-nullable**, compact when
+/// `flexible` else legacy.
+///
+/// [`put_string`]'s own precedent: a `&[u8]` rather than an `Option`, so
+/// the writer cannot express a null a non-nullable field must not carry.
+pub fn put_bytes(buf: &mut Vec<u8>, flexible: bool, value: &[u8]) {
+    if flexible {
+        put_compact_nullable_bytes(buf, Some(value));
+    } else {
+        put_i32(buf, i32::try_from(value.len()).unwrap_or(i32::MAX));
+        buf.extend_from_slice(value);
+    }
+}
+
 /// Appends a string a schema declares **non-nullable**, compact when
 /// `flexible` else legacy.
 ///
@@ -324,169 +374,4 @@ pub fn put_tagged_fields(buf: &mut Vec<u8>, fields: &TaggedFields) {
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-
-    use super::*;
-
-    #[test]
-    fn compact_string_round_trips_including_null_and_empty() {
-        for value in [Some("hello"), Some(""), None] {
-            let mut buf = Vec::new();
-            put_compact_nullable_string(&mut buf, value);
-            let mut cur = Cursor::new(&buf);
-            let got = read_compact_nullable_string(&mut cur).expect("decodes");
-            assert_eq!(got, value);
-            assert_eq!(cur.remaining(), 0, "the whole field is consumed");
-        }
-    }
-
-    #[test]
-    fn a_non_null_compact_string_rejects_the_null_encoding() {
-        let mut buf = Vec::new();
-        put_compact_nullable_string(&mut buf, None);
-        let mut cur = Cursor::new(&buf);
-        assert!(matches!(
-            read_compact_string(&mut cur),
-            Err(DecodeError::UnexpectedNull { .. })
-        ));
-    }
-
-    #[test]
-    fn compact_bytes_round_trip() {
-        for value in [Some(&b"\x00\x01\xff"[..]), Some(&b""[..]), None] {
-            let mut buf = Vec::new();
-            put_compact_nullable_bytes(&mut buf, value);
-            let mut cur = Cursor::new(&buf);
-            assert_eq!(
-                read_compact_nullable_bytes(&mut cur).expect("decodes"),
-                value
-            );
-        }
-    }
-
-    #[test]
-    fn a_length_past_the_input_is_rejected_before_any_read() {
-        // uvarint(1000 + 1) claims a 1000-byte string in a 3-byte buffer.
-        let mut buf = Vec::new();
-        put_compact_len(&mut buf, Some(1000));
-        let mut cur = Cursor::new(&buf);
-        assert!(matches!(
-            read_compact_nullable_string(&mut cur),
-            Err(DecodeError::LengthOutOfBounds { .. })
-        ));
-    }
-
-    #[test]
-    fn an_array_length_is_bounded_by_remaining() {
-        // The DoS shape in miniature: a huge count in a tiny buffer.
-        let mut buf = Vec::new();
-        put_compact_array_len(&mut buf, Some(2_000_000_000));
-        let mut cur = Cursor::new(&buf);
-        assert!(
-            matches!(
-                read_compact_array_len(&mut cur),
-                Err(DecodeError::LengthOutOfBounds { .. })
-            ),
-            "a count past the input is refused, never speculatively sized"
-        );
-    }
-
-    #[test]
-    fn an_empty_array_and_a_null_array_are_distinct() {
-        let mut empty = Vec::new();
-        put_compact_array_len(&mut empty, Some(0));
-        let mut null = Vec::new();
-        put_compact_array_len(&mut null, None);
-        assert_eq!(
-            read_compact_array_len(&mut Cursor::new(&empty)).expect("decodes"),
-            Some(0)
-        );
-        assert_eq!(
-            read_compact_array_len(&mut Cursor::new(&null)).expect("decodes"),
-            None
-        );
-    }
-
-    #[test]
-    fn tagged_fields_round_trip_preserving_unknown_tags() {
-        let fields = TaggedFields {
-            unknown: vec![
-                RawTaggedField {
-                    tag: 0,
-                    data: vec![1, 2, 3],
-                },
-                RawTaggedField {
-                    tag: 7,
-                    data: vec![],
-                },
-            ],
-        };
-        let mut buf = Vec::new();
-        put_tagged_fields(&mut buf, &fields);
-        let mut cur = Cursor::new(&buf);
-        assert_eq!(read_tagged_fields(&mut cur).expect("decodes"), fields);
-        assert_eq!(cur.remaining(), 0);
-    }
-
-    #[test]
-    fn the_empty_tagged_section_is_a_single_zero_byte() {
-        let mut buf = Vec::new();
-        put_tagged_fields(&mut buf, &TaggedFields::default());
-        assert_eq!(buf, [0]);
-        let mut cur = Cursor::new(&buf);
-        assert_eq!(
-            read_tagged_fields(&mut cur).expect("decodes"),
-            TaggedFields::default()
-        );
-    }
-
-    #[test]
-    fn a_tagged_field_size_past_the_input_is_rejected() {
-        let mut buf = Vec::new();
-        put_unsigned_varint(&mut buf, 1); // one field
-        put_unsigned_varint(&mut buf, 5); // tag 5
-        put_unsigned_varint(&mut buf, 200); // claims 200 bytes
-        buf.push(0xAB); // but only one follows
-        let mut cur = Cursor::new(&buf);
-        assert!(matches!(
-            read_tagged_fields(&mut cur),
-            Err(DecodeError::LengthOutOfBounds { .. })
-        ));
-    }
-
-    /// Golden byte vectors, computed by hand from the KIP-482 spec: a
-    /// compact length is `uvarint(len + 1)`, null is `uvarint(0)`. These pin
-    /// the encoding against the specification itself, independent of any
-    /// other implementation — self-consistent round trips could agree on a
-    /// wrong encoding, but these cannot. ⚠️ Whole-message byte-compatibility
-    /// against `kafka-protocol`'s public `Encodable`/`Decodable` (its
-    /// primitive `Encoder`/`Decoder` are private) is `M2.30`-`M2.34`'s
-    /// differential, where the message types exist to drive it.
-    #[test]
-    fn the_encoding_matches_the_spec_byte_for_byte() {
-        let mut buf = Vec::new();
-        put_compact_string(&mut buf, "hello");
-        assert_eq!(buf, [0x06, b'h', b'e', b'l', b'l', b'o']); // uvarint(6), then 5 bytes
-
-        buf.clear();
-        put_compact_nullable_string(&mut buf, Some(""));
-        assert_eq!(buf, [0x01]); // uvarint(1) = empty
-
-        buf.clear();
-        put_compact_nullable_string(&mut buf, None);
-        assert_eq!(buf, [0x00]); // uvarint(0) = null
-
-        buf.clear();
-        put_compact_nullable_bytes(&mut buf, Some(&[0x00, 0x01, 0xff]));
-        assert_eq!(buf, [0x04, 0x00, 0x01, 0xff]); // uvarint(4), then 3 bytes
-
-        buf.clear();
-        put_compact_array_len(&mut buf, Some(3));
-        assert_eq!(buf, [0x04]); // uvarint(4) = 3 elements
-
-        buf.clear();
-        put_compact_array_len(&mut buf, None);
-        assert_eq!(buf, [0x00]); // uvarint(0) = null array
-    }
-}
+mod tests;

@@ -4,7 +4,10 @@
 //! For every `(api, version)` pair in `ADVERTISED`, a minimal valid
 //! request through the public [`Handler`] seam gets a real answer —
 //! never a closed connection, never error 35 — which is
-//! `m2-complete.sh`'s "the matrix is honest" leg.
+//! `m2-complete.sh`'s "the matrix is honest" leg. ⚠️ **One row's own
+//! documented behaviour is a refusal, not a success** —
+//! [`expected_error_code`] is where that is named rather than assumed
+//! away.
 
 #![allow(clippy::expect_used)]
 
@@ -13,7 +16,7 @@ use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
 use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
 use kafka_protocol::messages::{
     ApiVersionsRequest, FetchRequest, InitProducerIdRequest, MetadataRequest, ProduceRequest,
-    RequestHeader, TopicName,
+    RequestHeader, SaslAuthenticateRequest, SaslHandshakeRequest, TopicName,
 };
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
 use oqueue_broker::{Cluster, Dispatcher, Handler, HandlerResponse};
@@ -73,6 +76,23 @@ fn init_producer_id_body(out: &mut Vec<u8>, version: i16) {
     request.encode(out, version).expect("encodes");
 }
 
+/// `SaslHandshake`'s minimal body: the one mechanism `ADR-0032` enables.
+fn sasl_handshake_body(out: &mut Vec<u8>, version: i16) {
+    SaslHandshakeRequest::default()
+        .with_mechanism(StrBytes::from_static_str("PLAIN"))
+        .encode(out, version)
+        .expect("encodes");
+}
+
+/// `SaslAuthenticate`'s minimal body — a synthetic credential `M9.3`'s own
+/// handler refuses regardless, per `expected_error_code`.
+fn sasl_authenticate_body(out: &mut Vec<u8>, version: i16) {
+    SaslAuthenticateRequest::default()
+        .with_auth_bytes(bytes::Bytes::from_static(b"\x00alice\x00secret"))
+        .encode(out, version)
+        .expect("encodes");
+}
+
 /// The smallest valid body for `api_key` at `version`, against a cluster
 /// that has topic `"t"` — enough for a real answer, not an error dance.
 fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
@@ -122,8 +142,22 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
             request.encode(&mut body, version).expect("encodes");
         }
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
+        ApiKey::SaslHandshake => sasl_handshake_body(&mut body, version),
+        ApiKey::SaslAuthenticate => sasl_authenticate_body(&mut body, version),
     }
     body
+}
+
+/// Response header length: v0 is 4 bytes of correlation id, v1 adds the
+/// empty tagged-fields byte. `ApiVersions`/`SaslHandshake` stay v0 at
+/// every version — the generated `response_header_version` carries both
+/// special cases.
+fn response_header_len(api_key: ApiKey, version: i16) -> usize {
+    if api_key.response_header_version(version) >= 1 {
+        5
+    } else {
+        4
+    }
 }
 
 /// Decode the reply body with the client half at the request's version —
@@ -131,15 +165,7 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
 /// fails here rather than passing as opaque bytes. Returns `ApiVersions`'
 /// top-level error code, 0 for the APIs that have none.
 fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
-    // Response header: v0 is 4 bytes of correlation id, v1 adds the empty
-    // tagged-fields byte. ApiVersions stays v0 at every version — the
-    // generated `response_header_version` carries that special case.
-    let header_len = if api_key.response_header_version(version) >= 1 {
-        5
-    } else {
-        4
-    };
-    let mut rest = &reply[header_len..];
+    let mut rest = &reply[response_header_len(api_key, version)..];
     let error_code = match api_key {
         ApiKey::ApiVersions => {
             kafka_protocol::messages::ApiVersionsResponse::decode(&mut rest, version)
@@ -173,12 +199,44 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .expect("InitProducerId reply decodes")
                 .error_code
         }
+        ApiKey::SaslHandshake => {
+            kafka_protocol::messages::SaslHandshakeResponse::decode(&mut rest, version)
+                .expect("SaslHandshake reply decodes")
+                .error_code
+        }
+        ApiKey::SaslAuthenticate => {
+            kafka_protocol::messages::SaslAuthenticateResponse::decode(&mut rest, version)
+                .expect("SaslAuthenticate reply decodes")
+                .error_code
+        }
     };
     assert!(
         rest.is_empty(),
         "{api_key:?} v{version}: nothing after the body"
     );
     error_code
+}
+
+/// The error code a well-formed **minimal** request must answer with, per
+/// API. `0` for every API that genuinely succeeds against it; a named
+/// non-zero code for the one that does not by design.
+///
+/// ⚠️ **`SaslAuthenticate`, not `0`.** `M9.3`'s own handler refuses every
+/// exchange — no credential source is configured yet (`M9.4`'s own scope)
+/// — so the minimal, synthetic credential this matrix constructs is
+/// *correctly* refused, not merely "not yet implemented." `FR-2`'s bar is
+/// "genuinely served": reachable, decodable, and answering per its actual
+/// documented behaviour — never `UNSUPPORTED_VERSION` (35), which this
+/// still is not. `error_code == 0` for every other row is what "genuinely
+/// succeeds" happens to mean for them; it does not mean the same thing
+/// for an authentication check whose whole point is refusing what it does
+/// not recognise.
+fn expected_error_code(api_key: ApiKey) -> i16 {
+    if api_key == ApiKey::SaslAuthenticate {
+        oqueue_codec::error_codes::SASL_AUTHENTICATION_FAILED
+    } else {
+        0
+    }
 }
 
 #[tokio::test]
@@ -200,8 +258,9 @@ async fn every_advertised_version_is_served() {
             };
             let error_code = decode_reply(advertised.api_key, version, &reply);
             assert_eq!(
-                error_code, 0,
-                "{:?} v{version}: an advertised version is never error 35",
+                error_code,
+                expected_error_code(advertised.api_key),
+                "{:?} v{version}: an advertised version is never error 35, and answers what it documents",
                 advertised.api_key
             );
         }

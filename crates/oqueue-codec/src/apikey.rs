@@ -29,10 +29,14 @@ pub enum ApiKey {
     ListOffsets = 2,
     /// Metadata (3).
     Metadata = 3,
+    /// `SaslHandshake` (17).
+    SaslHandshake = 17,
     /// `ApiVersions` (18).
     ApiVersions = 18,
     /// `InitProducerId` (22).
     InitProducerId = 22,
+    /// `SaslAuthenticate` (36).
+    SaslAuthenticate = 36,
 }
 
 impl ApiKey {
@@ -52,8 +56,10 @@ impl ApiKey {
             1 => Some(Self::Fetch),
             2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
+            17 => Some(Self::SaslHandshake),
             18 => Some(Self::ApiVersions),
             22 => Some(Self::InitProducerId),
+            36 => Some(Self::SaslAuthenticate),
             _ => None,
         }
     }
@@ -100,16 +106,20 @@ mod tests {
             ApiKey::Fetch,
             ApiKey::ListOffsets,
             ApiKey::Metadata,
+            ApiKey::SaslHandshake,
             ApiKey::ApiVersions,
             ApiKey::InitProducerId,
+            ApiKey::SaslAuthenticate,
         ] {
             assert_eq!(ApiKey::from_i16(key.as_i16()), Some(key));
         }
         // Keys Kafka defines but this broker does not serve. ⚠️ `2` was here
-        // until `M3.21`, which added `ListOffsets`, and `22` was here until
-        // `M11.4`, which added `InitProducerId`: a key moving from this
-        // list to the one above is what serving a new API looks like, and
-        // leaving it in both is how the round trip above starts lying.
+        // until `M3.21`, which added `ListOffsets`, `22` was here until
+        // `M11.4`, which added `InitProducerId`, and `17`/`36` were here
+        // until `M9.3`, which added `SaslHandshake`/`SaslAuthenticate`: a
+        // key moving from this list to the one above is what serving a new
+        // API looks like, and leaving it in both is how the round trip
+        // above starts lying.
         for unserved in [10, 20, -1, 32512] {
             assert_eq!(ApiKey::from_i16(unserved), None);
         }
@@ -127,5 +137,12 @@ mod tests {
         assert_eq!(ApiKey::ApiVersions.request_header_version(3), 2);
         assert_eq!(ApiKey::ApiVersions.response_header_version(3), 0);
         assert_eq!(ApiKey::ApiVersions.response_header_version(0), 0);
+        // SaslHandshake: never flexible, at any advertised version --
+        // module doc's own "standing example", falling out of
+        // `flexible_from: None` rather than a second special case.
+        assert_eq!(ApiKey::SaslHandshake.request_header_version(0), 1);
+        assert_eq!(ApiKey::SaslHandshake.request_header_version(1), 1);
+        assert_eq!(ApiKey::SaslHandshake.response_header_version(0), 0);
+        assert_eq!(ApiKey::SaslHandshake.response_header_version(1), 0);
     }
 }
