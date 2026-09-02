@@ -258,6 +258,25 @@ mod tests {
         assert_eq!((produce.min_version, produce.max_version), (3, 13));
     }
 
+    /// ⚠️ **`M9.6`'s own check**: `ApiVersions` still answers with no `SaslHandshake`
+    /// or `SaslAuthenticate` exchange having happened at all — not TLS-terminated,
+    /// no credentials configured, nothing. `M9.3`-`M9.5` added a real SASL
+    /// mechanism and TLS capability beside this dispatcher; neither moved
+    /// `ApiVersions` behind them. `M9.7`'s future authorization gate is the
+    /// thing this test is written to catch, should it ever wrap `ApiVersions`
+    /// by accident rather than by the deliberate exemption doc 02 §1.4 point 2
+    /// requires.
+    #[tokio::test]
+    async fn api_versions_answers_with_no_sasl_exchange_and_no_tls() {
+        let (dispatcher, _fixture) = dispatcher().await;
+        let out = replied(&dispatcher, api_versions_request(3, 1)).await;
+        let (_correlation, response) = decode_response(&out, 3);
+        assert_eq!(
+            response.error_code, 0,
+            "unauthenticated, unencrypted, still answered"
+        );
+    }
+
     #[tokio::test]
     async fn an_unsupported_version_gets_the_v0_bodied_fallback() {
         let (dispatcher, _fixture) = dispatcher().await;
