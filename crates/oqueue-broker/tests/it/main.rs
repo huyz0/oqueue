@@ -9,6 +9,7 @@ mod budget;
 mod connection;
 mod corpus;
 mod crash_points;
+mod cross_principal;
 mod faults;
 mod generated;
 mod invariants;
