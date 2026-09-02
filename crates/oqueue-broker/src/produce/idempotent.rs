@@ -131,9 +131,18 @@ async fn an_all_rejected_produce_leaves_the_sessions_watermark_untouched() {
 /// ⚠️ **The property this milestone exists to deliver, on the actual wire
 /// path**: one producer's rejected gap must not cost a different topic's
 /// legitimate span, in the very same `Produce` request, its real offset.
+///
+/// ⚠️ **`M11.16`: also the other side of `an_all_rejected_produce_leaves_
+/// the_sessions_watermark_untouched`'s own coin.** That test pins "nothing
+/// admitted raises no bar"; this one pins "something admitted alongside a
+/// rejection still raises it" — `M11.6`'s round-1 fix gated `session.observe`
+/// on at least one `Assigned` outcome, and neither test alone distinguishes
+/// that gate from one that never observes at all.
 #[tokio::test]
 async fn one_topics_rejection_does_not_cost_anothers_offset_in_one_request() {
     let fixture = fixture(&["a", "b"]).await;
+    assert_eq!(fixture.session.watermark(), None, "nothing produced yet");
+
     let mut t_a = TopicProduceData::default();
     t_a.name = TopicName(StrBytes::from_string("a".to_owned()));
     let mut t_b = TopicProduceData::default();
@@ -157,6 +166,12 @@ async fn one_topics_rejection_does_not_cost_anothers_offset_in_one_request() {
     assert_eq!(a.base_offset, -1);
     assert_eq!(b.error_code, 0, "an unrelated topic's produce still lands");
     assert_eq!(b.base_offset, 0);
+    assert!(
+        fixture.session.watermark().is_some(),
+        "topic b's admitted span was really committed, which must raise this \
+         session's read-your-writes bar even though topic a's span in the \
+         same request was rejected"
+    );
 }
 
 /// ⚠️ **`M11.7`, end to end.** A zombie — an epoch older than one this

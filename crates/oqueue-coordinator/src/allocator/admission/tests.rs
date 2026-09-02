@@ -118,6 +118,29 @@ fn an_exact_replay_answers_the_recorded_offset_without_a_new_one() {
     assert_eq!(assignment.base_offset(), oqueue_core::Offset::ZERO);
 }
 
+/// `M11.16`: every replay case above replays at offset zero, which cannot
+/// distinguish "answers the recorded offset" from "always answers zero" —
+/// a mutant hardcoding `Offset::ZERO` in place of the real recorded value
+/// would pass every one of them. This one commits a second span first, so
+/// the sequence being replayed is recorded at a genuinely nonzero offset,
+/// and the replay must answer *that* value.
+#[test]
+fn a_replay_of_a_nonzero_recorded_offset_answers_that_offset_not_zero() {
+    let mut allocator = Allocator::new();
+    commit(&mut allocator, span_from(1, 0, 2)); // occupies offsets 0..2
+    commit(&mut allocator, span_from(1, 1, 3)); // occupies offsets 2..5
+    let admission = allocator.admit(vec![span_from(1, 1, 3)]);
+    assert!(admission.admitted.is_empty(), "no new offset is assigned");
+    assert_eq!(admission.replayed.len(), 1);
+    let (index, t, p, assignment) = &admission.replayed[0];
+    assert_eq!(*index, 0);
+    assert_eq!((t, p), (&topic(), &partition()));
+    assert_eq!(
+        assignment.base_offset(),
+        oqueue_core::Offset::new(2).expect("a valid offset")
+    );
+}
+
 #[test]
 fn a_replay_whose_record_count_does_not_match_is_a_duplicate_not_a_replay() {
     let mut allocator = Allocator::new();
