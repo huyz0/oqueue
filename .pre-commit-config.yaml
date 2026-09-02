@@ -112,6 +112,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-topic-list-scope
+        name: "M9.11: no code path materializes the global topic list to answer a client request"
+        entry: scripts/check-topic-list-scope.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-idempotence-enabled
         name: "M11.9, M11.md task 12: M2's enable.idempotence=false client-config workaround stays retired"
         entry: scripts/check-idempotence-enabled.sh
