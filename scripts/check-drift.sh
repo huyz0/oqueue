@@ -320,6 +320,12 @@ declare -A RUST_BOUNDS=(
   # connection that much longer against a client's own (bounded, but large)
   # number.
   ["crates/oqueue-broker/src/join_group/deadline.rs|MAX_BARRIER_MS"]="3_000_000"
+  # The longest a follower's own SyncGroup may wait for the leader's.
+  # `M4.8`'s own ceiling, not derived from any client-supplied value
+  # (SyncGroupRequest carries no timeout field) -- raising it holds a
+  # follower's connection open that much longer against a leader that
+  # never submits.
+  ["crates/oqueue-broker/src/sync_group/deadline.rs|MAX_SYNC_WAIT_MS"]="3_000_000"
   # How many batches one index page may name, and how many entries a partition
   # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
   # `M10.20`: moved from `index_state.rs` to its own `index_state/page.rs`
@@ -433,6 +439,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/join_group/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/join_group/tests.rs|REBALANCE_TIMEOUT_MS"]="a test's own fixture value (how long the T1 acceptance test waits under paused time), not a production bound"
   ["crates/oqueue-broker/src/join_group/tests.rs|V7"]="a test's own advertised-version literal, same shape as VERSION above"
+  ["crates/oqueue-broker/src/sync_group/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/sync_group/tests.rs|V5"]="a test's own advertised-version literal, same shape as VERSION above"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )

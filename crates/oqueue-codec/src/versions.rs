@@ -36,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 10] = [
+pub static ADVERTISED: [Advertised; 11] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -89,6 +89,17 @@ pub static ADVERTISED: [Advertised; 10] = [
         min: 0,
         max: 9,
         flexible_from: Some(6),
+    },
+    Advertised {
+        // ⚠️ **v0-5, flexible from v4** — `oqueue_codec::sync_group`'s own
+        // doc, confirmed against the dependency's generated source
+        // directly (`M4.8`): a third cutover version in three consecutive
+        // rows (v3 `FindCoordinator`, v6 `JoinGroup`, v4 here) is why this
+        // crate reads the dependency rather than pattern-matching itself.
+        api_key: ApiKey::SyncGroup,
+        min: 0,
+        max: 5,
+        flexible_from: Some(4),
     },
     Advertised {
         // ⚠️ **Never flexible, at any version** — the dependency's own
@@ -157,7 +168,7 @@ mod tests {
         InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse, ListOffsetsRequest,
         ListOffsetsResponse, MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
         SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
-        SaslHandshakeResponse,
+        SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -198,6 +209,10 @@ mod tests {
             ApiKey::JoinGroup => (
                 JoinGroupRequest::header_version(version),
                 JoinGroupResponse::header_version(version),
+            ),
+            ApiKey::SyncGroup => (
+                SyncGroupRequest::header_version(version),
+                SyncGroupResponse::header_version(version),
             ),
             ApiKey::ApiVersions => (
                 ApiVersionsRequest::header_version(version),
@@ -285,6 +300,7 @@ mod tests {
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => pin::<JoinGroupRequest>(row),
+                ApiKey::SyncGroup => pin::<SyncGroupRequest>(row),
                 ApiKey::SaslHandshake => pin_never_flexible::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => pin::<InitProducerIdRequest>(row),
@@ -316,6 +332,7 @@ mod tests {
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => within::<JoinGroupRequest>(row),
+                ApiKey::SyncGroup => within::<SyncGroupRequest>(row),
                 ApiKey::SaslHandshake => within::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),

@@ -99,6 +99,10 @@ pub struct Cluster {
     /// own sans-I/O contract (`round`'s own module doc). Starts empty by
     /// construction; nothing a composer configures.
     group_joins: GroupJoins,
+    /// `M4.8`'s own sync barrier — who is mid-`SyncGroup` for each group,
+    /// and the assignment map the leader's own submission fills in.
+    /// Starts empty by construction, `group_joins`'s own shape.
+    sync_groups: crate::sync_group::SyncGroups,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -190,6 +194,7 @@ impl Cluster {
             topic_lookups: AtomicU64::new(0),
             group_coordinator: seams.group_coordinator,
             group_joins: GroupJoins::default(),
+            sync_groups: crate::sync_group::SyncGroups::default(),
         })
     }
 
@@ -203,6 +208,12 @@ impl Cluster {
     /// shares (`M4.7`).
     pub(crate) const fn group_joins(&self) -> &GroupJoins {
         &self.group_joins
+    }
+
+    /// The sync-round bookkeeping every connection's `SyncGroup` handler
+    /// shares (`M4.8`).
+    pub(crate) const fn sync_groups(&self) -> &crate::sync_group::SyncGroups {
+        &self.sync_groups
     }
 
     /// The topic's partition count, or `None` if it does not exist.

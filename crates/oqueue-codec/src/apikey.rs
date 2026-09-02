@@ -33,6 +33,8 @@ pub enum ApiKey {
     FindCoordinator = 10,
     /// `JoinGroup` (11).
     JoinGroup = 11,
+    /// `SyncGroup` (14).
+    SyncGroup = 14,
     /// `SaslHandshake` (17).
     SaslHandshake = 17,
     /// `ApiVersions` (18).
@@ -62,6 +64,7 @@ impl ApiKey {
             3 => Some(Self::Metadata),
             10 => Some(Self::FindCoordinator),
             11 => Some(Self::JoinGroup),
+            14 => Some(Self::SyncGroup),
             17 => Some(Self::SaslHandshake),
             18 => Some(Self::ApiVersions),
             22 => Some(Self::InitProducerId),
@@ -114,6 +117,7 @@ mod tests {
             ApiKey::Metadata,
             ApiKey::FindCoordinator,
             ApiKey::JoinGroup,
+            ApiKey::SyncGroup,
             ApiKey::SaslHandshake,
             ApiKey::ApiVersions,
             ApiKey::InitProducerId,

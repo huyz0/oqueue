@@ -18,10 +18,10 @@
 //! beyond the pre-authentication trio (`ApiVersions`, `SaslHandshake`,
 //! `SaslAuthenticate`) that `oqueue_core::authorize` refuses closes the
 //! connection rather than answering with a per-API authorization error code —
-//! a deliberate simplification, not an oversight: seven heterogeneous
+//! a deliberate simplification, not an oversight: eight heterogeneous
 //! response shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`,
-//! `InitProducerId`, `FindCoordinator`, `JoinGroup`) would each need their
-//! own encoded refusal, and this decision point's own
+//! `InitProducerId`, `FindCoordinator`, `JoinGroup`, `SyncGroup`) would each
+//! need their own encoded refusal, and this decision point's own
 //! scope is the seam, not full Kafka error-code parity for a branch no
 //! existing deployment reaches yet (`credentials` is empty everywhere until
 //! `bin/oqueue`'s own composition-root wiring lands). A later task may trade
@@ -235,6 +235,7 @@ impl Dispatcher {
             ApiKey::Metadata => self.metadata_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
             ApiKey::JoinGroup => crate::join_group::handle(&self.cluster, prelude, body).await,
+            ApiKey::SyncGroup => crate::sync_group::handle(&self.cluster, prelude, body).await,
             ApiKey::Produce => self.produce_handle(prelude, body).await,
             ApiKey::Fetch => self.fetch_handle(prelude, body).await,
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),

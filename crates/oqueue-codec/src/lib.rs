@@ -44,6 +44,7 @@ pub mod produce;
 pub mod records;
 pub mod sasl_authenticate;
 pub mod sasl_handshake;
+pub mod sync_group;
 pub mod varint;
 pub mod versions;
 pub mod wire;

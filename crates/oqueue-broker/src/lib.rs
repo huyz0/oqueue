@@ -44,6 +44,7 @@ mod region;
 pub mod sasl_authenticate;
 mod sasl_handshake;
 pub mod session;
+mod sync_group;
 #[cfg(test)]
 mod testing;
 pub mod tls;

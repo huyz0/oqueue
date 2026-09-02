@@ -116,6 +116,7 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
         ApiKey::SaslAuthenticate => sasl_authenticate_body(&mut body, version),
         ApiKey::FindCoordinator => find_coordinator_body(&mut body, version),
         ApiKey::JoinGroup => join_group_body(&mut body, version),
+        ApiKey::SyncGroup => sync_group_body(&mut body, version),
     }
     body
 }
@@ -143,6 +144,27 @@ fn join_group_body(out: &mut Vec<u8>, version: i16) {
         .with_member_id(StrBytes::from_static_str(""))
         .with_protocol_type(StrBytes::from_static_str("consumer"))
         .with_protocols(vec![protocol]);
+    request.encode(out, version).expect("encodes");
+}
+
+/// `SyncGroup`'s own minimal body -- a single member submitting its own
+/// (non-empty) assignment, the shape `sync_group.rs`'s own handler treats
+/// as the assignment-bearing submission regardless of `JoinGroup` ever
+/// having run for this group (no fencing checked yet, `M4.11`'s own
+/// scope), so this answers `error_code == 0` with no other setup.
+fn sync_group_body(out: &mut Vec<u8>, version: i16) {
+    use kafka_protocol::messages::SyncGroupRequest;
+    use kafka_protocol::messages::sync_group_request::SyncGroupRequestAssignment;
+    let mut assignment = SyncGroupRequestAssignment::default();
+    assignment.member_id = StrBytes::from_static_str("m1");
+    assignment.assignment = bytes::Bytes::from_static(b"a");
+    let request = SyncGroupRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(
+            StrBytes::from_static_str("matrix-sync-group"),
+        ))
+        .with_generation_id(1)
+        .with_member_id(StrBytes::from_static_str("m1"))
+        .with_assignments(vec![assignment]);
     request.encode(out, version).expect("encodes");
 }
 
@@ -251,6 +273,11 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         ApiKey::JoinGroup => {
             kafka_protocol::messages::JoinGroupResponse::decode(&mut rest, version)
                 .expect("JoinGroup reply decodes")
+                .error_code
+        }
+        ApiKey::SyncGroup => {
+            kafka_protocol::messages::SyncGroupResponse::decode(&mut rest, version)
+                .expect("SyncGroup reply decodes")
                 .error_code
         }
     };

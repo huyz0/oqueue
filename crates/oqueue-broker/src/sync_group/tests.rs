@@ -1,0 +1,250 @@
+#![allow(clippy::expect_used)]
+
+use super::handle;
+use crate::connection::HandlerResponse;
+use crate::testing::fixture;
+use kafka_protocol::messages::SyncGroupRequest as KpRequest;
+use kafka_protocol::messages::SyncGroupResponse as KpResponse;
+use kafka_protocol::messages::sync_group_request::SyncGroupRequestAssignment as KpAssignment;
+use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
+use oqueue_codec::frame::RequestPrelude;
+
+const VERSION: i16 = 3;
+
+fn prelude() -> RequestPrelude {
+    RequestPrelude {
+        api_key: 14,
+        api_version: VERSION,
+        correlation_id: 9,
+    }
+}
+
+/// A follower's own request: no assignments.
+fn follower_body(group: &str, member_id: &str) -> Vec<u8> {
+    let request = KpRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(StrBytes::from_string(
+            group.to_owned(),
+        )))
+        .with_generation_id(1)
+        .with_member_id(StrBytes::from_string(member_id.to_owned()));
+    let mut out = Vec::new();
+    request.encode(&mut out, VERSION).expect("encodes");
+    out
+}
+
+/// The leader's own request: one assignment per member.
+fn leader_body(group: &str, leader_id: &str, assignments: &[(&str, &[u8])]) -> Vec<u8> {
+    let entries = assignments
+        .iter()
+        .map(|&(id, bytes)| {
+            let mut a = KpAssignment::default();
+            a.member_id = StrBytes::from_string(id.to_owned());
+            a.assignment = bytes::Bytes::from(bytes.to_vec());
+            a
+        })
+        .collect();
+    let request = KpRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(StrBytes::from_string(
+            group.to_owned(),
+        )))
+        .with_generation_id(1)
+        .with_member_id(StrBytes::from_string(leader_id.to_owned()))
+        .with_assignments(entries);
+    let mut out = Vec::new();
+    request.encode(&mut out, VERSION).expect("encodes");
+    out
+}
+
+fn decode_response(bytes: &[u8]) -> KpResponse {
+    // SyncGroup goes flexible (tagged response header) at v4; VERSION is 3.
+    let mut rest = &bytes[4..];
+    let response = KpResponse::decode(&mut rest, VERSION).expect("decodes");
+    assert!(rest.is_empty());
+    response
+}
+
+async fn sync(cluster: &crate::cluster::Cluster, body: Vec<u8>) -> KpResponse {
+    let HandlerResponse::Reply(out) = handle(cluster, prelude(), &body).await else {
+        panic!("a SyncGroup replies");
+    };
+    decode_response(&out)
+}
+
+/// ⚠️ **`M4.8`'s own acceptance criterion, half one**: each follower's own
+/// response carries exactly its own slice of the leader's submitted
+/// assignment, never another member's.
+#[tokio::test(start_paused = true)]
+async fn a_followers_own_slice_is_exactly_its_own_never_anothers() {
+    let fixture = fixture(&[]).await;
+    let leader = sync(
+        &fixture.cluster,
+        leader_body(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"assignment-for-m1"), ("m2", b"assignment-for-m2")],
+        ),
+    )
+    .await;
+    assert_eq!(leader.error_code, 0);
+    assert_eq!(leader.assignment.as_ref(), b"assignment-for-m1");
+
+    let follower = sync(&fixture.cluster, follower_body("orders-consumers", "m2")).await;
+    assert_eq!(follower.error_code, 0);
+    assert_eq!(follower.assignment.as_ref(), b"assignment-for-m2");
+}
+
+/// ⚠️ **A group's own second rebalance gets its own, real answer — not the
+/// first generation's, stale.** `SyncGroups::submit` starts a fresh entry
+/// when a prior generation's own assignment is already known
+/// (`OnceLock::set` on an already-set cell silently no-ops otherwise);
+/// this is the ordinary case of a group rebalancing more than once, not
+/// the adversarial fencing this module's own doc defers to `M4.11`.
+#[tokio::test(start_paused = true)]
+async fn a_second_rebalance_gets_its_own_new_assignment_not_the_first_ones() {
+    let fixture = fixture(&[]).await;
+    sync(
+        &fixture.cluster,
+        leader_body(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"gen1-m1"), ("m2", b"gen1-m2")],
+        ),
+    )
+    .await;
+    sync(&fixture.cluster, follower_body("orders-consumers", "m2")).await;
+
+    // A second rebalance: the leader submits a new assignment.
+    let leader = sync(
+        &fixture.cluster,
+        leader_body(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"gen2-m1"), ("m2", b"gen2-m2")],
+        ),
+    )
+    .await;
+    assert_eq!(leader.assignment.as_ref(), b"gen2-m1");
+
+    let follower = sync(&fixture.cluster, follower_body("orders-consumers", "m2")).await;
+    assert_eq!(
+        follower.assignment.as_ref(),
+        b"gen2-m2",
+        "the second generation's own assignment, not the first's stale one"
+    );
+}
+
+/// ⚠️ **Half two**: a follower's own `SyncGroup` arriving before the
+/// leader's parks rather than answering early (with empty or wrong bytes).
+#[tokio::test(start_paused = true)]
+async fn a_follower_arriving_before_the_leader_parks_then_gets_its_own_slice() {
+    let fixture = std::sync::Arc::new(fixture(&[]).await);
+    let follower = {
+        let cluster = std::sync::Arc::clone(&fixture.cluster);
+        let body = follower_body("orders-consumers", "m2");
+        tokio::spawn(async move { sync(&cluster, body).await })
+    };
+
+    // Let the follower reach its own park before the leader arrives.
+    tokio::task::yield_now().await;
+    assert!(
+        !follower.is_finished(),
+        "the follower must be parked, not answered, before the leader's own submission"
+    );
+
+    let leader = sync(
+        &fixture.cluster,
+        leader_body(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"leader-slice"), ("m2", b"follower-slice")],
+        ),
+    )
+    .await;
+    assert_eq!(leader.assignment.as_ref(), b"leader-slice");
+
+    let follower = follower.await.expect("the follower task joins");
+    assert_eq!(follower.error_code, 0);
+    assert_eq!(
+        follower.assignment.as_ref(),
+        b"follower-slice",
+        "woken with its own real slice, not empty or the leader's"
+    );
+}
+
+/// A follower's own `SyncGroup` arriving *after* the leader's is answered
+/// at once from the already-known assignment map, never parked.
+#[tokio::test(start_paused = true)]
+async fn a_follower_arriving_after_the_leader_is_answered_at_once() {
+    let fixture = fixture(&[]).await;
+    sync(
+        &fixture.cluster,
+        leader_body(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"leader-slice"), ("m2", b"follower-slice")],
+        ),
+    )
+    .await;
+
+    let started = tokio::time::Instant::now();
+    let follower = sync(&fixture.cluster, follower_body("orders-consumers", "m2")).await;
+    assert_eq!(
+        tokio::time::Instant::now() - started,
+        std::time::Duration::ZERO,
+        "the assignment was already known -- no park"
+    );
+    assert_eq!(follower.assignment.as_ref(), b"follower-slice");
+}
+
+/// A malformed body closes the connection rather than answering — every
+/// other handler's own policy for a frame this broker cannot decode.
+#[tokio::test(start_paused = true)]
+async fn a_malformed_body_closes_rather_than_panicking() {
+    let fixture = fixture(&[]).await;
+    let response = handle(&fixture.cluster, prelude(), &[0xFF; 3]).await;
+    assert!(matches!(response, HandlerResponse::Close));
+}
+
+/// `protocol_type`/`protocol_name` are absent below v5 and echoed from v5
+/// on (`oqueue_codec::sync_group`'s own doc) — this test is the only one in
+/// this file at v5+, and exists specifically so that cutover is exercised
+/// on the wire at all, not only in `response_for`'s own in-memory value.
+#[tokio::test(start_paused = true)]
+async fn protocol_type_and_name_are_echoed_on_the_wire_from_v5() {
+    const V5: i16 = 5;
+    let fixture = fixture(&[]).await;
+    let mut assignment = KpAssignment::default();
+    assignment.member_id = StrBytes::from_static_str("m1");
+    assignment.assignment = bytes::Bytes::from_static(b"a");
+    let request = KpRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(
+            StrBytes::from_static_str("orders-consumers"),
+        ))
+        .with_generation_id(1)
+        .with_member_id(StrBytes::from_static_str("m1"))
+        .with_protocol_type(Some(StrBytes::from_static_str("consumer")))
+        .with_protocol_name(Some(StrBytes::from_static_str("range")))
+        .with_assignments(vec![assignment]);
+    let mut body = Vec::new();
+    request.encode(&mut body, V5).expect("encodes");
+
+    let prelude = RequestPrelude {
+        api_key: 14,
+        api_version: V5,
+        correlation_id: 9,
+    };
+    let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude, &body).await else {
+        panic!("a SyncGroup replies");
+    };
+    let mut rest = &out[5..]; // v5 is flexible: a 5-byte response header.
+    let response = KpResponse::decode(&mut rest, V5).expect("decodes");
+    assert!(rest.is_empty());
+    assert_eq!(
+        response.protocol_type.as_ref().map(StrBytes::as_str),
+        Some("consumer")
+    );
+    assert_eq!(
+        response.protocol_name.as_ref().map(StrBytes::as_str),
+        Some("range")
+    );
+}
