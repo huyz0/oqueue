@@ -82,6 +82,7 @@ mod store;
 #[cfg(test)]
 mod test_executor;
 mod topic;
+mod topic_grants;
 
 pub use authz::authorize;
 pub use bundle::{BUNDLE_FORMAT_VERSION, BundleBuilder, PushedRecords, Region, RegionAlg, Sealed};
@@ -122,3 +123,4 @@ pub use retry::{RetryClass, RetryDecision, RetryPolicy};
 pub use staleness::{CacheState, MAX_METADATA_STALENESS_MS, RefreshReason, SessionWatermark};
 pub use store::{BoxFuture, FakeObjectStore, ObjectStore};
 pub use topic::TopicId;
+pub use topic_grants::TopicGrants;
