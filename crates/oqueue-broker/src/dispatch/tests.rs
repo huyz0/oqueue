@@ -374,4 +374,89 @@ mod authorization {
             oqueue_codec::error_codes::TOPIC_AUTHORIZATION_FAILED,
         );
     }
+
+    /// A `Produce` request naming exactly `topic`, one partition, one
+    /// record, `acks=-1`.
+    fn produce_frame(topic: &str) -> Vec<u8> {
+        use kafka_protocol::messages::ProduceRequest;
+        use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
+
+        let mut body = Vec::new();
+        let mut request = ProduceRequest::default();
+        request.acks = -1;
+        let mut t = TopicProduceData::default();
+        t.name = TopicName(StrBytes::from_string(topic.to_owned()));
+        let mut p = PartitionProduceData::default();
+        p.index = 0;
+        p.records = Some(bytes::Bytes::from(crate::testing::golden_batch()));
+        t.partition_data.push(p);
+        request.topic_data.push(t);
+        request.encode(&mut body, 9).expect("encodes");
+        framed(ApiKey::Produce, 9, &body)
+    }
+
+    fn produce_response(out: &[u8]) -> kafka_protocol::messages::ProduceResponse {
+        // v9 is flexible: the response header carries the tagged-fields
+        // byte, 5 bytes total.
+        let mut rest = &out[5..];
+        let response =
+            kafka_protocol::messages::ProduceResponse::decode(&mut rest, 9).expect("decodes");
+        assert!(rest.is_empty());
+        response
+    }
+
+    /// ⚠️ **`M9.12`'s own end-to-end wiring test.** The same real stack
+    /// `M9.9`'s test drives, this time through `Produce`: a granted topic's
+    /// write lands, an ungranted one is refused before it ever reaches the
+    /// bundle — proven by the watermark never moving for it.
+    #[tokio::test]
+    async fn a_produce_request_after_authentication_is_scoped_by_topic_grants() {
+        let (dispatcher, fixture) = dispatcher().await;
+        fixture.cluster.ensure_topic("seen");
+        fixture.cluster.ensure_topic("unseen");
+        let mut grants = TopicGrants::new();
+        grants.grant(
+            Principal::new("alice").expect("valid"),
+            TopicId::new("seen").expect("valid"),
+        );
+        let dispatcher = Dispatcher {
+            tls: true,
+            credentials: std::sync::Arc::new(one_credential()),
+            topic_grants: std::sync::Arc::new(grants),
+            ..dispatcher
+        };
+        let auth = dispatcher
+            .dispatch(sasl_authenticate_frame("alice", "secret"))
+            .await;
+        assert!(matches!(auth, HandlerResponse::Reply(_)), "SASL succeeds");
+
+        let HandlerResponse::Reply(unseen_out) = dispatcher.dispatch(produce_frame("unseen")).await
+        else {
+            panic!("expected a reply");
+        };
+        assert_eq!(
+            produce_response(&unseen_out).responses[0].partition_responses[0].error_code,
+            oqueue_codec::error_codes::TOPIC_AUTHORIZATION_FAILED,
+        );
+        assert_eq!(
+            fixture
+                .cluster
+                .high_watermark(
+                    &TopicId::new("unseen").expect("valid"),
+                    crate::testing::partition(0)
+                )
+                .get(),
+            0,
+            "a refused produce writes nothing"
+        );
+
+        let HandlerResponse::Reply(seen_out) = dispatcher.dispatch(produce_frame("seen")).await
+        else {
+            panic!("expected a reply");
+        };
+        assert_eq!(
+            produce_response(&seen_out).responses[0].partition_responses[0].error_code,
+            0
+        );
+    }
 }

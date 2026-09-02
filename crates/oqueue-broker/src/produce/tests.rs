@@ -12,6 +12,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use super::handle;
+use crate::authz::AuthzContext;
 use crate::connection::HandlerResponse;
 use crate::testing::{Fixture, fixture, golden_batch, partition, topic};
 use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
@@ -68,7 +69,18 @@ async fn a_null_topic_name_closes_at_every_version_that_has_one() {
         let body = with_null_name(version, "zzzprobe");
         assert!(
             matches!(
-                handle(&fixture.cluster, &fixture.session, prelude(version), &body).await,
+                handle(
+                    &fixture.cluster,
+                    &fixture.session,
+                    prelude(version),
+                    &body,
+                    &AuthzContext {
+                        principal: None,
+                        credentials_configured: false,
+                        topic_grants: &oqueue_core::TopicGrants::default(),
+                    }
+                )
+                .await,
                 HandlerResponse::Close
             ),
             "v{version} framed a reply for a null topic name"
@@ -87,7 +99,18 @@ async fn a_present_topic_name_still_replies_at_every_version() {
         let body = produce_body(version, "zzzprobe", 1, golden_batch());
         assert!(
             matches!(
-                handle(&fixture.cluster, &fixture.session, prelude(version), &body).await,
+                handle(
+                    &fixture.cluster,
+                    &fixture.session,
+                    prelude(version),
+                    &body,
+                    &AuthzContext {
+                        principal: None,
+                        credentials_configured: false,
+                        topic_grants: &oqueue_core::TopicGrants::default(),
+                    }
+                )
+                .await,
                 HandlerResponse::Reply(_)
             ),
             "v{version} refused a request whose name is present"
@@ -148,8 +171,18 @@ fn decode(bytes: &[u8], version: i16) -> ProduceResponse {
 }
 
 pub(crate) async fn replied(fixture: &Fixture, version: i16, body: &[u8]) -> ProduceResponse {
-    let HandlerResponse::Reply(out) =
-        handle(&fixture.cluster, &fixture.session, prelude(version), body).await
+    let HandlerResponse::Reply(out) = handle(
+        &fixture.cluster,
+        &fixture.session,
+        prelude(version),
+        body,
+        &AuthzContext {
+            principal: None,
+            credentials_configured: false,
+            topic_grants: &oqueue_core::TopicGrants::default(),
+        },
+    )
+    .await
     else {
         panic!("an acks != 0 produce replies");
     };
@@ -337,7 +370,18 @@ async fn acks_zero_is_silent_but_still_flushes_and_commits() {
     let fixture = fixture(&["t"]).await;
     let body = produce_body(9, "t", 0, golden_batch());
     assert!(matches!(
-        handle(&fixture.cluster, &fixture.session, prelude(9), &body).await,
+        handle(
+            &fixture.cluster,
+            &fixture.session,
+            prelude(9),
+            &body,
+            &AuthzContext {
+                principal: None,
+                credentials_configured: false,
+                topic_grants: &oqueue_core::TopicGrants::default(),
+            }
+        )
+        .await,
         HandlerResponse::Silent
     ));
     assert_eq!(fixture.store.counts().count(Operation::Put), 1);
@@ -350,3 +394,7 @@ async fn acks_zero_is_silent_but_still_flushes_and_commits() {
         "fire-and-forget still lands"
     );
 }
+
+/// `M9.12`'s own tests: per-principal scoping on `Produce`, `Metadata`'s
+/// `M9.9` shape reused rather than reinvented.
+mod authorization;

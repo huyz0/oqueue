@@ -215,8 +215,18 @@ pub(crate) async fn produce_one(fixture: &Fixture, name: &str, records: Vec<u8>)
         api_version: 9,
         correlation_id: 1,
     };
-    let crate::connection::HandlerResponse::Reply(_) =
-        crate::produce::handle(&fixture.cluster, &fixture.session, prelude, &body).await
+    let crate::connection::HandlerResponse::Reply(_) = crate::produce::handle(
+        &fixture.cluster,
+        &fixture.session,
+        prelude,
+        &body,
+        &crate::authz::AuthzContext {
+            principal: None,
+            credentials_configured: false,
+            topic_grants: &oqueue_core::TopicGrants::default(),
+        },
+    )
+    .await
     else {
         panic!("the fixture produce replies");
     };

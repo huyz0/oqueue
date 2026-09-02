@@ -53,6 +53,7 @@ pub(crate) async fn read_or_park(
     session: &Session,
     request: &oqueue_codec::fetch::FetchRequest<'_>,
     version: i16,
+    authz: &crate::authz::AuthzContext<'_>,
 ) -> Vec<TopicOutcome> {
     // ⚠️ **A request naming nothing is answered, not parked on.** There is no
     // partition whose commit could satisfy it, so waiting is waiting for
@@ -114,7 +115,7 @@ pub(crate) async fn read_or_park(
         // that was in the index the whole time.
         let before = watermarks(cluster, request, version);
         let mut applied = watch.applied();
-        let outcomes = read_all(cluster, request, version, &mut objects).await;
+        let outcomes = read_all(cluster, request, version, &mut objects, authz).await;
         reads += 1;
         // ⚠️ **A pass that spent its whole budget is *not* a reason to stop**,
         // and `M3.26` shipped a version that thought it was. The argument was
@@ -162,6 +163,7 @@ pub(crate) async fn read_or_park(
 mod tests {
     #![allow(clippy::expect_used)]
 
+    use crate::authz::AuthzContext;
     use crate::connection::HandlerResponse;
     use crate::fetch::handle;
     use crate::fetch::tests::{
@@ -183,8 +185,18 @@ mod tests {
     ) -> tokio::task::JoinHandle<kafka_protocol::messages::FetchResponse> {
         let fixture = std::sync::Arc::clone(fixture);
         tokio::spawn(async move {
-            let HandlerResponse::Reply(out) =
-                handle(&fixture.cluster, &fixture.session, prelude(13), &body).await
+            let HandlerResponse::Reply(out) = handle(
+                &fixture.cluster,
+                &fixture.session,
+                prelude(13),
+                &body,
+                &AuthzContext {
+                    principal: None,
+                    credentials_configured: false,
+                    topic_grants: &oqueue_core::TopicGrants::default(),
+                },
+            )
+            .await
             else {
                 panic!("a fetch replies");
             };

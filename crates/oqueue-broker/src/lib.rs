@@ -26,6 +26,7 @@
 //! left for an operator to discover.
 #![forbid(unsafe_code)]
 
+mod authz;
 pub mod cluster;
 pub mod connection;
 pub mod dispatch;

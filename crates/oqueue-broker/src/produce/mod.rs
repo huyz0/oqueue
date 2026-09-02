@@ -24,6 +24,7 @@
 
 mod answer;
 
+use crate::authz::{AuthzContext, topic_authorized};
 use crate::cluster::{Cluster, FlushError};
 use crate::connection::HandlerResponse;
 use crate::ingest::verify;
@@ -141,6 +142,7 @@ pub(crate) async fn handle(
     session: &Session,
     prelude: RequestPrelude,
     body: &[u8],
+    authz: &AuthzContext<'_>,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
@@ -157,10 +159,14 @@ pub(crate) async fn handle(
         bundle: BundleBuilder::new(),
         seen: HashSet::new(),
     };
+    let mode = TopicMode {
+        version,
+        acks_valid,
+    };
     let outcomes: Vec<TopicOutcome> = request
         .topics
         .iter()
-        .map(|topic| one_topic(cluster, &mut pending, topic, version, acks_valid))
+        .map(|topic| one_topic(cluster, &mut pending, topic, &mode, authz))
         .collect();
 
     let flushed = flush(cluster, session, pending).await;
@@ -169,32 +175,7 @@ pub(crate) async fn handle(
         return HandlerResponse::Silent;
     }
     let response = ProduceResponse {
-        topics: outcomes
-            .iter()
-            // ⚠️ **`filter_map`, not `expect`** (`M3.41`, `region.rs`'s own
-            // precedent). `unanswerable` above already refused any request
-            // whose topic name was `None` at a version that needs one, so a
-            // `Name(None)` here cannot happen — and a panic one refactor away
-            // from being reachable is what `error-handling.md` forbids even
-            // for a proven-safe path. Named as unreachable rather than
-            // asserted: dropped from the reply, not a crash of the
-            // connection carrying every other topic's answer.
-            .filter_map(|topic| {
-                let identity = if version <= 12 {
-                    TopicIdentity::Name(topic.name.as_deref()?)
-                } else {
-                    TopicIdentity::Id(topic.topic_id)
-                };
-                Some(ProduceResponseTopic {
-                    identity,
-                    partitions: topic
-                        .partitions
-                        .iter()
-                        .map(|p| answer(p, flushed.as_ref()))
-                        .collect(),
-                })
-            })
-            .collect(),
+        topics: build_response_topics(&outcomes, version, flushed.as_ref()),
     };
 
     let mut out = Vec::new();
@@ -205,17 +186,62 @@ pub(crate) async fn handle(
     HandlerResponse::Reply(out)
 }
 
+/// Every topic's own response entry — split out of `handle` purely to keep
+/// that function under the fifty-line limit once `M9.12` added `authz`
+/// threading beside everything already there.
+///
+/// ⚠️ **`filter_map`, not `expect`** (`M3.41`, `region.rs`'s own
+/// precedent). `unanswerable` (`handle`'s own guard) already refused any
+/// request whose topic name was `None` at a version that needs one, so a
+/// `Name(None)` here cannot happen — and a panic one refactor away from
+/// being reachable is what `error-handling.md` forbids even for a
+/// proven-safe path. Named as unreachable rather than asserted: dropped
+/// from the reply, not a crash of the connection carrying every other
+/// topic's answer.
+fn build_response_topics<'a>(
+    outcomes: &'a [TopicOutcome],
+    version: i16,
+    flushed: Result<&'a Vec<PushOutcome>, &'a FlushError>,
+) -> Vec<ProduceResponseTopic<'a>> {
+    outcomes
+        .iter()
+        .filter_map(|topic| {
+            let identity = if version <= 12 {
+                TopicIdentity::Name(topic.name.as_deref()?)
+            } else {
+                TopicIdentity::Id(topic.topic_id)
+            };
+            Some(ProduceResponseTopic {
+                identity,
+                partitions: topic
+                    .partitions
+                    .iter()
+                    .map(|p| answer(p, flushed))
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+/// The per-request scalars `one_topic` needs beyond `topic` itself, bundled
+/// to stay under `rust-style.md`'s argument-count limit once `M9.12` added
+/// `authz` beside them.
+struct TopicMode {
+    version: i16,
+    acks_valid: bool,
+}
+
 /// One topic's outcome: resolve its addressing, then every partition.
 fn one_topic(
     cluster: &Cluster,
     pending: &mut Pending,
     topic: &oqueue_codec::produce::ProduceTopic<'_>,
-    version: i16,
-    acks_valid: bool,
+    mode: &TopicMode,
+    authz: &AuthzContext<'_>,
 ) -> TopicOutcome {
     // From v13 the wire addresses topics by id, not name — echo what the wire
     // carries at this version, and resolve the id against the registry.
-    let (name, resolved_name) = if version >= 13 {
+    let (name, resolved_name) = if mode.version >= 13 {
         (
             None,
             cluster.topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id)),
@@ -228,11 +254,33 @@ fn one_topic(
         .iter()
         .map(|p| PartitionSlot {
             index: p.index,
-            slot: match (&resolved_name, acks_valid) {
+            slot: match (&resolved_name, mode.acks_valid) {
                 (_, false) => Slot::Refused(error_codes::INVALID_REQUIRED_ACKS),
                 // An id this broker never issued: its own error (100), mapped
                 // back through the echoed id.
                 (None, true) => Slot::Refused(error_codes::UNKNOWN_TOPIC_ID),
+                // ⚠️ **`M9.12`: checked before `one_partition` runs at all** —
+                // the same ordering `M9.9` used for `Metadata`, so an
+                // unauthorized principal cannot cause a side effect (here,
+                // none exists on this path either way, but the ordering is
+                // what keeps that true if one is ever added).
+                //
+                // ⚠️ **Below v13 this checks the client's raw name, never
+                // `Cluster::partition_count`** — round 1 review's own
+                // finding, named rather than "fixed" into matching v13+:
+                // `TopicGrants` is keyed by name, so a name-addressed
+                // request can be authorized (or refused) without ever
+                // resolving existence first, `Metadata`'s own explicit-name
+                // case (`M9.9`) doing exactly this for every version it
+                // serves. From v13 the wire carries only an id, and an id
+                // cannot be checked against a name-keyed index *before*
+                // resolving it to a name — existence-resolution is not a
+                // choice there, it is what makes a name to check exist at
+                // all. The two paths' shapes genuinely differ by
+                // addressing mode, not by an oversight in one of them.
+                (Some(topic_name), true) if !topic_authorized(topic_name, authz) => {
+                    Slot::Refused(error_codes::TOPIC_AUTHORIZATION_FAILED)
+                }
                 (Some(topic_name), true) => {
                     one_partition(cluster, pending, topic_name, p.index, p.records)
                 }

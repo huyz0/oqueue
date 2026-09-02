@@ -36,6 +36,7 @@ mod partition;
 mod pass;
 mod target;
 
+use crate::authz::AuthzContext;
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use crate::session::Session;
@@ -65,6 +66,7 @@ pub(crate) async fn handle(
     session: &Session,
     prelude: RequestPrelude,
     body: &[u8],
+    authz: &AuthzContext<'_>,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
@@ -96,7 +98,7 @@ pub(crate) async fn handle(
         return HandlerResponse::Close;
     }
 
-    let outcomes = read_or_park(cluster, session, &request, version).await;
+    let outcomes = read_or_park(cluster, session, &request, version, authz).await;
 
     let response = FetchResponse {
         topics: outcomes
@@ -150,6 +152,7 @@ pub(crate) mod tests {
     #![allow(clippy::redundant_pub_crate)]
 
     use super::handle;
+    use crate::authz::AuthzContext;
     use crate::connection::HandlerResponse;
     use crate::testing::{Fixture, fixture, golden_batch, produce_one};
     use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
@@ -233,7 +236,7 @@ pub(crate) mod tests {
         out
     }
 
-    fn by_name(name: &str) -> FetchTopic {
+    pub(crate) fn by_name(name: &str) -> FetchTopic {
         let mut t = FetchTopic::default();
         t.topic = TopicName(StrBytes::from_string(name.to_owned()));
         t
@@ -268,8 +271,18 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn replied(fixture: &Fixture, version: i16, body: &[u8]) -> FetchResponse {
-        let HandlerResponse::Reply(out) =
-            handle(&fixture.cluster, &fixture.session, prelude(version), body).await
+        let HandlerResponse::Reply(out) = handle(
+            &fixture.cluster,
+            &fixture.session,
+            prelude(version),
+            body,
+            &AuthzContext {
+                principal: None,
+                credentials_configured: false,
+                topic_grants: &oqueue_core::TopicGrants::default(),
+            },
+        )
+        .await
         else {
             panic!("a fetch with a legal isolation level replies");
         };
@@ -309,7 +322,18 @@ pub(crate) mod tests {
             let body = with_null_name(version, "zzzprobe");
             assert!(
                 matches!(
-                    handle(&fixture.cluster, &fixture.session, prelude(version), &body).await,
+                    handle(
+                        &fixture.cluster,
+                        &fixture.session,
+                        prelude(version),
+                        &body,
+                        &AuthzContext {
+                            principal: None,
+                            credentials_configured: false,
+                            topic_grants: &oqueue_core::TopicGrants::default(),
+                        }
+                    )
+                    .await,
                     HandlerResponse::Close
                 ),
                 "v{version} framed a reply for a null topic name"
@@ -435,7 +459,12 @@ pub(crate) mod tests {
                 &fixture.cluster,
                 &fixture.session,
                 prelude(13),
-                &fetch_body(13, by_id(&fixture), 0, 7)
+                &fetch_body(13, by_id(&fixture), 0, 7),
+                &AuthzContext {
+                    principal: None,
+                    credentials_configured: false,
+                    topic_grants: &oqueue_core::TopicGrants::default(),
+                }
             )
             .await,
             HandlerResponse::Close

@@ -416,7 +416,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/key_layout.rs|PRIME"]="FNV-1a's prime, fixed by the algorithm"
   # --- oqueue-broker/src/listoffsets.rs: a sentinel, and a test's own version literal
   ["crates/oqueue-broker/src/listoffsets.rs|UNSET"]="a protocol sentinel"
-  ["crates/oqueue-broker/src/listoffsets.rs|VERSION"]="a test's own advertised-version literal, inside #[cfg(test)] mod tests -- not a production bound, and the file-path exclusion below only catches a tests/ directory, not an inline test module"
+  ["crates/oqueue-broker/src/listoffsets/tests.rs|VERSION"]="a test's own advertised-version literal -- M9.12 split listoffsets.rs's inline mod tests to listoffsets/tests.rs, moving this constant with it; not a production bound"
   ["crates/oqueue-broker/src/init_producer_id.rs|VERSION"]="a test's own advertised-version literal, inside #[cfg(test)] mod tests -- same shape as listoffsets.rs's own entry above"
   ["crates/oqueue-broker/src/sasl_handshake/tests.rs|VERSION"]="a test's own advertised-version literal, split into its own tests.rs file at the 500-line boundary's own precedent -- same shape as listoffsets.rs's own entry above"
   ["crates/oqueue-broker/src/sasl_authenticate/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"

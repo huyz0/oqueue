@@ -193,14 +193,10 @@ impl Dispatcher {
             return HandlerResponse::Close;
         };
         match api_key {
-            ApiKey::ListOffsets => crate::listoffsets::handle(&self.cluster, prelude, body),
+            ApiKey::ListOffsets => self.listoffsets_handle(prelude, body),
             ApiKey::Metadata => self.metadata_handle(prelude, body),
-            ApiKey::Produce => {
-                crate::produce::handle(&self.cluster, &self.session, prelude, body).await
-            }
-            ApiKey::Fetch => {
-                crate::fetch::handle(&self.cluster, &self.session, prelude, body).await
-            }
+            ApiKey::Produce => self.produce_handle(prelude, body).await,
+            ApiKey::Fetch => self.fetch_handle(prelude, body).await,
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),
             ApiKey::SaslHandshake => crate::sasl_handshake::handle(prelude, body),
             ApiKey::SaslAuthenticate => crate::sasl_authenticate::handle(
@@ -216,9 +212,26 @@ impl Dispatcher {
         }
     }
 
+    /// [`crate::authz::AuthzContext`] for this connection, right now —
+    /// `M9.12`'s shared builder, `metadata_handle`'s own original pattern
+    /// generalized to every handler that scopes by topic. `principal` is
+    /// borrowed rather than read again, because `Session::principal` returns
+    /// an owned value and every caller needs its own local to borrow from
+    /// for the lifetime this context carries.
+    fn authz_context<'a>(
+        &'a self,
+        principal: Option<&'a oqueue_core::Principal>,
+    ) -> crate::authz::AuthzContext<'a> {
+        crate::authz::AuthzContext {
+            principal,
+            credentials_configured: !self.credentials.is_empty(),
+            topic_grants: &self.topic_grants,
+        }
+    }
+
     /// `Metadata`'s own arm, pulled out of `dispatch`'s `match` purely to
     /// keep that function under the fifty-line limit — building
-    /// [`crate::metadata::AuthzContext`] needs the session's current
+    /// [`crate::authz::AuthzContext`] needs the session's current
     /// principal bound to a local first, which the match arm's own line
     /// budget could not absorb alongside every other API.
     fn metadata_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
@@ -227,12 +240,48 @@ impl Dispatcher {
             &self.cluster,
             prelude,
             body,
-            &crate::metadata::AuthzContext {
-                principal: principal.as_ref(),
-                credentials_configured: !self.credentials.is_empty(),
-                topic_grants: &self.topic_grants,
-            },
+            &self.authz_context(principal.as_ref()),
         )
+    }
+
+    /// `ListOffsets`'s own arm — `M9.12`'s per-principal scoping, same
+    /// pattern as `metadata_handle`.
+    fn listoffsets_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::listoffsets::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &self.authz_context(principal.as_ref()),
+        )
+    }
+
+    /// `Produce`'s own arm — `M9.12`'s per-principal scoping, same pattern
+    /// as `metadata_handle`.
+    async fn produce_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::produce::handle(
+            &self.cluster,
+            &self.session,
+            prelude,
+            body,
+            &self.authz_context(principal.as_ref()),
+        )
+        .await
+    }
+
+    /// `Fetch`'s own arm — `M9.12`'s per-principal scoping, same pattern as
+    /// `metadata_handle`.
+    async fn fetch_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::fetch::handle(
+            &self.cluster,
+            &self.session,
+            prelude,
+            body,
+            &self.authz_context(principal.as_ref()),
+        )
+        .await
     }
 }
 

@@ -15,7 +15,7 @@
 //! named it, so existence is not what is being protected. The
 //! *null-topic-array* case ("every topic") instead **silently omits**
 //! whatever the principal cannot see (`M9.10`): it is served directly from
-//! [`TopicGrants::topics_for`] rather than [`Cluster::topic_names`], so an
+//! [`oqueue_core::TopicGrants::topics_for`] rather than [`Cluster::topic_names`], so an
 //! unauthorized topic is never enumerated in the first place, not answered
 //! and then hidden. Scoping is a no-op for both shapes — every name
 //! resolves exactly as before `M9` — whenever `credentials_configured` is
@@ -24,6 +24,7 @@
 //! connection could ever be denied by `M9.7`'s gate either, so there is
 //! nothing this handler could honestly refuse.
 
+use crate::authz::{AuthzContext, topic_authorized};
 use crate::cluster::Cluster;
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
@@ -31,22 +32,7 @@ use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_codec::metadata::{
     MetadataResponse, MetadataResponseTopic, decode_request, encode_response,
 };
-use oqueue_core::{Principal, TopicGrants, TopicId};
-
-/// `M9.9`'s authorization inputs, bundled: `Metadata`'s own signature would
-/// otherwise carry three parameters that only ever travel together (`M9.7`'s
-/// principal/credentials-configured pair, plus `M9.8`'s index), past
-/// `rust-style.md`'s argument-count limit.
-pub(crate) struct AuthzContext<'a> {
-    /// This connection's authenticated identity, if any (`M9.7`'s
-    /// `Session::principal`).
-    pub(crate) principal: Option<&'a Principal>,
-    /// Whether authorization is even live on this broker — `M9.7`'s own
-    /// fail-open signal, reused rather than a second one invented here.
-    pub(crate) credentials_configured: bool,
-    /// `M9.8`'s forward index.
-    pub(crate) topic_grants: &'a TopicGrants,
-}
+use oqueue_core::TopicId;
 
 /// Decodes, answers, encodes. `Close` only when the body cannot be
 /// decoded — a malformed request from a client that negotiated fine is a
@@ -174,7 +160,7 @@ fn resolve_all(
 /// — `M9.10`'s own gate, the silent-omission half of `M9.1`'s verified
 /// Kafka finding.
 ///
-/// ⚠️ **Served from [`TopicGrants::topics_for`] directly, never from
+/// ⚠️ **Served from [`oqueue_core::TopicGrants::topics_for`] directly, never from
 /// [`Cluster::topic_names`], once configured.** This is doc 15 §4's own
 /// architectural claim made real for this path specifically: the cost is
 /// O(topics this principal can see), not O(topics that exist) filtered
@@ -213,32 +199,6 @@ fn all_topics_names(cluster: &Cluster, authz: &AuthzContext<'_>) -> Vec<String> 
         .filter(|name| cluster.partition_count(name).is_some())
         .map(str::to_owned)
         .collect()
-}
-
-/// Whether an explicitly-named topic may be resolved at all, before
-/// `resolve_topic` ever runs — `M9.9`'s own gate, the explicitly-named half
-/// of `M9.1`'s verified Kafka finding.
-///
-/// ⚠️ **Fails open, reusing `oqueue_core::authorize`'s own signal.** With no
-/// credential source configured, `M9.7`'s dispatcher gate could never have
-/// refused this connection either — scoping `Metadata` here without
-/// scoping `SaslAuthenticate` would be inconsistent, not more careful.
-/// ⚠️ **Fails closed on everything else**, deliberately conservative: no
-/// principal (should be unreachable — `M9.7`'s own gate already refuses an
-/// unauthenticated connection once credentials are configured) and an
-/// unconstructible topic name (an empty string; `TopicId`'s own invariant)
-/// both answer "no," never a panic or an unwrap.
-fn topic_authorized(name: &str, authz: &AuthzContext<'_>) -> bool {
-    if !authz.credentials_configured {
-        return true;
-    }
-    let Some(principal) = authz.principal else {
-        return false;
-    };
-    let Ok(topic_id) = TopicId::new(name) else {
-        return false;
-    };
-    authz.topic_grants.can_see(principal, &topic_id)
 }
 
 /// Resolves one topic: existing topics report their partitions; a missing
