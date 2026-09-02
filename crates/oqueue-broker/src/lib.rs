@@ -37,6 +37,7 @@ mod heartbeat;
 mod ingest;
 mod init_producer_id;
 mod join_group;
+mod leave_group;
 pub mod listoffsets;
 pub mod metadata;
 pub mod produce;

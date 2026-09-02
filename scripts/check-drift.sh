@@ -453,6 +453,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/heartbeat/tests.rs|SYNC_VERSION"]="a test's own advertised-version literal, same shape as JOIN_VERSION above"
   ["crates/oqueue-broker/src/heartbeat/tests.rs|HEARTBEAT_VERSION"]="a test's own advertised-version literal, same shape as JOIN_VERSION above"
   ["crates/oqueue-broker/src/heartbeat/tests.rs|REBALANCE_TIMEOUT_MS"]="a test's own fixture value (how long the acceptance test's own join round waits under paused time), not a production bound"
+  ["crates/oqueue-broker/src/leave_group/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/leave_group/tests.rs|V1"]="a test's own advertised-version literal, same shape as VERSION above"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )

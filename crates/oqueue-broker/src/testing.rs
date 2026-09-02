@@ -47,6 +47,11 @@ pub(crate) struct Fixture {
     pub(crate) store: Arc<TestStore>,
     /// One connection's memory, so a test can produce and then read on it.
     pub(crate) session: crate::session::Session,
+    /// The concrete fake behind `cluster`'s own type-erased
+    /// `Arc<dyn GroupCoordinator>` — `M4.10`'s own need: a test asserting
+    /// "exactly one rebalance" needs `transition_calls()`, which no method
+    /// on the trait itself exposes.
+    pub(crate) group_coordinator: Arc<oqueue_core::FakeGroupCoordinator>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -174,13 +179,15 @@ pub(crate) async fn with_store(
         .expect("an empty log opens");
     let shared: Arc<dyn ObjectStore> = Arc::clone(&store) as Arc<dyn ObjectStore>;
     let sequencing = crate::cluster::Sequencing::new(coordinator, reader);
+    let group_coordinator = Arc::new(oqueue_core::FakeGroupCoordinator::new());
     let cluster = Cluster::new(
         host,
         port,
         sequencing,
         crate::cluster::Seams {
             store: shared,
-            group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+            group_coordinator: Arc::clone(&group_coordinator)
+                as Arc<dyn oqueue_core::GroupCoordinator>,
         },
         &WriterId::mint(),
     )
@@ -192,6 +199,7 @@ pub(crate) async fn with_store(
         cluster: Arc::new(cluster),
         session: crate::session::Session::default(),
         store,
+        group_coordinator,
         serving: tokio::spawn(serving.run()),
     }
 }

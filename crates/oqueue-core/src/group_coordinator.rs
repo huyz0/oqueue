@@ -3,6 +3,7 @@
 
 use crate::{AssignmentEpoch, GenerationId, GroupEvent, GroupId, GroupState, Result};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
 /// One group's own state, generation, and assignment epoch.
@@ -81,6 +82,16 @@ pub trait GroupCoordinator: Send + Sync + core::fmt::Debug {
 #[derive(Default)]
 pub struct FakeGroupCoordinator {
     groups: Mutex<HashMap<GroupId, GroupRecord>>,
+    /// How many times [`GroupCoordinator::transition`] has been called,
+    /// successful or refused — `M4.10`'s own need: "one rebalance, not
+    /// three" for a batched `LeaveGroup` is not observable from the
+    /// resulting state alone (a buggy implementation calling `transition`
+    /// once per removed member would have its second and third calls
+    /// silently refused, landing on the identical final state), so a
+    /// caller asserting "called exactly once" needs this counter, the
+    /// same "a proxy, not wall-clock timing" idiom `Cluster::topic_lookups`
+    /// (`M9.17`) already established for an analogous question.
+    transition_calls: AtomicU64,
 }
 
 impl FakeGroupCoordinator {
@@ -88,6 +99,13 @@ impl FakeGroupCoordinator {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// How many times [`GroupCoordinator::transition`] has been called on
+    /// this coordinator so far, whatever the outcome.
+    #[must_use]
+    pub fn transition_calls(&self) -> u64 {
+        self.transition_calls.load(Ordering::Relaxed)
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<GroupId, GroupRecord>> {
@@ -105,6 +123,7 @@ impl core::fmt::Debug for FakeGroupCoordinator {
 
 impl GroupCoordinator for FakeGroupCoordinator {
     fn transition(&self, group: &GroupId, event: GroupEvent) -> Result<GroupRecord> {
+        self.transition_calls.fetch_add(1, Ordering::Relaxed);
         let mut groups = self.lock();
         let current = groups.get(group).copied().unwrap_or(GroupRecord::FRESH);
         let (state, generation, assignment_epoch) =
@@ -186,6 +205,22 @@ mod tests {
         c.transition(&group("orders"), GroupEvent::Join)
             .expect("legal");
         assert_eq!(c.record(&group("payments")), None);
+    }
+
+    #[test]
+    fn transition_calls_counts_every_call_including_refused_ones() {
+        let c = FakeGroupCoordinator::new();
+        assert_eq!(c.transition_calls(), 0);
+        c.transition(&group("orders"), GroupEvent::Join)
+            .expect("Empty -> Join is legal");
+        assert_eq!(c.transition_calls(), 1);
+        // Refused: Join has no legal successor from PreparingRebalance.
+        let _ = c.transition(&group("orders"), GroupEvent::Join);
+        assert_eq!(
+            c.transition_calls(),
+            2,
+            "a refused call still counts -- it was still called"
+        );
     }
 
     fn arbitrary_event() -> impl proptest::strategy::Strategy<Value = GroupEvent> {

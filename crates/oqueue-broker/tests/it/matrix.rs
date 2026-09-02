@@ -118,6 +118,7 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
         ApiKey::JoinGroup => join_group_body(&mut body, version),
         ApiKey::SyncGroup => sync_group_body(&mut body, version),
         ApiKey::Heartbeat => heartbeat_body(&mut body, version),
+        ApiKey::LeaveGroup => leave_group_body(&mut body, version),
     }
     body
 }
@@ -181,6 +182,31 @@ fn heartbeat_body(out: &mut Vec<u8>, version: i16) {
         ))
         .with_generation_id(1)
         .with_member_id(StrBytes::from_static_str("m1"));
+    request.encode(out, version).expect("encodes");
+}
+
+/// `LeaveGroup`'s own minimal body -- one member leaving a group nothing
+/// ever joined. Answers `error_code == 0` unconditionally: removal, not
+/// fencing (`leave_group.rs`'s own doc) -- whether the member was ever
+/// really there is `M4.11`'s own question.
+fn leave_group_body(out: &mut Vec<u8>, version: i16) {
+    use kafka_protocol::messages::LeaveGroupRequest;
+    let request = if version <= 2 {
+        LeaveGroupRequest::default()
+            .with_group_id(kafka_protocol::messages::GroupId(
+                StrBytes::from_static_str("matrix-leave-group"),
+            ))
+            .with_member_id(StrBytes::from_static_str("m1"))
+    } else {
+        use kafka_protocol::messages::leave_group_request::MemberIdentity;
+        let mut member = MemberIdentity::default();
+        member.member_id = StrBytes::from_static_str("m1");
+        LeaveGroupRequest::default()
+            .with_group_id(kafka_protocol::messages::GroupId(
+                StrBytes::from_static_str("matrix-leave-group"),
+            ))
+            .with_members(vec![member])
+    };
     request.encode(out, version).expect("encodes");
 }
 
@@ -288,6 +314,11 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         ApiKey::FindCoordinator => find_coordinator_error_code(&mut rest, version),
         ApiKey::JoinGroup | ApiKey::SyncGroup | ApiKey::Heartbeat => {
             group_protocol_error_code(api_key, &mut rest, version)
+        }
+        ApiKey::LeaveGroup => {
+            kafka_protocol::messages::LeaveGroupResponse::decode(&mut rest, version)
+                .expect("LeaveGroup reply decodes")
+                .error_code
         }
     };
     assert!(

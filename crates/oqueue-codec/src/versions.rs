@@ -36,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 12] = [
+pub static ADVERTISED: [Advertised; 13] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -97,6 +97,17 @@ pub static ADVERTISED: [Advertised; 12] = [
         api_key: ApiKey::Heartbeat,
         min: 0,
         max: 4,
+        flexible_from: Some(4),
+    },
+    Advertised {
+        // ⚠️ **v0-5, flexible from v4** — `oqueue_codec::leave_group`'s own
+        // doc, confirmed against the dependency's generated source
+        // directly (`M4.10`): batched from v3 (real Kafka's own batching,
+        // ahead of `FindCoordinator`'s KIP-699 one), one function two
+        // frame shapes, `find_coordinator.rs`'s own precedent.
+        api_key: ApiKey::LeaveGroup,
+        min: 0,
+        max: 5,
         flexible_from: Some(4),
     },
     Advertised {
@@ -175,8 +186,9 @@ mod tests {
         ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse,
         FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
         InitProducerIdRequest, InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse,
-        ListOffsetsRequest, ListOffsetsResponse, MetadataRequest, MetadataResponse, ProduceRequest,
-        ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+        LeaveGroupRequest, LeaveGroupResponse, ListOffsetsRequest, ListOffsetsResponse,
+        MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
+        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
         SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
@@ -215,18 +227,9 @@ mod tests {
                 FindCoordinatorRequest::header_version(version),
                 FindCoordinatorResponse::header_version(version),
             ),
-            ApiKey::JoinGroup => (
-                JoinGroupRequest::header_version(version),
-                JoinGroupResponse::header_version(version),
-            ),
-            ApiKey::Heartbeat => (
-                HeartbeatRequest::header_version(version),
-                HeartbeatResponse::header_version(version),
-            ),
-            ApiKey::SyncGroup => (
-                SyncGroupRequest::header_version(version),
-                SyncGroupResponse::header_version(version),
-            ),
+            ApiKey::JoinGroup | ApiKey::Heartbeat | ApiKey::LeaveGroup | ApiKey::SyncGroup => {
+                group_protocol_header_versions(api_key, version)
+            }
             ApiKey::ApiVersions => (
                 ApiVersionsRequest::header_version(version),
                 ApiVersionsResponse::header_version(version),
@@ -243,6 +246,32 @@ mod tests {
                 SaslAuthenticateRequest::header_version(version),
                 SaslAuthenticateResponse::header_version(version),
             ),
+        }
+    }
+
+    /// The four classic group-protocol messages' own header versions --
+    /// pulled out of `dependency_header_versions` purely to keep that
+    /// function under the fifty-line limit, `metadata_handle`'s own
+    /// precedent.
+    fn group_protocol_header_versions(api_key: ApiKey, version: i16) -> (i16, i16) {
+        match api_key {
+            ApiKey::JoinGroup => (
+                JoinGroupRequest::header_version(version),
+                JoinGroupResponse::header_version(version),
+            ),
+            ApiKey::Heartbeat => (
+                HeartbeatRequest::header_version(version),
+                HeartbeatResponse::header_version(version),
+            ),
+            ApiKey::LeaveGroup => (
+                LeaveGroupRequest::header_version(version),
+                LeaveGroupResponse::header_version(version),
+            ),
+            ApiKey::SyncGroup => (
+                SyncGroupRequest::header_version(version),
+                SyncGroupResponse::header_version(version),
+            ),
+            other => unreachable!("group_protocol_header_versions called for {other:?}"),
         }
     }
 
@@ -314,6 +343,7 @@ mod tests {
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => pin::<JoinGroupRequest>(row),
                 ApiKey::Heartbeat => pin::<HeartbeatRequest>(row),
+                ApiKey::LeaveGroup => pin::<LeaveGroupRequest>(row),
                 ApiKey::SyncGroup => pin::<SyncGroupRequest>(row),
                 ApiKey::SaslHandshake => pin_never_flexible::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
@@ -347,6 +377,7 @@ mod tests {
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => within::<JoinGroupRequest>(row),
                 ApiKey::Heartbeat => within::<HeartbeatRequest>(row),
+                ApiKey::LeaveGroup => within::<LeaveGroupRequest>(row),
                 ApiKey::SyncGroup => within::<SyncGroupRequest>(row),
                 ApiKey::SaslHandshake => within::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
