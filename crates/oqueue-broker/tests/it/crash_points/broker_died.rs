@@ -12,7 +12,7 @@
 //! file's only caller.
 
 use super::{Aftermath, POLL_BUDGET};
-use oqueue_broker::{Cluster, Dispatcher, Handler as _, Sequencing, WriterId};
+use oqueue_broker::{Cluster, Dispatcher, Handler as _, Seams, Sequencing, WriterId};
 use oqueue_coordinator::Coordinator;
 use oqueue_core::{
     BoxFuture, ByteRange, CoordinatorEpoch, FakeMaterializedIndex, FakeMetadataLog, ObjectKey,
@@ -116,8 +116,17 @@ async fn mini_cluster_with_hanging_put() -> MiniCluster {
     let shared: Arc<dyn ObjectStore> = Arc::clone(&store) as Arc<dyn ObjectStore>;
     let sequencing = Sequencing::new(coordinator, reader);
     let cluster = Arc::new(
-        Cluster::new("h", 1, sequencing, shared, &WriterId::mint())
-            .expect("a minted identity is a usable key component"),
+        Cluster::new(
+            "h",
+            1,
+            sequencing,
+            Seams {
+                store: shared,
+                group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+            },
+            &WriterId::mint(),
+        )
+        .expect("a minted identity is a usable key component"),
     );
     cluster.ensure_topic("orders");
     let serving_task = tokio::spawn(serving.run());

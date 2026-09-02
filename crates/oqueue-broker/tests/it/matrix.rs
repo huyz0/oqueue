@@ -115,8 +115,35 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
         ApiKey::SaslHandshake => sasl_handshake_body(&mut body, version),
         ApiKey::SaslAuthenticate => sasl_authenticate_body(&mut body, version),
         ApiKey::FindCoordinator => find_coordinator_body(&mut body, version),
+        ApiKey::JoinGroup => join_group_body(&mut body, version),
     }
     body
+}
+
+/// `JoinGroup`'s own minimal body — one member, its own compatible
+/// protocol, a rebalance timeout of `1`ms so a fresh group's own round (no
+/// early-close signal, `join_group::round`'s own module doc) closes at its
+/// own deadline almost immediately rather than holding this test open.
+/// Every later version reuses the same group name, so from v1 on the round
+/// closes the instant this single member rejoins (`expected` is `Some(1)`
+/// from the version before) — its own function for the same
+/// fifty-line-limit reason `list_offsets_body` is.
+fn join_group_body(out: &mut Vec<u8>, version: i16) {
+    use kafka_protocol::messages::JoinGroupRequest;
+    use kafka_protocol::messages::join_group_request::JoinGroupRequestProtocol;
+    let mut protocol = JoinGroupRequestProtocol::default();
+    protocol.name = StrBytes::from_static_str("range");
+    protocol.metadata = bytes::Bytes::from_static(b"m");
+    let request = JoinGroupRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(
+            StrBytes::from_static_str("matrix-group"),
+        ))
+        .with_session_timeout_ms(1)
+        .with_rebalance_timeout_ms(1)
+        .with_member_id(StrBytes::from_static_str(""))
+        .with_protocol_type(StrBytes::from_static_str("consumer"))
+        .with_protocols(vec![protocol]);
+    request.encode(out, version).expect("encodes");
 }
 
 /// `Produce`'s own minimal body -- its own function for the same
@@ -221,6 +248,11 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .error_code
         }
         ApiKey::FindCoordinator => find_coordinator_error_code(&mut rest, version),
+        ApiKey::JoinGroup => {
+            kafka_protocol::messages::JoinGroupResponse::decode(&mut rest, version)
+                .expect("JoinGroup reply decodes")
+                .error_code
+        }
     };
     assert!(
         rest.is_empty(),

@@ -174,8 +174,17 @@ pub(crate) async fn with_store(
         .expect("an empty log opens");
     let shared: Arc<dyn ObjectStore> = Arc::clone(&store) as Arc<dyn ObjectStore>;
     let sequencing = crate::cluster::Sequencing::new(coordinator, reader);
-    let cluster = Cluster::new(host, port, sequencing, shared, &WriterId::mint())
-        .expect("a minted identity is a usable key component");
+    let cluster = Cluster::new(
+        host,
+        port,
+        sequencing,
+        crate::cluster::Seams {
+            store: shared,
+            group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+        },
+        &WriterId::mint(),
+    )
+    .expect("a minted identity is a usable key component");
     for topic in topics {
         cluster.ensure_topic(topic);
     }

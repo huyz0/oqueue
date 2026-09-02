@@ -54,7 +54,10 @@ fuzz_target!(|data: &[u8]| {
             "fuzz",
             1,
             oqueue_broker::Sequencing::new(coordinator, reader),
-            store,
+            oqueue_broker::Seams {
+                store,
+                group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+            },
             &oqueue_broker::WriterId::mint(),
         )
         .expect("a minted identity is a usable key component");

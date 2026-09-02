@@ -36,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 9] = [
+pub static ADVERTISED: [Advertised; 10] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -77,6 +77,18 @@ pub static ADVERTISED: [Advertised; 9] = [
         min: 0,
         max: 6,
         flexible_from: Some(3),
+    },
+    Advertised {
+        // ⚠️ **v0-9, flexible from v6 — not this crate's usual v2/v3
+        // cutover** — `oqueue_codec::join_group`'s own doc, confirmed
+        // against the dependency's generated source directly (`M4.5`). The
+        // codec's own ceiling is v9; nothing about this broker's handler
+        // (`M4.7`, no `skip_assignment`/no server-side assignor) narrows it
+        // the way `InitProducerId`'s v4 cap does.
+        api_key: ApiKey::JoinGroup,
+        min: 0,
+        max: 9,
+        flexible_from: Some(6),
     },
     Advertised {
         // ⚠️ **Never flexible, at any version** — the dependency's own
@@ -142,9 +154,10 @@ mod tests {
     use kafka_protocol::messages::{
         ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse,
         FindCoordinatorRequest, FindCoordinatorResponse, InitProducerIdRequest,
-        InitProducerIdResponse, ListOffsetsRequest, ListOffsetsResponse, MetadataRequest,
-        MetadataResponse, ProduceRequest, ProduceResponse, SaslAuthenticateRequest,
-        SaslAuthenticateResponse, SaslHandshakeRequest, SaslHandshakeResponse,
+        InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse, ListOffsetsRequest,
+        ListOffsetsResponse, MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
+        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+        SaslHandshakeResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -181,6 +194,10 @@ mod tests {
             ApiKey::FindCoordinator => (
                 FindCoordinatorRequest::header_version(version),
                 FindCoordinatorResponse::header_version(version),
+            ),
+            ApiKey::JoinGroup => (
+                JoinGroupRequest::header_version(version),
+                JoinGroupResponse::header_version(version),
             ),
             ApiKey::ApiVersions => (
                 ApiVersionsRequest::header_version(version),
@@ -267,6 +284,7 @@ mod tests {
                 ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
+                ApiKey::JoinGroup => pin::<JoinGroupRequest>(row),
                 ApiKey::SaslHandshake => pin_never_flexible::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => pin::<InitProducerIdRequest>(row),
@@ -297,6 +315,7 @@ mod tests {
                 ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),
+                ApiKey::JoinGroup => within::<JoinGroupRequest>(row),
                 ApiKey::SaslHandshake => within::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),

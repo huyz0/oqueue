@@ -35,6 +35,7 @@ mod find_coordinator;
 mod flush;
 mod ingest;
 mod init_producer_id;
+mod join_group;
 pub mod listoffsets;
 pub mod metadata;
 pub mod produce;
@@ -48,7 +49,7 @@ mod testing;
 pub mod tls;
 mod writer_id;
 
-pub use cluster::{Cluster, FlushError, Sequencing};
+pub use cluster::{Cluster, FlushError, Seams, Sequencing};
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, serve_connection};
 pub use dispatch::Dispatcher;
 pub use fetch::{Allowance, MAX_PARK_MS};

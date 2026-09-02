@@ -205,11 +205,18 @@ async fn build_cluster(
         "oqueue: WARNING -- the metadata log is in memory (M6 owns the durable one). \
          Offsets do not survive a restart."
     );
+    eprintln!(
+        "oqueue: WARNING -- consumer-group state is in memory (M4.14/M4.15 own the durable \
+         one, ADR-0034). Group membership and generation do not survive a restart."
+    );
     let cluster = oqueue_broker::Cluster::new(
         host,
         port,
         oqueue_broker::Sequencing::new(coordinator, reader),
-        store,
+        oqueue_broker::Seams {
+            store,
+            group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+        },
         &oqueue_broker::WriterId::mint(),
     )
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?;

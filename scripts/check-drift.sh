@@ -314,6 +314,12 @@ declare -A RUST_BOUNDS=(
   # `ConnectionLimits::idle_timeout` a composer picks, so raising it is
   # weakening in a second way: it can cross that ceiling silently.
   ["crates/oqueue-broker/src/fetch/deadline.rs|MAX_PARK_MS"]="60_000"
+  # The longest a JoinGroup round may stay open. `M4.7`'s own ceiling on a
+  # member's rebalance_timeout_ms, fetch::deadline::MAX_PARK_MS's own
+  # argument applied to a second wire field: raising it holds every member's
+  # connection that much longer against a client's own (bounded, but large)
+  # number.
+  ["crates/oqueue-broker/src/join_group/deadline.rs|MAX_BARRIER_MS"]="3_000_000"
   # How many batches one index page may name, and how many entries a partition
   # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
   # `M10.20`: moved from `index_state.rs` to its own `index_state/page.rs`
@@ -399,6 +405,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_SASL_MECHANISM"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|SASL_AUTHENTICATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|TOPIC_AUTHORIZATION_FAILED"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|INCONSISTENT_GROUP_PROTOCOL"]="Kafka's own error code, the protocol fixes it"
   # --- batch.rs: RecordBatch v2's fixed layout
   ["crates/oqueue-codec/src/batch.rs|BATCH_HEADER_LEN"]="RecordBatch v2's fixed header length"
   ["crates/oqueue-codec/src/batch.rs|CRC_COVERAGE_START"]="RecordBatch v2's fixed CRC coverage offset"
@@ -423,6 +430,9 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/sasl_authenticate/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/find_coordinator/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/find_coordinator/tests.rs|BATCHED_VERSION"]="a test's own advertised-version literal for the KIP-699 batched shape (M4.4), same shape as VERSION above"
+  ["crates/oqueue-broker/src/join_group/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/join_group/tests.rs|REBALANCE_TIMEOUT_MS"]="a test's own fixture value (how long the T1 acceptance test waits under paused time), not a production bound"
+  ["crates/oqueue-broker/src/join_group/tests.rs|V7"]="a test's own advertised-version literal, same shape as VERSION above"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )

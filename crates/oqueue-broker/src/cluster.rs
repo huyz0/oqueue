@@ -35,11 +35,12 @@
 //! metadata record rather than N of each. Doc 12 prices a PUT far above the
 //! bytes in it, so this ratio is the cost model.
 
+use crate::join_group::GroupJoins;
 use crate::writer_id::WriterId;
 use oqueue_coordinator::{Coordinator, CoordinatorError};
 use oqueue_core::{
-    BundleNamer, CacheState, CoordinatorEpoch, Error, IndexReader, ObjectStore, Offset,
-    PartitionId, TopicId,
+    BundleNamer, CacheState, CoordinatorEpoch, Error, GroupCoordinator, IndexReader, ObjectStore,
+    Offset, PartitionId, TopicId,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -86,6 +87,18 @@ pub struct Cluster {
     /// call — the two shapes of cost a `Metadata` handler can have, targeted
     /// (O(topics a caller resolves)) and a full scan (O(topics that exist)).
     topic_lookups: AtomicU64,
+    /// The consumer-group state machine's own seam (`M4.2`, `ADR-0034`) —
+    /// `ADR-0033`'s "every group resolves to this node" made real: one
+    /// coordinator instance, shared by every connection's `Dispatcher` the
+    /// same way `coordinator`/`index` above already are, since two members
+    /// of the same group arrive on two different connections and must see
+    /// the same group state.
+    group_coordinator: Arc<dyn GroupCoordinator>,
+    /// `M4.7`'s own join-round bookkeeping — who is mid-`JoinGroup` for
+    /// each group, never durable and never part of `group_coordinator`'s
+    /// own sans-I/O contract (`round`'s own module doc). Starts empty by
+    /// construction; nothing a composer configures.
+    group_joins: GroupJoins,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -109,6 +122,19 @@ impl Sequencing {
     pub const fn new(coordinator: Coordinator, index: IndexReader) -> Self {
         Self { coordinator, index }
     }
+}
+
+/// Every seam a `Cluster` is built over besides `Sequencing`.
+///
+/// ⚠️ Bundled so [`Cluster::new`] stays under `rust-style.md`'s
+/// argument-count limit as a third one joins `store`, not because these two
+/// share `Sequencing`'s own "mismatching them is a bug" invariant.
+#[derive(Debug)]
+pub struct Seams {
+    /// The object store this broker reads and writes through.
+    pub store: Arc<dyn ObjectStore>,
+    /// The consumer-group state machine's own seam (`M4.2`, `ADR-0034`).
+    pub group_coordinator: Arc<dyn GroupCoordinator>,
 }
 
 /// What a flush can fail with, in the two ways a client hears differently.
@@ -148,7 +174,7 @@ impl Cluster {
         host: impl Into<String>,
         port: i32,
         sequencing: Sequencing,
-        store: Arc<dyn ObjectStore>,
+        seams: Seams,
         writer: &WriterId,
     ) -> Result<Self, Error> {
         Ok(Self {
@@ -158,11 +184,25 @@ impl Cluster {
             topics: Mutex::new(HashMap::new()),
             coordinator: sequencing.coordinator,
             index: sequencing.index,
-            store,
+            store: seams.store,
             namer: Mutex::new(BundleNamer::new(writer.as_str())?),
             reaped_reads: AtomicU64::new(0),
             topic_lookups: AtomicU64::new(0),
+            group_coordinator: seams.group_coordinator,
+            group_joins: GroupJoins::default(),
         })
+    }
+
+    /// The consumer-group coordinator every connection's `JoinGroup`
+    /// handler drives (`M4.7`).
+    pub(crate) fn group_coordinator(&self) -> &dyn GroupCoordinator {
+        self.group_coordinator.as_ref()
+    }
+
+    /// The join-round bookkeeping every connection's `JoinGroup` handler
+    /// shares (`M4.7`).
+    pub(crate) const fn group_joins(&self) -> &GroupJoins {
+        &self.group_joins
     }
 
     /// The topic's partition count, or `None` if it does not exist.

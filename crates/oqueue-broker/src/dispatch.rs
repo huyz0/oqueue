@@ -18,9 +18,10 @@
 //! beyond the pre-authentication trio (`ApiVersions`, `SaslHandshake`,
 //! `SaslAuthenticate`) that `oqueue_core::authorize` refuses closes the
 //! connection rather than answering with a per-API authorization error code —
-//! a deliberate simplification, not an oversight: six heterogeneous response
-//! shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`, `InitProducerId`,
-//! `FindCoordinator`) would each need their own encoded refusal, and this decision point's own
+//! a deliberate simplification, not an oversight: seven heterogeneous
+//! response shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`,
+//! `InitProducerId`, `FindCoordinator`, `JoinGroup`) would each need their
+//! own encoded refusal, and this decision point's own
 //! scope is the seam, not full Kafka error-code parity for a branch no
 //! existing deployment reaches yet (`credentials` is empty everywhere until
 //! `bin/oqueue`'s own composition-root wiring lands). A later task may trade
@@ -206,21 +207,7 @@ impl Dispatcher {
         if api_key == ApiKey::ApiVersions {
             return HandlerResponse::Reply(api_versions_response(prelude));
         }
-        // `M9.7`'s authorization decision point: one call, ahead of the
-        // routing match below, that every API beyond the pre-authentication
-        // trio (`ApiVersions`, already answered above; `SaslHandshake` and
-        // `SaslAuthenticate`, exempted here since they are how a principal
-        // gets attached in the first place) passes through before its
-        // handler runs. A new arm added to the match cannot skip this by
-        // forgetting to call it — only by being routed outside this one
-        // shared guard, which `M9.11`'s structural gate is free to check for
-        // once there is more than one call site to compare against.
-        if !matches!(api_key, ApiKey::SaslHandshake | ApiKey::SaslAuthenticate)
-            && !oqueue_core::authorize(
-                self.session.principal().as_ref(),
-                !self.credentials.is_empty(),
-            )
-        {
+        if self.unauthorized(api_key) {
             return HandlerResponse::Close;
         }
         // `security.md` rule 13, FR-45, `M9.16`: the second bound every API
@@ -247,6 +234,7 @@ impl Dispatcher {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body),
             ApiKey::Metadata => self.metadata_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
+            ApiKey::JoinGroup => crate::join_group::handle(&self.cluster, prelude, body).await,
             ApiKey::Produce => self.produce_handle(prelude, body).await,
             ApiKey::Fetch => self.fetch_handle(prelude, body).await,
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),
@@ -262,6 +250,24 @@ impl Dispatcher {
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
         }
+    }
+
+    /// `M9.7`'s authorization decision point: one call, ahead of `dispatch`'s
+    /// own routing match, that every API beyond the pre-authentication trio
+    /// (`ApiVersions`, answered before this is ever reached; `SaslHandshake`
+    /// and `SaslAuthenticate`, exempted here since they are how a principal
+    /// gets attached in the first place) passes through before its handler
+    /// runs. A new arm added to that match cannot skip this by forgetting to
+    /// call it — only by being routed outside this one shared guard, which
+    /// `M9.11`'s structural gate is free to check for once there is more
+    /// than one call site to compare against. Pulled into its own method
+    /// purely to keep `dispatch` under the fifty-line limit.
+    fn unauthorized(&self, api_key: ApiKey) -> bool {
+        !matches!(api_key, ApiKey::SaslHandshake | ApiKey::SaslAuthenticate)
+            && !oqueue_core::authorize(
+                self.session.principal().as_ref(),
+                !self.credentials.is_empty(),
+            )
     }
 
     /// Admits one in-flight request against this connection's quota, if one

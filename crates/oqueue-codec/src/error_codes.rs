@@ -98,6 +98,14 @@ pub const UNSUPPORTED_SASL_MECHANISM: i16 = 33;
 /// pre-`M9.4` answer (no credential source configured yet) and `M9.4`'s
 /// own answer to a real, wrong credential alike.
 pub const SASL_AUTHENTICATION_FAILED: i16 = 58;
+/// No protocol name is common to every member of a `JoinGroup` round (23).
+///
+/// `M4.6`'s own `elect` returning `None` mapped to the wire, `M4.7`'s own
+/// job per `M4.6`'s backlog row: a member whose own advertised protocols
+/// share nothing with the round's running intersection is refused this
+/// code and never enrolled, rather than silently joining a group it could
+/// never run an assignor with.
+pub const INCONSISTENT_GROUP_PROTOCOL: i16 = 23;
 /// An explicitly-named topic the requesting principal cannot `DESCRIBE` (29).
 ///
 /// `M9.9`, one leg of `M9.1`'s verified finding against real Kafka source:
@@ -202,6 +210,15 @@ mod tests {
         assert_eq!(
             super::TOPIC_AUTHORIZATION_FAILED,
             ResponseError::TopicAuthorizationFailed.code()
+        );
+    }
+
+    /// `M4.7`'s own `JoinGroup` code, same oracle.
+    #[test]
+    fn the_inconsistent_group_protocol_code_matches_the_dependency() {
+        assert_eq!(
+            super::INCONSISTENT_GROUP_PROTOCOL,
+            ResponseError::InconsistentGroupProtocol.code()
         );
     }
 }

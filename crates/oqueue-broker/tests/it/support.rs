@@ -65,8 +65,17 @@ pub async fn broker(topics: &[&str]) -> Broker {
     .expect("an empty log opens");
     let shared: Arc<dyn ObjectStore> = Arc::clone(&store) as Arc<dyn ObjectStore>;
     let sequencing = Sequencing::new(coordinator, reader);
-    let cluster = Cluster::new("h", 1, sequencing, shared, &WriterId::mint())
-        .expect("a minted identity is a usable key component");
+    let cluster = Cluster::new(
+        "h",
+        1,
+        sequencing,
+        oqueue_broker::Seams {
+            store: shared,
+            group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+        },
+        &WriterId::mint(),
+    )
+    .expect("a minted identity is a usable key component");
     for topic in topics {
         cluster.ensure_topic(topic);
     }

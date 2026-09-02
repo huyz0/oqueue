@@ -31,6 +31,8 @@ pub enum ApiKey {
     Metadata = 3,
     /// `FindCoordinator` (10).
     FindCoordinator = 10,
+    /// `JoinGroup` (11).
+    JoinGroup = 11,
     /// `SaslHandshake` (17).
     SaslHandshake = 17,
     /// `ApiVersions` (18).
@@ -59,6 +61,7 @@ impl ApiKey {
             2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
             10 => Some(Self::FindCoordinator),
+            11 => Some(Self::JoinGroup),
             17 => Some(Self::SaslHandshake),
             18 => Some(Self::ApiVersions),
             22 => Some(Self::InitProducerId),
@@ -110,6 +113,7 @@ mod tests {
             ApiKey::ListOffsets,
             ApiKey::Metadata,
             ApiKey::FindCoordinator,
+            ApiKey::JoinGroup,
             ApiKey::SaslHandshake,
             ApiKey::ApiVersions,
             ApiKey::InitProducerId,
@@ -120,7 +124,8 @@ mod tests {
         // Keys Kafka defines but this broker does not serve. ⚠️ `2` was here
         // until `M3.21`, which added `ListOffsets`, `22` was here until
         // `M11.4`, which added `InitProducerId`, `10` was here until
-        // `M4.3`, which added `FindCoordinator`, and `17`/`36` were here
+        // `M4.3`, which added `FindCoordinator`, `11` was here until
+        // `M4.7`, which added `JoinGroup`, and `17`/`36` were here
         // until `M9.3`, which added `SaslHandshake`/`SaslAuthenticate`: a
         // key moving from this list to the one above is what serving a new
         // API looks like, and leaving it in both is how the round trip
