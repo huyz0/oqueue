@@ -1,6 +1,6 @@
 # 0031. Idempotent-producer state lives with the offset allocator, not in a retroactive tombstone
 
-Status: accepted
+Status: accepted; 2026-09-02 (`M11.2`): point 4's field shape is stale — `CommittedSpan` gained one grouped field, `producer: Option<ProducerIdentity>`, not the three separate optional fields below, to stay under `clippy.toml`'s five-argument threshold. See `M11.2`'s own commit message.
 Date: 2026-09-02
 Requirements: FR-14, FR-15 (scope)
 
