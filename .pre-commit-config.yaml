@@ -70,6 +70,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-secrets
+        name: "M9.14: no secret- or key-material-shaped field derives Debug unredacted"
+        entry: scripts/check-secrets.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: build-index-check
         name: "M-1.33: generated index regions (standards table, skills table, research tag index) are current"
         entry: scripts/build-index.sh --check

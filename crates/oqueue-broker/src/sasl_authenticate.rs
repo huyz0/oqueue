@@ -106,7 +106,7 @@ const fn refused() -> SaslAuthenticateResponse<'static> {
     SaslAuthenticateResponse {
         error_code: error_codes::SASL_AUTHENTICATION_FAILED,
         error_message: Some(REFUSED),
-        auth_bytes: b"",
+        auth_bytes: Redacted::new(b""),
         session_lifetime_ms: 0,
     }
 }
@@ -134,7 +134,7 @@ pub(crate) fn handle(
     };
 
     let matched = if tls {
-        parse_plain(request.auth_bytes)
+        parse_plain(request.auth_bytes.expose())
             .and_then(|(authcid, password)| credentials.verify(authcid, password).cloned())
     } else {
         None
@@ -155,7 +155,7 @@ pub(crate) fn handle(
         .map_or_else(refused, |_principal| SaslAuthenticateResponse {
             error_code: error_codes::NONE,
             error_message: None,
-            auth_bytes: b"",
+            auth_bytes: Redacted::new(b""),
             // ⚠️ No expiry: this broker does not yet re-authenticate a
             // long-lived connection (a real feature, not an omission to
             // fix here) — Kafka's own convention for "no bound" is the

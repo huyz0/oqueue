@@ -60,12 +60,19 @@ required.
 | Code | [rust-style.md](docs/internal/standards/rust-style.md) | Read when naming a type or function, choosing between a generic and `impl Trait`, deciding what a lint attribute or `clippy.toml` entry should say, or when a diff is hard to read for reasons `code-structure.md` doesn't cover. |
 <!-- index:standards:end -->
 
-⚠️ **A rule whose script is missing is a preference**, and some of the scripts
-these standards name are still missing. Not because a milestone left a row open
-— ⚠️ that was true when this paragraph was written and `M0.16` closed the row —
-but because the standards name scripts no milestone was ever scoped to write.
-Each of those needs something to check that does not exist yet, which is why
-they are deferrals with receiving milestones rather than oversights.
+⚠️ **A rule whose script is missing is a preference.** Every script the
+standards above name now exists — `M9.14` wrote the last of them
+(`check-secrets.sh`, `security.md` rules 6-7's own static half). ⚠️ **That
+sentence is checked in both directions** by `check-portability.sh`, the same
+mechanism `.agents/skills/README.md`'s own analogous section names for
+itself: a standard naming a script that is absent fails, and so does this
+paragraph saying some are missing on a day they are all present. It needs
+both because it is the sentence that keeps going stale — this paragraph said
+the opposite through most of `M9` while `M9.14` was writing the one script it
+called missing. If a future standard names a script no milestone has written
+yet, that is not an oversight — it is a deferral with a receiving milestone,
+recorded the same two places the paragraph below says to check, not
+re-asserted here.
 
 ⚠️ **Do not look for the list here.** A hardcoded list of what is outstanding
 went stale four separate times elsewhere in this repository before the fix

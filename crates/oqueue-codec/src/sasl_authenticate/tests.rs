@@ -19,7 +19,11 @@ fn our_request_decode_matches_the_dependency() {
         kp.encode(&mut bytes, version).expect("dependency encodes");
 
         let ours = decode_request(&bytes, version).expect("ours decodes");
-        assert_eq!(ours.auth_bytes, &b"\x00alice\x00secret"[..], "v{version}");
+        assert_eq!(
+            *ours.auth_bytes.expose(),
+            &b"\x00alice\x00secret"[..],
+            "v{version}"
+        );
     }
 }
 
@@ -37,7 +41,7 @@ fn an_empty_auth_bytes_round_trips() {
         kp.encode(&mut bytes, version).expect("dependency encodes");
 
         let ours = decode_request(&bytes, version).expect("ours decodes");
-        assert_eq!(ours.auth_bytes, &b""[..], "v{version}");
+        assert_eq!(*ours.auth_bytes.expose(), &b""[..], "v{version}");
     }
 }
 
@@ -53,7 +57,7 @@ fn our_response_encode_matches_the_dependency_on_success() {
         let response = SaslAuthenticateResponse {
             error_code: 0,
             error_message: None,
-            auth_bytes: b"server-final",
+            auth_bytes: oqueue_core::Redacted::new(b"server-final"),
             session_lifetime_ms: 3_600_000,
         };
         let mut bytes = Vec::new();
@@ -83,7 +87,7 @@ fn our_response_encode_matches_the_dependency_on_refusal() {
         let response = SaslAuthenticateResponse {
             error_code: 58, // SASL_AUTHENTICATION_FAILED
             error_message: Some("no SASL/PLAIN credential is configured"),
-            auth_bytes: b"",
+            auth_bytes: oqueue_core::Redacted::new(b""),
             session_lifetime_ms: 0,
         };
         let mut bytes = Vec::new();

@@ -12,11 +12,13 @@ milestone M1, which gives the object store seam real S3 and GCS backends, is
 in progress. There will be something to build on once it lands.
 
 Two honest qualifications, because the alternative is a claim that reads
-stronger than it is. Some gates the standards describe are still unwritten, and
-a rule whose script is missing is a preference until it lands. And one rule can
-never have a script: *never claim a test passes without having run it* is a
-rule about what an agent says, and nothing checks a claim against an intention.
-Every other rule rests on it.
+stronger than it is. Every gate the standards currently name is written
+(`M9.14` wrote the last of them, `check-secrets.sh`) — but a rule whose
+script is missing is a preference, and a standard naming a script no
+milestone has written yet is a deferral, not an oversight, should the
+situation return. And one rule can never have a script: *never claim a test
+passes without having run it* is a rule about what an agent says, and nothing
+checks a claim against an intention. Every other rule rests on it.
 
 **Issues and design discussion are very welcome.** Particularly:
 

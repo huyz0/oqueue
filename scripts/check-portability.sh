@@ -87,9 +87,13 @@ def build():
         ⚠️ **And each claim is judged against the population it is about**,
         which the first version got wrong and the gate caught on its first
         run. `.agents/skills/README.md` says "scripts these *skills* invoke";
-        `AGENTS.md` says "the *standards* name" — different sets, and the
-        second sentence is **true** today, because `fuzz.sh` and
-        `check-secrets.sh` are named by `security.md` and written by nobody.
+        `AGENTS.md` says "the *standards* name" — different sets. ⚠️ **At the
+        time this check was written, that distinction mattered**: `fuzz.sh`
+        and `check-secrets.sh` were both named by `security.md` and written
+        by nobody yet, so `AGENTS.md`'s own "some scripts are still missing"
+        sentence was true while `M2` and `M9.14` had not yet written them —
+        the historical case this check exists to keep working for, not a
+        claim about today (`fuzz.sh` and `check-secrets.sh` both exist now).
         One population for both would have forced a true sentence to be
         deleted, which is the opposite of this check's purpose. ⚠️ Getting the
         population *members* wrong has the same effect — see
@@ -99,12 +103,13 @@ def build():
             """⚠️ **A bare `` `check-secrets.sh` `` counts too**, not only a
             `scripts/`-prefixed path. `security.md` rule 6 writes it bare, so a
             path-only pattern left it out of `AGENTS.md`'s population — and the
-            moment `M2` writes `fuzz.sh`, that population would have been
+            moment `M2` wrote `fuzz.sh`, that population would have been
             entirely present and this check would have demanded the deletion of
-            a sentence still true, because `check-secrets.sh` is `M8`'s. Review
-            demonstrated it by creating `scripts/fuzz.sh` and watching the gate
-            block every commit. A check whose failure mode is "delete the true
-            sentence" is worse than no check."""
+            a sentence still true at the time, because `check-secrets.sh` was
+            not yet written (`M9.14` is what wrote it). Review demonstrated the
+            gap by creating `scripts/fuzz.sh` and watching the gate block every
+            commit. A check whose failure mode is "delete the true sentence" is
+            worse than no check."""
             found = set()
             for f in paths:
                 if not f.exists():
