@@ -37,6 +37,7 @@ pub mod find_coordinator;
 pub mod flex;
 pub mod frame;
 pub mod init_producer_id;
+pub mod join_group;
 pub mod listoffsets;
 pub mod metadata;
 pub mod produce;
