@@ -9,6 +9,7 @@
 #![allow(clippy::redundant_pub_crate)]
 
 mod admission;
+mod expiry;
 
 // ⚠️ `RejectReason` is `pub` (`M11.6`) so `oqueue-broker` can name and match
 // on it through `SpanOutcome::Rejected`, but `admission` itself stays
@@ -92,6 +93,10 @@ pub(crate) struct Allocator {
     next_version: CommitVersion,
     end_offsets: HashMap<TopicId, HashMap<PartitionId, Offset>>,
     producer_state: HashMap<(ProducerId, TopicId, PartitionId), ProducerState>,
+    /// Which key in `producer_state` was touched least recently, so `apply`
+    /// can evict one in `O(log n)` once `producer_state` is at
+    /// [`expiry::MAX_TRACKED_PRODUCERS`] — `M11.8`, `ADR-0031` point 6.
+    producer_recency: expiry::Recency<(ProducerId, TopicId, PartitionId)>,
 }
 
 /// ⚠️ Renders how far the version line has reached, never the partitions it
@@ -109,7 +114,13 @@ impl core::fmt::Debug for Allocator {
                 &self.end_offsets.values().map(HashMap::len).sum::<usize>(),
             )
             .field("producers", &self.producer_state.len())
-            .finish()
+            // ⚠️ `producer_recency` is deliberately absent, not merely
+            // unlisted: it names the same per-tenant keys `producer_state`
+            // already withholds, and its size always equals `producers`
+            // above, so listing it too would be the redundant half of the
+            // same leak. `finish_non_exhaustive` says so explicitly rather
+            // than looking like every field was named.
+            .finish_non_exhaustive()
     }
 }
 
@@ -121,6 +132,7 @@ impl Allocator {
             next_version: CommitVersion::ZERO,
             end_offsets: HashMap::new(),
             producer_state: HashMap::new(),
+            producer_recency: expiry::Recency::default(),
         }
     }
 
@@ -221,8 +233,14 @@ impl Allocator {
                 .insert(partition, end);
         }
         for (key, state) in staged.producer_ends {
+            self.producer_recency.touch(key.clone());
             self.producer_state.insert(key, state);
         }
+        evict_over_cap(
+            &mut self.producer_state,
+            &mut self.producer_recency,
+            expiry::MAX_TRACKED_PRODUCERS,
+        );
         self.next_version = staged.next_version;
         (staged.entry.version(), staged.assignments)
     }
@@ -273,144 +291,29 @@ impl Allocator {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    // A panic in a test harness is the test failing, which is what it is for.
-    #![allow(clippy::expect_used)]
-
-    use super::Allocator;
-    use oqueue_core::{
-        ByteRange, CommitVersion, CommittedSpan, Error, ObjectKey, Offset, PartitionId, TopicId,
-    };
-
-    fn topic() -> TopicId {
-        TopicId::new("t".to_owned()).expect("a valid topic id")
-    }
-
-    fn partition() -> PartitionId {
-        PartitionId::new(0).expect("a valid partition")
-    }
-
-    fn span(records: u32) -> CommittedSpan {
-        CommittedSpan::new(topic(), partition(), records, ByteRange::Full, None)
-    }
-
-    fn object() -> ObjectKey {
-        ObjectKey::new("o".to_owned()).expect("a valid object key")
-    }
-
-    /// ⚠️ The allocator is reachable through `CoordinatorLoop`, which an
-    /// operator may format on an error or shutdown path. Its `Debug` must
-    /// therefore not become a listing of every tenant's topics — the rule
-    /// `FakeMetadataLog` and `FakeMaterializedIndex` already follow in
-    /// `oqueue-core`, and it binds harder here because this one is not a fake.
-    #[test]
-    fn formatting_the_allocator_summarises_rather_than_lists() {
-        let mut allocator = Allocator::new();
-        let span = CommittedSpan::new(
-            TopicId::new("secret-tenant-topic".to_owned()).expect("a valid topic id"),
-            PartitionId::new(0).expect("a valid partition"),
-            1,
-            ByteRange::Full,
-            None,
-        );
-        let staged = allocator
-            .stage(
-                ObjectKey::new("o".to_owned()).expect("a valid object key"),
-                vec![span],
-            )
-            .expect("a first commit stages");
-        allocator.apply(staged);
-
-        let rendered = format!("{allocator:?}");
-        assert!(
-            !rendered.contains("secret-tenant-topic"),
-            "a Debug line must not name a tenant's topics: {rendered}"
-        );
-        assert!(
-            rendered.contains("next_version: CommitVersion(1)"),
-            "and must still say where the line has reached: {rendered}"
-        );
-        assert!(
-            rendered.contains("partitions: 1"),
-            "and how much it is holding: {rendered}"
-        );
-    }
-
-    /// ⚠️ **A partition's line refuses rather than wrapping.** An offset is an
-    /// `i64` on the wire, and a wrapped one is *smaller* than the one before
-    /// it — every later comparison, every watermark, every consumer's position
-    /// is then wrong, and nothing tells anybody. `Offset::add` is what refuses;
-    /// this is what reaches it, which two-billion produce requests otherwise
-    /// would.
-    #[test]
-    fn a_partition_at_the_end_of_its_line_refuses_rather_than_wrapping() {
-        let allocator = Allocator::seeded(
-            CommitVersion::ZERO,
-            &[(
-                topic(),
-                partition(),
-                Offset::new(i64::MAX - 1).expect("in range"),
-            )],
-        );
-
-        let refused = allocator.stage(object(), vec![span(2)]);
-
-        assert!(
-            matches!(refused, Err(Error::OffsetOverflow { .. })),
-            "a line one record from its end must refuse two: {refused:?}"
-        );
-        // ⚠️ **And the one that fits still fits**, which is what says this is a
-        // ceiling rather than an off-by-one: a guard one too eager refuses the
-        // last legal record of every partition that ever reaches here.
-        allocator
-            .stage(object(), vec![span(1)])
-            .expect("the last record on the line is still assignable");
-    }
-
-    /// ⚠️ **And the shard's version line does the same.** A wrapped
-    /// `CommitVersion` is a version *below* one already folded, which
-    /// `MaterializedIndex` guarantee 1 refuses as non-monotonic — so the shard
-    /// stops committing with a message about ordering rather than about the
-    /// counter that ran out.
-    #[test]
-    fn a_version_line_at_its_end_refuses_rather_than_wrapping() {
-        let allocator = Allocator::seeded(CommitVersion::new(u64::MAX), &[]);
-
-        let refused = allocator.stage(object(), vec![span(1)]);
-
-        assert!(
-            matches!(refused, Err(Error::CommitVersionOverflow { .. })),
-            "the last version on the line cannot be advanced past: {refused:?}"
-        );
-        // ⚠️ **And the last legal version still stages**, the same companion
-        // the offset test carries and for the same reason: a guard one step
-        // too eager costs a shard its final commit, and a test that only ever
-        // probes the value past the end cannot tell the two apart.
-        Allocator::seeded(CommitVersion::new(u64::MAX - 1), &[])
-            .stage(object(), vec![span(1)])
-            .expect("the last version on the line is still assignable");
-    }
-
-    /// ⚠️ **Nothing is consumed by a refusal**, which is what makes both
-    /// guards safe to hit: `stage` computes without taking, so a caller that
-    /// retries a smaller batch gets the offsets it would have got anyway.
-    #[test]
-    fn a_refused_stage_consumes_nothing() {
-        let allocator = Allocator::seeded(
-            CommitVersion::new(7),
-            &[(
-                topic(),
-                partition(),
-                Offset::new(i64::MAX - 1).expect("in range"),
-            )],
-        );
-
-        assert!(allocator.stage(object(), vec![span(2)]).is_err());
-
-        let staged = allocator
-            .stage(object(), vec![span(1)])
-            .expect("a batch that fits still fits");
-        assert_eq!(staged.entry.version(), CommitVersion::new(7));
+/// Evicts from `producer_state`, guided by `recency`, until at most `cap`
+/// entries remain — `M11.8`, `ADR-0031` point 6.
+///
+/// ⚠️ **`cap` is a parameter, not `expiry::MAX_TRACKED_PRODUCERS` read
+/// directly, so a test can drive this against a small number rather than
+/// reaching the real cap through 100,000 real commits** — `admission.rs`'s
+/// own `next_sequence` boundary test drives that function directly rather
+/// than through two billion real ones, on the same reasoning.
+fn evict_over_cap(
+    producer_state: &mut HashMap<(ProducerId, TopicId, PartitionId), ProducerState>,
+    recency: &mut expiry::Recency<(ProducerId, TopicId, PartitionId)>,
+    cap: usize,
+) {
+    // ⚠️ A `while`, not an `if`: a caller may have inserted more than one
+    // entry past the cap in one call (`apply` folds a whole commit's worth
+    // of spans before this runs), and each eviction removes only one.
+    while producer_state.len() > cap {
+        let Some(oldest) = recency.evict_oldest() else {
+            break;
+        };
+        producer_state.remove(&oldest);
     }
 }
+
+#[cfg(test)]
+mod tests;

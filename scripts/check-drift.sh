@@ -328,6 +328,12 @@ declare -A RUST_BOUNDS=(
   # `ADR-0021`'s staleness limit: how long an agent may serve from a cache
   # nothing has arrived for. Raising it widens hazard H4's window.
   ["crates/oqueue-core/src/staleness.rs|MAX_METADATA_STALENESS_MS"]="5_000"
+  # `M11.8`, `ADR-0031` point 6: how many distinct producer lines one
+  # shard's allocator tracks before evicting the least recently touched.
+  # ⚠️ **Weakens by lowering** — the opposite of most rows here — since a
+  # smaller cap shortens the window a retry has before its producer's state
+  # might be gone.
+  ["crates/oqueue-coordinator/src/allocator/expiry.rs|MAX_TRACKED_PRODUCERS"]="100_000"
   # ⚠️ **Three more, found by this row's own review.** Each says in its own doc
   # comment that it is "a constant rather than a knob, per non-negotiable 2",
   # and each was pinned by nothing: measured, all three raised a thousandfold
