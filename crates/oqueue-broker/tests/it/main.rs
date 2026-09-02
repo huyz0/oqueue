@@ -14,6 +14,7 @@ mod faults;
 mod generated;
 mod invariants;
 mod matrix;
+mod metadata_cost;
 mod overlap;
 mod quota;
 mod reads;

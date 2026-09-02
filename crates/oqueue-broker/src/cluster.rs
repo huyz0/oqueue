@@ -77,6 +77,15 @@ pub struct Cluster {
     store: Arc<dyn ObjectStore>,
     namer: Mutex<BundleNamer>,
     reaped_reads: AtomicU64,
+    /// How many catalog entries [`Cluster::partition_count`] and
+    /// [`Cluster::topic_names`] have together touched — `M9.17`'s own
+    /// cost-test proxy for NFR-12 (`docs/internal/standards/testing.md` rule
+    /// 11 forbids asserting on wall-clock duration, so this is what a test
+    /// asserting "CPU independent of catalog size" actually counts): one per
+    /// `partition_count` call, and the full catalog size per `topic_names`
+    /// call — the two shapes of cost a `Metadata` handler can have, targeted
+    /// (O(topics a caller resolves)) and a full scan (O(topics that exist)).
+    topic_lookups: AtomicU64,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -152,12 +161,14 @@ impl Cluster {
             store,
             namer: Mutex::new(BundleNamer::new(writer.as_str())?),
             reaped_reads: AtomicU64::new(0),
+            topic_lookups: AtomicU64::new(0),
         })
     }
 
     /// The topic's partition count, or `None` if it does not exist.
     #[must_use]
     pub fn partition_count(&self, topic: &str) -> Option<usize> {
+        self.topic_lookups.fetch_add(1, Ordering::Relaxed);
         self.with_topics(|topics| topics.get(topic).map(|t| t.partitions))
     }
 
@@ -180,9 +191,22 @@ impl Cluster {
     }
 
     /// Every topic name, sorted — `Metadata` with no filter asks for all.
+    ///
+    /// ⚠️ **O(catalog), not O(what a caller keeps)** — this touches every
+    /// entry to build and sort the list, unlike [`Cluster::partition_count`]'s
+    /// one targeted lookup. `topic_lookups` below counts this proportionally
+    /// to catalog size for exactly that reason: a caller that resolves a
+    /// scoped set of names via `partition_count` per name costs O(that set);
+    /// a caller that calls this and filters afterward is the O(catalog)
+    /// anti-pattern `M9.10`'s own `all_topics_names` exists to avoid, and
+    /// `M9.17`'s cost test needs a proxy that actually tells the two apart.
     #[must_use]
     pub fn topic_names(&self) -> Vec<String> {
         let mut names = self.with_topics(|topics| topics.keys().cloned().collect::<Vec<_>>());
+        self.topic_lookups.fetch_add(
+            u64::try_from(names.len()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
         names.sort();
         names
     }
@@ -277,6 +301,15 @@ impl Cluster {
 
     pub(crate) fn count_reaped_read(&self) {
         self.reaped_reads.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// How many catalog entries [`Cluster::partition_count`] and
+    /// [`Cluster::topic_names`] have together touched since this cluster
+    /// was created — `M9.17`'s own cost-test proxy, read as a delta around
+    /// one request rather than compared across clusters.
+    #[must_use]
+    pub fn topic_lookups(&self) -> u64 {
+        self.topic_lookups.load(Ordering::Relaxed)
     }
 
     /// The namer minting this process's object keys.
