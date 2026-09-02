@@ -454,6 +454,32 @@ pub enum Error {
         max: u64,
     },
 
+    /// A consumer group id was empty.
+    #[error("group id is empty")]
+    EmptyGroupId,
+
+    /// A consumer group member id was empty.
+    #[error("member id is empty")]
+    EmptyMemberId,
+
+    /// A consumer group's state has no legal transition for the event it was
+    /// given (`M4.1`, FR-22).
+    ///
+    /// ⚠️ **Fields are `String`, not [`crate::GroupState`]/the event type
+    /// itself** — this crate's own error enum is a leaf every domain type
+    /// can be built to construct, and a variant naming `GroupState` back
+    /// would make `group_state.rs` and `error.rs` depend on each other.
+    /// `Debug`-formatted names are enough to say which transition was
+    /// refused; a caller that needs the typed value already has it, since
+    /// it is the one that attempted the transition.
+    #[error("group state {state} has no transition for {event}")]
+    IllegalGroupTransition {
+        /// The state the transition was attempted from, `Debug`-formatted.
+        state: String,
+        /// The event that had no legal successor, `Debug`-formatted.
+        event: String,
+    },
+
     /// A backend failure that will not succeed on retry: bad credentials, a
     /// malformed request, an unsupported operation, a config that does not
     /// describe a usable endpoint.

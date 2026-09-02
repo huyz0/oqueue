@@ -60,6 +60,9 @@ impl Error {
             Self::ObjectNotFound { .. }
             | Self::EmptyTopicId
             | Self::EmptyPrincipal
+            | Self::EmptyGroupId
+            | Self::EmptyMemberId
+            | Self::IllegalGroupTransition { .. }
             | Self::NegativePartitionId { .. }
             | Self::NegativeOffset { .. }
             | Self::NegativeOffsetDelta { .. }
