@@ -245,15 +245,28 @@ fn open_round(
     rebalance_timeout: Duration,
 ) -> Result<(), ()> {
     let event = match coordinator.record(group).map(|r| r.state) {
-        None | Some(GroupState::Empty | GroupState::Stable) => GroupEvent::Join,
-        Some(GroupState::CompletingRebalance) => GroupEvent::MemberJoinedDuringSync,
-        // `PreparingRebalance`: this bookkeeping's own `entry.open` said no
-        // round was open, so the coordinator agreeing a round is already in
-        // flight means the two have diverged — this module's own bug, not a
-        // case a client can trigger. `Dead`: unreachable, module doc above.
-        Some(GroupState::PreparingRebalance | GroupState::Dead) => return Err(()),
+        None | Some(GroupState::Empty | GroupState::Stable) => Some(GroupEvent::Join),
+        Some(GroupState::CompletingRebalance) => Some(GroupEvent::MemberJoinedDuringSync),
+        // ⚠️ **Already `PreparingRebalance`, with no locally-open round —
+        // not this module's own bug.** An external actor moved the
+        // coordinator here directly: `heartbeat.rs`'s own eviction sweep
+        // fires `GroupEvent::Join` on a partial membership loss without
+        // ever touching this bookkeeping (`M4.9`'s own finding, fixed
+        // here rather than deferred once it turned out to permanently
+        // wedge a group — every future `JoinGroup` would otherwise see
+        // exactly this state and refuse forever, since nothing else can
+        // ever fire `JoinBarrierComplete` for a round this module never
+        // opened). The round genuinely is open already, just not tracked
+        // here yet — start collecting without re-firing `Join`, which
+        // has no legal arm from `PreparingRebalance` in the first place.
+        // `M4.10`'s own `LeaveGroup` task will reach this same arm.
+        Some(GroupState::PreparingRebalance) => None,
+        // `Dead`: unreachable, module doc above.
+        Some(GroupState::Dead) => return Err(()),
     };
-    if coordinator.transition(group, event).is_err() {
+    if let Some(event) = event
+        && coordinator.transition(group, event).is_err()
+    {
         return Err(());
     }
     entry.open = Some(OpenRound {

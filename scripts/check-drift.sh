@@ -326,6 +326,13 @@ declare -A RUST_BOUNDS=(
   # follower's connection open that much longer against a leader that
   # never submits.
   ["crates/oqueue-broker/src/sync_group/deadline.rs|MAX_SYNC_WAIT_MS"]="3_000_000"
+  # How short/long a session timeout this broker honours from a Heartbeat
+  # member, whatever it asks for -- real Kafka's own
+  # group.min/max.session.timeout.ms defaults. Lowering the minimum lets a
+  # slow GC pause or scheduling hiccup evict a healthy member; raising the
+  # maximum lets a stuck member hold its own seat that much longer.
+  ["crates/oqueue-broker/src/heartbeat/deadline.rs|MIN_SESSION_TIMEOUT_MS"]="6_000"
+  ["crates/oqueue-broker/src/heartbeat/deadline.rs|MAX_SESSION_TIMEOUT_MS"]="1_800_000"
   # How many batches one index page may name, and how many entries a partition
   # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
   # `M10.20`: moved from `index_state.rs` to its own `index_state/page.rs`
@@ -412,6 +419,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/error_codes.rs|SASL_AUTHENTICATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|TOPIC_AUTHORIZATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|INCONSISTENT_GROUP_PROTOCOL"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|REBALANCE_IN_PROGRESS"]="Kafka's own error code, the protocol fixes it"
   # --- batch.rs: RecordBatch v2's fixed layout
   ["crates/oqueue-codec/src/batch.rs|BATCH_HEADER_LEN"]="RecordBatch v2's fixed header length"
   ["crates/oqueue-codec/src/batch.rs|CRC_COVERAGE_START"]="RecordBatch v2's fixed CRC coverage offset"
@@ -441,6 +449,10 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/join_group/tests.rs|V7"]="a test's own advertised-version literal, same shape as VERSION above"
   ["crates/oqueue-broker/src/sync_group/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/sync_group/tests.rs|V5"]="a test's own advertised-version literal, same shape as VERSION above"
+  ["crates/oqueue-broker/src/heartbeat/tests.rs|JOIN_VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/heartbeat/tests.rs|SYNC_VERSION"]="a test's own advertised-version literal, same shape as JOIN_VERSION above"
+  ["crates/oqueue-broker/src/heartbeat/tests.rs|HEARTBEAT_VERSION"]="a test's own advertised-version literal, same shape as JOIN_VERSION above"
+  ["crates/oqueue-broker/src/heartbeat/tests.rs|REBALANCE_TIMEOUT_MS"]="a test's own fixture value (how long the acceptance test's own join round waits under paused time), not a production bound"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )

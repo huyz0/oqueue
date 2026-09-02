@@ -33,6 +33,7 @@ pub mod dispatch;
 pub mod fetch;
 mod find_coordinator;
 mod flush;
+mod heartbeat;
 mod ingest;
 mod init_producer_id;
 mod join_group;

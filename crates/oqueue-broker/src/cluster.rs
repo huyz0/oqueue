@@ -103,6 +103,10 @@ pub struct Cluster {
     /// and the assignment map the leader's own submission fills in.
     /// Starts empty by construction, `group_joins`'s own shape.
     sync_groups: crate::sync_group::SyncGroups,
+    /// `M4.9`'s own session-timeout tracking — every group's own tracked
+    /// membership, and when each member's own silence would evict it.
+    /// Starts empty by construction, `group_joins`'s own shape.
+    heartbeats: crate::heartbeat::Heartbeats,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -195,6 +199,7 @@ impl Cluster {
             group_coordinator: seams.group_coordinator,
             group_joins: GroupJoins::default(),
             sync_groups: crate::sync_group::SyncGroups::default(),
+            heartbeats: crate::heartbeat::Heartbeats::default(),
         })
     }
 
@@ -214,6 +219,13 @@ impl Cluster {
     /// shares (`M4.8`).
     pub(crate) const fn sync_groups(&self) -> &crate::sync_group::SyncGroups {
         &self.sync_groups
+    }
+
+    /// The session-timeout tracking every connection's `Heartbeat` handler
+    /// shares, and `JoinGroup`'s own handler registers a fresh member
+    /// into (`M4.9`).
+    pub(crate) const fn heartbeats(&self) -> &crate::heartbeat::Heartbeats {
+        &self.heartbeats
     }
 
     /// The topic's partition count, or `None` if it does not exist.

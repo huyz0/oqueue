@@ -279,3 +279,38 @@ async fn a_stale_rounds_own_deadline_never_closes_a_later_round() {
     let close = round_2_outcome.get().expect("round 2 now closes for real");
     assert_eq!(close.members.len(), 1, "only \"a\" ever joined round 2");
 }
+
+/// ⚠️ **A group an *external* actor moved to `PreparingRebalance` is not a
+/// permanent bug.** `M4.9`'s own finding: `heartbeat.rs`'s eviction sweep
+/// fires `GroupEvent::Join` directly against the coordinator, without ever
+/// opening a round here — so `entry.open` genuinely is `None` the first
+/// time a real client's own `JoinGroup` reaches this module afterward,
+/// even though the coordinator already reports `PreparingRebalance`. This
+/// must start collecting rather than refuse, or the group is wedged
+/// forever (nothing else can ever fire `JoinBarrierComplete` for a round
+/// this module never opened).
+#[tokio::test(start_paused = true)]
+async fn a_group_moved_to_preparing_rebalance_by_an_external_actor_still_accepts_a_join() {
+    let coordinator = FakeGroupCoordinator::new();
+    let joins = GroupJoins::default();
+    let g = group("orders");
+
+    // The shape `heartbeat.rs`'s own sweep produces: the coordinator moves
+    // to PreparingRebalance directly (here, `Empty -> Join`, the same
+    // transition a `Stable` group's own partial eviction fires), with no
+    // call through `GroupJoins::join` and so no locally-open round.
+    coordinator
+        .transition(&g, GroupEvent::Join)
+        .expect("Empty -> Join is legal");
+
+    let outcome = joins.join(
+        &coordinator,
+        &g,
+        member("survivor", &["range"]),
+        Duration::from_secs(1),
+    );
+    assert!(
+        matches!(outcome, JoinOutcome::Pending { .. } | JoinOutcome::Ready(_)),
+        "a PreparingRebalance group with no locally-open round must still accept a join, not refuse one forever"
+    );
+}

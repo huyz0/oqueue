@@ -36,6 +36,7 @@ pub mod fetch;
 pub mod find_coordinator;
 pub mod flex;
 pub mod frame;
+pub mod heartbeat;
 pub mod init_producer_id;
 pub mod join_group;
 pub mod listoffsets;

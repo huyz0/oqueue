@@ -68,27 +68,50 @@ pub(crate) async fn handle(
         request.session_timeout_ms,
     )));
 
-    match cluster.group_joins().join(
+    let close = match cluster.group_joins().join(
         cluster.group_coordinator(),
         &group,
         member,
         rebalance_timeout,
     ) {
-        JoinOutcome::Refused => reply(prelude, &refusal(error_codes::INCONSISTENT_GROUP_PROTOCOL)),
-        JoinOutcome::Ready(close) => {
-            reply(prelude, &response_for(&close, member_id.as_str(), version))
+        JoinOutcome::Refused => {
+            return reply(prelude, &refusal(error_codes::INCONSISTENT_GROUP_PROTOCOL));
         }
+        JoinOutcome::Ready(close) => close,
         pending @ JoinOutcome::Pending { .. } => {
-            wait_for_close(cluster, &group, pending).await.map_or_else(
+            let Some(close) = wait_for_close(cluster, &group, pending).await else {
                 // See `wait_for_close`'s own doc: unreachable outside an
                 // internal invariant violation, answered rather than held
                 // open forever waiting on a close that evidently is not
                 // coming.
-                || reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR)),
-                |close| reply(prelude, &response_for(&close, member_id.as_str(), version)),
-            )
+                return reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR));
+            };
+            close
         }
-    }
+    };
+    register_heartbeat(
+        cluster,
+        &group,
+        member_id.as_str(),
+        request.session_timeout_ms,
+    );
+    reply(prelude, &response_for(&close, member_id.as_str(), version))
+}
+
+/// Registers this member's own session timeout with `heartbeat.rs`'s own
+/// tracking — `M4.9`'s job, called only once a member is genuinely
+/// enrolled (never on [`JoinOutcome::Refused`]), so `Heartbeat`'s own
+/// handler has something to track a fresh member against from the moment
+/// it can legitimately send one.
+fn register_heartbeat(
+    cluster: &Cluster,
+    group: &GroupId,
+    member_id: &str,
+    session_timeout_ms: i32,
+) {
+    cluster
+        .heartbeats()
+        .register(group, member_id, session_timeout_ms);
 }
 
 /// A minted id for an empty `member_id`; an echoed one accepted at face

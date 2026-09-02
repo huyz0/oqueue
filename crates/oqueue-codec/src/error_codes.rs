@@ -106,6 +106,16 @@ pub const SASL_AUTHENTICATION_FAILED: i16 = 58;
 /// code and never enrolled, rather than silently joining a group it could
 /// never run an assignor with.
 pub const INCONSISTENT_GROUP_PROTOCOL: i16 = 23;
+/// The group is rebalancing; rejoin rather than treat this as accepted (27).
+///
+/// `M4.9`'s own answer to a `Heartbeat` whose `generation_id` does not
+/// match the coordinator's current one — the group has moved on (a new
+/// round opened, or this member was itself evicted for it), and the client
+/// is told to `JoinGroup` again rather than being silently accepted into a
+/// generation it is not part of. Finer fencing (`ILLEGAL_GENERATION` for a
+/// member that never belonged at all) is `M4.11`'s own audited path, not
+/// this task's to distinguish.
+pub const REBALANCE_IN_PROGRESS: i16 = 27;
 /// An explicitly-named topic the requesting principal cannot `DESCRIBE` (29).
 ///
 /// `M9.9`, one leg of `M9.1`'s verified finding against real Kafka source:
@@ -219,6 +229,15 @@ mod tests {
         assert_eq!(
             super::INCONSISTENT_GROUP_PROTOCOL,
             ResponseError::InconsistentGroupProtocol.code()
+        );
+    }
+
+    /// `M4.9`'s own `Heartbeat` code, same oracle.
+    #[test]
+    fn the_rebalance_in_progress_code_matches_the_dependency() {
+        assert_eq!(
+            super::REBALANCE_IN_PROGRESS,
+            ResponseError::RebalanceInProgress.code()
         );
     }
 }

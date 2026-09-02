@@ -117,6 +117,7 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
         ApiKey::FindCoordinator => find_coordinator_body(&mut body, version),
         ApiKey::JoinGroup => join_group_body(&mut body, version),
         ApiKey::SyncGroup => sync_group_body(&mut body, version),
+        ApiKey::Heartbeat => heartbeat_body(&mut body, version),
     }
     body
 }
@@ -165,6 +166,21 @@ fn sync_group_body(out: &mut Vec<u8>, version: i16) {
         .with_generation_id(1)
         .with_member_id(StrBytes::from_static_str("m1"))
         .with_assignments(vec![assignment]);
+    request.encode(out, version).expect("encodes");
+}
+
+/// `Heartbeat`'s own minimal body -- against a group nothing ever joined,
+/// so this genuinely answers `REBALANCE_IN_PROGRESS` (`expected_error_code`
+/// names this the same way `SaslAuthenticate`'s own row is named: a
+/// documented, non-zero, "genuinely served" answer, not `UNSUPPORTED_VERSION`).
+fn heartbeat_body(out: &mut Vec<u8>, version: i16) {
+    use kafka_protocol::messages::HeartbeatRequest;
+    let request = HeartbeatRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(
+            StrBytes::from_static_str("matrix-heartbeat-group"),
+        ))
+        .with_generation_id(1)
+        .with_member_id(StrBytes::from_static_str("m1"));
     request.encode(out, version).expect("encodes");
 }
 
@@ -270,15 +286,8 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .error_code
         }
         ApiKey::FindCoordinator => find_coordinator_error_code(&mut rest, version),
-        ApiKey::JoinGroup => {
-            kafka_protocol::messages::JoinGroupResponse::decode(&mut rest, version)
-                .expect("JoinGroup reply decodes")
-                .error_code
-        }
-        ApiKey::SyncGroup => {
-            kafka_protocol::messages::SyncGroupResponse::decode(&mut rest, version)
-                .expect("SyncGroup reply decodes")
-                .error_code
+        ApiKey::JoinGroup | ApiKey::SyncGroup | ApiKey::Heartbeat => {
+            group_protocol_error_code(api_key, &mut rest, version)
         }
     };
     assert!(
@@ -299,6 +308,30 @@ fn find_coordinator_error_code(rest: &mut &[u8], version: i16) -> i16 {
         response.coordinators[0].error_code
     } else {
         response.error_code
+    }
+}
+
+/// `JoinGroup`/`SyncGroup`/`Heartbeat`'s own decode -- one function since
+/// all three answer a bare `error_code`, its own function for the same
+/// fifty-line-limit reason `list_offsets_body` is.
+fn group_protocol_error_code(api_key: ApiKey, rest: &mut &[u8], version: i16) -> i16 {
+    match api_key {
+        ApiKey::JoinGroup => {
+            kafka_protocol::messages::JoinGroupResponse::decode(rest, version)
+                .expect("JoinGroup reply decodes")
+                .error_code
+        }
+        ApiKey::SyncGroup => {
+            kafka_protocol::messages::SyncGroupResponse::decode(rest, version)
+                .expect("SyncGroup reply decodes")
+                .error_code
+        }
+        ApiKey::Heartbeat => {
+            kafka_protocol::messages::HeartbeatResponse::decode(rest, version)
+                .expect("Heartbeat reply decodes")
+                .error_code
+        }
+        other => unreachable!("group_protocol_error_code called for {other:?}"),
     }
 }
 
@@ -324,11 +357,14 @@ fn decode_ignoring_body<T: Decodable>(rest: &mut &[u8], api_key: ApiKey, version
 /// succeeds" happens to mean for them; it does not mean the same thing
 /// for an authentication check whose whole point is refusing what it does
 /// not recognise.
-fn expected_error_code(api_key: ApiKey) -> i16 {
-    if api_key == ApiKey::SaslAuthenticate {
-        oqueue_codec::error_codes::SASL_AUTHENTICATION_FAILED
-    } else {
-        0
+const fn expected_error_code(api_key: ApiKey) -> i16 {
+    match api_key {
+        ApiKey::SaslAuthenticate => oqueue_codec::error_codes::SASL_AUTHENTICATION_FAILED,
+        // Against a group nothing ever joined -- `heartbeat_body`'s own
+        // doc, the same "genuinely served, documented non-zero answer"
+        // shape `SaslAuthenticate`'s own row already is.
+        ApiKey::Heartbeat => oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
+        _ => 0,
     }
 }
 

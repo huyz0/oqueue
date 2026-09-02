@@ -36,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 11] = [
+pub static ADVERTISED: [Advertised; 12] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -89,6 +89,15 @@ pub static ADVERTISED: [Advertised; 11] = [
         min: 0,
         max: 9,
         flexible_from: Some(6),
+    },
+    Advertised {
+        // ⚠️ **v0-4, flexible from v4** — `oqueue_codec::heartbeat`'s own
+        // doc, confirmed against the dependency's generated source
+        // directly (`M4.9`).
+        api_key: ApiKey::Heartbeat,
+        min: 0,
+        max: 4,
+        flexible_from: Some(4),
     },
     Advertised {
         // ⚠️ **v0-5, flexible from v4** — `oqueue_codec::sync_group`'s own
@@ -164,10 +173,10 @@ mod tests {
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
         ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse,
-        FindCoordinatorRequest, FindCoordinatorResponse, InitProducerIdRequest,
-        InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse, ListOffsetsRequest,
-        ListOffsetsResponse, MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
-        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+        FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
+        InitProducerIdRequest, InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse,
+        ListOffsetsRequest, ListOffsetsResponse, MetadataRequest, MetadataResponse, ProduceRequest,
+        ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
         SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
@@ -209,6 +218,10 @@ mod tests {
             ApiKey::JoinGroup => (
                 JoinGroupRequest::header_version(version),
                 JoinGroupResponse::header_version(version),
+            ),
+            ApiKey::Heartbeat => (
+                HeartbeatRequest::header_version(version),
+                HeartbeatResponse::header_version(version),
             ),
             ApiKey::SyncGroup => (
                 SyncGroupRequest::header_version(version),
@@ -300,6 +313,7 @@ mod tests {
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => pin::<JoinGroupRequest>(row),
+                ApiKey::Heartbeat => pin::<HeartbeatRequest>(row),
                 ApiKey::SyncGroup => pin::<SyncGroupRequest>(row),
                 ApiKey::SaslHandshake => pin_never_flexible::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
@@ -332,6 +346,7 @@ mod tests {
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => within::<JoinGroupRequest>(row),
+                ApiKey::Heartbeat => within::<HeartbeatRequest>(row),
                 ApiKey::SyncGroup => within::<SyncGroupRequest>(row),
                 ApiKey::SaslHandshake => within::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
