@@ -8,13 +8,16 @@
 //! is what our decoder's default (`true`) expresses below v4
 //! (`oqueue_codec::metadata`).
 //!
-//! ⚠️ **`M9.9`: an explicitly-named topic is scoped, the null-topic-array
-//! case is not yet** (`M9.10`'s own row). `M9.1`'s verified finding against
-//! real Kafka source split these into two distinct shapes on purpose — an
+//! ⚠️ **`M9.9`/`M9.10`: two distinct shapes, not the same rule twice**
+//! (`M9.1`'s verified finding against real Kafka source). An
 //! *explicitly-named* topic the principal cannot `DESCRIBE` answers
-//! `TOPIC_AUTHORIZATION_FAILED` for that entry, while "every topic" (the
-//! null array) still calls [`Cluster::topic_names`] unscoped until `M9.10`
-//! points it at the same index instead. Scoping is a no-op — every name
+//! `TOPIC_AUTHORIZATION_FAILED` for that entry (`M9.9`) — the client already
+//! named it, so existence is not what is being protected. The
+//! *null-topic-array* case ("every topic") instead **silently omits**
+//! whatever the principal cannot see (`M9.10`): it is served directly from
+//! [`TopicGrants::topics_for`] rather than [`Cluster::topic_names`], so an
+//! unauthorized topic is never enumerated in the first place, not answered
+//! and then hidden. Scoping is a no-op for both shapes — every name
 //! resolves exactly as before `M9` — whenever `credentials_configured` is
 //! `false`, `oqueue_core::authorize`'s own fail-open signal reused rather
 //! than inventing a second one: no credential source configured means no
@@ -85,11 +88,7 @@ fn answer(
     let all_topics = request.topics.is_none()
         || (version == 0 && request.topics.as_ref().is_some_and(Vec::is_empty));
     let names: Option<Vec<String>> = if all_topics {
-        // ⚠️ **Not yet scoped — `M9.10`'s own case.** "Every topic" still
-        // means every topic that exists, not yet every topic this
-        // principal can see; the module doc names this a known, temporary
-        // gap rather than an oversight.
-        Some(cluster.topic_names())
+        Some(all_topics_names(cluster, authz))
     } else {
         // ⚠️ A null NAME inside an entry (v10+ describe-by-topic-id) is a
         // request this id-less stub cannot serve — refusing beats creating
@@ -138,8 +137,10 @@ fn answer(
 /// bundled for the same argument-count reason as [`AuthzContext`].
 struct ResolveMode {
     version: i16,
-    /// Whether `names` came from the null-topic-array case — `M9.9`'s own
-    /// authorization gate does not run for it yet (`M9.10`'s row).
+    /// Whether `names` came from the null-topic-array case — `topic_authorized`
+    /// does not run per-entry for it, because `all_topics_names` (`M9.10`)
+    /// already scoped the list at its source; running it again per name
+    /// would be redundant, not incorrect.
     all_topics: bool,
     allow_auto_topic_creation: bool,
 }
@@ -166,6 +167,51 @@ fn resolve_all(
                 }
             }
         })
+        .collect()
+}
+
+/// The topic names a null-topic-array ("every topic") request answers with
+/// — `M9.10`'s own gate, the silent-omission half of `M9.1`'s verified
+/// Kafka finding.
+///
+/// ⚠️ **Served from [`TopicGrants::topics_for`] directly, never from
+/// [`Cluster::topic_names`], once configured.** This is doc 15 §4's own
+/// architectural claim made real for this path specifically: the cost is
+/// O(topics this principal can see), not O(topics that exist) filtered
+/// down afterward — the anti-pattern `M9.8`'s whole index exists to avoid,
+/// which computing this list by enumerating every topic and checking each
+/// one against the index would silently reintroduce.
+///
+/// ⚠️ **Fails open when unconfigured**, `topic_authorized`'s own signal.
+/// **No principal is an empty list**, not a panic — the same defensive
+/// shape as `topic_authorized`, for a case that should be equally
+/// unreachable past `M9.7`'s own gate.
+fn all_topics_names(cluster: &Cluster, authz: &AuthzContext<'_>) -> Vec<String> {
+    if !authz.credentials_configured {
+        return cluster.topic_names();
+    }
+    let Some(principal) = authz.principal else {
+        return Vec::new();
+    };
+    // ⚠️ **Existence filtered here, not left to `resolve_topic`.** A grant
+    // naming a topic that does not (yet) exist must not appear at all — real
+    // Kafka's own null-array path never invents or reports on a topic
+    // outside its existing metadata cache, only an *explicitly-named* one
+    // gets `allow_auto_topic_creation`'s treatment (`M9.9`'s own case, a
+    // request the client actually made). Without this, `resolve_all`'s
+    // `mode.all_topics` short-circuit would hand a phantom name straight to
+    // `resolve_topic`, which would either silently create it or answer
+    // `UNKNOWN_TOPIC_OR_PARTITION` for a topic nobody named — round 1
+    // review's own finding. `partition_count` is one lookup per granted
+    // topic (O(this principal's own grant count)), never a scan of
+    // `Cluster`'s own topics — the cost claim this whole path exists for
+    // stays intact.
+    authz
+        .topic_grants
+        .topics_for(principal)
+        .map(TopicId::as_str)
+        .filter(|name| cluster.partition_count(name).is_some())
+        .map(str::to_owned)
         .collect()
 }
 
