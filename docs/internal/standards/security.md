@@ -75,7 +75,9 @@ attacker-controlled bytes from an unauthenticated peer.
 12. **No object contains regions from two key domains.** → FR-42, and a test
     asserting it
 13. **A tenant cannot exhaust a shared resource** — connection counts, memory,
-    in-flight requests are bounded per principal, not only globally.
+    in-flight requests are bounded per principal, not only globally. → FR-45;
+    test asserting a principal over quota is throttled while another
+    principal's throughput is unaffected (`M9.16`)
 
 ## Cryptography
 

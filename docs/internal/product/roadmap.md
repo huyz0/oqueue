@@ -176,7 +176,7 @@ and it is not what M-1.24 asked for.
 | M2 | FR-1, FR-2, FR-3 |
 | M3 | FR-10, FR-11, FR-12, FR-13, FR-32, NFR-2, NFR-3 |
 | M10 | NFR-20 (the method), FR-51 (the method), NFR-21 |
-| M9 | FR-4, FR-40, FR-44, NFR-12 |
+| M9 | FR-4, FR-40, FR-44, FR-45, NFR-12 |
 | M4 | FR-20, FR-21, FR-22 |
 | M11 | FR-14 |
 | M5 | FR-33, FR-34, FR-35 |

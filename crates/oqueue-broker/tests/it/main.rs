@@ -15,6 +15,7 @@ mod generated;
 mod invariants;
 mod matrix;
 mod overlap;
+mod quota;
 mod reads;
 mod reap;
 mod roundtrip;

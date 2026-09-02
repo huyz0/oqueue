@@ -34,6 +34,18 @@ use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header, read_request_prelude};
 use oqueue_codec::versions::supports;
 
+/// The result of [`Dispatcher::admit_quota`] — not `Option<Option<InFlight>>`
+/// (clippy's `option_option`, `-D pedantic`): a refusal and "admitted,
+/// nothing to release" are genuinely different outcomes, not two spellings
+/// of `None`.
+enum QuotaAdmission {
+    /// The request is over its principal's bound; close the connection.
+    Refused,
+    /// The request may proceed, holding `InFlight` for the rest of it if a
+    /// quota is actually configured for an authenticated principal.
+    Admitted(Option<oqueue_core::InFlight>),
+}
+
 /// Routes decoded frames to API handlers over the cluster.
 ///
 /// `M2.21` built the frame walk and `ApiVersions`; `M2.22` added `Metadata`;
@@ -58,6 +70,12 @@ pub struct Dispatcher {
     /// `Metadata`'s own fail-open rule (`credentials` empty) means this
     /// field is not even read until a credential source exists.
     topic_grants: std::sync::Arc<oqueue_core::TopicGrants>,
+    /// The in-flight-request bound each authenticated principal shares
+    /// across every connection it opens (`security.md` rule 13, FR-45,
+    /// `M9.16`) — `None` by construction, matching `credentials`' own
+    /// "nothing configured" default: no quota is enforced until a composer
+    /// that actually knows opts one in.
+    quota: Option<std::sync::Arc<oqueue_core::PrincipalQuota>>,
 }
 
 impl Dispatcher {
@@ -85,6 +103,7 @@ impl Dispatcher {
             tls: false,
             credentials: std::sync::Arc::default(),
             topic_grants: std::sync::Arc::default(),
+            quota: None,
         }
     }
 
@@ -132,6 +151,26 @@ impl Dispatcher {
     #[must_use]
     pub fn with_topic_grants(mut self, topic_grants: oqueue_core::TopicGrants) -> Self {
         self.topic_grants = std::sync::Arc::new(topic_grants);
+        self
+    }
+
+    /// The in-flight-request bound this connection's authenticated
+    /// principal shares with every other connection it opens
+    /// (`security.md` rule 13, FR-45, `M9.16`).
+    ///
+    /// ⚠️ **Takes the shared `Arc` itself, not a value to wrap.**
+    /// `with_credentials`/`with_topic_grants` each take an owned value and
+    /// wrap it in a fresh `Arc` — correct for read-only configuration, where
+    /// a clone of the *data* behaves identically to sharing it. A quota's
+    /// count has to be the *same* counter across every dispatcher for one
+    /// broker, or each connection gets its own independent bound and a
+    /// principal escapes it by opening more connections — the composer
+    /// builds one `Arc<PrincipalQuota>` and clones the `Arc` into every
+    /// dispatcher sharing the `Cluster`, `Cluster`'s own sharing shape
+    /// applied to a second value.
+    #[must_use]
+    pub fn with_quota(mut self, quota: std::sync::Arc<oqueue_core::PrincipalQuota>) -> Self {
+        self.quota = Some(quota);
         self
     }
 }
@@ -184,6 +223,18 @@ impl Dispatcher {
         {
             return HandlerResponse::Close;
         }
+        // `security.md` rule 13, FR-45, `M9.16`: the second bound every API
+        // beyond the pre-authentication trio passes through, right beside
+        // `M9.7`'s own authorization check rather than folded into it —
+        // "may this principal run at all" and "has this principal already
+        // got too much running" are separate questions, and `authorize`'s
+        // own doc says plainly it is the seam, not the policy. Held for the
+        // rest of this call, including the `.await` below: `_in_flight`
+        // releases when `dispatch` returns, not before.
+        let _in_flight = match self.admit_quota(self.session.principal().as_ref()) {
+            QuotaAdmission::Admitted(in_flight) => in_flight,
+            QuotaAdmission::Refused => return HandlerResponse::Close,
+        };
         // The message body starts after the full request header, whose
         // per-API shape `oqueue_codec::frame` now owns (`ADR-0019`).
         let Some(body) = oqueue_codec::frame::decode_request_header(request)
@@ -209,6 +260,21 @@ impl Dispatcher {
             // Answered above by the early return; named rather than a
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
+        }
+    }
+
+    /// Admits one in-flight request against this connection's quota, if one
+    /// is configured (`security.md` rule 13, FR-45, `M9.16`).
+    fn admit_quota(&self, principal: Option<&oqueue_core::Principal>) -> QuotaAdmission {
+        match (&self.quota, principal) {
+            (Some(quota), Some(principal)) => oqueue_core::PrincipalQuota::admit(quota, principal)
+                .map_or(QuotaAdmission::Refused, |in_flight| {
+                    QuotaAdmission::Admitted(Some(in_flight))
+                }),
+            // No quota configured, or no principal yet: the same fail-open
+            // shape `oqueue_core::authorize` already uses — nothing to bound
+            // is not a refusal.
+            _ => QuotaAdmission::Admitted(None),
         }
     }
 

@@ -87,6 +87,7 @@ the reason these have IDs at all.
 | FR-42 | Segregate BYOK data into objects scoped to one key domain. | Test asserting no object contains regions from two key domains | agreed |
 | FR-43 | Provide a FIPS 140-3 build using a validated cryptographic module. | Runtime assertion that FIPS mode is enabled; differential test proving FIPS and non-FIPS builds read each other's data | agreed |
 | FR-44 | Never allow key material or credentials to reach a log, span, metric label, error variant, or admin response. | Static gate on secret types; log scan in the end-to-end suite | agreed |
+| FR-45 | A single principal cannot exhaust a shared resource — connection counts, memory, or in-flight requests — to degrade another principal's service. | Test asserting a principal over its configured quota is throttled or refused while a second principal's throughput is unaffected | agreed — derived in `M9.16`. ⚠️ **Filled a real gap, not added freshly**: `security.md` rule 13 already stated this rule with no requirement ID and no named gate; `M9.md`'s own task 15 ("Rate limiting and quotas per principal — the isolation half of multi-tenancy") was citing `NFR-12` (`Metadata` response cost — a different property) before this row existed, found while starting that task. |
 
 ### Operations
 
