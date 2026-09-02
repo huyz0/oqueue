@@ -18,6 +18,7 @@ mod overlap;
 mod reads;
 mod reap;
 mod roundtrip;
+mod secrets_log_scan;
 mod seeded;
 mod support;
 mod virtual_time;
