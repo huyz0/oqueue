@@ -16,7 +16,7 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    Error, ObjectKey, Offset, PartitionId, ProducerEpoch, ProducerId, Timestamp, TopicId,
+    Error, ObjectKey, Offset, PartitionId, Principal, ProducerEpoch, ProducerId, Timestamp, TopicId,
 };
 use proptest::prelude::*;
 
@@ -119,6 +119,18 @@ proptest! {
             }
         }
     }
+
+    /// No string produces a `Principal` wrapping an empty string.
+    #[test]
+    fn principal_is_never_empty(name in ".*") {
+        match Principal::new(name.clone()) {
+            Ok(p) => prop_assert!(!p.as_str().is_empty()),
+            Err(e) => {
+                prop_assert!(name.is_empty());
+                prop_assert_eq!(e, Error::EmptyPrincipal);
+            }
+        }
+    }
 }
 
 /// `Offset::ZERO` is the documented floor and satisfies the invariant.
@@ -155,7 +167,8 @@ fn offset_add_at_the_boundary_errors_rather_than_wrapping() {
 /// Both are needed.
 mod kills_surviving_mutants {
     use super::{
-        Error, ObjectKey, Offset, PartitionId, ProducerEpoch, ProducerId, Timestamp, TopicId,
+        Error, ObjectKey, Offset, PartitionId, Principal, ProducerEpoch, ProducerId, Timestamp,
+        TopicId,
     };
     use oqueue_core::{ByteRange, CommittedSpan, ProducerIdentity};
 
@@ -171,6 +184,7 @@ mod kills_surviving_mutants {
         assert_eq!(Timestamp::from_millis(9).expect("valid").as_millis(), 9);
         assert_eq!(ProducerId::new(11).expect("valid").get(), 11);
         assert_eq!(ProducerEpoch::new(3).expect("valid").get(), 3);
+        assert_eq!(Principal::new("alice").expect("valid").as_str(), "alice");
     }
 
     /// ⚠️ **`ProducerIdentity`'s own three accessors, and `CommittedSpan`'s
@@ -221,6 +235,7 @@ mod kills_surviving_mutants {
         assert_eq!(Timestamp::from_millis(9).expect("valid").to_string(), "9ms");
         assert_eq!(ProducerId::new(11).expect("valid").to_string(), "11");
         assert_eq!(ProducerEpoch::new(3).expect("valid").to_string(), "3");
+        assert_eq!(Principal::new("alice").expect("valid").to_string(), "alice");
     }
 
     /// ⚠️ Zero is the boundary every `< 0` guard turns on, and `< ` mutated to

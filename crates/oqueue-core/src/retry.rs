@@ -59,6 +59,7 @@ impl Error {
             Self::Transient => RetryClass::Bounded,
             Self::ObjectNotFound { .. }
             | Self::EmptyTopicId
+            | Self::EmptyPrincipal
             | Self::NegativePartitionId { .. }
             | Self::NegativeOffset { .. }
             | Self::NegativeOffsetDelta { .. }

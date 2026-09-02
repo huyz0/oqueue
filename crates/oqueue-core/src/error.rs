@@ -61,6 +61,10 @@ pub enum Error {
         got: i64,
     },
 
+    /// A principal's name was empty.
+    #[error("principal is empty")]
+    EmptyPrincipal,
+
     /// A producer epoch was negative.
     #[error("producer epoch must not be negative, got {got}")]
     NegativeProducerEpoch {
