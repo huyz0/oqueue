@@ -13,6 +13,19 @@
 //! version — has no response the client would parse, and the only safe
 //! answer is closing the connection: [`HandlerResponse::Close`] from the
 //! [`crate::Handler`] seam (ADR-0018's status notes).
+//!
+//! ⚠️ **`M9.7`'s authorization decision point answers the same way.** An API
+//! beyond the pre-authentication trio (`ApiVersions`, `SaslHandshake`,
+//! `SaslAuthenticate`) that `oqueue_core::authorize` refuses closes the
+//! connection rather than answering with a per-API authorization error code —
+//! a deliberate simplification, not an oversight: five heterogeneous response
+//! shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`, `InitProducerId`)
+//! would each need their own encoded refusal, and this decision point's own
+//! scope is the seam, not full Kafka error-code parity for a branch no
+//! existing deployment reaches yet (`credentials` is empty everywhere until
+//! `bin/oqueue`'s own composition-root wiring lands). A later task may trade
+//! this for a friendlier per-API answer; recorded rather than silently
+//! chosen.
 
 use crate::connection::HandlerResponse;
 use core::future::Future;
@@ -130,6 +143,23 @@ impl Dispatcher {
         if api_key == ApiKey::ApiVersions {
             return HandlerResponse::Reply(api_versions_response(prelude));
         }
+        // `M9.7`'s authorization decision point: one call, ahead of the
+        // routing match below, that every API beyond the pre-authentication
+        // trio (`ApiVersions`, already answered above; `SaslHandshake` and
+        // `SaslAuthenticate`, exempted here since they are how a principal
+        // gets attached in the first place) passes through before its
+        // handler runs. A new arm added to the match cannot skip this by
+        // forgetting to call it — only by being routed outside this one
+        // shared guard, which `M9.11`'s structural gate is free to check for
+        // once there is more than one call site to compare against.
+        if !matches!(api_key, ApiKey::SaslHandshake | ApiKey::SaslAuthenticate)
+            && !oqueue_core::authorize(
+                self.session.principal().as_ref(),
+                !self.credentials.is_empty(),
+            )
+        {
+            return HandlerResponse::Close;
+        }
         // The message body starts after the full request header, whose
         // per-API shape `oqueue_codec::frame` now owns (`ADR-0019`).
         let Some(body) = oqueue_codec::frame::decode_request_header(request)
@@ -149,9 +179,13 @@ impl Dispatcher {
             }
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),
             ApiKey::SaslHandshake => crate::sasl_handshake::handle(prelude, body),
-            ApiKey::SaslAuthenticate => {
-                crate::sasl_authenticate::handle(prelude, body, self.tls, &self.credentials)
-            }
+            ApiKey::SaslAuthenticate => crate::sasl_authenticate::handle(
+                prelude,
+                body,
+                self.tls,
+                &self.credentials,
+                &self.session,
+            ),
             // Answered above by the early return; named rather than a
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
@@ -190,207 +224,4 @@ fn api_versions_response(prelude: RequestPrelude) -> Vec<u8> {
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-
-    use super::Dispatcher;
-    use crate::connection::HandlerResponse;
-    use crate::testing::{Fixture, fixture};
-    use std::sync::Arc;
-
-    /// ⚠️ The fixture is returned alongside, and holding it is not a
-    /// formality: dropping it aborts the coordinator loop, and a dispatcher
-    /// over a dead coordinator answers every produce with a refusal.
-    async fn dispatcher() -> (Dispatcher, Fixture) {
-        let fixture = fixture(&[]).await;
-        let dispatcher = Dispatcher::new(Arc::clone(&fixture.cluster));
-        (dispatcher, fixture)
-    }
-
-    /// The reply's bytes, or a panic naming the other verdict.
-    async fn replied(dispatcher: &Dispatcher, request: Vec<u8>) -> Vec<u8> {
-        match dispatcher.dispatch(request).await {
-            HandlerResponse::Reply(out) => out,
-            other => panic!("expected a reply, got {other:?}"),
-        }
-    }
-    use kafka_protocol::messages::ApiVersionsResponse;
-    use kafka_protocol::protocol::Decodable;
-    use oqueue_codec::wire::{Cursor, put_i16, put_i32};
-
-    fn api_versions_request(version: i16, correlation_id: i32) -> Vec<u8> {
-        let mut body = Vec::new();
-        put_i16(&mut body, 18);
-        put_i16(&mut body, version);
-        put_i32(&mut body, correlation_id);
-        // client_id: legacy i16-length nullable string, null here.
-        put_i16(&mut body, -1);
-        if version >= 3 {
-            body.push(0x00); // empty tagged fields (v2 request header)
-        }
-        body
-    }
-
-    fn decode_response(bytes: &[u8], body_version: i16) -> (i32, ApiVersionsResponse) {
-        // ApiVersions responses carry a v0 header at every version: just
-        // the correlation id.
-        let mut cur = Cursor::new(bytes);
-        let correlation = cur.read_i32().expect("a correlation id");
-        let mut rest = &bytes[4..];
-        let response =
-            ApiVersionsResponse::decode(&mut rest, body_version).expect("a decodable body");
-        assert!(rest.is_empty(), "nothing after the body");
-        (correlation, response)
-    }
-
-    #[tokio::test]
-    async fn a_supported_version_is_answered_at_that_version() {
-        let (dispatcher, _fixture) = dispatcher().await;
-        let out = replied(&dispatcher, api_versions_request(3, 77)).await;
-        let (correlation, response) = decode_response(&out, 3);
-        assert_eq!(correlation, 77);
-        assert_eq!(response.error_code, 0);
-        let produce = response
-            .api_keys
-            .iter()
-            .find(|k| k.api_key == 0)
-            .expect("produce is advertised");
-        assert_eq!((produce.min_version, produce.max_version), (3, 13));
-    }
-
-    /// ⚠️ **`M9.6`'s own check**: `ApiVersions` still answers with no `SaslHandshake`
-    /// or `SaslAuthenticate` exchange having happened at all — not TLS-terminated,
-    /// no credentials configured, nothing. `M9.3`-`M9.5` added a real SASL
-    /// mechanism and TLS capability beside this dispatcher; neither moved
-    /// `ApiVersions` behind them. `M9.7`'s future authorization gate is the
-    /// thing this test is written to catch, should it ever wrap `ApiVersions`
-    /// by accident rather than by the deliberate exemption doc 02 §1.4 point 2
-    /// requires.
-    #[tokio::test]
-    async fn api_versions_answers_with_no_sasl_exchange_and_no_tls() {
-        let (dispatcher, _fixture) = dispatcher().await;
-        let out = replied(&dispatcher, api_versions_request(3, 1)).await;
-        let (_correlation, response) = decode_response(&out, 3);
-        assert_eq!(
-            response.error_code, 0,
-            "unauthenticated, unencrypted, still answered"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unsupported_version_gets_the_v0_bodied_fallback() {
-        let (dispatcher, _fixture) = dispatcher().await;
-        let out = replied(&dispatcher, api_versions_request(99, 5)).await;
-        let (correlation, response) = decode_response(&out, 0);
-        assert_eq!(correlation, 5);
-        assert_eq!(
-            response.error_code,
-            kafka_protocol::error::ResponseError::UnsupportedVersion.code()
-        );
-        assert!(
-            !response.api_keys.is_empty(),
-            "the table rides the fallback so the client can retry"
-        );
-    }
-
-    #[tokio::test]
-    async fn an_unknown_api_key_closes_the_connection() {
-        let mut body = Vec::new();
-        put_i16(&mut body, 0x7F00);
-        put_i16(&mut body, 0);
-        put_i32(&mut body, 1);
-        let (dispatcher, _fixture) = dispatcher().await;
-        assert_eq!(dispatcher.dispatch(body).await, HandlerResponse::Close);
-    }
-
-    #[tokio::test]
-    async fn an_advertised_api_at_an_unadvertised_version_closes() {
-        let mut body = Vec::new();
-        put_i16(&mut body, 0); // Produce
-        put_i16(&mut body, 2); // removed by KIP-896, below the floor
-        put_i32(&mut body, 1);
-        let (dispatcher, _fixture) = dispatcher().await;
-        assert_eq!(
-            dispatcher.dispatch(body).await,
-            HandlerResponse::Close,
-            "outside ApiVersions' fallback there is nothing parsable to say"
-        );
-    }
-
-    /// End to end through the connection task: the dispatcher is a Handler,
-    /// and the bytes on the wire carry the v0 header both ways.
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn api_versions_round_trips_through_a_connection() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut client, server) = tokio::io::duplex(4096);
-        let limits = crate::ConnectionLimits {
-            max_frame: 1024,
-            max_in_flight: 4,
-            idle_timeout: std::time::Duration::from_hours(1),
-        };
-        let (dispatcher, _fixture) = dispatcher().await;
-        let conn = tokio::spawn(crate::serve_connection(
-            server,
-            Arc::new(dispatcher),
-            limits,
-        ));
-
-        let body = api_versions_request(3, 42);
-        let mut frame = Vec::new();
-        put_i32(&mut frame, i32::try_from(body.len()).expect("small"));
-        frame.extend_from_slice(&body);
-        client.write_all(&frame).await.expect("request written");
-
-        let mut size = [0u8; 4];
-        client.read_exact(&mut size).await.expect("a response size");
-        let mut response = vec![0u8; u32::from_be_bytes(size) as usize];
-        client.read_exact(&mut response).await.expect("a response");
-        let (correlation, decoded) = decode_response(&response, 3);
-        assert_eq!(correlation, 42);
-        assert_eq!(decoded.error_code, 0);
-
-        drop(client);
-        conn.await.expect("joins").expect("clean close");
-    }
-
-    /// The close decision travels the whole stack: an unknown api key ends
-    /// the connection promptly — the client sees EOF, not a timeout — which
-    /// is the seam hole round 1's review found (no test drove a `None`
-    /// through `serve_connection`).
-    #[tokio::test(start_paused = true)]
-    async fn an_unknown_key_closes_the_connection_promptly() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let (mut client, server) = tokio::io::duplex(4096);
-        let limits = crate::ConnectionLimits {
-            max_frame: 1024,
-            max_in_flight: 4,
-            idle_timeout: std::time::Duration::from_hours(1),
-        };
-        let (dispatcher, _fixture) = dispatcher().await;
-        let conn = tokio::spawn(crate::serve_connection(
-            server,
-            Arc::new(dispatcher),
-            limits,
-        ));
-
-        let mut body = Vec::new();
-        put_i16(&mut body, 0x7F00);
-        put_i16(&mut body, 0);
-        put_i32(&mut body, 9);
-        let mut frame = Vec::new();
-        put_i32(&mut frame, i32::try_from(body.len()).expect("small"));
-        frame.extend_from_slice(&body);
-        client.write_all(&frame).await.expect("request written");
-
-        // EOF, promptly: under paused time a wrong implementation would sit
-        // until the hour-long idle timeout; a correct one closes now.
-        let mut buf = [0u8; 1];
-        let read = client.read(&mut buf).await.expect("a read completes");
-        assert_eq!(read, 0, "the broker closed rather than answering");
-        conn.await
-            .expect("joins")
-            .expect("a clean, deliberate close");
-    }
-}
+mod tests;

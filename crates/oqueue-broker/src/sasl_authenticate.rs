@@ -51,6 +51,17 @@ impl PlainCredentials {
         Self(credentials)
     }
 
+    /// Whether this broker has any credential to check against at all —
+    /// `M9.7`'s own question, distinct from whether any one exchange
+    /// succeeds: an empty set is `M9.3`'s and `M9.4`'s own shipped default,
+    /// and the one case `oqueue_core::authorize` must fail open for rather
+    /// than lock every connection out of an API no credential could ever be
+    /// presented to unlock.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     /// The principal `authcid`/`password` authenticates as, or `None` for
     /// no match — an unknown principal and a wrong password are the same
     /// outcome here, deliberately: distinguishing them would let a client
@@ -106,38 +117,52 @@ const fn refused() -> SaslAuthenticateResponse<'static> {
 /// `tls` names whether this connection is already TLS-terminated —
 /// `ADR-0032`'s prerequisite, decided by whichever composer accepted the
 /// connection (a TLS listener, once that wiring exists), never guessed at
-/// here. `credentials` is the configured set to check against.
+/// here. `credentials` is the configured set to check against. On success,
+/// `session` records the matched principal (`Session::authenticate`) —
+/// `M9.7`'s "the rule that every request carries one" made real, since this
+/// is the one place that principal is ever established.
 pub(crate) fn handle(
     prelude: RequestPrelude,
     body: &[u8],
     tls: bool,
     credentials: &PlainCredentials,
+    session: &crate::session::Session,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
         return HandlerResponse::Close;
     };
 
-    let response = if tls {
-        match parse_plain(request.auth_bytes) {
-            Some((authcid, password)) if credentials.verify(authcid, password).is_some() => {
-                SaslAuthenticateResponse {
-                    error_code: error_codes::NONE,
-                    error_message: None,
-                    auth_bytes: b"",
-                    // ⚠️ No expiry: this broker does not yet re-authenticate a
-                    // long-lived connection (a real feature, not an omission
-                    // to fix here) — Kafka's own convention for "no bound" is
-                    // the field's own max representable value, not `0`,
-                    // which real Kafka clients treat as "expires immediately."
-                    session_lifetime_ms: i64::MAX,
-                }
-            }
-            _ => refused(),
-        }
+    let matched = if tls {
+        parse_plain(request.auth_bytes)
+            .and_then(|(authcid, password)| credentials.verify(authcid, password).cloned())
     } else {
-        refused()
+        None
     };
+    // ⚠️ **`session.authenticate` decides "first" atomically.** Verifying the
+    // credential above has no side effect, so two `SaslAuthenticate` frames
+    // pipelined on the same connection (`connection.rs`'s per-frame
+    // `tokio::spawn`, `bin/oqueue`'s deeply pipelined default) can both reach
+    // this point having both matched a real credential — `Session::authenticate`
+    // itself is the one place that decides which principal, if either, actually
+    // wins, under a single lock acquisition rather than a separate check and
+    // write here that a race could slip between. A matched credential that
+    // loses that race is refused exactly like one that never matched at all —
+    // `ADR-0032`'s "no re-authentication story yet" held under concurrency,
+    // not just in sequence.
+    let response = matched
+        .filter(|principal| session.authenticate(principal.clone()))
+        .map_or_else(refused, |_principal| SaslAuthenticateResponse {
+            error_code: error_codes::NONE,
+            error_message: None,
+            auth_bytes: b"",
+            // ⚠️ No expiry: this broker does not yet re-authenticate a
+            // long-lived connection (a real feature, not an omission to
+            // fix here) — Kafka's own convention for "no bound" is the
+            // field's own max representable value, not `0`, which real
+            // Kafka clients treat as "expires immediately."
+            session_lifetime_ms: i64::MAX,
+        });
 
     let mut out = Vec::new();
     if encode_response_header(

@@ -2,6 +2,7 @@
 
 use super::{PlainCredential, PlainCredentials, handle};
 use crate::connection::HandlerResponse;
+use crate::session::Session;
 use bytes::Bytes;
 use kafka_protocol::messages::{SaslAuthenticateRequest, SaslAuthenticateResponse};
 use kafka_protocol::protocol::{Decodable, Encodable};
@@ -39,7 +40,16 @@ fn one_credential(name: &str, password: &str) -> PlainCredentials {
 }
 
 fn replied(body: &[u8], tls: bool, credentials: &PlainCredentials) -> SaslAuthenticateResponse {
-    let HandlerResponse::Reply(out) = handle(prelude(), body, tls, credentials) else {
+    replied_on(body, tls, credentials, &Session::default())
+}
+
+fn replied_on(
+    body: &[u8],
+    tls: bool,
+    credentials: &PlainCredentials,
+    session: &Session,
+) -> SaslAuthenticateResponse {
+    let HandlerResponse::Reply(out) = handle(prelude(), body, tls, credentials, session) else {
         panic!("a well-formed SaslAuthenticate replies");
     };
     let mut rest = &out[4..];
@@ -163,7 +173,98 @@ fn a_malformed_plain_exchange_over_tls_is_refused() {
 fn a_malformed_body_closes_rather_than_panicking() {
     let creds = one_credential("alice", "secret");
     assert!(matches!(
-        handle(prelude(), &[0xFF, 0xFF], true, &creds),
+        handle(prelude(), &[0xFF, 0xFF], true, &creds, &Session::default()),
         HandlerResponse::Close
     ));
+}
+
+/// ⚠️ **`M9.7`'s own dependency**: a successful exchange is the one place a
+/// `Principal` is ever attached to a connection — the authorization decision
+/// point has nothing to read if this does not happen.
+#[test]
+fn a_successful_exchange_attaches_the_principal_to_the_session() {
+    let creds = one_credential("alice", "secret");
+    let session = Session::default();
+    assert_eq!(session.principal(), None, "nothing authenticated yet");
+
+    let response = replied_on(
+        &encoded(plain_bytes("alice", "secret")),
+        true,
+        &creds,
+        &session,
+    );
+
+    assert_eq!(response.error_code, 0);
+    assert_eq!(
+        session.principal(),
+        Some(Principal::new("alice").expect("valid"))
+    );
+}
+
+/// A refused exchange — wrong password, this time — leaves the session
+/// exactly as unauthenticated as it started: a failed attempt must not
+/// silently attach an identity nobody proved.
+#[test]
+fn a_refused_exchange_does_not_attach_a_principal() {
+    let creds = one_credential("alice", "secret");
+    let session = Session::default();
+
+    let response = replied_on(
+        &encoded(plain_bytes("alice", "wrong")),
+        true,
+        &creds,
+        &session,
+    );
+
+    assert_eq!(response.error_code, error_codes::SASL_AUTHENTICATION_FAILED);
+    assert_eq!(session.principal(), None);
+}
+
+/// ⚠️ **`Session::authenticate`'s own guarantee, exercised at the one place
+/// that could break it.** A second, otherwise-correct exchange for a
+/// *different* principal on an already-authenticated connection is refused,
+/// not honoured — `ADR-0032` carries no re-authentication story, so a
+/// connection's identity is fixed the moment the first exchange succeeds.
+#[test]
+fn a_second_exchange_on_an_authenticated_session_is_refused_and_does_not_replace_the_principal() {
+    let creds = PlainCredentials::new(vec![
+        PlainCredential {
+            principal: Principal::new("alice").expect("valid"),
+            password: Redacted::new("secret1".to_owned()),
+        },
+        PlainCredential {
+            principal: Principal::new("bob").expect("valid"),
+            password: Redacted::new("secret2".to_owned()),
+        },
+    ]);
+    let session = Session::default();
+
+    let first = replied_on(
+        &encoded(plain_bytes("alice", "secret1")),
+        true,
+        &creds,
+        &session,
+    );
+    assert_eq!(first.error_code, 0, "the first exchange succeeds");
+    assert_eq!(
+        session.principal(),
+        Some(Principal::new("alice").expect("valid"))
+    );
+
+    let second = replied_on(
+        &encoded(plain_bytes("bob", "secret2")),
+        true,
+        &creds,
+        &session,
+    );
+    assert_eq!(
+        second.error_code,
+        error_codes::SASL_AUTHENTICATION_FAILED,
+        "a correct, but second, credential is still refused"
+    );
+    assert_eq!(
+        session.principal(),
+        Some(Principal::new("alice").expect("valid")),
+        "the original principal survives the refused second exchange"
+    );
 }

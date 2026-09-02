@@ -41,6 +41,7 @@
 //! can hand out. That is what lets everything downstream stop re-checking.
 #![forbid(unsafe_code)]
 
+mod authz;
 mod bundle;
 mod bundle_footer;
 mod bundle_name;
@@ -82,6 +83,7 @@ mod store;
 mod test_executor;
 mod topic;
 
+pub use authz::authorize;
 pub use bundle::{BUNDLE_FORMAT_VERSION, BundleBuilder, PushedRecords, Region, RegionAlg, Sealed};
 pub use bundle_footer::parse_footer;
 pub use bundle_name::BundleNamer;
