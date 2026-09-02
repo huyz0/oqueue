@@ -1,6 +1,6 @@
 # 0031. Idempotent-producer state lives with the offset allocator, not in a retroactive tombstone
 
-Status: accepted; 2026-09-02 (`M11.2`): point 4's field shape is stale — `CommittedSpan` gained one grouped field, `producer: Option<ProducerIdentity>`, not the three separate optional fields below, to stay under `clippy.toml`'s five-argument threshold. See `M11.2`'s own commit message.
+Status: accepted; 2026-09-02 (`M11.2`): point 4's field shape is stale — `CommittedSpan` gained one grouped field, `producer: Option<ProducerIdentity>`, not the three separate optional fields below, to stay under `clippy.toml`'s five-argument threshold. See `M11.2`'s own commit message.; 2026-09-02 (`M11.18`): the "Alternatives considered" section's "librdkafka enables the idempotent path *by default*" is wrong — a wire capture in `M11.10`/`M11.11` found librdkafka's own default is `false`; only Kafka's Java client defaults it on, since KIP-679. The alternative was still rightly rejected: `M2`'s workaround was real and user-visible regardless of which client's default made it so.
 Date: 2026-09-02
 Requirements: FR-14, FR-15 (scope)
 
