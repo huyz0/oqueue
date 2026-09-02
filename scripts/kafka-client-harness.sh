@@ -95,6 +95,41 @@ else
     fail "librdkafka round trip failed"
     note "$(tail -5 "$HARNESS_DIR/rdkafka.log" 2>/dev/null || true)"
   fi
+
+  # ── idempotent-producer conformance (M11.10) ──────────────────────────────
+  # ⚠️ Same client, same importability check above; a separate `elif` chain
+  # would re-test what this `else` branch already established. ⚠️ **Its own
+  # broker**, not `$ADDR` — a real client's post-bootstrap connections use
+  # `Metadata`'s advertised address, so the frame-dropping proxy this leg
+  # needs has to be what the broker advertises from the start, which
+  # `idempotent_conformance.py` arranges by starting both itself.
+  #
+  # ⚠️ **Two of `M11.10`'s three legs, by real-client conformance — the
+  # third is provably unreachable that way and is named here rather than
+  # silently skipped.** "Produces successfully" is the ordinary round trip
+  # two lines up, already running with `enable.idempotence` at its default;
+  # "a duplicate-sequence test observes deduplication" is this leg. "A
+  # fenced epoch is refused" is not reachable from any real,
+  # standards-compliant *non-transactional* client: `M11.4`'s
+  # `InitProducerId` handler always mints a fresh id at epoch zero for a
+  # non-transactional call, and the only way a real client ever presents an
+  # *existing* id at a *different* epoch is the transactional `InitProducerId`
+  # flow (naming `transactional.id`), which that same handler refuses
+  # outright (FR-15, deferred) — so no compliant client can ever be the
+  # zombie this leg would need. `oqueue-broker`'s own
+  # `produce/idempotent.rs::a_zombie_epoch_is_refused_with_the_invalid_producer_epoch_wire_code`
+  # is where that property is verified, at the fidelity actually available:
+  # a hand-rolled wire-level client, the same tool `M11.7`'s own admission
+  # tests already use for exactly this reason.
+  if python3 scripts/harness/idempotent_conformance.py \
+      > "$HARNESS_DIR/idempotent.log" 2>&1 \
+    && grep -q '^DEDUPLICATED OK$' "$HARNESS_DIR/idempotent.log"; then
+    ok "librdkafka idempotent-producer conformance (a lost ack is deduplicated, not doubled)"
+    echo "idempotent-conformance" >> "$ROSTER"
+  else
+    fail "idempotent-producer conformance failed"
+    note "$(tail -10 "$HARNESS_DIR/idempotent.log" 2>/dev/null || true)"
+  fi
 fi
 
 # ── the Java client ─────────────────────────────────────────────────────────
