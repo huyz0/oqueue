@@ -1,0 +1,19 @@
+{
+  "commits": [
+    "970923209eaf4e0253894eec512b8653a57b37af"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/backlog.md line 40 ('| M11.3 | ... | ... M11.6's own scope, not touched here.' with no closing '| done |'), introduced by M11.3's own commit 869a982 (git log -L 40,40:docs/internal/product/backlog.md shows the prior '| todo |' close was dropped when the addendum was appended and never restored). Confirmed via a full-file scan (python: every '| M...' row checked for a trailing '|') that this is the sole occurrence in the document. Not previously caught by M11.3's own per-commit review, nor by rounds 1-3 of this milestone review (M11.13, M11.19, M11.20), each of which read backlog.md as part of its packet. Per review.md rule 9a, a finding whose subject is prose/a backlog row is minor unless acting on it would change code behaviour or a live decision -- it would not here (the task's done status is unambiguous from the prose), so no task_id is created for it.",
+      "id": "4e478c06d5ca",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "backlog.md's M11.3 row is missing its trailing State-column cell -- it is the only row in the entire ~800-line table (all milestones) that does not end in '|', so the table's State column for that row is structurally empty even though the prose says 'Built' and the task is done."
+    }
+  ],
+  "milestone": "M11",
+  "notes": "Round 4 of the outer loop, scoped to M11.20 (the only commit round 3 did not cover, per scripts/milestone-review.sh context --milestone M11). Confirmed the round-3-disclosed citation fix: docs/researches/02-kafka-protocol-compatibility.md:89's CORRECTION banner now correctly attributes itself to M11.15 (git show --stat on 2b4f691 (M11.11, does not touch this file) and e1d36d0 (M11.15, adds this exact sentence) both checked directly), and remains coherent with the doc's second correction at line 267 (attributed to M11.17, also verified against git show --stat 2841064). M11.20's own backlog row (docs/internal/product/backlog.md) accurately narrates round 3's own two-round per-commit review: round 1 (changes-requested, the citation mismatch) and round 2 (pass, confirming the fix and sweeping every other correction banner). Verified backlog.md's M11 section (21 rows, 22 commits -- the extra count is the disclosed duplicate 'M11.1' task id used for a genuine standalone fuzz-gap fix, f1f814e, distinct from 6bc4374's M11.1, and confirmed both are covered by hash rather than by task-id text in reviews/milestone-M11-582bc42423122389.json's commit list, so the coverage gate cannot be confused by the reused id) is otherwise internally consistent: no task_id cited by any row that the backlog does not itself define, and every M11 row's State cell reads 'done' except the one row noted above, which is done in substance but malformed in form. Ran scripts/check-milestone-review.sh --milestone M11 before recording this verdict: it correctly fails (1 of 22 commits, M11.20 itself, unreviewed) -- the expected pre-recording state, not a live defect. This verdict, once recorded and staged, is expected to make it pass over all 22 commits. No blocking or major finding; this looks like the terminating round, and per M10.16's own precedent, docs/internal/product/backlog.md is left untouched by this recording commit so it stays reviews/-only and exempt from needing further coverage.",
+  "recorded_at": "2026-09-02T03:53:02Z",
+  "reviewer": "claude-sonnet-5-milestone-review-round4",
+  "verdict": "pass"
+}
