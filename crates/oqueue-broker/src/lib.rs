@@ -31,6 +31,7 @@ pub mod cluster;
 pub mod connection;
 pub mod dispatch;
 pub mod fetch;
+mod find_coordinator;
 mod flush;
 mod ingest;
 mod init_producer_id;

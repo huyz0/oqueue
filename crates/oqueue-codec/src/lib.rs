@@ -33,6 +33,7 @@ mod decode_error;
 pub mod emit;
 pub mod error_codes;
 pub mod fetch;
+pub mod find_coordinator;
 pub mod flex;
 pub mod frame;
 pub mod init_producer_id;

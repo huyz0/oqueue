@@ -36,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 8] = [
+pub static ADVERTISED: [Advertised; 9] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -65,6 +65,14 @@ pub static ADVERTISED: [Advertised; 8] = [
         min: 0,
         max: 13,
         flexible_from: Some(9),
+    },
+    Advertised {
+        // ⚠️ **Not the batched `coordinator_keys` shape** — that is v4+
+        // (KIP-699), `M4.4`'s own task. Single-key only, `M4.3`.
+        api_key: ApiKey::FindCoordinator,
+        min: 0,
+        max: 3,
+        flexible_from: Some(3),
     },
     Advertised {
         // ⚠️ **Never flexible, at any version** — the dependency's own
@@ -129,10 +137,10 @@ mod tests {
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
         ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse,
-        InitProducerIdRequest, InitProducerIdResponse, ListOffsetsRequest, ListOffsetsResponse,
-        MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
-        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
-        SaslHandshakeResponse,
+        FindCoordinatorRequest, FindCoordinatorResponse, InitProducerIdRequest,
+        InitProducerIdResponse, ListOffsetsRequest, ListOffsetsResponse, MetadataRequest,
+        MetadataResponse, ProduceRequest, ProduceResponse, SaslAuthenticateRequest,
+        SaslAuthenticateResponse, SaslHandshakeRequest, SaslHandshakeResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -144,44 +152,56 @@ mod tests {
     /// case is the one this most needs to hold — the dependency's generated
     /// `ApiVersionsResponse::header_version` is 0 at every version, and so
     /// must ours.
+    /// The dependency's own generated `(request, response)` header versions
+    /// for `api_key` at `version` — split out of the test below purely to
+    /// keep that function under the fifty-line limit, `metadata_handle`'s
+    /// own precedent in `oqueue-broker`.
+    fn dependency_header_versions(api_key: ApiKey, version: i16) -> (i16, i16) {
+        match api_key {
+            ApiKey::Produce => (
+                ProduceRequest::header_version(version),
+                ProduceResponse::header_version(version),
+            ),
+            ApiKey::ListOffsets => (
+                ListOffsetsRequest::header_version(version),
+                ListOffsetsResponse::header_version(version),
+            ),
+            ApiKey::Fetch => (
+                FetchRequest::header_version(version),
+                FetchResponse::header_version(version),
+            ),
+            ApiKey::Metadata => (
+                MetadataRequest::header_version(version),
+                MetadataResponse::header_version(version),
+            ),
+            ApiKey::FindCoordinator => (
+                FindCoordinatorRequest::header_version(version),
+                FindCoordinatorResponse::header_version(version),
+            ),
+            ApiKey::ApiVersions => (
+                ApiVersionsRequest::header_version(version),
+                ApiVersionsResponse::header_version(version),
+            ),
+            ApiKey::InitProducerId => (
+                InitProducerIdRequest::header_version(version),
+                InitProducerIdResponse::header_version(version),
+            ),
+            ApiKey::SaslHandshake => (
+                SaslHandshakeRequest::header_version(version),
+                SaslHandshakeResponse::header_version(version),
+            ),
+            ApiKey::SaslAuthenticate => (
+                SaslAuthenticateRequest::header_version(version),
+                SaslAuthenticateResponse::header_version(version),
+            ),
+        }
+    }
+
     #[test]
     fn our_header_versions_match_the_dependency() {
         for row in &ADVERTISED {
             for version in row.min..=row.max {
-                let (req, resp) = match row.api_key {
-                    ApiKey::Produce => (
-                        ProduceRequest::header_version(version),
-                        ProduceResponse::header_version(version),
-                    ),
-                    ApiKey::ListOffsets => (
-                        ListOffsetsRequest::header_version(version),
-                        ListOffsetsResponse::header_version(version),
-                    ),
-                    ApiKey::Fetch => (
-                        FetchRequest::header_version(version),
-                        FetchResponse::header_version(version),
-                    ),
-                    ApiKey::Metadata => (
-                        MetadataRequest::header_version(version),
-                        MetadataResponse::header_version(version),
-                    ),
-                    ApiKey::ApiVersions => (
-                        ApiVersionsRequest::header_version(version),
-                        ApiVersionsResponse::header_version(version),
-                    ),
-                    ApiKey::InitProducerId => (
-                        InitProducerIdRequest::header_version(version),
-                        InitProducerIdResponse::header_version(version),
-                    ),
-                    ApiKey::SaslHandshake => (
-                        SaslHandshakeRequest::header_version(version),
-                        SaslHandshakeResponse::header_version(version),
-                    ),
-                    ApiKey::SaslAuthenticate => (
-                        SaslAuthenticateRequest::header_version(version),
-                        SaslAuthenticateResponse::header_version(version),
-                    ),
-                };
+                let (req, resp) = dependency_header_versions(row.api_key, version);
                 assert_eq!(
                     row.api_key.request_header_version(version),
                     req,
@@ -242,6 +262,7 @@ mod tests {
                 ApiKey::Fetch => pin::<FetchRequest>(row),
                 ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
+                ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
                 ApiKey::SaslHandshake => pin_never_flexible::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => pin::<InitProducerIdRequest>(row),
@@ -271,6 +292,7 @@ mod tests {
                 ApiKey::Fetch => within::<FetchRequest>(row),
                 ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
+                ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),
                 ApiKey::SaslHandshake => within::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),

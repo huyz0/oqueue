@@ -29,6 +29,8 @@ pub enum ApiKey {
     ListOffsets = 2,
     /// Metadata (3).
     Metadata = 3,
+    /// `FindCoordinator` (10).
+    FindCoordinator = 10,
     /// `SaslHandshake` (17).
     SaslHandshake = 17,
     /// `ApiVersions` (18).
@@ -56,6 +58,7 @@ impl ApiKey {
             1 => Some(Self::Fetch),
             2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
+            10 => Some(Self::FindCoordinator),
             17 => Some(Self::SaslHandshake),
             18 => Some(Self::ApiVersions),
             22 => Some(Self::InitProducerId),
@@ -106,6 +109,7 @@ mod tests {
             ApiKey::Fetch,
             ApiKey::ListOffsets,
             ApiKey::Metadata,
+            ApiKey::FindCoordinator,
             ApiKey::SaslHandshake,
             ApiKey::ApiVersions,
             ApiKey::InitProducerId,
@@ -115,12 +119,13 @@ mod tests {
         }
         // Keys Kafka defines but this broker does not serve. ⚠️ `2` was here
         // until `M3.21`, which added `ListOffsets`, `22` was here until
-        // `M11.4`, which added `InitProducerId`, and `17`/`36` were here
+        // `M11.4`, which added `InitProducerId`, `10` was here until
+        // `M4.3`, which added `FindCoordinator`, and `17`/`36` were here
         // until `M9.3`, which added `SaslHandshake`/`SaslAuthenticate`: a
         // key moving from this list to the one above is what serving a new
         // API looks like, and leaving it in both is how the round trip
         // above starts lying.
-        for unserved in [10, 20, -1, 32512] {
+        for unserved in [19, 20, -1, 32512] {
             assert_eq!(ApiKey::from_i16(unserved), None);
         }
     }

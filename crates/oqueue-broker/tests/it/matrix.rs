@@ -109,43 +109,61 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
                 .encode(&mut body, version)
                 .expect("encodes");
         }
-        ApiKey::Produce => {
-            let mut request = ProduceRequest::default();
-            request.acks = -1;
-            let mut topic = TopicProduceData::default();
-            if version >= 13 {
-                topic.topic_id = cluster.topic_id("t").expect("t exists");
-            } else {
-                topic.name = TopicName(StrBytes::from_static_str("t"));
-            }
-            let mut partition = PartitionProduceData::default();
-            partition.index = 0;
-            partition.records = Some(bytes::Bytes::from(golden_batch()));
-            topic.partition_data.push(partition);
-            request.topic_data.push(topic);
-            request.encode(&mut body, version).expect("encodes");
-        }
-        ApiKey::Fetch => {
-            let mut request = FetchRequest::default();
-            request.max_wait_ms = 0;
-            let mut topic = FetchTopic::default();
-            if version >= 13 {
-                topic.topic_id = cluster.topic_id("t").expect("t exists");
-            } else {
-                topic.topic = TopicName(StrBytes::from_static_str("t"));
-            }
-            let mut partition = FetchPartition::default();
-            partition.partition = 0;
-            partition.partition_max_bytes = 1 << 20;
-            topic.partitions.push(partition);
-            request.topics.push(topic);
-            request.encode(&mut body, version).expect("encodes");
-        }
+        ApiKey::Produce => produce_body(&mut body, version, cluster),
+        ApiKey::Fetch => fetch_body(&mut body, version, cluster),
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
         ApiKey::SaslHandshake => sasl_handshake_body(&mut body, version),
         ApiKey::SaslAuthenticate => sasl_authenticate_body(&mut body, version),
+        ApiKey::FindCoordinator => find_coordinator_body(&mut body, version),
     }
     body
+}
+
+/// `Produce`'s own minimal body -- its own function for the same
+/// fifty-line-limit reason `list_offsets_body` is.
+fn produce_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
+    let mut request = ProduceRequest::default();
+    request.acks = -1;
+    let mut topic = TopicProduceData::default();
+    if version >= 13 {
+        topic.topic_id = cluster.topic_id("t").expect("t exists");
+    } else {
+        topic.name = TopicName(StrBytes::from_static_str("t"));
+    }
+    let mut partition = PartitionProduceData::default();
+    partition.index = 0;
+    partition.records = Some(bytes::Bytes::from(golden_batch()));
+    topic.partition_data.push(partition);
+    request.topic_data.push(topic);
+    request.encode(out, version).expect("encodes");
+}
+
+/// `Fetch`'s own minimal body -- its own function for the same
+/// fifty-line-limit reason `list_offsets_body` is.
+fn fetch_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
+    let mut request = FetchRequest::default();
+    request.max_wait_ms = 0;
+    let mut topic = FetchTopic::default();
+    if version >= 13 {
+        topic.topic_id = cluster.topic_id("t").expect("t exists");
+    } else {
+        topic.topic = TopicName(StrBytes::from_static_str("t"));
+    }
+    let mut partition = FetchPartition::default();
+    partition.partition = 0;
+    partition.partition_max_bytes = 1 << 20;
+    topic.partitions.push(partition);
+    request.topics.push(topic);
+    request.encode(out, version).expect("encodes");
+}
+
+/// `FindCoordinator`'s own minimal body — its own function for the same
+/// fifty-line-limit reason `list_offsets_body` is.
+fn find_coordinator_body(out: &mut Vec<u8>, version: i16) {
+    kafka_protocol::messages::FindCoordinatorRequest::default()
+        .with_key(StrBytes::from_static_str("g"))
+        .encode(out, version)
+        .expect("encodes");
 }
 
 /// Response header length: v0 is 4 bytes of correlation id, v1 adds the
@@ -165,6 +183,7 @@ fn response_header_len(api_key: ApiKey, version: i16) -> usize {
 /// fails here rather than passing as opaque bytes. Returns `ApiVersions`'
 /// top-level error code, 0 for the APIs that have none.
 fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
+    use kafka_protocol::messages::{FetchResponse, MetadataResponse, ProduceResponse};
     let mut rest = &reply[response_header_len(api_key, version)..];
     let error_code = match api_key {
         ApiKey::ApiVersions => {
@@ -179,21 +198,9 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .partitions[0]
                 .error_code
         }
-        ApiKey::Metadata => {
-            kafka_protocol::messages::MetadataResponse::decode(&mut rest, version)
-                .expect("Metadata reply decodes");
-            0
-        }
-        ApiKey::Produce => {
-            kafka_protocol::messages::ProduceResponse::decode(&mut rest, version)
-                .expect("Produce reply decodes");
-            0
-        }
-        ApiKey::Fetch => {
-            kafka_protocol::messages::FetchResponse::decode(&mut rest, version)
-                .expect("Fetch reply decodes");
-            0
-        }
+        ApiKey::Metadata => decode_ignoring_body::<MetadataResponse>(&mut rest, api_key, version),
+        ApiKey::Produce => decode_ignoring_body::<ProduceResponse>(&mut rest, api_key, version),
+        ApiKey::Fetch => decode_ignoring_body::<FetchResponse>(&mut rest, api_key, version),
         ApiKey::InitProducerId => {
             kafka_protocol::messages::InitProducerIdResponse::decode(&mut rest, version)
                 .expect("InitProducerId reply decodes")
@@ -209,12 +216,29 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .expect("SaslAuthenticate reply decodes")
                 .error_code
         }
+        ApiKey::FindCoordinator => find_coordinator_error_code(&mut rest, version),
     };
     assert!(
         rest.is_empty(),
         "{api_key:?} v{version}: nothing after the body"
     );
     error_code
+}
+
+/// `FindCoordinator`'s own decode -- its own function for the same
+/// fifty-line-limit reason `list_offsets_body` is.
+fn find_coordinator_error_code(rest: &mut &[u8], version: i16) -> i16 {
+    kafka_protocol::messages::FindCoordinatorResponse::decode(rest, version)
+        .expect("FindCoordinator reply decodes")
+        .error_code
+}
+
+/// Decodes a reply this matrix does not otherwise inspect, purely to prove
+/// the bytes are well-formed -- `decode_reply`'s own three identical arms
+/// (`Metadata`, `Produce`, `Fetch`), factored out for the fifty-line limit.
+fn decode_ignoring_body<T: Decodable>(rest: &mut &[u8], api_key: ApiKey, version: i16) -> i16 {
+    T::decode(rest, version).unwrap_or_else(|e| panic!("{api_key:?} reply decodes: {e}"));
+    0
 }
 
 /// The error code a well-formed **minimal** request must answer with, per

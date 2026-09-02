@@ -18,9 +18,9 @@
 //! beyond the pre-authentication trio (`ApiVersions`, `SaslHandshake`,
 //! `SaslAuthenticate`) that `oqueue_core::authorize` refuses closes the
 //! connection rather than answering with a per-API authorization error code —
-//! a deliberate simplification, not an oversight: five heterogeneous response
-//! shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`, `InitProducerId`)
-//! would each need their own encoded refusal, and this decision point's own
+//! a deliberate simplification, not an oversight: six heterogeneous response
+//! shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`, `InitProducerId`,
+//! `FindCoordinator`) would each need their own encoded refusal, and this decision point's own
 //! scope is the seam, not full Kafka error-code parity for a branch no
 //! existing deployment reaches yet (`credentials` is empty everywhere until
 //! `bin/oqueue`'s own composition-root wiring lands). A later task may trade
@@ -246,6 +246,7 @@ impl Dispatcher {
         match api_key {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body),
             ApiKey::Metadata => self.metadata_handle(prelude, body),
+            ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
             ApiKey::Produce => self.produce_handle(prelude, body).await,
             ApiKey::Fetch => self.fetch_handle(prelude, body).await,
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),
@@ -308,6 +309,12 @@ impl Dispatcher {
             body,
             &self.authz_context(principal.as_ref()),
         )
+    }
+
+    /// `FindCoordinator`'s own arm, pulled out of `dispatch`'s `match` for
+    /// the same fifty-line-limit reason `metadata_handle` is.
+    fn find_coordinator_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+        crate::find_coordinator::handle(&self.cluster, prelude, body)
     }
 
     /// `ListOffsets`'s own arm — `M9.12`'s per-principal scoping, same

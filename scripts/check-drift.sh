@@ -370,6 +370,7 @@ declare -A RUST_BOUNDS=(
 # `oqueue-codec/src/error_codes.rs` alone has 14.
 declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/fetch/partition.rs|OFFSET_UNSET"]="the protocol's unset-offset sentinel"
+  ["crates/oqueue-broker/src/find_coordinator.rs|GROUP"]="the wire schema's own key_type value for a consumer-group lookup, fixed by the protocol"
   # `M10.20`: moved from `records.rs` to its own `records/count.rs` when
   # `count_records` (the only reader of this constant) got its own file.
   ["crates/oqueue-codec/src/records/count.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
@@ -420,6 +421,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/init_producer_id.rs|VERSION"]="a test's own advertised-version literal, inside #[cfg(test)] mod tests -- same shape as listoffsets.rs's own entry above"
   ["crates/oqueue-broker/src/sasl_handshake/tests.rs|VERSION"]="a test's own advertised-version literal, split into its own tests.rs file at the 500-line boundary's own precedent -- same shape as listoffsets.rs's own entry above"
   ["crates/oqueue-broker/src/sasl_authenticate/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/find_coordinator/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )
