@@ -34,6 +34,13 @@ tokio = { version = "1", features = ["io-util", "sync", "rt", "time", "macros"] 
 # Topic ids on the modern wire (Produce v13, Fetch v13+, Metadata v10+) --
 # oqueue-codec deals in `[u8; 16]`; this crate is where they meet `Uuid`.
 uuid = { version = "1", default-features = false }
+# `M9.5`: TLS termination. `tls.rs` is generic over `S: AsyncRead +
+# AsyncWrite` (`serve_connection`'s own precedent), so no `tokio` "net"
+# feature is needed here -- `bin/oqueue` owns the real `TcpStream`, this
+# crate only wraps whatever stream it is handed.
+tokio-rustls.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
 
 # ⚠️ **Test-only now (`ADR-0019`).** `ADR-0017` had this as the dispatcher's
 # generated message layer; `M2.31`-`M2.34` hand-rolled every message this

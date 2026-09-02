@@ -17,6 +17,9 @@ Because *almost* everything else in this workspace is sans-I/O — ⚠️ **"by 
 - `oqueue-coordinator` — where offsets are assigned and journalled. ⚠️ **The concrete materialized index and the concrete object store are *not* here**: both are seams in `oqueue-core`, chosen by `bin/oqueue`, so this crate has no `oqueue-index` or `oqueue-store` dependency.
 - `tokio` — the runtime this I/O shell is written against (feature-minimal: io, sync, rt, time, macros — the last for `connection.rs`'s `select!`; `net` waits for `bin/oqueue`).
 - `uuid` — the type this crate converts `oqueue-codec`'s `[u8; 16]` topic ids to and from at the seam.
+- `rustls` — `tls.rs`'s TLS termination (`M9.5`, `ADR-0012`'s `ring` default build).
+- `rustls-pki-types` — the certificate/key types `tls.rs` parses PEM into.
+- `tokio-rustls` — wraps a stream in `rustls`'s handshake; generic over `S: AsyncRead + AsyncWrite`, the same seam `serve_connection` already is, so no `tokio` "net" feature is needed here.
 
 ⚠️ **`kafka-protocol` is a `dev-dependency` now, not runtime (`ADR-0019`).**
 `ADR-0017` had it as the dispatcher's generated message layer; `M2.31`-`M2.34`

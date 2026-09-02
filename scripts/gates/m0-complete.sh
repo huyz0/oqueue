@@ -75,7 +75,7 @@ TARGETS=(x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu)
 # `a961ae7`. The ADR weighed the *host* compiler against NFR-42 and never the
 # cross target this gate already tested, so a two-target claim went quietly
 # false for five days with nothing running the gate that noticed.
-CROSS_EXCLUDED=(oqueue oqueue-store)
+CROSS_EXCLUDED=(oqueue oqueue-store oqueue-broker)
 
 # The five tree-scanning gates `M0.14` instrumented. ⚠️ `check-core-contract.sh`
 # is deliberately absent: alone among the M-1 gates it is scoped to

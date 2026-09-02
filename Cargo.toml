@@ -136,6 +136,21 @@ rustls = { version = "0.23", default-features = false, features = [
     "std",
     "tls12",
 ] }
+# The certificate/key types `oqueue-broker`'s TLS listener loads from PEM
+# (`M9.5`) — `PemObject::from_pem_slice`/`pem_slice_iter`, unconditionally
+# compiled in this version (no separate `pem` feature to request). `rustls`
+# itself already depends on this crate (`pki-types/alloc`); this entry
+# only makes it a direct dependency too, resolving nothing new — already
+# in `Cargo.lock` transitively.
+rustls-pki-types = { version = "1", default-features = false, features = [
+    "alloc",
+] }
+# Wraps a `tokio::net::TcpStream` in `rustls`'s handshake — `oqueue-broker`'s
+# TLS listener (`M9.5`). Pure Rust, already in `Cargo.lock` transitively
+# through `reqwest`'s own `rustls-no-provider` path.
+tokio-rustls = { version = "0.26", default-features = false, features = [
+    "tls12",
+] }
 
 # ── Lints ───────────────────────────────────────────────────────────────────
 #

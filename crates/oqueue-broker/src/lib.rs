@@ -43,6 +43,7 @@ mod sasl_handshake;
 pub mod session;
 #[cfg(test)]
 mod testing;
+pub mod tls;
 mod writer_id;
 
 pub use cluster::{Cluster, FlushError, Sequencing};

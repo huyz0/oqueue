@@ -979,8 +979,11 @@ dependencies = [
  "oqueue-coordinator",
  "oqueue-core",
  "oqueue-testkit",
+ "rustls",
+ "rustls-pki-types",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "uuid",
 ]
 
