@@ -122,6 +122,7 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
         ApiKey::Heartbeat => group_protocol::heartbeat_body(&mut body, version),
         ApiKey::LeaveGroup => group_protocol::leave_group_body(&mut body, version),
         ApiKey::OffsetCommit => group_protocol::offset_commit_body(&mut body, version),
+        ApiKey::OffsetFetch => group_protocol::offset_fetch_body(&mut body, version),
     }
     body
 }
@@ -237,6 +238,7 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .error_code
         }
         ApiKey::OffsetCommit => group_protocol::offset_commit_error_code(&mut rest, version),
+        ApiKey::OffsetFetch => group_protocol::offset_fetch_error_code(&mut rest, version),
     };
     assert!(
         rest.is_empty(),

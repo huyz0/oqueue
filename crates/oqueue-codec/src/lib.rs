@@ -43,6 +43,7 @@ pub mod leave_group;
 pub mod listoffsets;
 pub mod metadata;
 pub mod offset_commit;
+pub mod offset_fetch;
 pub mod produce;
 pub mod records;
 pub mod sasl_authenticate;

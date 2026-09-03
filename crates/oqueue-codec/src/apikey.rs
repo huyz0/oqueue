@@ -31,6 +31,8 @@ pub enum ApiKey {
     Metadata = 3,
     /// `OffsetCommit` (8).
     OffsetCommit = 8,
+    /// `OffsetFetch` (9).
+    OffsetFetch = 9,
     /// `FindCoordinator` (10).
     FindCoordinator = 10,
     /// `JoinGroup` (11).
@@ -69,6 +71,7 @@ impl ApiKey {
             2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
             8 => Some(Self::OffsetCommit),
+            9 => Some(Self::OffsetFetch),
             10 => Some(Self::FindCoordinator),
             11 => Some(Self::JoinGroup),
             12 => Some(Self::Heartbeat),
@@ -125,6 +128,7 @@ mod tests {
             ApiKey::ListOffsets,
             ApiKey::Metadata,
             ApiKey::OffsetCommit,
+            ApiKey::OffsetFetch,
             ApiKey::FindCoordinator,
             ApiKey::JoinGroup,
             ApiKey::Heartbeat,

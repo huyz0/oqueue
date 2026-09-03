@@ -1,9 +1,9 @@
 //! Minimal request bodies and reply decoders for `matrix.rs`'s own FR-2
-//! sweep — the five fencing-related APIs (`JoinGroup`, `SyncGroup`,
-//! `Heartbeat`, `LeaveGroup`, `OffsetCommit`) pulled into their own module
-//! purely for `code-structure.md`'s five-hundred-line limit, not a
-//! different concept from the rest of `matrix.rs`: every function here is
-//! `matrix.rs`'s own, called from there.
+//! sweep — the six group-protocol APIs (`JoinGroup`, `SyncGroup`,
+//! `Heartbeat`, `LeaveGroup`, `OffsetCommit`, `OffsetFetch`) pulled into
+//! their own module purely for `code-structure.md`'s five-hundred-line
+//! limit, not a different concept from the rest of `matrix.rs`: every
+//! function here is `matrix.rs`'s own, called from there.
 
 use kafka_protocol::messages::TopicName;
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
@@ -161,4 +161,35 @@ pub(super) fn group_protocol_error_code(api_key: ApiKey, rest: &mut &[u8], versi
         }
         other => unreachable!("group_protocol_error_code called for {other:?}"),
     }
+}
+
+/// `OffsetFetch`'s own minimal body -- one partition of `"t"`, explicit
+/// (not the null-array all-topics form; `offset_fetch/tests.rs`'s own
+/// dedicated tests cover that shape). No fencing (`offset_fetch.rs`'s own
+/// module doc: any authenticated client may fetch a group's own committed
+/// offsets without joining it), so this genuinely answers `error_code ==
+/// 0` -- unlike every other row in this module, which need `M4.11`'s own
+/// fencing seam to be told they were never a real member.
+pub(super) fn offset_fetch_body(out: &mut Vec<u8>, version: i16) {
+    use kafka_protocol::messages::OffsetFetchRequest;
+    use kafka_protocol::messages::offset_fetch_request::OffsetFetchRequestTopic;
+    let mut topic = OffsetFetchRequestTopic::default();
+    topic.name = TopicName(StrBytes::from_static_str("t"));
+    topic.partition_indexes = vec![0];
+    let request = OffsetFetchRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(
+            StrBytes::from_static_str("matrix-offset-fetch-group"),
+        ))
+        .with_topics(Some(vec![topic]));
+    request.encode(out, version).expect("encodes");
+}
+
+/// `OffsetFetch`'s own decode -- its own function for the same
+/// fifty-line-limit reason `list_offsets_body` is.
+pub(super) fn offset_fetch_error_code(rest: &mut &[u8], version: i16) -> i16 {
+    kafka_protocol::messages::OffsetFetchResponse::decode(rest, version)
+        .expect("OffsetFetch reply decodes")
+        .topics[0]
+        .partitions[0]
+        .error_code
 }

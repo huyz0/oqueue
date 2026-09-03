@@ -70,9 +70,9 @@ impl CommittedOffsets {
     }
 
     /// `group`'s own committed offset for `topic`/`partition`, or `None`
-    /// if nothing has ever committed one — test-only introspection;
-    /// `M4.13`'s own `OffsetFetch` is the real caller a later task adds.
-    #[cfg(test)]
+    /// if nothing has ever committed one — `M4.13`'s own real caller:
+    /// `OffsetFetch`'s explicit-topics form reads this for every partition
+    /// a client names.
     pub(crate) fn get(&self, group: &GroupId, topic: &TopicId, partition: i32) -> Option<i64> {
         let offsets = self.lock();
         let value = offsets
@@ -80,6 +80,31 @@ impl CommittedOffsets {
             .copied();
         drop(offsets);
         value
+    }
+
+    /// Every topic/partition/offset `group` has ever committed, grouped by
+    /// topic and sorted (topic name, then partition index) for a
+    /// deterministic answer — `M4.13`'s own real caller: `OffsetFetch`'s
+    /// all-topics form (`topics: None` on the wire) reads this instead of
+    /// looking up one partition at a time.
+    pub(crate) fn topics_for_group(&self, group: &GroupId) -> Vec<(TopicId, Vec<(i32, i64)>)> {
+        let offsets = self.lock();
+        let mut by_topic: HashMap<TopicId, Vec<(i32, i64)>> = HashMap::new();
+        for ((g, topic, partition), offset) in offsets.iter() {
+            if g == group {
+                by_topic
+                    .entry(topic.clone())
+                    .or_default()
+                    .push((*partition, *offset));
+            }
+        }
+        drop(offsets);
+        let mut result: Vec<_> = by_topic.into_iter().collect();
+        result.sort_by(|(a, _), (b, _)| a.as_str().cmp(b.as_str()));
+        for (_, partitions) in &mut result {
+            partitions.sort_by_key(|&(index, _)| index);
+        }
+        result
     }
 }
 

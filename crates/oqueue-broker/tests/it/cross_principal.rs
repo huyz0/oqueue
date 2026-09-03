@@ -7,15 +7,30 @@
 //! mechanism works in isolation; this is where they are swept together.
 //!
 //! ⚠️ **Not yet every topic-scoped API this broker has, and that gap is
-//! named, not silent.** `OffsetCommit` (`M4.12`) also routes through
-//! `crate::authz::topic_authorized` but has no row here yet — its own
-//! fencing means a row needs a real `JoinGroup`+`SyncGroup` round through
-//! the dispatcher first to seat a genuinely-tracked member, unlike the
-//! four APIs below, which need no group state at all. `M4.12`'s own
-//! acceptance criterion is satisfied by a focused unit-level test instead
-//! (`offset_commit/tests.rs`'s own precedent); this sweep gains that row
-//! (and `OffsetFetch`'s, `M4.13`) once the shared seating helper is worth
-//! building once for both rather than not at all.
+//! named, not silent.** `OffsetCommit` (`M4.12`) and `OffsetFetch`
+//! (`M4.13`) both route through `crate::authz::topic_authorized` but have
+//! no row here yet. `M4.12`'s own commit predicted this sweep would gain
+//! both rows once `M4.13` landed too — that turned out wrong, and this
+//! paragraph is the correction rather than a second repeat of the same
+//! promise: a real row needs two *members of one shared group* formed
+//! through this file's own real `Dispatcher`s, each committing under its
+//! own authenticated identity, which means a genuine `JoinGroup` round
+//! closing — first-ever rounds for a group have no early-close signal
+//! (`join_group::round`'s own module doc), so it needs paused time
+//! advanced past both members' own join calls going pending together, a
+//! materially bigger harness than `authenticated_dispatchers` below
+//! (SASL only, no group state at all). Both tasks instead proved the
+//! exact property FR-40 asks for — a principal's own `OffsetFetch` never
+//! returns a group-mate's own committed topic — with a focused unit-level
+//! test driving the real handlers directly (`offset_commit/tests.rs`'s
+//! `a_commit_from_principal_a_cannot_land_under_principal_bs_topic`,
+//! `offset_fetch/tests.rs`'s
+//! `all_topics_never_returns_a_topic_committed_by_another_principal`),
+//! `M9.9`-`M9.12`'s own "unit test proves the mechanism" half of this
+//! file's own split. The wire-level row remains a real, standing gap —
+//! genuinely worth building once, for both APIs together, whenever that
+//! harness cost is judged worth paying, but not tied to a specific next
+//! task anymore.
 //!
 //! ⚠️ **Two shapes for `Metadata`, not one standing in for the other**
 //! (`M9.1`'s verified Kafka finding, `M9.9`/`M9.10`'s own split): an

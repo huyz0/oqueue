@@ -18,11 +18,11 @@
 //! beyond the pre-authentication trio (`ApiVersions`, `SaslHandshake`,
 //! `SaslAuthenticate`) that `oqueue_core::authorize` refuses closes the
 //! connection rather than answering with a per-API authorization error code —
-//! a deliberate simplification, not an oversight: eleven heterogeneous
+//! a deliberate simplification, not an oversight: twelve heterogeneous
 //! response shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`,
 //! `InitProducerId`, `FindCoordinator`, `JoinGroup`, `SyncGroup`,
-//! `Heartbeat`, `LeaveGroup`, `OffsetCommit`) would each need their own
-//! encoded refusal,
+//! `Heartbeat`, `LeaveGroup`, `OffsetCommit`, `OffsetFetch`) would each
+//! need their own encoded refusal,
 //! and this decision point's own scope is the seam, not full Kafka error-code
 //! parity for a branch no
 //! existing deployment reaches yet (`credentials` is empty everywhere until
@@ -224,18 +224,14 @@ impl Dispatcher {
             QuotaAdmission::Admitted(in_flight) => in_flight,
             QuotaAdmission::Refused => return HandlerResponse::Close,
         };
-        // The message body starts after the full request header, whose
-        // per-API shape `oqueue_codec::frame` now owns (`ADR-0019`).
-        let Some(body) = oqueue_codec::frame::decode_request_header(request)
-            .ok()
-            .map(|(_, consumed)| &request[consumed..])
-        else {
+        let Some(body) = Self::request_body(request) else {
             return HandlerResponse::Close;
         };
         match api_key {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body),
             ApiKey::Metadata => self.metadata_handle(prelude, body),
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body),
+            ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
             ApiKey::JoinGroup => crate::join_group::handle(&self.cluster, prelude, body).await,
             ApiKey::SyncGroup => crate::sync_group::handle(&self.cluster, prelude, body).await,
@@ -256,6 +252,15 @@ impl Dispatcher {
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
         }
+    }
+
+    /// The message body, after the full request header — whose per-API
+    /// shape `oqueue_codec::frame` owns (`ADR-0019`) — pulled out of
+    /// `dispatch` purely to keep that function under the fifty-line limit.
+    fn request_body(request: &[u8]) -> Option<&[u8]> {
+        oqueue_codec::frame::decode_request_header(request)
+            .ok()
+            .map(|(_, consumed)| &request[consumed..])
     }
 
     /// `M9.7`'s authorization decision point: one call, ahead of `dispatch`'s
@@ -376,6 +381,20 @@ impl Dispatcher {
     fn offset_commit_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
         let principal = self.session.principal();
         crate::offset_commit::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &self.authz_context(principal.as_ref()),
+        )
+    }
+
+    /// `OffsetFetch`'s own arm — `M4.13`'s own per-principal scoping,
+    /// `offset_commit_handle`'s own pattern, no fencing involved
+    /// (`crate::offset_fetch`'s own module doc: any authenticated client
+    /// may fetch a group's own committed offsets without joining it).
+    fn offset_fetch_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::offset_fetch::handle(
             &self.cluster,
             prelude,
             body,
