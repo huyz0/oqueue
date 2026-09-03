@@ -1,11 +1,18 @@
 //! `JoinGroup` (11), v0-9 — `M4.7`.
 //!
-//! ⚠️ **Member ids are minted, never taken from the wire.** `member_id.rs`'s
-//! own doc names this handler as where minting (an empty `member_id`) or
-//! validating an echoed one (a rejoin) happens; this task builds only the
-//! first half. A non-empty `member_id` is accepted at face value — never
-//! looked up, never refused as unrecognized — because `UNKNOWN_MEMBER_ID`
-//! is `M4.9`'s own path to invent (`M4.7`'s backlog row, verbatim).
+//! ⚠️ **Member ids are minted, never taken from the wire — except for a
+//! rejoin's own fencing check, `M4.11`'s own half.** `member_id.rs`'s own
+//! doc names this handler as where minting (an empty `member_id`) or
+//! validating an echoed one (a rejoin) happens. An *empty* `member_id`
+//! always mints a fresh one, unchecked (there is nothing to look up yet).
+//! A *non-empty* one now goes through `crate::fencing::fence`: if this
+//! broker's own `heartbeat.rs`'s tracking does not recognise it,
+//! `UNKNOWN_MEMBER_ID` refuses the join outright rather than silently
+//! admitting a made-up identity — real Kafka's own answer to a rejoin
+//! naming an id it never enrolled, telling the client to retry with `""`.
+//! No generation or state check: `JoinGroupRequest` carries no generation
+//! field, and a tracked member may legitimately rejoin from any live
+//! state.
 //!
 //! ⚠️ **Every join goes through [`round::GroupJoins`]**, `M4.6`'s own
 //! `elect` reused both to admit a member (refusing one that would empty the
@@ -32,7 +39,7 @@ use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_codec::join_group::{
-    JoinGroupResponse, JoinGroupResponseMember, decode_request, encode_response,
+    JoinGroupRequest, JoinGroupResponse, JoinGroupResponseMember, decode_request, encode_response,
 };
 use oqueue_core::{GroupId, MemberId};
 pub(crate) use round::GroupJoins;
@@ -54,15 +61,12 @@ pub(crate) async fn handle(
         return reply(prelude, &refusal(error_codes::INVALID_REQUEST));
     };
     let member_id = member_id_for(request.member_id);
-    let member = RoundMember {
-        member_id: member_id.as_str().to_owned(),
-        protocol_type: request.protocol_type.to_owned(),
-        protocols: request
-            .protocols
-            .iter()
-            .map(|p| (p.name.to_owned(), p.metadata.to_owned()))
-            .collect(),
-    };
+    if !request.member_id.is_empty()
+        && let Err(refused) = fence_rejoin(cluster, &group, member_id.as_str())
+    {
+        return reply(prelude, &refusal(refused.error_code()));
+    }
+    let member = round_member(&request, member_id.as_str());
     let rebalance_timeout = tokio::time::Duration::from_millis(barrier_ms(effective_timeout_ms(
         request.rebalance_timeout_ms,
         request.session_timeout_ms,
@@ -96,6 +100,36 @@ pub(crate) async fn handle(
         request.session_timeout_ms,
     );
     reply(prelude, &response_for(&close, member_id.as_str(), version))
+}
+
+/// `M4.11`'s own check for a rejoin naming a non-empty `member_id`: refuses
+/// `UNKNOWN_MEMBER_ID` unless `heartbeat.rs`'s own tracking already
+/// recognises it. No generation or state check — module doc's own reasons.
+fn fence_rejoin(
+    cluster: &Cluster,
+    group: &GroupId,
+    member_id: &str,
+) -> Result<(), crate::fencing::Refusal> {
+    let member_tracked = cluster.heartbeats().is_tracked(group, member_id);
+    let record = cluster.group_coordinator().record(group);
+    let ctx =
+        crate::fencing::FencingContext::for_this_node(member_tracked, record.as_ref(), None, None);
+    crate::fencing::fence(&ctx)
+}
+
+/// This member's own contribution to the round it is about to join —
+/// pulled out of `handle` purely for `code-structure.md`'s own fifty-line
+/// limit.
+fn round_member(request: &JoinGroupRequest<'_>, member_id: &str) -> RoundMember {
+    RoundMember {
+        member_id: member_id.to_owned(),
+        protocol_type: request.protocol_type.to_owned(),
+        protocols: request
+            .protocols
+            .iter()
+            .map(|p| (p.name.to_owned(), p.metadata.to_owned()))
+            .collect(),
+    }
 }
 
 /// Registers this member's own session timeout with `heartbeat.rs`'s own

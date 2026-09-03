@@ -30,6 +30,7 @@ mod authz;
 pub mod cluster;
 pub mod connection;
 pub mod dispatch;
+mod fencing;
 pub mod fetch;
 mod find_coordinator;
 mod flush;

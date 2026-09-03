@@ -126,6 +126,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-fencing-seam
+        name: "M4.11: no handler constructs a fencing code outside crate::fencing"
+        entry: scripts/check-fencing-seam.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-idempotence-enabled
         name: "M11.9, M11.md task 12: M2's enable.idempotence=false client-config workaround stays retired"
         entry: scripts/check-idempotence-enabled.sh

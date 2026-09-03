@@ -150,10 +150,10 @@ fn join_group_body(out: &mut Vec<u8>, version: i16) {
 }
 
 /// `SyncGroup`'s own minimal body -- a single member submitting its own
-/// (non-empty) assignment, the shape `sync_group.rs`'s own handler treats
-/// as the assignment-bearing submission regardless of `JoinGroup` ever
-/// having run for this group (no fencing checked yet, `M4.11`'s own
-/// scope), so this answers `error_code == 0` with no other setup.
+/// (non-empty) assignment against a group nothing ever joined, so
+/// `M4.11`'s own fencing seam genuinely refuses it `UNKNOWN_MEMBER_ID`
+/// (`expected_error_code`'s own row) -- `heartbeat_body`'s own precedent
+/// for the same "genuinely served, documented non-zero answer" shape.
 fn sync_group_body(out: &mut Vec<u8>, version: i16) {
     use kafka_protocol::messages::SyncGroupRequest;
     use kafka_protocol::messages::sync_group_request::SyncGroupRequestAssignment;
@@ -171,9 +171,12 @@ fn sync_group_body(out: &mut Vec<u8>, version: i16) {
 }
 
 /// `Heartbeat`'s own minimal body -- against a group nothing ever joined,
-/// so this genuinely answers `REBALANCE_IN_PROGRESS` (`expected_error_code`
-/// names this the same way `SaslAuthenticate`'s own row is named: a
-/// documented, non-zero, "genuinely served" answer, not `UNSUPPORTED_VERSION`).
+/// so `M4.11`'s own fencing seam genuinely answers `UNKNOWN_MEMBER_ID`
+/// (`expected_error_code` names this the same way `SaslAuthenticate`'s own
+/// row is named: a documented, non-zero, "genuinely served" answer, not
+/// `UNSUPPORTED_VERSION`) -- this member was never tracked at all, distinct
+/// from the `REBALANCE_IN_PROGRESS` a *tracked* member gets for a stale
+/// generation (`heartbeat/tests.rs`'s own coverage of that case).
 fn heartbeat_body(out: &mut Vec<u8>, version: i16) {
     use kafka_protocol::messages::HeartbeatRequest;
     let request = HeartbeatRequest::default()
@@ -186,9 +189,13 @@ fn heartbeat_body(out: &mut Vec<u8>, version: i16) {
 }
 
 /// `LeaveGroup`'s own minimal body -- one member leaving a group nothing
-/// ever joined. Answers `error_code == 0` unconditionally: removal, not
-/// fencing (`leave_group.rs`'s own doc) -- whether the member was ever
-/// really there is `M4.11`'s own question.
+/// ever joined. The *top-level* `error_code` this test decodes stays `0`
+/// unconditionally -- the request itself always succeeds
+/// (`leave_group.rs`'s own module doc) -- even though `M4.11`'s own
+/// fencing seam now answers this one member `UNKNOWN_MEMBER_ID` in its own
+/// per-member entry, which this matrix sweep does not decode
+/// (`leave_group/tests.rs`'s own dedicated test covers the per-member
+/// code).
 fn leave_group_body(out: &mut Vec<u8>, version: i16) {
     use kafka_protocol::messages::LeaveGroupRequest;
     let request = if version <= 2 {
@@ -391,10 +398,12 @@ fn decode_ignoring_body<T: Decodable>(rest: &mut &[u8], api_key: ApiKey, version
 const fn expected_error_code(api_key: ApiKey) -> i16 {
     match api_key {
         ApiKey::SaslAuthenticate => oqueue_codec::error_codes::SASL_AUTHENTICATION_FAILED,
-        // Against a group nothing ever joined -- `heartbeat_body`'s own
-        // doc, the same "genuinely served, documented non-zero answer"
-        // shape `SaslAuthenticate`'s own row already is.
-        ApiKey::Heartbeat => oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
+        // Against a group nothing ever joined -- `heartbeat_body`'s and
+        // `sync_group_body`'s own docs, the same "genuinely served,
+        // documented non-zero answer" shape `SaslAuthenticate`'s own row
+        // already is (`M4.11`'s own fencing seam, `UNKNOWN_MEMBER_ID` for
+        // a member never tracked at all).
+        ApiKey::Heartbeat | ApiKey::SyncGroup => oqueue_codec::error_codes::UNKNOWN_MEMBER_ID,
         _ => 0,
     }
 }

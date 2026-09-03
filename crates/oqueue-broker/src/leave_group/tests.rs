@@ -155,16 +155,22 @@ async fn the_singular_v0_2_form_also_leaves() {
     assert!(!fixture.cluster.heartbeats().is_tracked(&g, "m1"));
 }
 
-/// ⚠️ **Removal, not fencing** — a member this broker never tracked still
-/// leaves successfully; whether it was ever really a member is `M4.11`'s
-/// own question, not this handler's to invent.
+/// ⚠️ **`M4.11`'s own fencing seam**: a member this broker never tracked
+/// is told `UNKNOWN_MEMBER_ID`, per member, rather than `NONE` — the
+/// request as a whole still succeeds (top-level `error_code` stays `NONE`;
+/// `leave_group.rs`'s own module doc), so a client can tell "you were
+/// never here" from a genuine departure, without the request itself being
+/// refused.
 #[tokio::test(start_paused = true)]
-async fn leaving_an_untracked_member_still_succeeds() {
+async fn leaving_an_untracked_member_is_told_unknown_member_id() {
     let fixture = fixture(&[]).await;
     let response = leave(&fixture.cluster, &batched_body("orders", &["ghost"]));
-    assert_eq!(response.error_code, 0);
+    assert_eq!(response.error_code, 0, "the request itself still succeeds");
     assert_eq!(response.members.len(), 1);
-    assert_eq!(response.members[0].error_code, 0);
+    assert_eq!(
+        response.members[0].error_code,
+        oqueue_codec::error_codes::UNKNOWN_MEMBER_ID
+    );
 }
 
 /// A malformed body closes the connection rather than answering — every

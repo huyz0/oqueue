@@ -259,9 +259,12 @@ async fn a_survivor_can_rejoin_after_an_eviction_the_group_is_not_permanently_we
     );
 }
 
-/// ⚠️ **Half two**: a stale-generation heartbeat is refused with
-/// `REBALANCE_IN_PROGRESS`, not treated as a fresh join -- the group's own
-/// state and generation are unchanged by the refused call.
+/// ⚠️ **Half two**: a stale-generation heartbeat from a member this broker
+/// still tracks is refused `ILLEGAL_GENERATION`, not treated as a fresh
+/// join -- `M4.11`'s own distinction from an *untracked* member's own
+/// `UNKNOWN_MEMBER_ID` (`fencing/tests.rs`'s own table covers that case;
+/// this one is specifically "tracked, but stale"). The group's own state
+/// and generation are unchanged by the refused call either way.
 #[tokio::test(start_paused = true)]
 async fn a_stale_generation_heartbeat_is_refused_not_treated_as_a_fresh_join() {
     let fixture = std::sync::Arc::new(fixture(&[]).await);
@@ -269,7 +272,7 @@ async fn a_stale_generation_heartbeat_is_refused_not_treated_as_a_fresh_join() {
         a_stable_group_of_two(&fixture.cluster, "orders", [30_000, 30_000]).await;
 
     let error_code = heartbeat(&fixture.cluster, "orders", &leader, 0);
-    assert_eq!(error_code, oqueue_codec::error_codes::REBALANCE_IN_PROGRESS);
+    assert_eq!(error_code, oqueue_codec::error_codes::ILLEGAL_GENERATION);
 
     let group = group("orders");
     let record = fixture
@@ -283,6 +286,16 @@ async fn a_stale_generation_heartbeat_is_refused_not_treated_as_a_fresh_join() {
         "a refused heartbeat must not itself move the group -- not treated as a fresh join"
     );
     assert_eq!(record.generation.get(), 1, "the generation is unchanged");
+}
+
+/// ⚠️ **`M4.11`'s other half of the distinction**: a member this broker
+/// never tracked at all -- not stale, never enrolled -- is told
+/// `UNKNOWN_MEMBER_ID`, not `ILLEGAL_GENERATION` or `REBALANCE_IN_PROGRESS`.
+#[tokio::test(start_paused = true)]
+async fn a_heartbeat_from_a_never_tracked_member_is_told_unknown_member_id() {
+    let fixture = fixture(&[]).await;
+    let error_code = heartbeat(&fixture.cluster, "orders", "ghost", 0);
+    assert_eq!(error_code, oqueue_codec::error_codes::UNKNOWN_MEMBER_ID);
 }
 
 /// A successful heartbeat genuinely extends its own member's own deadline

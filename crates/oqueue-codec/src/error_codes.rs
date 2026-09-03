@@ -122,6 +122,46 @@ pub const REBALANCE_IN_PROGRESS: i16 = 27;
 /// the *explicitly-named* case answers this rather than the silent omission
 /// the *null-topic-array* case uses instead (`M9.10`).
 pub const TOPIC_AUTHORIZATION_FAILED: i16 = 29;
+/// A group member id this broker's own tracking does not recognise (25).
+///
+/// `M4.11`'s own audited fencing path, `crate::fencing`'s `Refusal` — the
+/// only place this constant is ever constructed. Distinguished from
+/// [`ILLEGAL_GENERATION`] by what is stale: this member id was never (or
+/// no longer is) tracked at all, rather than tracked but naming a round
+/// that has since moved on.
+pub const UNKNOWN_MEMBER_ID: i16 = 25;
+/// A group member's own claimed generation does not match the coordinator's
+/// current one (22).
+///
+/// `M4.11`'s own audited fencing path — a member this broker still tracks,
+/// naming a generation that is not (or is no longer) the group's current
+/// one.
+pub const ILLEGAL_GENERATION: i16 = 22;
+/// This broker does not coordinate the named group (16).
+///
+/// ⚠️ **Unreachable in this milestone's own v1 architecture** —
+/// `ADR-0033`: every group resolves to this one node, unconditionally, so
+/// no v1 deployment can ever be asked about a group it does not host. The
+/// code exists, and `M4.11`'s own fencing seam accepts the input that
+/// would produce it, so a later milestone that adds routing does not have
+/// to invent the wire mapping from scratch — but nothing in this
+/// milestone's own scope ever passes that input for real.
+pub const NOT_COORDINATOR: i16 = 16;
+/// This broker coordinates the named group but cannot answer for it right
+/// now (15).
+///
+/// ⚠️ Unreachable for the identical reason [`NOT_COORDINATOR`] is —
+/// `ADR-0033`'s single-coordinator v1 architecture has no "not ready yet"
+/// state today.
+pub const COORDINATOR_NOT_AVAILABLE: i16 = 15;
+/// This broker is still replaying the named group's own state and cannot
+/// answer for it yet (14).
+///
+/// ⚠️ Real in shape, not yet in trigger — `M4.15`'s own row names this
+/// exact code as what it wires a genuine signal to (durable group-state
+/// replay on coordinator takeover). Every caller in this milestone passes
+/// `load_in_progress: false`.
+pub const COORDINATOR_LOAD_IN_PROGRESS: i16 = 14;
 
 #[cfg(test)]
 mod tests {
@@ -238,6 +278,28 @@ mod tests {
         assert_eq!(
             super::REBALANCE_IN_PROGRESS,
             ResponseError::RebalanceInProgress.code()
+        );
+    }
+
+    /// `M4.11`'s own five fencing codes, same oracle.
+    #[test]
+    fn the_fencing_codes_match_the_dependency() {
+        assert_eq!(
+            super::UNKNOWN_MEMBER_ID,
+            ResponseError::UnknownMemberId.code()
+        );
+        assert_eq!(
+            super::ILLEGAL_GENERATION,
+            ResponseError::IllegalGeneration.code()
+        );
+        assert_eq!(super::NOT_COORDINATOR, ResponseError::NotCoordinator.code());
+        assert_eq!(
+            super::COORDINATOR_NOT_AVAILABLE,
+            ResponseError::CoordinatorNotAvailable.code()
+        );
+        assert_eq!(
+            super::COORDINATOR_LOAD_IN_PROGRESS,
+            ResponseError::CoordinatorLoadInProgress.code()
         );
     }
 }

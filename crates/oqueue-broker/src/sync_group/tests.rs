@@ -70,12 +70,38 @@ async fn sync(cluster: &crate::cluster::Cluster, body: Vec<u8>) -> KpResponse {
     decode_response(&out)
 }
 
+/// Registers each of `member_ids` with `heartbeat.rs`'s own tracking and
+/// drives the coordinator to `CompletingRebalance` at generation `1` --
+/// `M4.11`'s own fencing seam now refuses every test below unless the
+/// members it names are genuinely tracked at the generation each request
+/// hardcodes, which is what every `leader_body`/`follower_body` call here
+/// already assumes. A direct `register`/`transition` pair rather than a
+/// real `join_group::handle` round: this file's own tests care about
+/// `SyncGroup`'s behaviour, not re-deriving `JoinGroup`'s
+/// (`heartbeat/tests.rs`'s own `join` helper is where the full path
+/// matters).
+fn seat(cluster: &crate::cluster::Cluster, group: &str, member_ids: &[&str]) {
+    let g = oqueue_core::GroupId::new(group).expect("valid");
+    for &member_id in member_ids {
+        cluster.heartbeats().register(&g, member_id, 30_000);
+    }
+    cluster
+        .group_coordinator()
+        .transition(&g, oqueue_core::GroupEvent::Join)
+        .expect("Empty -> Join is legal");
+    cluster
+        .group_coordinator()
+        .transition(&g, oqueue_core::GroupEvent::JoinBarrierComplete)
+        .expect("PreparingRebalance -> CompletingRebalance is legal");
+}
+
 /// ⚠️ **`M4.8`'s own acceptance criterion, half one**: each follower's own
 /// response carries exactly its own slice of the leader's submitted
 /// assignment, never another member's.
 #[tokio::test(start_paused = true)]
 async fn a_followers_own_slice_is_exactly_its_own_never_anothers() {
     let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
     let leader = sync(
         &fixture.cluster,
         leader_body(
@@ -102,6 +128,7 @@ async fn a_followers_own_slice_is_exactly_its_own_never_anothers() {
 #[tokio::test(start_paused = true)]
 async fn a_second_rebalance_gets_its_own_new_assignment_not_the_first_ones() {
     let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
     sync(
         &fixture.cluster,
         leader_body(
@@ -138,6 +165,7 @@ async fn a_second_rebalance_gets_its_own_new_assignment_not_the_first_ones() {
 #[tokio::test(start_paused = true)]
 async fn a_follower_arriving_before_the_leader_parks_then_gets_its_own_slice() {
     let fixture = std::sync::Arc::new(fixture(&[]).await);
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
     let follower = {
         let cluster = std::sync::Arc::clone(&fixture.cluster);
         let body = follower_body("orders-consumers", "m2");
@@ -176,6 +204,7 @@ async fn a_follower_arriving_before_the_leader_parks_then_gets_its_own_slice() {
 #[tokio::test(start_paused = true)]
 async fn a_follower_arriving_after_the_leader_is_answered_at_once() {
     let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
     sync(
         &fixture.cluster,
         leader_body(
@@ -205,6 +234,52 @@ async fn a_malformed_body_closes_rather_than_panicking() {
     assert!(matches!(response, HandlerResponse::Close));
 }
 
+/// ⚠️ **`M4.11`'s own fencing check**: a member this broker never tracked
+/// at all is refused `UNKNOWN_MEMBER_ID` before the submission is ever
+/// treated as the assignment-bearing one — the group's own bookkeeping
+/// (`SyncGroups`) is never touched by a refused call.
+#[tokio::test(start_paused = true)]
+async fn a_member_this_broker_never_tracked_is_refused_unknown_member_id() {
+    let fixture = fixture(&[]).await;
+    let leader = sync(
+        &fixture.cluster,
+        leader_body("orders-consumers", "ghost", &[("ghost", b"a")]),
+    )
+    .await;
+    assert_eq!(
+        leader.error_code,
+        oqueue_codec::error_codes::UNKNOWN_MEMBER_ID
+    );
+}
+
+/// A tracked member naming a generation that is not the group's current
+/// one is refused `ILLEGAL_GENERATION`, distinct from an untracked one's
+/// own `UNKNOWN_MEMBER_ID`.
+#[tokio::test(start_paused = true)]
+async fn a_stale_generation_submission_is_refused_illegal_generation() {
+    let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1"]);
+    let request = KpRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(
+            StrBytes::from_static_str("orders-consumers"),
+        ))
+        .with_generation_id(999)
+        .with_member_id(StrBytes::from_static_str("m1"))
+        .with_assignments(vec![{
+            let mut a = KpAssignment::default();
+            a.member_id = StrBytes::from_static_str("m1");
+            a.assignment = bytes::Bytes::from_static(b"a");
+            a
+        }]);
+    let mut body = Vec::new();
+    request.encode(&mut body, VERSION).expect("encodes");
+    let response = sync(&fixture.cluster, body).await;
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::ILLEGAL_GENERATION
+    );
+}
+
 /// `protocol_type`/`protocol_name` are absent below v5 and echoed from v5
 /// on (`oqueue_codec::sync_group`'s own doc) — this test is the only one in
 /// this file at v5+, and exists specifically so that cutover is exercised
@@ -213,6 +288,7 @@ async fn a_malformed_body_closes_rather_than_panicking() {
 async fn protocol_type_and_name_are_echoed_on_the_wire_from_v5() {
     const V5: i16 = 5;
     let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1"]);
     let mut assignment = KpAssignment::default();
     assignment.member_id = StrBytes::from_static_str("m1");
     assignment.assignment = bytes::Bytes::from_static(b"a");

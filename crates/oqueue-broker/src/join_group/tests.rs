@@ -177,6 +177,37 @@ async fn a_member_with_no_common_protocol_is_refused_inconsistent_group_protocol
     );
 }
 
+/// ⚠️ **`M4.11`'s own fencing check**: a rejoin naming a non-empty
+/// `member_id` this broker never enrolled is refused `UNKNOWN_MEMBER_ID`
+/// outright, never silently admitted as a fresh member under a made-up
+/// identity.
+#[tokio::test(start_paused = true)]
+async fn a_rejoin_naming_an_unrecognized_member_id_is_refused_unknown_member_id() {
+    let fixture = fixture(&[]).await;
+    let mut protocol = KpProtocol::default();
+    protocol.name = StrBytes::from_static_str("range");
+    protocol.metadata = bytes::Bytes::from_static(b"meta");
+    let request = KpRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(
+            StrBytes::from_static_str("orders-consumers"),
+        ))
+        .with_session_timeout_ms(30_000)
+        .with_rebalance_timeout_ms(5_000)
+        .with_member_id(StrBytes::from_static_str("made-up-id"))
+        .with_protocol_type(StrBytes::from_static_str("consumer"))
+        .with_protocols(vec![protocol]);
+    let mut body = Vec::new();
+    request.encode(&mut body, VERSION).expect("encodes");
+
+    let response = join(&fixture.cluster, body, VERSION).await;
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::UNKNOWN_MEMBER_ID
+    );
+    assert_eq!(response.member_id.as_str(), "");
+    assert_eq!(response.generation_id, -1);
+}
+
 /// A malformed body closes the connection rather than answering — every
 /// other handler's own policy for a frame this broker cannot decode.
 #[tokio::test(start_paused = true)]

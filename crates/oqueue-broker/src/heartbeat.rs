@@ -15,12 +15,13 @@
 //! the moment it is answered, and this module remembers it for every
 //! later renewal.
 //!
-//! ⚠️ **A generation mismatch answers `REBALANCE_IN_PROGRESS`, uniformly.**
-//! Real Kafka distinguishes a member that never belonged
-//! (`UNKNOWN_MEMBER_ID`/`ILLEGAL_GENERATION`) from one whose group has
-//! since rebalanced; that distinction is `M4.11`'s own audited fencing
-//! path, not this task's to invent ad hoc — every mismatch here is told
-//! the same thing: rejoin.
+//! ⚠️ **`M4.11`'s own audited fencing path now makes the distinction real
+//! Kafka does.** A member that never belonged (or no longer does) is told
+//! `UNKNOWN_MEMBER_ID`; one this module still tracks but naming a stale
+//! generation is told `ILLEGAL_GENERATION`; one tracked, current
+//! generation, but whose group has since moved off `Stable` is told
+//! `REBALANCE_IN_PROGRESS` — `crate::fencing::fence`, not an ad hoc
+//! `is_current` check this module used to carry.
 //!
 //! ⚠️ **Eviction, and `M4.10`'s own explicit `LeaveGroup`, both reuse
 //! `GroupEvent::Join`** — the same event `join_group`'s own handler fires
@@ -211,14 +212,9 @@ impl Heartbeats {
         drop(groups);
     }
 
-    /// Whether `member_id` is currently tracked in `group` — test-only
-    /// introspection with no production caller; every real decision this
-    /// module makes goes through `register`/`renew`/`sweep` instead.
-    ///
-    /// ⚠️ **`pub(crate)`, not private** — `leave_group`'s own tests
-    /// (`M4.10`) need this from a sibling module, not just this one's own
-    /// `tests` submodule.
-    #[cfg(test)]
+    /// Whether `member_id` is currently tracked in `group` — `M4.11`'s own
+    /// real caller: `crate::fencing::FencingContext::member_tracked` for
+    /// every `M4.7`-`M4.10` handler now reads this, not only tests.
     pub(crate) fn is_tracked(&self, group: &GroupId, member_id: &str) -> bool {
         let groups = self.lock();
         let tracked = groups
@@ -250,21 +246,28 @@ pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) ->
         .heartbeats()
         .sweep(&group, cluster.group_coordinator());
 
-    // ⚠️ **State, not only generation.** `GenerationId` itself only
-    // advances at `JoinBarrierComplete` (`ADR-0033`, `M4.1`) — a group an
-    // eviction just moved off `Stable` still carries its old generation
-    // number until the next completed join, so a heartbeat naming that
-    // same number must still be refused: `Stable` is the only state a
-    // heartbeat may succeed in, matching real Kafka's own behaviour (a
-    // heartbeat during `PreparingRebalance`/`CompletingRebalance` answers
-    // `REBALANCE_IN_PROGRESS` regardless of whether the generation number
-    // happens to still match).
-    let current = cluster.group_coordinator().record(&group);
-    let is_current = current.is_some_and(|record| {
-        record.state == GroupState::Stable && record.generation.get() == request.generation_id
-    });
-    if !is_current {
-        return reply(prelude, version, error_codes::REBALANCE_IN_PROGRESS);
+    // ⚠️ **`M4.11`'s own audited seam, not an ad hoc `is_current` check.**
+    // `Stable` is the only state a heartbeat may succeed in, matching real
+    // Kafka's own behaviour — a heartbeat during `PreparingRebalance`/
+    // `CompletingRebalance` answers `REBALANCE_IN_PROGRESS` regardless of
+    // whether the generation number happens to still match, since
+    // `GenerationId` itself only advances at `JoinBarrierComplete`
+    // (`ADR-0033`, `M4.1`) and a group an eviction just moved off `Stable`
+    // still carries its old generation number until the next completed
+    // join. A member this module never tracked at all (or no longer does)
+    // is told `UNKNOWN_MEMBER_ID` instead, distinct from a tracked member
+    // naming a stale generation (`ILLEGAL_GENERATION`) — the distinction
+    // this module's own doc used to defer to this task by name.
+    let member_tracked = cluster.heartbeats().is_tracked(&group, request.member_id);
+    let record = cluster.group_coordinator().record(&group);
+    let ctx = crate::fencing::FencingContext::for_this_node(
+        member_tracked,
+        record.as_ref(),
+        Some(request.generation_id),
+        Some(&[GroupState::Stable]),
+    );
+    if let Err(refusal) = crate::fencing::fence(&ctx) {
+        return reply(prelude, version, refusal.error_code());
     }
 
     cluster.heartbeats().renew(&group, request.member_id);

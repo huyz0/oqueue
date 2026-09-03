@@ -10,12 +10,18 @@
 //! submits an empty one (`oqueue_codec::sync_group`'s own doc). A member
 //! whose own submission happens to carry a non-empty list is treated as
 //! carrying the real assignment regardless of whether it was actually
-//! elected leader, and `request.generation_id` is decoded but never
-//! checked against anything — a stale-generation or wrong-leader
-//! submission is answered exactly like a current, correct one. Both are
-//! fencing gaps this milestone's own `M4.11` ("fencing errors as one
-//! audited path") is where validating belongs, not this task's to invent
-//! ad hoc.
+//! elected leader — this remains structural, not a fencing gap `M4.11`'s
+//! own five codes have an answer for (there is no wire code for "you were
+//! not the leader," and nothing here persists an elected identity to check
+//! against).
+//!
+//! ⚠️ **`M4.11`'s own audited seam now closes the other two.** A member
+//! this broker never tracked, one naming a stale `request.generation_id`,
+//! or one submitting while the group is not `CompletingRebalance` or
+//! `Stable` (still `PreparingRebalance`, still collecting joins) is
+//! refused via `crate::fencing::fence` before either branch below runs —
+//! `UNKNOWN_MEMBER_ID`, `ILLEGAL_GENERATION`, `REBALANCE_IN_PROGRESS`
+//! respectively.
 //!
 //! ⚠️ **No assignor runs here** — `ADR-0033`'s own decision, `M4.8`'s
 //! acceptance criterion verbatim: the classic protocol computes assignment
@@ -41,7 +47,7 @@ use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_codec::sync_group::{
     SyncGroupRequest, SyncGroupResponse, decode_request, encode_response,
 };
-use oqueue_core::{GroupEvent, GroupId};
+use oqueue_core::{GroupEvent, GroupId, GroupState};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use tokio::sync::Notify;
@@ -127,6 +133,24 @@ pub(crate) async fn handle(
         return reply(prelude, &refusal(error_codes::INVALID_REQUEST));
     };
 
+    // ⚠️ **`M4.11`'s own audited seam**: a member this broker never
+    // tracked, or one naming a stale generation, or one submitting outside
+    // `CompletingRebalance`/`Stable` (still `PreparingRebalance`, still
+    // collecting joins) is refused before either branch below runs a
+    // submission or a wait — module doc's own "both fencing gaps M4.11
+    // owns" now closed.
+    let member_tracked = cluster.heartbeats().is_tracked(&group, request.member_id);
+    let record = cluster.group_coordinator().record(&group);
+    let ctx = crate::fencing::FencingContext::for_this_node(
+        member_tracked,
+        record.as_ref(),
+        Some(request.generation_id),
+        Some(&[GroupState::CompletingRebalance, GroupState::Stable]),
+    );
+    if let Err(refused) = crate::fencing::fence(&ctx) {
+        return reply(prelude, &refusal(refused.error_code()));
+    }
+
     if !request.assignments.is_empty() {
         // The assignment-bearing submission: build the map every member's
         // own slice comes from, fire the state transition, and submit it
@@ -188,8 +212,11 @@ async fn wait_for_assignment(
 }
 
 /// This member's own slice of `map` — empty if the leader's own submission
-/// never named it (a fencing gap `M4.11` owns, not this module's to
-/// invent a code for). `protocol_type`/`protocol_name` (v5+) are echoed
+/// never named it. A tracked member in good standing that the leader
+/// simply omitted has no wire code of its own among `M4.11`'s five
+/// (real Kafka answers this the same way: empty bytes, not a refusal), so
+/// this stays a plain lookup rather than routing through `fence`.
+/// `protocol_type`/`protocol_name` (v5+) are echoed
 /// straight from this member's own request — the wire's own answer to
 /// what the response should carry, needing no state this module would
 /// otherwise have to persist from `JoinGroup`.
