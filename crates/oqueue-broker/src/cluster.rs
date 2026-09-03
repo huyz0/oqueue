@@ -107,6 +107,10 @@ pub struct Cluster {
     /// membership, and when each member's own silence would evict it.
     /// Starts empty by construction, `group_joins`'s own shape.
     heartbeats: crate::heartbeat::Heartbeats,
+    /// `M4.12`'s own committed-offset bookkeeping — in-memory until
+    /// `M4.14` gives it a durable home. Starts empty by construction,
+    /// `group_joins`'s own shape.
+    committed_offsets: crate::offset_commit::CommittedOffsets,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -200,6 +204,7 @@ impl Cluster {
             group_joins: GroupJoins::default(),
             sync_groups: crate::sync_group::SyncGroups::default(),
             heartbeats: crate::heartbeat::Heartbeats::default(),
+            committed_offsets: crate::offset_commit::CommittedOffsets::default(),
         })
     }
 
@@ -226,6 +231,12 @@ impl Cluster {
     /// into (`M4.9`).
     pub(crate) const fn heartbeats(&self) -> &crate::heartbeat::Heartbeats {
         &self.heartbeats
+    }
+
+    /// The committed-offset bookkeeping every connection's `OffsetCommit`
+    /// handler shares (`M4.12`).
+    pub(crate) const fn committed_offsets(&self) -> &crate::offset_commit::CommittedOffsets {
+        &self.committed_offsets
     }
 
     /// The topic's partition count, or `None` if it does not exist.

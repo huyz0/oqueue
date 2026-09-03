@@ -41,6 +41,7 @@ mod join_group;
 mod leave_group;
 pub mod listoffsets;
 pub mod metadata;
+mod offset_commit;
 pub mod produce;
 mod read;
 mod region;

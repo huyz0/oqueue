@@ -18,10 +18,11 @@
 //! beyond the pre-authentication trio (`ApiVersions`, `SaslHandshake`,
 //! `SaslAuthenticate`) that `oqueue_core::authorize` refuses closes the
 //! connection rather than answering with a per-API authorization error code —
-//! a deliberate simplification, not an oversight: ten heterogeneous
+//! a deliberate simplification, not an oversight: eleven heterogeneous
 //! response shapes (`Metadata`, `Produce`, `Fetch`, `ListOffsets`,
 //! `InitProducerId`, `FindCoordinator`, `JoinGroup`, `SyncGroup`,
-//! `Heartbeat`, `LeaveGroup`) would each need their own encoded refusal,
+//! `Heartbeat`, `LeaveGroup`, `OffsetCommit`) would each need their own
+//! encoded refusal,
 //! and this decision point's own scope is the seam, not full Kafka error-code
 //! parity for a branch no
 //! existing deployment reaches yet (`credentials` is empty everywhere until
@@ -234,6 +235,7 @@ impl Dispatcher {
         match api_key {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body),
             ApiKey::Metadata => self.metadata_handle(prelude, body),
+            ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
             ApiKey::JoinGroup => crate::join_group::handle(&self.cluster, prelude, body).await,
             ApiKey::SyncGroup => crate::sync_group::handle(&self.cluster, prelude, body).await,
@@ -365,6 +367,20 @@ impl Dispatcher {
             &self.authz_context(principal.as_ref()),
         )
         .await
+    }
+
+    /// `OffsetCommit`'s own arm — `M4.12`'s own per-principal scoping,
+    /// `M9.12`'s pattern reused for a group-protocol handler rather than
+    /// invented again. Not `async`: `crate::offset_commit::handle`'s own
+    /// precedent, nothing here parks.
+    fn offset_commit_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::offset_commit::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &self.authz_context(principal.as_ref()),
+        )
     }
 }
 

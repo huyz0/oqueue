@@ -29,6 +29,8 @@ pub enum ApiKey {
     ListOffsets = 2,
     /// Metadata (3).
     Metadata = 3,
+    /// `OffsetCommit` (8).
+    OffsetCommit = 8,
     /// `FindCoordinator` (10).
     FindCoordinator = 10,
     /// `JoinGroup` (11).
@@ -66,6 +68,7 @@ impl ApiKey {
             1 => Some(Self::Fetch),
             2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
+            8 => Some(Self::OffsetCommit),
             10 => Some(Self::FindCoordinator),
             11 => Some(Self::JoinGroup),
             12 => Some(Self::Heartbeat),
@@ -121,6 +124,7 @@ mod tests {
             ApiKey::Fetch,
             ApiKey::ListOffsets,
             ApiKey::Metadata,
+            ApiKey::OffsetCommit,
             ApiKey::FindCoordinator,
             ApiKey::JoinGroup,
             ApiKey::Heartbeat,
@@ -141,7 +145,8 @@ mod tests {
         // until `M9.3`, which added `SaslHandshake`/`SaslAuthenticate`: a
         // key moving from this list to the one above is what serving a new
         // API looks like, and leaving it in both is how the round trip
-        // above starts lying.
+        // above starts lying. `8` (`OffsetCommit`, `M4.12`) never needed
+        // that move -- it was never in this array to begin with.
         for unserved in [19, 20, -1, 32512] {
             assert_eq!(ApiKey::from_i16(unserved), None);
         }

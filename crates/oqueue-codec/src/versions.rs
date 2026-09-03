@@ -36,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 13] = [
+pub static ADVERTISED: [Advertised; 14] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -65,6 +65,21 @@ pub static ADVERTISED: [Advertised; 13] = [
         min: 0,
         max: 13,
         flexible_from: Some(9),
+    },
+    Advertised {
+        // ⚠️ **From v2, not v0** — the dependency's own generated
+        // `OffsetCommitRequest` only models v2-9 at all (confirmed against
+        // its generated source): v0/v1 carried a different shape
+        // (`retention_time_ms` absent, a `timestamp` field per partition
+        // instead) nothing since Kafka 0.11 sends. Ceiling v9 is the
+        // *request's* own ceiling, not the response's (which the
+        // dependency models to v10) — a version this broker cannot decode
+        // a request for is not one it serves, however far the response
+        // shape alone could reach.
+        api_key: ApiKey::OffsetCommit,
+        min: 2,
+        max: 9,
+        flexible_from: Some(8),
     },
     Advertised {
         // ⚠️ v0-3 single-key (`M4.3`), v4-6 batched (KIP-699, `M4.4`) —
@@ -187,9 +202,9 @@ mod tests {
         FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
         InitProducerIdRequest, InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse,
         LeaveGroupRequest, LeaveGroupResponse, ListOffsetsRequest, ListOffsetsResponse,
-        MetadataRequest, MetadataResponse, ProduceRequest, ProduceResponse,
-        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
-        SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
+        MetadataRequest, MetadataResponse, OffsetCommitRequest, OffsetCommitResponse,
+        ProduceRequest, ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse,
+        SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -222,6 +237,10 @@ mod tests {
             ApiKey::Metadata => (
                 MetadataRequest::header_version(version),
                 MetadataResponse::header_version(version),
+            ),
+            ApiKey::OffsetCommit => (
+                OffsetCommitRequest::header_version(version),
+                OffsetCommitResponse::header_version(version),
             ),
             ApiKey::FindCoordinator => (
                 FindCoordinatorRequest::header_version(version),
@@ -340,6 +359,7 @@ mod tests {
                 ApiKey::Fetch => pin::<FetchRequest>(row),
                 ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
+                ApiKey::OffsetCommit => pin::<OffsetCommitRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => pin::<JoinGroupRequest>(row),
                 ApiKey::Heartbeat => pin::<HeartbeatRequest>(row),
@@ -374,6 +394,7 @@ mod tests {
                 ApiKey::Fetch => within::<FetchRequest>(row),
                 ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
+                ApiKey::OffsetCommit => within::<OffsetCommitRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),
                 ApiKey::JoinGroup => within::<JoinGroupRequest>(row),
                 ApiKey::Heartbeat => within::<HeartbeatRequest>(row),

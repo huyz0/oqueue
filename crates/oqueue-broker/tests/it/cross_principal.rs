@@ -1,10 +1,21 @@
-//! FR-40: cross-principal refusal, tested on **every** API this broker
-//! scopes by topic — not a representative sample. `M9.9`-`M9.12` built the
-//! per-handler unit tests that prove each mechanism works in isolation;
-//! this is the one place that sweeps every one of them together, through
-//! the real [`Dispatcher`], the composition-root shape `matrix.rs`'s own
-//! FR-2 precedent already established — applied here to FR-40, which is
-//! `m9-complete.sh` (`M9.18`)'s own acceptance evidence.
+//! FR-40: cross-principal refusal, swept together through the real
+//! [`Dispatcher`] for every topic-scoped API this file currently covers
+//! (`Metadata`, `Produce`, `Fetch`, `ListOffsets`) — the composition-root
+//! shape `matrix.rs`'s own FR-2 precedent already established, applied
+//! here to FR-40, `m9-complete.sh` (`M9.18`)'s own acceptance evidence.
+//! `M9.9`-`M9.12` built the per-handler unit tests that prove each
+//! mechanism works in isolation; this is where they are swept together.
+//!
+//! ⚠️ **Not yet every topic-scoped API this broker has, and that gap is
+//! named, not silent.** `OffsetCommit` (`M4.12`) also routes through
+//! `crate::authz::topic_authorized` but has no row here yet — its own
+//! fencing means a row needs a real `JoinGroup`+`SyncGroup` round through
+//! the dispatcher first to seat a genuinely-tracked member, unlike the
+//! four APIs below, which need no group state at all. `M4.12`'s own
+//! acceptance criterion is satisfied by a focused unit-level test instead
+//! (`offset_commit/tests.rs`'s own precedent); this sweep gains that row
+//! (and `OffsetFetch`'s, `M4.13`) once the shared seating helper is worth
+//! building once for both rather than not at all.
 //!
 //! ⚠️ **Two shapes for `Metadata`, not one standing in for the other**
 //! (`M9.1`'s verified Kafka finding, `M9.9`/`M9.10`'s own split): an
