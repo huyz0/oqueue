@@ -168,8 +168,9 @@ pub(crate) async fn handle(
         // right one to answer with either way, so a refusal here does not
         // stop the reply.
         let _ = cluster
-            .group_coordinator()
-            .transition(&group, GroupEvent::SyncComplete);
+            .group_transitions()
+            .transition(group.clone(), GroupEvent::SyncComplete)
+            .await;
         let map = cluster.sync_groups().submit(&group, map);
         return reply(prelude, &response_for(&map, &request, version));
     }

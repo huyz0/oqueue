@@ -5,6 +5,13 @@
 //! reads `committed_offsets`' own readiness indirectly through it) are
 //! visible here because a submodule inherits its parent's own visibility,
 //! the same reason `cluster::tests` already can.
+//!
+//! ⚠️ **`M4.15c` added `group_transitions` here too, not a third file** —
+//! the field is populated by the same background task this module's own
+//! `wait_until_replayed` already inspects (`GroupTransitionsTask::serve`
+//! is what that task falls through into once both replays succeed), so
+//! the accessor belongs beside the machinery it reads, not split again
+//! for a name that would otherwise need to be `replay_and_transitions.rs`.
 
 use super::Cluster;
 
@@ -100,5 +107,48 @@ impl Cluster {
             "Cluster::wait_until_replayed gave up after {MAX_REPLAY_WAIT_YIELDS} yields -- \
              replay never finished"
         );
+    }
+
+    /// The single-writer seam every group-state-mutating handler enqueues
+    /// through (`M4.15c`) — `join_group`'s own barrier bookkeeping is the
+    /// one exception, still calling `group_coordinator().transition(...)`
+    /// directly until `M4.15d`'s own retrofit.
+    pub(crate) const fn group_transitions(&self) -> &crate::group_transitions::GroupTransitions {
+        &self.group_transitions
+    }
+
+    /// Whether `Cluster`'s own background task is still running — `true`
+    /// for the whole of replay *and* for as long as
+    /// `crate::group_transitions::GroupTransitionsTask::serve` keeps
+    /// running afterward, since `M4.15c` both phases are the same task.
+    ///
+    /// ⚠️ **`async-concurrency.md` rule 13's own bar, extended past
+    /// replay.** `wait_until_replayed` already gives replay's own panic an
+    /// owner that observes it; once `serve` takes over, nothing calls this
+    /// method automatically (no health-check surface exists yet, the same
+    /// no-`tracing` gap `Cluster::new`'s own doc names), so a panic inside
+    /// `serve` is not proactively *surfaced* anywhere today. But it is not
+    /// *silent* either: every `GroupTransitions::enqueue`/`transition`
+    /// call after `serve` dies resolves `Error::Transient` at once (a
+    /// dropped `oneshot::Sender` completing the receiver with an error),
+    /// never a hang and never a wrong answer — this method is what lets a
+    /// caller (a test today, a future health probe) confirm *why*,
+    /// non-destructively: it only inspects `is_finished`, never consumes
+    /// the handle the way `wait_until_replayed` does to read a panic's own
+    /// message.
+    // ⚠️ No production caller exists yet — no health-check surface is
+    // built (`Cluster::new`'s own doc names the same no-`tracing` gap).
+    // `group_state.rs`'s own "seam now, caller later" precedent
+    // (`oqueue_core::authorize`, `TopicGrants::grant`/`revoke`), applied
+    // here to a diagnostic rather than a protocol seam: this row's own
+    // test is the caller until a real probe exists to be the other one.
+    #[allow(dead_code)]
+    #[must_use]
+    pub(crate) fn group_transitions_task_alive(&self) -> bool {
+        self.replay_task
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
     }
 }

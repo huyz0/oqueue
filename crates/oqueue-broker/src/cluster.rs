@@ -120,14 +120,14 @@ pub struct Cluster {
     /// replay task flips it when done.
     replay_gate: Arc<crate::replay_gate::ReplayGate>,
     /// The background replay task's own handle — `async-concurrency.md`
-    /// rule 13: a spawned task needs an owner that can observe its
-    /// completion and its panic, or a panic inside it is silently
-    /// swallowed rather than surfaced. `Cluster` is that owner;
-    /// [`Cluster::wait_until_replayed`] is what actually inspects it.
-    /// `std::sync::Mutex`, not held across an `.await` (rule 6): taking
-    /// the handle out happens synchronously, and the handle itself is
-    /// awaited only after the lock is released.
+    /// rule 13's own "an owner that can observe completion and panic,"
+    /// inspected by [`Cluster::wait_until_replayed`]. Since `M4.15c` this
+    /// is also the group-transitions actor's own task (`cluster/replay.rs`'s
+    /// own module doc). `std::sync::Mutex`, not held across an `.await`.
     replay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The single-writer group-transition seam (`M4.15c`) —
+    /// `cluster/replay.rs`'s own `group_transitions()` accessor.
+    group_transitions: crate::group_transitions::GroupTransitions,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -229,11 +229,12 @@ impl Cluster {
     /// [`Error::EmptyObjectKey`] or [`Error::MalformedWriterId`] if `writer`
     /// is not a usable key component, which [`WriterId::mint`] never
     /// produces.
-    // ⚠️ `async` with no top-level `.await` since `M4.15a` moved the only
-    // one into the spawned task's own async block — kept anyway rather
-    // than reverting every call site's `.await` a second time: `M4.15b`'s
-    // own row adds group-state replay bootstrap here too, which is
-    // expected to need a genuine `.await` back before this returns.
+    // ⚠️ `async` with no top-level `.await`, still — `M4.15c` added a
+    // second replay (`crate::group_transitions`'s own) to the same
+    // spawned task rather than awaiting it here directly, `tokio::join!`
+    // running both replays concurrently before either marks
+    // `replay_gate` ready. Kept `async` anyway rather than reverting
+    // every call site's `.await` a second time.
     #[allow(clippy::unused_async)]
     pub async fn new(
         host: impl Into<String>,
@@ -243,15 +244,32 @@ impl Cluster {
         writer: &WriterId,
     ) -> Result<Self, Error> {
         let committed_offsets = Arc::new(crate::offset_commit::CommittedOffsets::new_empty(
-            seams.group_metadata_log,
+            Arc::clone(&seams.group_metadata_log),
         ));
         let replay_gate = Arc::new(crate::replay_gate::ReplayGate::new());
+        let (group_transitions, group_transitions_task) =
+            crate::group_transitions::GroupTransitions::new();
         let replay_task = tokio::spawn({
             let committed_offsets = Arc::clone(&committed_offsets);
             let replay_gate = Arc::clone(&replay_gate);
+            let group_coordinator = Arc::clone(&seams.group_coordinator);
+            let group_metadata_log = Arc::clone(&seams.group_metadata_log);
             async move {
-                if committed_offsets.replay().await.is_ok() {
+                let (offsets_replayed, transitions_replayed) = tokio::join!(
+                    committed_offsets.replay(),
+                    group_transitions_task
+                        .replay(group_coordinator.as_ref(), group_metadata_log.as_ref()),
+                );
+                // ⚠️ **All-or-nothing readiness** — a half-replayed
+                // `Cluster` (offsets caught up, group state not, or the
+                // reverse) is a worse ambiguity than staying uniformly
+                // `COORDINATOR_LOAD_IN_PROGRESS`: neither replay's own
+                // caller could tell which half a given answer trusted.
+                if offsets_replayed.is_ok() && transitions_replayed.is_ok() {
                     replay_gate.mark_ready();
+                    group_transitions_task
+                        .serve(group_coordinator, group_metadata_log)
+                        .await;
                 }
             }
         });
@@ -273,11 +291,20 @@ impl Cluster {
             committed_offsets,
             replay_gate,
             replay_task: Mutex::new(Some(replay_task)),
+            group_transitions,
         })
     }
 
     /// The consumer-group coordinator every connection's `JoinGroup`
     /// handler drives (`M4.7`).
+    ///
+    /// ⚠️ **Reads only, since `M4.15c`.** `.record(group)` is still safe
+    /// to call directly (a plain read, synchronized by the coordinator's
+    /// own internal lock); a *mutating* `.transition(...)` call must go
+    /// through [`Cluster::group_transitions`] instead — `crate::fencing`
+    /// and every handler's own test fixtures still read through here,
+    /// `group_transitions.rs`'s own module doc names why the write path
+    /// moved.
     pub(crate) fn group_coordinator(&self) -> &dyn GroupCoordinator {
         self.group_coordinator.as_ref()
     }

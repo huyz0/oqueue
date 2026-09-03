@@ -1,6 +1,7 @@
-//! What one entry in the group metadata log is — `M4.14`, `ADR-0035`.
+//! What one entry in the group metadata log is — `M4.14`, `ADR-0035`;
+//! `M4.15c` adds the second variant, `GroupTransitioned`.
 
-use crate::{GroupId, TopicId};
+use crate::{GroupEvent, GroupId, TopicId};
 
 /// One event `GroupMetadataLog` durably records.
 ///
@@ -26,5 +27,18 @@ pub enum GroupMetadataRecord {
         partition: i32,
         /// The committed offset.
         offset: i64,
+    },
+    /// A group's own `GroupCoordinator` state machine accepted `event` —
+    /// `M4.15c`. Replayed by re-firing `event` through
+    /// [`crate::GroupCoordinator::transition`] in the order these records
+    /// were appended, `GroupState::transition`'s own determinism (doc 02
+    /// §3.1) making that equivalent to what actually happened live —
+    /// `crate::GroupState`'s own doc names the same "only the legal
+    /// transitions, nothing else" guarantee replay leans on here.
+    GroupTransitioned {
+        /// The group the event applied to.
+        group: GroupId,
+        /// The event `GroupState::transition` accepted.
+        event: GroupEvent,
     },
 }

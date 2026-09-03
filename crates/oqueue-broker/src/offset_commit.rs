@@ -322,6 +322,11 @@ fn apply(
                 offsets.insert(key, (version, *offset));
             }
         }
+        // `M4.15c`'s own event, replayed by `crate::group_transitions`'s
+        // own reader of this same log — nothing this map holds. An
+        // explicit no-op arm, not a `_ =>`, so a third variant lands here
+        // as a compile error rather than a silent absorption.
+        GroupMetadataRecord::GroupTransitioned { .. } => {}
     }
 }
 

@@ -33,7 +33,16 @@ use oqueue_core::GroupId;
 /// Decodes, answers each named member per `M4.11`'s own fencing seam,
 /// removes every one of them in one batch, and replies — or closes the
 /// connection on a malformed body.
-pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+///
+/// ⚠️ **`async` since `M4.15c`** — `Heartbeats::leave`'s own enqueue
+/// through `crate::group_transitions` is awaited before this replies, so
+/// the durable append (and the live transition it guards) has landed by
+/// the time a client sees a successful response.
+pub(crate) async fn handle(
+    cluster: &Cluster,
+    prelude: RequestPrelude,
+    body: &[u8],
+) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
         return HandlerResponse::Close;
@@ -67,7 +76,8 @@ pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) ->
 
     cluster
         .heartbeats()
-        .leave(&group, &member_ids, cluster.group_coordinator());
+        .leave(&group, &member_ids, cluster.group_transitions())
+        .await;
 
     reply(
         prelude,

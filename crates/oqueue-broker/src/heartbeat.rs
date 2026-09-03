@@ -94,7 +94,7 @@ use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_codec::heartbeat::{decode_request, encode_response};
-use oqueue_core::{GroupCoordinator, GroupEvent, GroupId, GroupState};
+use oqueue_core::{GroupEvent, GroupId, GroupState};
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use tokio::time::{Duration, Instant};
@@ -150,9 +150,16 @@ impl Heartbeats {
     /// Evicts every member of `group` whose own deadline has already
     /// passed, firing one coordinator transition if any were — module
     /// doc's own "which event" answer.
-    fn sweep(&self, group: &GroupId, coordinator: &dyn GroupCoordinator) {
+    async fn sweep(
+        &self,
+        group: &GroupId,
+        group_transitions: &crate::group_transitions::GroupTransitions,
+    ) {
         let now = Instant::now();
-        self.remove_where(group, coordinator, |_, session| session.deadline > now);
+        self.remove_where(group, group_transitions, |_, session| {
+            session.deadline > now
+        })
+        .await;
     }
 
     /// Removes every one of `member_ids` from `group`'s own tracked
@@ -160,13 +167,14 @@ impl Heartbeats {
     /// named member is removed under one lock acquisition, so a request
     /// naming several members triggers at most one coordinator transition,
     /// not one per member (`M4.10`'s own acceptance criterion).
-    pub(crate) fn leave(
+    pub(crate) async fn leave(
         &self,
         group: &GroupId,
         member_ids: &[&str],
-        coordinator: &dyn GroupCoordinator,
+        group_transitions: &crate::group_transitions::GroupTransitions,
     ) {
-        self.remove_where(group, coordinator, |id, _| !member_ids.contains(&id));
+        self.remove_where(group, group_transitions, |id, _| !member_ids.contains(&id))
+            .await;
     }
 
     /// Removes every member of `group` for which `keep` returns `false`,
@@ -175,41 +183,59 @@ impl Heartbeats {
     /// (session-timeout eviction) and [`leave`](Self::leave) (an explicit
     /// `LeaveGroup`) both need.
     ///
-    /// ⚠️ **The coordinator call stays inside this lock's own scope,
-    /// deliberately** — `join_group::round`'s own `join_locked` holds
-    /// *its* lock across its own `coordinator.transition` call for the
-    /// identical reason: releasing the lock between deciding an event and
-    /// firing it lets a second `remove_where` call (another `sweep`, or a
-    /// second `leave`) for the same group interleave in between, deciding
-    /// its own event from the same pre-removal membership count and then
+    /// ⚠️ **The decision and the enqueue stay inside this lock's own
+    /// scope, deliberately** — `join_group::round`'s own `join_locked`
+    /// holds *its* lock across its own coordinator call for the identical
+    /// reason: releasing the lock between deciding an event and firing it
+    /// lets a second `remove_where` call (another `sweep`, or a second
+    /// `leave`) for the same group interleave in between, deciding its
+    /// own event from the same pre-removal membership count and then
     /// applying a now-stale decision. Round-1 review found this
     /// empirically reachable when the lock was released early; holding it
-    /// across the call closes every race between calls that go through
-    /// this one function.
-    fn remove_where(
+    /// across the enqueue closes every race between calls that go
+    /// through this one function.
+    ///
+    /// ⚠️ **Since `M4.15c`, "the call" is [`GroupTransitions::enqueue`],
+    /// not `GroupCoordinator::transition` directly** — enqueuing is
+    /// itself synchronous (an `mpsc` send never awaits), so it is exactly
+    /// as safe to hold this lock across as the old direct call was
+    /// (`async-concurrency.md` rule 6 is about `.await`, not about a
+    /// non-async function call). The response *is* awaited, unlike a
+    /// first attempt at this retrofit assumed: the caller's own
+    /// subsequent logic — `heartbeat.rs`'s own fencing decision right
+    /// after `sweep`, `leave_group/tests.rs`'s own
+    /// `transition_calls()` assertion right after `leave` — reads the
+    /// coordinator's record expecting this exact removal to have already
+    /// landed, so the await happens here, after the lock (not the
+    /// decision) is released, never held across it.
+    async fn remove_where(
         &self,
         group: &GroupId,
-        coordinator: &dyn GroupCoordinator,
+        group_transitions: &crate::group_transitions::GroupTransitions,
         mut keep: impl FnMut(&str, &MemberSession) -> bool,
     ) {
-        let mut groups = self.lock();
-        let Some(members) = groups.get_mut(group) else {
+        let receiver = {
+            let mut groups = self.lock();
+            let receiver = groups.get_mut(group).and_then(|members| {
+                let before = members.len();
+                members.retain(|id, session| keep(id, session));
+                let removed = members.len() != before;
+                if !removed {
+                    return None;
+                }
+                let event = if members.is_empty() {
+                    GroupEvent::AllMembersGone
+                } else {
+                    GroupEvent::Join
+                };
+                Some(group_transitions.enqueue(group.clone(), event))
+            });
             drop(groups);
-            return;
+            receiver
         };
-        let before = members.len();
-        members.retain(|id, session| keep(id, session));
-        let removed = members.len() != before;
-        let emptied = removed && members.is_empty();
-        if removed {
-            let event = if emptied {
-                GroupEvent::AllMembersGone
-            } else {
-                GroupEvent::Join
-            };
-            let _ = coordinator.transition(group, event);
+        if let Some(receiver) = receiver {
+            let _ = receiver.await;
         }
-        drop(groups);
     }
 
     /// Whether `member_id` is currently tracked in `group` — `M4.11`'s own
@@ -228,10 +254,15 @@ impl Heartbeats {
 /// Decodes, sweeps this group for anyone timed out, and answers — or
 /// closes the connection on a malformed body.
 ///
-/// ⚠️ **Not `async`, unlike `join_group`/`sync_group`'s own handlers** —
-/// `find_coordinator.rs`'s own precedent: nothing here parks, so there is
-/// no `.await` for an `async fn` to own.
-pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+/// ⚠️ **`async` since `M4.15c`** — `sweep`'s own enqueue through
+/// `crate::group_transitions` must be awaited before the fencing check
+/// below reads the coordinator's record, or this handler could answer on
+/// a record that has not yet caught up to the eviction it just decided.
+pub(crate) async fn handle(
+    cluster: &Cluster,
+    prelude: RequestPrelude,
+    body: &[u8],
+) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
         return HandlerResponse::Close;
@@ -244,7 +275,8 @@ pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) ->
     // module doc's own "no background reaper" answer.
     cluster
         .heartbeats()
-        .sweep(&group, cluster.group_coordinator());
+        .sweep(&group, cluster.group_transitions())
+        .await;
 
     // ⚠️ **`M4.11`'s own audited seam, not an ad hoc `is_current` check.**
     // `Stable` is the only state a heartbeat may succeed in, matching real

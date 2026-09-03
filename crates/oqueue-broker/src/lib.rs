@@ -34,6 +34,7 @@ mod fencing;
 pub mod fetch;
 mod find_coordinator;
 mod flush;
+mod group_transitions;
 mod heartbeat;
 mod ingest;
 mod init_producer_id;

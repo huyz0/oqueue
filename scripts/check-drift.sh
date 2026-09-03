@@ -350,6 +350,16 @@ declare -A RUST_BOUNDS=(
   # fake) replay; raising it only delays how quickly a truly stuck gate is
   # noticed.
   ["crates/oqueue-broker/src/cluster/replay.rs|MAX_REPLAY_WAIT_YIELDS"]="10_000"
+  # `M4.15c`: how many `GroupMetadataLog` entries `GroupTransitionsTask::replay`
+  # reads per page — `CommittedOffsets::replay`'s own identical reasoning
+  # (`REPLAY_PAGE_SIZE` below), a separate constant rather than shared code.
+  ["crates/oqueue-broker/src/group_transitions.rs|REPLAY_PAGE_SIZE"]="256"
+  # `M4.15c`: how many version conflicts `append_durably` retries against a
+  # racing writer (offset commits and group transitions share one log)
+  # before giving up — `MAX_COMMIT_RETRIES`'s own identical reasoning, its
+  # own constant rather than shared code (`FaultGroupMetadataLog`'s own
+  # "two small things, no shared code" precedent).
+  ["crates/oqueue-broker/src/group_transitions.rs|MAX_APPEND_RETRIES"]="8"
   # How many batches one index page may name, and how many entries a partition
   # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
   # `M10.20`: moved from `index_state.rs` to its own `index_state/page.rs`

@@ -24,6 +24,24 @@ fn group(name: &str) -> oqueue_core::GroupId {
     oqueue_core::GroupId::new(name).expect("valid")
 }
 
+/// Drives `g` to `Stable`, generation 1 — directly against the live
+/// coordinator, `M4.15c`'s own module doc: nothing this test needs
+/// depends on the seed itself being durable.
+fn seat_stable(cluster: &crate::cluster::Cluster, g: &oqueue_core::GroupId) {
+    cluster
+        .group_coordinator()
+        .transition(g, oqueue_core::GroupEvent::Join)
+        .expect("Empty -> Join is legal");
+    cluster
+        .group_coordinator()
+        .transition(g, oqueue_core::GroupEvent::JoinBarrierComplete)
+        .expect("PreparingRebalance -> CompletingRebalance is legal");
+    cluster
+        .group_coordinator()
+        .transition(g, oqueue_core::GroupEvent::SyncComplete)
+        .expect("CompletingRebalance -> Stable is legal");
+}
+
 fn batched_body(group: &str, member_ids: &[&str]) -> Vec<u8> {
     let members = member_ids
         .iter()
@@ -43,8 +61,8 @@ fn batched_body(group: &str, member_ids: &[&str]) -> Vec<u8> {
     out
 }
 
-fn leave(cluster: &crate::cluster::Cluster, body: &[u8]) -> KpResponse {
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(), body) else {
+async fn leave(cluster: &crate::cluster::Cluster, body: &[u8]) -> KpResponse {
+    let HandlerResponse::Reply(out) = handle(cluster, prelude(), body).await else {
         panic!("a LeaveGroup replies");
     };
     let mut rest = &out[5..]; // v5 is flexible: a 5-byte response header.
@@ -74,27 +92,14 @@ async fn three_batched_members_leaving_produces_exactly_one_rebalance() {
     for member_id in ["m1", "m2", "m3", "m4"] {
         fixture.cluster.heartbeats().register(&g, member_id, 30_000);
     }
-    fixture
-        .cluster
-        .group_coordinator()
-        .transition(&g, oqueue_core::GroupEvent::Join)
-        .expect("Empty -> Join is legal");
-    fixture
-        .cluster
-        .group_coordinator()
-        .transition(&g, oqueue_core::GroupEvent::JoinBarrierComplete)
-        .expect("PreparingRebalance -> CompletingRebalance is legal");
-    fixture
-        .cluster
-        .group_coordinator()
-        .transition(&g, oqueue_core::GroupEvent::SyncComplete)
-        .expect("CompletingRebalance -> Stable is legal");
+    seat_stable(&fixture.cluster, &g);
     let calls_before = fixture.group_coordinator.transition_calls();
 
     let response = leave(
         &fixture.cluster,
         &batched_body("orders", &["m1", "m2", "m3"]),
-    );
+    )
+    .await;
 
     assert_eq!(response.error_code, 0);
     assert_eq!(response.members.len(), 3);
@@ -145,7 +150,7 @@ async fn the_singular_v0_2_form_also_leaves() {
         api_version: V1,
         correlation_id: 1,
     };
-    let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude, &body) else {
+    let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude, &body).await else {
         panic!("a LeaveGroup replies");
     };
     let mut rest = &out[4..]; // v1 is not flexible: a 4-byte header.
@@ -164,7 +169,7 @@ async fn the_singular_v0_2_form_also_leaves() {
 #[tokio::test(start_paused = true)]
 async fn leaving_an_untracked_member_is_told_unknown_member_id() {
     let fixture = fixture(&[]).await;
-    let response = leave(&fixture.cluster, &batched_body("orders", &["ghost"]));
+    let response = leave(&fixture.cluster, &batched_body("orders", &["ghost"])).await;
     assert_eq!(response.error_code, 0, "the request itself still succeeds");
     assert_eq!(response.members.len(), 1);
     assert_eq!(
@@ -178,6 +183,6 @@ async fn leaving_an_untracked_member_is_told_unknown_member_id() {
 #[tokio::test(start_paused = true)]
 async fn a_malformed_body_closes_rather_than_panicking() {
     let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(), &[0xFF; 3]);
+    let response = handle(&fixture.cluster, prelude(), &[0xFF; 3]).await;
     assert!(matches!(response, HandlerResponse::Close));
 }

@@ -99,14 +99,15 @@ fn heartbeat_body(group: &str, member_id: &str, generation: i32) -> Vec<u8> {
     body
 }
 
-fn heartbeat(
+async fn heartbeat(
     cluster: &crate::cluster::Cluster,
     group: &str,
     member_id: &str,
     generation: i32,
 ) -> i16 {
     let body = heartbeat_body(group, member_id, generation);
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(12, HEARTBEAT_VERSION), &body) else {
+    let HandlerResponse::Reply(out) = handle(cluster, prelude(12, HEARTBEAT_VERSION), &body).await
+    else {
         panic!("a Heartbeat replies");
     };
     let mut rest = &out[4..]; // v2 is not flexible: a 4-byte header.
@@ -170,7 +171,7 @@ async fn a_member_absent_past_its_own_timeout_is_evicted_and_the_group_leaves_st
     tokio::time::sleep(std::time::Duration::from_secs(11)).await;
 
     // The leader's own heartbeat is what notices the follower's silence.
-    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 1);
+    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 1).await;
     assert_eq!(
         error_code,
         oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
@@ -213,7 +214,7 @@ async fn a_survivor_can_rejoin_after_an_eviction_the_group_is_not_permanently_we
         a_stable_group_of_two(&fixture.cluster, "orders", [60_000, 10_000]).await;
     tokio::time::sleep(std::time::Duration::from_secs(11)).await;
     assert_eq!(
-        heartbeat(&fixture.cluster, "orders", &leader, 1),
+        heartbeat(&fixture.cluster, "orders", &leader, 1).await,
         oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
         "the eviction itself, asserted already by the test above"
     );
@@ -271,7 +272,7 @@ async fn a_stale_generation_heartbeat_is_refused_not_treated_as_a_fresh_join() {
     let (leader, _follower) =
         a_stable_group_of_two(&fixture.cluster, "orders", [30_000, 30_000]).await;
 
-    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 0);
+    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 0).await;
     assert_eq!(error_code, oqueue_codec::error_codes::ILLEGAL_GENERATION);
 
     let group = group("orders");
@@ -294,7 +295,7 @@ async fn a_stale_generation_heartbeat_is_refused_not_treated_as_a_fresh_join() {
 #[tokio::test(start_paused = true)]
 async fn a_heartbeat_from_a_never_tracked_member_is_told_unknown_member_id() {
     let fixture = fixture(&[]).await;
-    let error_code = heartbeat(&fixture.cluster, "orders", "ghost", 0);
+    let error_code = heartbeat(&fixture.cluster, "orders", "ghost", 0).await;
     assert_eq!(error_code, oqueue_codec::error_codes::UNKNOWN_MEMBER_ID);
 }
 
@@ -314,7 +315,7 @@ async fn a_successful_heartbeat_extends_its_own_members_own_deadline() {
     // heartbeats -- renewing its own deadline to (now + 10s).
     tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     assert_eq!(
-        heartbeat(&fixture.cluster, "orders", &follower, 1),
+        heartbeat(&fixture.cluster, "orders", &follower, 1).await,
         oqueue_codec::error_codes::NONE
     );
 
@@ -322,7 +323,7 @@ async fn a_successful_heartbeat_extends_its_own_members_own_deadline() {
     // (registration + 10s), but 4s short of the deadline the heartbeat
     // above just renewed it to (its own moment + 10s).
     tokio::time::sleep(std::time::Duration::from_secs(6)).await;
-    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 1);
+    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 1).await;
     assert_eq!(
         error_code,
         oqueue_codec::error_codes::NONE,
@@ -354,7 +355,7 @@ async fn a_member_at_exactly_its_own_deadline_is_evicted() {
     // "now" at the sweep below is exactly the follower's own registered
     // deadline (registration time + its own 10s timeout).
     tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 1);
+    let error_code = heartbeat(&fixture.cluster, "orders", &leader, 1).await;
     assert_eq!(error_code, oqueue_codec::error_codes::REBALANCE_IN_PROGRESS);
     assert!(
         !fixture
@@ -370,6 +371,6 @@ async fn a_member_at_exactly_its_own_deadline_is_evicted() {
 #[tokio::test(start_paused = true)]
 async fn a_malformed_body_closes_rather_than_panicking() {
     let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(12, HEARTBEAT_VERSION), &[0xFF; 3]);
+    let response = handle(&fixture.cluster, prelude(12, HEARTBEAT_VERSION), &[0xFF; 3]).await;
     assert!(matches!(response, HandlerResponse::Close));
 }
