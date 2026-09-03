@@ -191,7 +191,7 @@ expect_used = "deny"
 
 # ── Profiles ────────────────────────────────────────────────────────────────
 #
-# Five, per `build.md` rule 10, and **root-only**: a `[profile]` section in a
+# Six, per `build.md` rule 10, and **root-only**: a `[profile]` section in a
 # member crate is ignored, and cargo says so on stderr while still exiting 0 —
 # which is why `check-crate.sh` reads `cargo metadata`'s stderr separately
 # rather than folding it into the JSON.
@@ -231,6 +231,34 @@ debug = false
 # level is build *speed*, not runtime speed, and they are compiled once.
 [profile.dev.build-override]
 opt-level = 3
+
+# ⚠️ **Mutation testing only** — `scripts/mutants.sh` passes `--profile mutants`,
+# and nothing else selects it. `M4.19` measured why it exists: a narrowed run
+# over `oqueue-broker` is ~4 s *per mutant*, and 30 mutants is ~2 min, so the
+# gate is a rebuild loop and anything that shortens one rebuild is multiplied
+# by the mutant count.
+#
+# ⚠️ **It differs from `dev` in exactly one thing: no debuginfo.** Dependencies
+# already carry none (`[profile.dev.package."*"]` above sets `debug = false`),
+# so this drops it for the workspace crates — which is what a mutation run
+# rebuilds over and over. ⚠️ `split-debuginfo` is inherited and moot at
+# `debug = 0`.
+#
+# ⚠️ **`opt-level`, `debug-assertions` and `overflow-checks` are deliberately
+# unchanged from `dev`, because changing them could change a verdict.** A
+# mutant is caught by a test failing; an assertion or an overflow check is
+# often the thing that fails. Debuginfo is not — it is what a *debugger* reads,
+# and no test in this workspace asserts on a backtrace's line numbers. That is
+# the whole argument for this profile being quality-neutral: it removes output
+# nothing under test consumes.
+#
+# ⚠️ `overflow-checks` is written out despite being inherited — `security.md`
+# rule 4 is "every profile", and `[profile.dev]` above states the same reason
+# for the same redundancy.
+[profile.mutants]
+inherits = "dev"
+overflow-checks = true
+debug = 0
 
 [profile.release]
 opt-level = 3

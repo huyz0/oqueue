@@ -46,14 +46,20 @@ ignored.
    strictly worse than the stock profile. Setting cgu=1 without setting `lto` is
    a mistake that looks like tuning.
 7. **`overflow-checks = true` in every profile, including release.** →
-   `security.md` rule 4. ⚠️ **The gate asserts `[profile.release]` only** —
+   `security.md` rule 4. ⚠️ **The gate asserts `[profile.release]` and `[profile.mutants]`** —
    `scripts/check-layering.sh` (`M0.21`) — and that is the profile where it
    matters, because it is the one whose cargo default is wrong: measured, a
    crate with no `overflow-checks` line anywhere panics on `u8` 255+1 under
-   `dev` and prints `0` under `release`. The root's other three profiles reach
-   it by inheritance — `dist` and `release-checked` from `release` directly,
-   `bench` from `dist`, which rule 10 pins deliberately — so gating `release`
-   gates all four **as the root manifest stands today**.
+   `dev` and prints `0` under `release`. Three of the root's other profiles
+   reach it by inheritance — `dist` and `release-checked` from `release`
+   directly, `bench` from `dist`, which rule 10 pins deliberately.
+   ⚠️ **`mutants` does not**: it inherits `dev`, outside `release`'s chain, so
+   it sets `overflow-checks = true` itself and `check-layering.sh` asserts that
+   directly (`M4.19`) rather than reaching it through `release`. That gate also
+   refuses `debug-assertions = false` there, because the mutation gate runs
+   under this profile and an assertion is often the thing that kills a
+   mutant — turning them off would weaken a gate silently, which is exactly
+   what non-negotiable 2 forbids.
    ⚠️ That is a property of the file, not of the gate: `overflow-checks = false`
    written into `[profile.dist]`, the tagged-artifact profile, leaves
    `check-layering.sh` green and ships a wrapping binary. Nothing reads a
@@ -63,9 +69,19 @@ ignored.
    tenants.
 9. **`debug = "line-tables-only"` in release**, so production flamegraphs
    symbolicate without carrying full debuginfo.
-10. **Five profiles**: `dev`, `release`, `dist` (fat LTO, tagged artifacts),
+10. **Six profiles**: `dev`, `release`, `dist` (fat LTO, tagged artifacts),
     `bench` (= `dist` + `debug = true`, nothing else), `release-checked`
-    (release codegen + assertions, a CI safety net).
+    (release codegen + assertions, a CI safety net), and `mutants`
+    (= `dev` + `debug = 0`; it also writes `overflow-checks = true` rather than
+    leaning on inheritance, because rule 7's gate asserts it there — do not
+    "tidy" that line away, `check-layering.sh` rejects the commit —
+    `M4.19`). ⚠️ **`mutants` is a
+    *tooling* profile and nothing ships from it**: `scripts/mutants.sh` is its
+    only selector. It exists because the mutation gate is a per-mutant rebuild
+    loop, so shortening one rebuild is multiplied by the mutant count —
+    measured at 102 s to 33 s. ⚠️ It inherits `dev`'s `opt-level`,
+    `debug-assertions` and `overflow-checks` *deliberately unchanged*, because
+    those decide whether a mutant is caught; see rule 7.
 11. **`[profile.dev.package."*"] debug = false`** — dependencies are ~90% of the
     compiled code and debuginfo is 60–70% of `target/debug`.
 

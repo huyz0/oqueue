@@ -1,6 +1,9 @@
 # 0001. Build profiles
 
-Status: accepted
+Status: accepted; 2026-09-03: `M4.19` adds a sixth root profile, `mutants`
+(= `dev` + `debug = 0`, selected only by `scripts/mutants.sh`) — this ADR's
+"five profiles" count is superseded, its reasoning is not, and `build.md`
+rule 10 carries the enumeration
 Date: 2026-08-15
 Requirements: NFR-2, NFR-40
 

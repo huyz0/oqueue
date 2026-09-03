@@ -20,20 +20,46 @@
 # `baselines/mutants.txt`. Splitting them is what lets a developer run this
 # freely while the gate stays a single, argued decision point.
 #
-# ## Cost, measured — ⚠️ by mode *and* cache state, because both matter
+# ## Cost, measured — ⚠️ by mode, cache state *and* where in the dep graph the
+# ## changed code sits, because the third one turned out to dominate
 #
-#   narrowed, diff with no mutants       0.1 s   (an early exit, not a run)
-#   narrowed, 1 mutant                   1.2 s
-#   narrowed, 13 mutants, warm           4.8 s
-#   narrowed, 13 mutants, cold           9.7 s
-#   unnarrowed, `-p oqueue-core`, warm  23 s
+#   narrowed, diff with no mutants                    0.1 s  (a skip, not a run)
+#   narrowed, 1 mutant                                1.2 s
+#   narrowed, 13 mutants, warm, `oqueue-core`         4.8 s
+#   narrowed, 13 mutants, cold, `oqueue-core`         9.7 s
+#   unnarrowed, `-p oqueue-core`, warm               23 s
+#   narrowed, 30 mutants, warm, `oqueue-broker`     102 s   ⚠️ `M4.19`, `dev`
+#   narrowed, 30 mutants, warm, `oqueue-broker`      33 s   ⚠️ `M4.19`, `mutants`
 #
 # ⚠️ **The first row is not a cost, it is a skip**, and quoting it as "narrowed
 # runs take 0.08 s" is how this script's placement was first argued. Review
-# caught that. The row that decides placement is the 4.8 s one: a modest new
-# file, warm, leaves ~5 s of NFR-56's 10 s budget for everything else — which
-# the suite currently uses 2.2 s of. Cold, it does not fit, and
-# `check-budget.sh` reports that as a compiling run rather than as erosion.
+# caught that.
+#
+# ⚠️ **The last row is `M4.19`'s correction, and the four rows above it were
+# stale by ~20x for the code this gate actually runs on now.** Every earlier
+# row was measured against `oqueue-core` — a leaf, sans-I/O crate. The same
+# gate over `oqueue-broker`, which sits on top of tokio, rustls and
+# `kafka-protocol`, costs **~4 s per mutant**, so cost tracks *what a mutant
+# forces a rebuild of*, not the mutant count the earlier rows imply. Phase
+# split, measured with `cargo mutants` timings on: unmutated baseline **8 s
+# build + 1 s test**, then 30 mutants in ~2 min. ⚠️ **So it is the per-mutant
+# rebuild loop, not the baseline**, that this gate is made of.
+#
+# ⚠️ **`-j` does not fix it — measured and reverted, `M4.19`.** Running the
+# identical diff warm at one job and at four: 103 s against 106 s. No gain,
+# because each individual mutant rebuild already saturates every core cargo
+# was given, so N concurrent jobs each get 1/N of them. ⚠️ Memory was never
+# the reason it fails to help (3.53 GiB at `-j 1` against 6.86 GiB at `-j 4`,
+# under `docker-test.sh`'s 12 GiB cap) — so anyone reasoning from headroom
+# will reach for `-j` again, and this paragraph is why not to.
+#
+# ⚠️ **What worked instead was making each rebuild cheaper, not running more
+# of them at once** — `[profile.mutants]`, below. That is also the reason to
+# expect *link* time to be the next lever: the container installs no `lld` or
+# `mold`, and every one of these rebuilds pays for it, as do the other two
+# cargo gates. It is a Dockerfile, `gates.yml` and `.cargo/config.toml`
+# change whose workspace-wide `rustflags` the aarch64 cross-build also reads,
+# so it needs its own task and its own cross-compile verification.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
@@ -85,6 +111,42 @@ fi
 # revisit this; until then the default is the sized cap the rule asks for.
 args=(--colors=never --no-times)
 [[ -n "$CRATE" ]] && args+=(-p "$CRATE")
+
+# ⚠️ **`M4.19`: the one change that actually moved this gate — 102 s to 33 s,
+# 3.1x, on the identical diff.** `[profile.mutants]` in the root manifest is
+# `dev` with debuginfo off and nothing else altered. The cost table above is
+# why it helps so much: this gate is a per-mutant *rebuild* loop, so anything
+# that shortens one rebuild is multiplied by the mutant count.
+#
+# ⚠️ **Quality-neutral, and the argument is narrow enough to check.**
+# `opt-level`, `debug-assertions` and `overflow-checks` are inherited from
+# `dev` unchanged — those are what can flip a mutant from caught to missed,
+# because a mutant is caught by a test failing and an assertion or an overflow
+# check is often the thing that fails. Debuginfo is read by a *debugger*, and
+# nothing under test asserts on a backtrace's line numbers. ⚠️ **Verified
+# rather than argued**: dev and this profile were run warm against the same
+# 30-mutant diff and both reported `19 caught, 11 unviable` — the counts are
+# the check, not the wall clock.
+#
+# ⚠️ **It is its own `--profile`, not an edit to `dev`**, so a developer's
+# normal build keeps its debuginfo. The trade is one cold rebuild the first
+# time this runs, into `$CARGO_TARGET_DIR/mutants/` rather than `debug/`.
+#
+# ⚠️ **And the trade is disk, not only time — review caught this being
+# stated as time alone, then caught the correction overstating itself.**
+# This script is the only writer of `target/mutants`, so once every run
+# passes `--profile mutants` the old `target/mutants/debug` tree is never
+# read or written again. ⚠️ **There are two of them, and the first version
+# of this paragraph conflated them**: the container's `oqueue-target`
+# volume held **48 GB**, and the host checkout a separate, older **22 GB**
+# — both stale, both deleted when the profile landed. Cargo
+# has no target GC (`build.md`, Hygiene) and nothing here runs
+# `cargo-sweep`, so a stale tree persists for the life of the checkout —
+# the `No space left on device` failure doc 19 §9 records for this exact
+# tool, arriving after the builds have already been paid for. The new tree
+# is far smaller than either (a few hundred MB), which is
+# the debuginfo this profile drops.
+args+=(--profile mutants)
 
 # ⚠️ Its own target directory, for `build.md` rule 18's reason: cargo-mutants
 # rebuilds constantly and would otherwise evict the normal build on every

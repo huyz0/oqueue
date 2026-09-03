@@ -238,6 +238,54 @@ def build():
             "-- security.md rule 4"
         )
 
+    # ⚠️ **`[profile.mutants]` is asserted separately because it is the one
+    # root profile outside `release`'s inheritance chain** — it inherits
+    # `dev` (`M4.19`), so the assertion above reaches it through nothing.
+    # `build.md` rule 7 states the same thing in prose; this is the half a
+    # script can hold.
+    #
+    # ⚠️ **And it is the profile the mutation gate itself runs under**, which
+    # makes it the one place a silent weakening is cheapest: a mutant is
+    # caught by a test failing, and an assertion or an overflow check is
+    # often what fails. Turning either off here would let mutants survive
+    # that a `debug_assert` would have killed — reddening `check-mutants`
+    # with no signpost back to the profile, whose cheapest-looking repair is
+    # a new line in `baselines/mutants.txt`: a permanent weakening bought by
+    # a manifest edit no gate could see. Non-negotiable 2 forbids exactly
+    # that trade, so it is refused here rather than argued there.
+    #
+    # ⚠️ Absence is not a failure — the profile is optional, and
+    # `scripts/mutants.sh` is its only selector. This checks what it says
+    # *if* it is there.
+    if "profile.mutants" in table_names(root_toml):
+        # ⚠️ **`inherits` is asserted too, and round-2 review is why.** The two
+        # checks below read what the profile *writes*; everything it does not
+        # write comes from whatever it inherits. Changing `dev` to `release`
+        # is a one-word edit that leaves both of them green while silently
+        # taking cargo's release default for `debug-assertions` — **false** —
+        # which is exactly the weakening this block exists to refuse.
+        # Verified by hand-mutation: with `inherits = "release"` and no other
+        # change, this gate passed before this line existed.
+        if not section_says(root_toml, "profile.mutants", r'inherits\s*=\s*"dev"'):
+            problems.append(
+                'Cargo.toml: [profile.mutants] does not set inherits = "dev" -- '
+                "the mutation gate's assertions below only cover what this "
+                "profile writes; what it inherits decides the rest "
+                "(build.md rule 7, non-negotiable 2)"
+            )
+        if not section_says(root_toml, "profile.mutants", r"overflow-checks\s*=\s*true"):
+            problems.append(
+                "Cargo.toml: [profile.mutants] does not set overflow-checks = true "
+                "-- security.md rule 4; it inherits dev, not release, so nothing "
+                "else asserts it"
+            )
+        if section_says(root_toml, "profile.mutants", r"debug-assertions\s*=\s*false"):
+            problems.append(
+                "Cargo.toml: [profile.mutants] sets debug-assertions = false -- "
+                "the mutation gate runs under this profile, and an assertion is "
+                "often what kills a mutant (build.md rule 7, non-negotiable 2)"
+            )
+
     checked = 0
     for m, name in names_by_manifest.items():
         checked += 1
@@ -354,7 +402,7 @@ elif [[ -n "$problems" ]]; then
     fail "manifest violation: $p"
   done <<< "$problems"
   note "manifests must: depend only on oqueue-core, carry lints.workspace = true,"
-  note "hold no [profile] section, and (root) set overflow-checks in [profile.release]"
+  note "hold no [profile] section, and (root) set overflow-checks in [profile.release] + [profile.mutants]"
   note "the named exceptions are oqueue-broker and bin/oqueue (package: oqueue)"
 else
   fail "layering check died (exit $rc); the tree was not checked"
