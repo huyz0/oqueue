@@ -24,8 +24,9 @@ use crate::cluster::Cluster;
 use crate::writer_id::WriterId;
 use oqueue_coordinator::Coordinator;
 use oqueue_core::{
-    CoordinatorEpoch, CountingObjectStore, FakeMaterializedIndex, FakeMetadataLog, FakeObjectStore,
-    FaultConfig, ObjectStore, PartitionId, StormKind, TopicId,
+    CoordinatorEpoch, CountingObjectStore, FakeGroupMetadataLog, FakeMaterializedIndex,
+    FakeMetadataLog, FakeObjectStore, FaultConfig, FaultGroupMetadataLog, ObjectStore, PartitionId,
+    StormKind, TopicId,
 };
 
 /// The store every fixture holds: a real fake, counted.
@@ -35,6 +36,11 @@ use oqueue_core::{
 /// FR-32's one PUT, FR-12's zero GETs — and a fixture that had to be opted
 /// into would leave them argued instead of asserted.
 pub(crate) type TestStore = CountingObjectStore<FakeObjectStore>;
+/// The group metadata log every fixture holds: a real fake, fault-capable —
+/// `TestStore`'s own "capable by default, not on request" precedent, so a
+/// test asserting `M4.14`'s own "impossible by construction" claim does not
+/// need a second fixture shape.
+pub(crate) type TestGroupMetadataLog = FaultGroupMetadataLog<FakeGroupMetadataLog>;
 use std::sync::Arc;
 
 /// A cluster and the coordinator loop serving it.
@@ -52,6 +58,11 @@ pub(crate) struct Fixture {
     /// "exactly one rebalance" needs `transition_calls()`, which no method
     /// on the trait itself exposes.
     pub(crate) group_coordinator: Arc<oqueue_core::FakeGroupCoordinator>,
+    /// The concrete, fault-capable fake behind `cluster`'s own type-erased
+    /// `Arc<dyn GroupMetadataLog>` (`M4.14`) — a fault-injection test tells
+    /// it to refuse the next append; a restart test opens a *second*
+    /// `CommittedOffsets::open` from this same log to prove replay.
+    pub(crate) group_metadata_log: Arc<TestGroupMetadataLog>,
     serving: tokio::task::JoinHandle<()>,
 }
 
@@ -105,6 +116,19 @@ impl Fixture {
             storm: Some((StormKind::Transient, calls)),
             ..FaultConfig::default()
         });
+    }
+
+    /// Makes every following `GroupMetadataLog::append` refuse, until
+    /// [`Self::heal_group_metadata_log`] is called — `M4.14`'s own
+    /// fault-injection test: a refused append must leave nothing durable
+    /// and nothing acknowledged.
+    pub(crate) fn refuse_group_metadata_append(&self) {
+        self.group_metadata_log.refuse_append();
+    }
+
+    /// Puts the group metadata log back to answering immediately.
+    pub(crate) fn heal_group_metadata_log(&self) {
+        self.group_metadata_log.heal();
     }
 }
 
@@ -180,6 +204,7 @@ pub(crate) async fn with_store(
     let shared: Arc<dyn ObjectStore> = Arc::clone(&store) as Arc<dyn ObjectStore>;
     let sequencing = crate::cluster::Sequencing::new(coordinator, reader);
     let group_coordinator = Arc::new(oqueue_core::FakeGroupCoordinator::new());
+    let group_metadata_log = Arc::new(TestGroupMetadataLog::new(FakeGroupMetadataLog::new()));
     let cluster = Cluster::new(
         host,
         port,
@@ -188,10 +213,13 @@ pub(crate) async fn with_store(
             store: shared,
             group_coordinator: Arc::clone(&group_coordinator)
                 as Arc<dyn oqueue_core::GroupCoordinator>,
+            group_metadata_log: Arc::clone(&group_metadata_log)
+                as Arc<dyn oqueue_core::GroupMetadataLog>,
         },
         &WriterId::mint(),
     )
-    .expect("a minted identity is a usable key component");
+    .await
+    .expect("a minted identity is a usable key component, and an empty log opens");
     for topic in topics {
         cluster.ensure_topic(topic);
     }
@@ -200,6 +228,7 @@ pub(crate) async fn with_store(
         session: crate::session::Session::default(),
         store,
         group_coordinator,
+        group_metadata_log,
         serving: tokio::spawn(serving.run()),
     }
 }

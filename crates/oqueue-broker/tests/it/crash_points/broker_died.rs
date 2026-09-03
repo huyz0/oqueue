@@ -123,10 +123,12 @@ async fn mini_cluster_with_hanging_put() -> MiniCluster {
             Seams {
                 store: shared,
                 group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+                group_metadata_log: Arc::new(oqueue_core::FakeGroupMetadataLog::new()),
             },
             &WriterId::mint(),
         )
-        .expect("a minted identity is a usable key component"),
+        .await
+        .expect("a minted identity is a usable key component, and an empty log opens"),
     );
     cluster.ensure_topic("orders");
     let serving_task = tokio::spawn(serving.run());

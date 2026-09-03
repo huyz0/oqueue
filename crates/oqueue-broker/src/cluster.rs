@@ -39,8 +39,8 @@ use crate::join_group::GroupJoins;
 use crate::writer_id::WriterId;
 use oqueue_coordinator::{Coordinator, CoordinatorError};
 use oqueue_core::{
-    BundleNamer, CacheState, CoordinatorEpoch, Error, GroupCoordinator, IndexReader, ObjectStore,
-    Offset, PartitionId, TopicId,
+    BundleNamer, CacheState, CoordinatorEpoch, Error, GroupCoordinator, GroupMetadataLog,
+    IndexReader, ObjectStore, Offset, PartitionId, TopicId,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,9 +107,10 @@ pub struct Cluster {
     /// membership, and when each member's own silence would evict it.
     /// Starts empty by construction, `group_joins`'s own shape.
     heartbeats: crate::heartbeat::Heartbeats,
-    /// `M4.12`'s own committed-offset bookkeeping — in-memory until
-    /// `M4.14` gives it a durable home. Starts empty by construction,
-    /// `group_joins`'s own shape.
+    /// `M4.12`'s own committed-offset bookkeeping — durable since `M4.14`
+    /// (`ADR-0035`): opened from `seams.group_metadata_log` in
+    /// [`Cluster::new`], replaying every already-committed offset before
+    /// this `Cluster` answers anything.
     committed_offsets: crate::offset_commit::CommittedOffsets,
 }
 
@@ -147,6 +148,8 @@ pub struct Seams {
     pub store: Arc<dyn ObjectStore>,
     /// The consumer-group state machine's own seam (`M4.2`, `ADR-0034`).
     pub group_coordinator: Arc<dyn GroupCoordinator>,
+    /// The committed-offset durability seam (`M4.14`, `ADR-0035`).
+    pub group_metadata_log: Arc<dyn GroupMetadataLog>,
 }
 
 /// What a flush can fail with, in the two ways a client hears differently.
@@ -178,17 +181,30 @@ impl Cluster {
     /// else** — see [`WriterId`]. `ADR-0026`'s unconditional `put` is safe
     /// only because no other live process writes the keys this one will.
     ///
+    /// ⚠️ **`async` since `M4.14`** (`ADR-0035`): opening
+    /// `seams.group_metadata_log` replays every already-committed offset
+    /// before this `Cluster` can answer anything — `Sequencing`'s own
+    /// `Coordinator::open` is the established precedent for "replay before
+    /// serving," done by the caller before `Cluster::new` for the topic log
+    /// and here, internally, for the group log (`ADR-0035`'s own "no hook
+    /// into `Coordinator::open`" decision: the two replays stay separate
+    /// steps, never one call).
+    ///
     /// # Errors
     ///
     /// [`Error::EmptyObjectKey`] or [`Error::MalformedWriterId`] if `writer`
-    /// is not a usable key component, which [`WriterId::mint`] never produces.
-    pub fn new(
+    /// is not a usable key component, which [`WriterId::mint`] never
+    /// produces; whatever [`CommittedOffsets::open`](crate::offset_commit::CommittedOffsets::open)
+    /// fails with if the group metadata log cannot be read.
+    pub async fn new(
         host: impl Into<String>,
         port: i32,
         sequencing: Sequencing,
         seams: Seams,
         writer: &WriterId,
     ) -> Result<Self, Error> {
+        let committed_offsets =
+            crate::offset_commit::CommittedOffsets::open(seams.group_metadata_log).await?;
         Ok(Self {
             node_id: 0,
             host: host.into(),
@@ -204,7 +220,7 @@ impl Cluster {
             group_joins: GroupJoins::default(),
             sync_groups: crate::sync_group::SyncGroups::default(),
             heartbeats: crate::heartbeat::Heartbeats::default(),
-            committed_offsets: crate::offset_commit::CommittedOffsets::default(),
+            committed_offsets,
         })
     }
 

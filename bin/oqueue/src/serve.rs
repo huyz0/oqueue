@@ -206,8 +206,13 @@ async fn build_cluster(
          Offsets do not survive a restart."
     );
     eprintln!(
-        "oqueue: WARNING -- consumer-group state is in memory (M4.14/M4.15 own the durable \
-         one, ADR-0034). Group membership and generation do not survive a restart."
+        "oqueue: WARNING -- consumer-group membership/generation is in memory (M4.15 owns the \
+         durable one, ADR-0034). Group membership and generation do not survive a restart."
+    );
+    eprintln!(
+        "oqueue: WARNING -- the group metadata log is in memory (M6 owns the durable engine, \
+         ADR-0035, the same one M4.14 names for the topic metadata log above). Committed \
+         offsets replay correctly across an in-process restart but do not survive the process."
     );
     let cluster = oqueue_broker::Cluster::new(
         host,
@@ -216,9 +221,11 @@ async fn build_cluster(
         oqueue_broker::Seams {
             store,
             group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+            group_metadata_log: Arc::new(oqueue_core::FakeGroupMetadataLog::new()),
         },
         &oqueue_broker::WriterId::mint(),
     )
+    .await
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?;
     Ok((cluster, serving))
 }

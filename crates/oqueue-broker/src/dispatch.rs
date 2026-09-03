@@ -230,7 +230,7 @@ impl Dispatcher {
         match api_key {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body),
             ApiKey::Metadata => self.metadata_handle(prelude, body),
-            ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body),
+            ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
             ApiKey::JoinGroup => crate::join_group::handle(&self.cluster, prelude, body).await,
@@ -376,9 +376,9 @@ impl Dispatcher {
 
     /// `OffsetCommit`'s own arm — `M4.12`'s own per-principal scoping,
     /// `M9.12`'s pattern reused for a group-protocol handler rather than
-    /// invented again. Not `async`: `crate::offset_commit::handle`'s own
-    /// precedent, nothing here parks.
-    fn offset_commit_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+    /// invented again. `async` since `M4.14`: a commit now durably appends
+    /// to a `GroupMetadataLog` before it is acknowledged.
+    async fn offset_commit_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
         let principal = self.session.principal();
         crate::offset_commit::handle(
             &self.cluster,
@@ -386,6 +386,7 @@ impl Dispatcher {
             body,
             &self.authz_context(principal.as_ref()),
         )
+        .await
     }
 
     /// `OffsetFetch`'s own arm — `M4.13`'s own per-principal scoping,

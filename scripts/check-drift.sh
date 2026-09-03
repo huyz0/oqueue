@@ -333,6 +333,17 @@ declare -A RUST_BOUNDS=(
   # maximum lets a stuck member hold its own seat that much longer.
   ["crates/oqueue-broker/src/heartbeat/deadline.rs|MIN_SESSION_TIMEOUT_MS"]="6_000"
   ["crates/oqueue-broker/src/heartbeat/deadline.rs|MAX_SESSION_TIMEOUT_MS"]="1_800_000"
+  # `M4.14`: how many `GroupMetadataLog` entries `CommittedOffsets::open`
+  # reads per page while replaying. Lowering it means more round trips to
+  # replay the same log (a real cost once `M6` gives the log a real,
+  # network-crossing engine); raising it means more memory held per page.
+  ["crates/oqueue-broker/src/offset_commit.rs|REPLAY_PAGE_SIZE"]="256"
+  # `M4.14`: how many version conflicts `CommittedOffsets::commit` retries
+  # against a racing writer before giving up. Lowering it makes a
+  # well-formed commit fail under ordinary concurrent contention it would
+  # otherwise have won by retrying; raising it risks a longer hold on one
+  # request under pathological contention.
+  ["crates/oqueue-broker/src/offset_commit.rs|MAX_COMMIT_RETRIES"]="8"
   # How many batches one index page may name, and how many entries a partition
   # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
   # `M10.20`: moved from `index_state.rs` to its own `index_state/page.rs`

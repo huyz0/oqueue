@@ -1,12 +1,18 @@
-//! `OffsetCommit` (8), v2-9 — `M4.12`.
+//! `OffsetCommit` (8), v2-9 — `M4.12`, `M4.14`.
 //!
-//! ⚠️ **In-memory only.** Durable storage plus replay on coordinator
-//! takeover is `M4.14`'s own separate task — the same split `M4.7`-`M4.11`
-//! already established for every other piece of this milestone's own
-//! bookkeeping (`heartbeat.rs`'s `Heartbeats`, `join_group::round`'s
-//! `GroupJoins`, `sync_group.rs`'s `SyncGroups`), none of which had a
-//! durable home before this milestone gave them one either. A restart
-//! loses every commit this module holds until `M4.14` lands.
+//! ⚠️ **Durable in the same sense `oqueue_coordinator::Coordinator`'s own
+//! topic-offset allocation already is — `ADR-0035`.** Every commit is
+//! appended to a [`oqueue_core::GroupMetadataLog`] *before* it is
+//! acknowledged (`ADR-0020`'s own "the ack IS the durable write" instinct,
+//! applied here rather than reinvented): the response this handler builds
+//! cannot be constructed before the corresponding
+//! [`oqueue_core::GroupMetadataLog::append`] future resolves `Ok`, because
+//! nothing in this module has anything to construct one from before then.
+//! `FakeGroupMetadataLog` is this milestone's own only implementation, the
+//! same status `FakeMetadataLog` already has — a restart survives once
+//! `M6`'s real engine exists for either seam, not before; `ADR-0035`'s own
+//! "durable in sense, not yet in substrate" is the honest framing this
+//! module doc used to overstate as "in-memory only" before this task.
 //!
 //! ⚠️ **Two fencing decisions, not one — `M9.7`'s seam reused, not a
 //! second one invented.** Every commit is checked against `crate::fencing`
@@ -30,6 +36,12 @@
 //! named rather than silently assumed, `M4.10`'s own "removal, not
 //! fencing" scoping discipline applied here to catalog membership instead
 //! of group membership.
+//!
+//! ⚠️ **A durable log failure answers `UNKNOWN_SERVER_ERROR`, per
+//! partition** — `join_group.rs`'s own precedent for an internal/storage
+//! failure that is not the client's own mistake: the request was
+//! well-formed, the fencing and authorization checks passed, and the
+//! append itself is what could not be honoured.
 
 #![allow(clippy::redundant_pub_crate)]
 
@@ -44,29 +56,158 @@ use oqueue_codec::offset_commit::{
     OffsetCommitRequest, OffsetCommitRequestTopic, OffsetCommitResponse,
     OffsetCommitResponsePartition, OffsetCommitResponseTopic, decode_request, encode_response,
 };
-use oqueue_core::{GroupId, GroupState, TopicId};
+use oqueue_core::{
+    CommitVersion, Error, GroupId, GroupMetadataEntry, GroupMetadataLog, GroupMetadataRecord,
+    GroupState, Result, TopicId,
+};
 use std::collections::HashMap;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
-/// Every group's own committed offsets, by `(group, topic, partition)`.
-#[derive(Debug, Default)]
+/// How many entries [`CommittedOffsets::open`] reads per page while
+/// replaying — `oqueue-index`'s own applier precedent for "read in bounded
+/// pages, a short page means done" (`GroupMetadataLog`'s own guarantee 5).
+const REPLAY_PAGE_SIZE: usize = 256;
+
+/// How many times [`CommittedOffsets::commit`] retries a version conflict
+/// against a racing writer before giving up. ⚠️ Bounded, `security.md`
+/// rule 13's instinct: a caller that never stops retrying is an unbounded
+/// hold wearing a retry loop.
+///
+/// ⚠️ **One log, every group** — `Cluster` holds a single
+/// `Arc<dyn GroupMetadataLog>`, so a version conflict here is contention
+/// across every group committing at once, not only within one key. A busy
+/// cluster could in principle exhaust one commit's retry budget on
+/// contention it was never itself part of, once `M6`'s real engine adds
+/// genuine round-trip latency between attempts — named rather than solved
+/// here, since fixing it means either partitioning the log or building
+/// backoff, and this task's own acceptance criterion is durability and
+/// replay, not contention behaviour under load.
+const MAX_COMMIT_RETRIES: u32 = 8;
+
+/// One group's committed position for one `(topic, partition)`, keyed the
+/// same way [`CommittedOffsets`] is.
+type OffsetKey = (GroupId, TopicId, i32);
+
+/// A committed offset, paired with the [`CommitVersion`] it was durably
+/// appended at — [`apply`]'s own guard against the race
+/// [`CommittedOffsets`]'s own doc names.
+type VersionedOffset = (CommitVersion, i64);
+
+/// Every group's own committed offsets, by `(group, topic, partition)`,
+/// each paired with the [`CommitVersion`] it was durably appended at —
+/// backed by a [`GroupMetadataLog`].
+///
+/// ⚠️ **The version is not bookkeeping — it is the guard against a real
+/// race.** `commit` appends before it inserts, but two commits to the
+/// *same* key racing past their own `.await` (real Kafka clients pipeline,
+/// and `connection.rs` gives each request its own task) can resolve their
+/// appends in one order and then run their post-append inserts in the
+/// other — a plain `insert` with no ordering check would let the causally
+/// earlier append overwrite the later one in memory, serving a stale
+/// offset until the next commit or a restart-and-replay corrected it. The
+/// stored version is what [`apply`] compares against to refuse exactly
+/// that: an insert only lands if nothing newer already has.
+#[derive(Debug)]
 pub(crate) struct CommittedOffsets {
-    offsets: Mutex<HashMap<(GroupId, TopicId, i32), i64>>,
+    offsets: Mutex<HashMap<OffsetKey, VersionedOffset>>,
+    log: Arc<dyn GroupMetadataLog>,
 }
 
 impl CommittedOffsets {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<(GroupId, TopicId, i32), i64>> {
+    /// Opens `log`, replaying every already-committed offset into memory
+    /// before answering any request — `M4.14`'s own restart-replay
+    /// guarantee. An empty log opens to an empty map at once.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `log.read_from` fails with — implementation-defined,
+    /// `GroupMetadataLog`'s own doc; the fake here never does.
+    pub(crate) async fn open(log: Arc<dyn GroupMetadataLog>) -> Result<Self> {
+        let mut offsets = HashMap::new();
+        let mut start = CommitVersion::ZERO;
+        loop {
+            let page = log.read_from(start, REPLAY_PAGE_SIZE).await?;
+            let got = page.len();
+            for entry in &page {
+                apply(&mut offsets, entry.version(), entry.record());
+            }
+            // ⚠️ **A short page means the log has no more** —
+            // `GroupMetadataLog`'s own guarantee 5, not "fewer than asked
+            // for this time." A full page means there may be more, so the
+            // next read starts just past the last entry this one saw.
+            let Some(last) = page.last() else {
+                break;
+            };
+            if got < REPLAY_PAGE_SIZE {
+                break;
+            }
+            start = last.version().advance(1)?;
+        }
+        Ok(Self {
+            offsets: Mutex::new(offsets),
+            log,
+        })
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<OffsetKey, VersionedOffset>> {
         self.offsets.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Records `offset` as `group`'s own committed position for
-    /// `topic`/`partition` — a later commit for the same key overwrites
-    /// the earlier one, the same "last write wins" behaviour real Kafka's
-    /// own `__consumer_offsets` compaction gives it.
-    fn commit(&self, group: &GroupId, topic: &TopicId, partition: i32, offset: i64) {
-        let mut offsets = self.lock();
-        offsets.insert((group.clone(), topic.clone(), partition), offset);
-        drop(offsets);
+    /// Durably records `offset` as `group`'s own committed position for
+    /// `topic`/`partition` — appended to the log *before* the in-memory
+    /// map is updated, module doc's own "the ack IS the durable write"
+    /// guarantee. A later commit for the same key overwrites the earlier
+    /// one, the same "last write wins" behaviour real Kafka's own
+    /// `__consumer_offsets` compaction gives it — "later" meaning the
+    /// version it durably appended at, not the order its own post-append
+    /// insert happened to run in; see [`apply`].
+    ///
+    /// ⚠️ **No lock held across the `.await`** (`async-concurrency.md`
+    /// rule 6) — versions are assigned optimistically (read
+    /// `last_version`, try to append there) and a losing race retries
+    /// rather than serializing through a held mutex, which rule 8 would
+    /// call a sequencing problem wearing a locking primitive. The log's
+    /// own [`Error::NonMonotonicCommitVersion`] validation is the
+    /// serialization point, not a lock this module holds.
+    ///
+    /// # Errors
+    ///
+    /// Whatever `log.append` fails with, or [`Error::Transient`] if
+    /// [`MAX_COMMIT_RETRIES`] racing writers are lost to in a row.
+    async fn commit(
+        &self,
+        group: &GroupId,
+        topic: &TopicId,
+        partition: i32,
+        offset: i64,
+    ) -> Result<()> {
+        let record = GroupMetadataRecord::OffsetCommitted {
+            group: group.clone(),
+            topic: topic.clone(),
+            partition,
+            offset,
+        };
+        for _ in 0..MAX_COMMIT_RETRIES {
+            let next = match self.log.last_version().await? {
+                Some(last) => last.advance(1)?,
+                None => CommitVersion::ZERO,
+            };
+            let entry = GroupMetadataEntry::new(next, record.clone());
+            match self.log.append(std::slice::from_ref(&entry)).await {
+                Ok(()) => {
+                    let mut offsets = self.lock();
+                    apply(&mut offsets, next, &record);
+                    drop(offsets);
+                    return Ok(());
+                }
+                Err(Error::NonMonotonicCommitVersion { .. }) => {
+                    // A racing writer landed first; retry against the new
+                    // last_version rather than fail a well-formed commit.
+                }
+                Err(other) => return Err(other),
+            }
+        }
+        Err(Error::Transient)
     }
 
     /// `group`'s own committed offset for `topic`/`partition`, or `None`
@@ -77,7 +218,7 @@ impl CommittedOffsets {
         let offsets = self.lock();
         let value = offsets
             .get(&(group.clone(), topic.clone(), partition))
-            .copied();
+            .map(|&(_, offset)| offset);
         drop(offsets);
         value
     }
@@ -90,7 +231,7 @@ impl CommittedOffsets {
     pub(crate) fn topics_for_group(&self, group: &GroupId) -> Vec<(TopicId, Vec<(i32, i64)>)> {
         let offsets = self.lock();
         let mut by_topic: HashMap<TopicId, Vec<(i32, i64)>> = HashMap::new();
-        for ((g, topic, partition), offset) in offsets.iter() {
+        for ((g, topic, partition), (_, offset)) in offsets.iter() {
             if g == group {
                 by_topic
                     .entry(topic.clone())
@@ -108,13 +249,47 @@ impl CommittedOffsets {
     }
 }
 
+/// Folds one already-durable record, appended at `version`, into `offsets`
+/// — [`CommittedOffsets::open`]'s own replay step, and [`CommittedOffsets::commit`]'s
+/// own post-append step for the entry it just wrote. A `match` with one arm
+/// on purpose: [`GroupMetadataRecord`] is exhaustive, and a second variant
+/// landing here without a new arm is exactly the silent-replay bug its own
+/// doc warns against.
+///
+/// ⚠️ **Guarded by `version`, not a plain overwrite** — two calls for the
+/// same key can arrive out of the order their own versions imply (`commit`'s
+/// own doc names the race: two concurrent commits to one key can append in
+/// one order and then reach this function in the other, each from its own
+/// task, after its own `.await`). An entry only lands if the key holds
+/// nothing yet or what it holds is from an earlier version — so whichever
+/// call's own version is durably later always wins in memory too, matching
+/// what a restart-and-replay would converge to regardless of which call's
+/// insert happened to run last.
+fn apply(
+    offsets: &mut HashMap<OffsetKey, VersionedOffset>,
+    version: CommitVersion,
+    record: &GroupMetadataRecord,
+) {
+    match record {
+        GroupMetadataRecord::OffsetCommitted {
+            group,
+            topic,
+            partition,
+            offset,
+        } => {
+            let key = (group.clone(), topic.clone(), *partition);
+            let stale = matches!(offsets.get(&key), Some(&(existing, _)) if existing >= version);
+            if !stale {
+                offsets.insert(key, (version, *offset));
+            }
+        }
+    }
+}
+
 /// Decodes, fences on group/member/generation, commits every named
 /// partition whose own topic this principal may see, and answers — or
 /// closes the connection on a malformed body.
-///
-/// ⚠️ **Not `async`** — `heartbeat.rs`/`leave_group.rs`'s own precedent:
-/// nothing here parks.
-pub(crate) fn handle(
+pub(crate) async fn handle(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
@@ -140,11 +315,10 @@ pub(crate) fn handle(
         );
     }
 
-    let topics = request
-        .topics
-        .iter()
-        .map(|topic| commit_topic(cluster, &group, topic, authz))
-        .collect();
+    let mut topics = Vec::with_capacity(request.topics.len());
+    for topic in &request.topics {
+        topics.push(commit_topic(cluster, &group, topic, authz).await);
+    }
     reply(prelude, version, &OffsetCommitResponse { topics })
 }
 
@@ -156,7 +330,7 @@ fn fence_commit(
     group: &GroupId,
     generation_id: i32,
     member_id: &str,
-) -> Result<(), crate::fencing::Refusal> {
+) -> std::result::Result<(), crate::fencing::Refusal> {
     let member_tracked = cluster.heartbeats().is_tracked(group, member_id);
     let record = cluster.group_coordinator().record(group);
     let ctx = FencingContext::for_this_node(
@@ -169,8 +343,9 @@ fn fence_commit(
 }
 
 /// One topic's own commit: refused wholesale if this principal cannot see
-/// it, else every named partition is recorded and answered `NONE`.
-fn commit_topic<'a>(
+/// it, else every named partition is durably recorded and answered `NONE`
+/// — or `UNKNOWN_SERVER_ERROR` if the durable append itself failed.
+async fn commit_topic<'a>(
     cluster: &Cluster,
     group: &GroupId,
     topic: &OffsetCommitRequestTopic<'a>,
@@ -182,22 +357,26 @@ fn commit_topic<'a>(
     let Ok(topic_id) = TopicId::new(topic.name) else {
         return refused_topic(topic, error_codes::UNKNOWN_TOPIC_OR_PARTITION);
     };
-    let partitions = topic
-        .partitions
-        .iter()
-        .map(|partition| {
-            cluster.committed_offsets().commit(
+    let mut partitions = Vec::with_capacity(topic.partitions.len());
+    for partition in &topic.partitions {
+        let error_code = match cluster
+            .committed_offsets()
+            .commit(
                 group,
                 &topic_id,
                 partition.partition_index,
                 partition.committed_offset,
-            );
-            OffsetCommitResponsePartition {
-                partition_index: partition.partition_index,
-                error_code: error_codes::NONE,
-            }
-        })
-        .collect();
+            )
+            .await
+        {
+            Ok(()) => error_codes::NONE,
+            Err(_) => error_codes::UNKNOWN_SERVER_ERROR,
+        };
+        partitions.push(OffsetCommitResponsePartition {
+            partition_index: partition.partition_index,
+            error_code,
+        });
+    }
     OffsetCommitResponseTopic {
         name: topic.name,
         partitions,

@@ -115,7 +115,7 @@ fn seat_once(cluster: &crate::cluster::Cluster, group: &str, member_id: &str) ->
 /// through the real `OffsetCommit` handler — `testing.rs`'s own "the write
 /// path is the fixture for the read path" precedent, applied here rather
 /// than reaching into `CommittedOffsets`' own internals by hand.
-fn commit(
+async fn commit(
     cluster: &crate::cluster::Cluster,
     group: &str,
     topic: &str,
@@ -151,7 +151,7 @@ fn commit(
         correlation_id: 1,
     };
     let HandlerResponse::Reply(out) =
-        crate::offset_commit::handle(cluster, commit_prelude, &body, &open())
+        crate::offset_commit::handle(cluster, commit_prelude, &body, &open()).await
     else {
         panic!("an OffsetCommit replies");
     };
@@ -185,7 +185,7 @@ async fn a_never_committed_partition_answers_unassigned() {
 #[tokio::test(start_paused = true)]
 async fn a_real_commit_is_read_back() {
     let fixture = fixture(&["orders"]).await;
-    commit(&fixture.cluster, "g", "orders", 0, 42);
+    commit(&fixture.cluster, "g", "orders", 0, 42).await;
     let response = fetch(
         &fixture.cluster,
         &explicit_body("g", &[("orders", &[0])]),
@@ -201,7 +201,7 @@ async fn a_real_commit_is_read_back() {
 #[tokio::test(start_paused = true)]
 async fn an_unauthorized_explicit_topic_is_refused_per_partition() {
     let fixture = fixture(&["bob-topic"]).await;
-    commit(&fixture.cluster, "g", "bob-topic", 0, 42);
+    commit(&fixture.cluster, "g", "bob-topic", 0, 42).await;
 
     let mut grants = TopicGrants::new();
     grants.grant(
@@ -233,8 +233,8 @@ async fn an_unauthorized_explicit_topic_is_refused_per_partition() {
 #[tokio::test(start_paused = true)]
 async fn all_topics_never_returns_a_topic_committed_by_another_principal() {
     let fixture = fixture(&["alice-topic", "bob-topic"]).await;
-    commit(&fixture.cluster, "g", "alice-topic", 0, 1);
-    commit(&fixture.cluster, "g", "bob-topic", 0, 2);
+    commit(&fixture.cluster, "g", "alice-topic", 0, 1).await;
+    commit(&fixture.cluster, "g", "bob-topic", 0, 2).await;
 
     let mut grants = TopicGrants::new();
     grants.grant(
@@ -265,8 +265,8 @@ async fn all_topics_never_returns_a_topic_committed_by_another_principal() {
 #[tokio::test(start_paused = true)]
 async fn all_topics_returns_every_authorized_topic() {
     let fixture = fixture(&["orders", "payments"]).await;
-    commit(&fixture.cluster, "g", "orders", 0, 10);
-    commit(&fixture.cluster, "g", "payments", 0, 20);
+    commit(&fixture.cluster, "g", "orders", 0, 10).await;
+    commit(&fixture.cluster, "g", "payments", 0, 20).await;
 
     let response = fetch(&fixture.cluster, &all_topics_body("g"), &open());
     let mut names: Vec<&str> = response.topics.iter().map(|t| t.name.as_str()).collect();
