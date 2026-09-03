@@ -46,6 +46,7 @@ mod offset_fetch;
 pub mod produce;
 mod read;
 mod region;
+mod replay_gate;
 pub mod sasl_authenticate;
 mod sasl_handshake;
 pub mod session;

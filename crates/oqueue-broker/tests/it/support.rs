@@ -78,6 +78,10 @@ pub async fn broker(topics: &[&str]) -> Broker {
     )
     .await
     .expect("a minted identity is a usable key component, and an empty log opens");
+    // `M4.15a` moved offset replay to a background task; wait for it so
+    // this fixture is not flaky against a request that reaches the server
+    // before the (near-instant, empty-log) replay task gets scheduled.
+    cluster.wait_until_replayed().await;
     for topic in topics {
         cluster.ensure_topic(topic);
     }

@@ -23,10 +23,15 @@
 //! produces it, `join_group::round`'s own `GroupState::Dead` precedent for
 //! testing an outcome nothing today reaches through a live handler.
 //!
-//! ⚠️ **`load_in_progress` is real in shape, not yet in trigger.** `M4.15`'s
-//! own row is what wires a genuine signal to it (durable group-state replay
-//! on coordinator takeover); every call site here passes `false` until
-//! then, via the same constructor.
+//! ⚠️ **`load_in_progress` is wired to a real signal — `M4.15a`.**
+//! [`FencingContext::for_this_node`] now takes the caller's own
+//! `still_loading` reading (`crate::cluster::Cluster::replay_in_progress`,
+//! backed by `crate::replay_gate::ReplayGate`) instead of hardcoding
+//! `false`. What that signal actually covers is narrower than the field's
+//! own name might suggest: `M4.15a` gates on `M4.14`'s offset replay only,
+//! since group *membership* state has no durable log of its own yet
+//! (`M4.15b`, not yet built) — named here rather than left to look more
+//! complete than it is.
 
 // ⚠️ `pub(crate)` inside a private module: `unreachable_pub` denies the
 // `pub` clippy's `redundant_pub_crate` asks for — `authz.rs`'s own
@@ -49,21 +54,10 @@ pub(crate) struct NodeReadiness {
     /// Whether this broker, coordinating the group, is ready to answer for
     /// it — unconditionally `true` in this milestone, module doc.
     pub(crate) coordinator_available: bool,
-    /// Whether this broker is still replaying the group's own durable
-    /// state — always `false` until `M4.15` gives it a real signal.
+    /// Whether this broker is still replaying durable state it needs
+    /// before answering honestly — `crate::replay_gate::ReplayGate`'s own
+    /// signal, threaded in by every real call site since `M4.15a`.
     pub(crate) load_in_progress: bool,
-}
-
-impl NodeReadiness {
-    /// Every real call site's own value — `M4.15` is what will make
-    /// `load_in_progress` sometimes `true`; nothing in this milestone's own
-    /// scope ever passes `is_coordinator`/`coordinator_available` as
-    /// `false` (module doc).
-    pub(crate) const READY: Self = Self {
-        is_coordinator: true,
-        coordinator_available: true,
-        load_in_progress: false,
-    };
 }
 
 /// Every input a fencing decision needs, gathered so a handler passes one
@@ -93,15 +87,22 @@ impl<'a> FencingContext<'a> {
     /// This node's own defaults (module doc): every real call site starts
     /// here rather than building a [`NodeReadiness`] at each one, and —
     /// more importantly — rather than being able to pass `false` for
-    /// `is_coordinator`/`coordinator_available` by accident.
+    /// `is_coordinator`/`coordinator_available` by accident. Only
+    /// `load_in_progress` varies by caller (`still_loading`); the other two
+    /// stay `true`, `ADR-0033`'s "every group resolves to this node."
     pub(crate) const fn for_this_node(
+        still_loading: bool,
         member_tracked: bool,
         record: Option<&'a GroupRecord>,
         generation_id: Option<i32>,
         acceptable_states: Option<&'a [GroupState]>,
     ) -> Self {
         Self {
-            node: NodeReadiness::READY,
+            node: NodeReadiness {
+                is_coordinator: true,
+                coordinator_available: true,
+                load_in_progress: still_loading,
+            },
             member_tracked,
             record,
             generation_id,

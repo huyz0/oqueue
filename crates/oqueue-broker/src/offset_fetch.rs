@@ -81,6 +81,31 @@ pub(crate) fn handle(
         );
     };
 
+    // ⚠️ **`M4.15a`'s own gate, checked here rather than through
+    // `crate::fencing`** — this handler routes through no other part of
+    // that seam (module doc's own "no group/member/generation fencing"),
+    // but `cluster.committed_offsets()` below is exactly the map
+    // `M4.15a`'s replay window is about: read before replay finishes, it
+    // would answer "never committed" for an offset that is actually just
+    // not loaded yet, which is precisely the silently-wrong-answer
+    // `behavior.md` rule 11 forbids. `OffsetFetchResponse` carries its own
+    // top-level `error_code`, unlike `OffsetCommitResponse`, so this
+    // refuses the whole request there rather than per topic/partition.
+    // ⚠️ **`crate::fencing::Refusal`'s own code, not the raw constant** —
+    // `check-fencing-seam.sh` refuses any of the five codes constructed
+    // outside `fencing.rs` itself, this handler included even though it
+    // routes through no other part of that seam.
+    if cluster.replay_in_progress() {
+        return reply(
+            prelude,
+            version,
+            &OffsetFetchResponse {
+                error_code: crate::fencing::Refusal::CoordinatorLoadInProgress.error_code(),
+                topics: Vec::new(),
+            },
+        );
+    }
+
     // ⚠️ **Bound here, not inside `all_topics`.** `CommittedOffsets` hands
     // back owned `TopicId`s, not borrows into any longer-lived storage —
     // `committed` is what the all-topics response's own

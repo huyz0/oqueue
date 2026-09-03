@@ -63,9 +63,9 @@ use oqueue_core::{
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
-/// How many entries [`CommittedOffsets::open`] reads per page while
-/// replaying — `oqueue-index`'s own applier precedent for "read in bounded
-/// pages, a short page means done" (`GroupMetadataLog`'s own guarantee 5).
+/// How many entries [`CommittedOffsets::replay`] reads per page —
+/// `oqueue-index`'s own applier precedent for "read in bounded pages, a
+/// short page means done" (`GroupMetadataLog`'s own guarantee 5).
 const REPLAY_PAGE_SIZE: usize = 256;
 
 /// How many times [`CommittedOffsets::commit`] retries a version conflict
@@ -114,19 +114,58 @@ pub(crate) struct CommittedOffsets {
 }
 
 impl CommittedOffsets {
-    /// Opens `log`, replaying every already-committed offset into memory
-    /// before answering any request — `M4.14`'s own restart-replay
-    /// guarantee. An empty log opens to an empty map at once.
+    /// Opens `log` and replays every already-committed offset into memory
+    /// before returning — `M4.14`'s own restart-replay guarantee, and
+    /// [`Self::new_empty`] plus [`Self::replay`] in one call. ⚠️ **Test-only
+    /// since `M4.15a`**: `Cluster::new` now calls the two halves apart
+    /// (`replay` in a background task, after returning), so nothing in
+    /// production code needs the combined form any more — every existing
+    /// test that does not care about the mid-replay window still does. An
+    /// empty log opens to an empty map at once.
+    ///
+    /// # Errors
+    ///
+    /// Whatever [`Self::replay`] fails with.
+    #[cfg(test)]
+    pub(crate) async fn open(log: Arc<dyn GroupMetadataLog>) -> Result<Self> {
+        let this = Self::new_empty(log);
+        this.replay().await?;
+        Ok(this)
+    }
+
+    /// An empty store over `log`, not yet replayed — no I/O. `Cluster::new`'s
+    /// own split half of what `open` used to do in one step (`M4.15a`): a
+    /// caller that wants to become queryable *before* replay finishes
+    /// (so it can answer `COORDINATOR_LOAD_IN_PROGRESS` for the window
+    /// [`Self::replay`] takes, rather than block existing entirely) needs
+    /// the two apart.
+    pub(crate) fn new_empty(log: Arc<dyn GroupMetadataLog>) -> Self {
+        Self {
+            offsets: Mutex::new(HashMap::new()),
+            log,
+        }
+    }
+
+    /// Reads `self`'s own log from the start and replaces the in-memory
+    /// map with what it finds — `Cluster::new`'s other split half.
+    ///
+    /// ⚠️ **Not safe to call concurrently with itself or with [`Self::commit`]
+    /// on the same instance** — it replaces the whole map rather than
+    /// merging into it, so a commit landing mid-replay would be silently
+    /// discarded by the replacement. `M4.15a`'s own caller relies on this:
+    /// nothing can reach `commit` until `crate::replay_gate::ReplayGate`
+    /// reports ready, and this is the only thing that marks it so — see
+    /// `cluster.rs`.
     ///
     /// # Errors
     ///
     /// Whatever `log.read_from` fails with — implementation-defined,
     /// `GroupMetadataLog`'s own doc; the fake here never does.
-    pub(crate) async fn open(log: Arc<dyn GroupMetadataLog>) -> Result<Self> {
+    pub(crate) async fn replay(&self) -> Result<()> {
         let mut offsets = HashMap::new();
         let mut start = CommitVersion::ZERO;
         loop {
-            let page = log.read_from(start, REPLAY_PAGE_SIZE).await?;
+            let page = self.log.read_from(start, REPLAY_PAGE_SIZE).await?;
             let got = page.len();
             for entry in &page {
                 apply(&mut offsets, entry.version(), entry.record());
@@ -143,10 +182,10 @@ impl CommittedOffsets {
             }
             start = last.version().advance(1)?;
         }
-        Ok(Self {
-            offsets: Mutex::new(offsets),
-            log,
-        })
+        let mut held = self.lock();
+        *held = offsets;
+        drop(held);
+        Ok(())
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<OffsetKey, VersionedOffset>> {
@@ -250,7 +289,7 @@ impl CommittedOffsets {
 }
 
 /// Folds one already-durable record, appended at `version`, into `offsets`
-/// — [`CommittedOffsets::open`]'s own replay step, and [`CommittedOffsets::commit`]'s
+/// — `CommittedOffsets::replay`'s own step, and [`CommittedOffsets::commit`]'s
 /// own post-append step for the entry it just wrote. A `match` with one arm
 /// on purpose: [`GroupMetadataRecord`] is exhaustive, and a second variant
 /// landing here without a new arm is exactly the silent-replay bug its own
@@ -334,6 +373,7 @@ fn fence_commit(
     let member_tracked = cluster.heartbeats().is_tracked(group, member_id);
     let record = cluster.group_coordinator().record(group);
     let ctx = FencingContext::for_this_node(
+        cluster.replay_in_progress(),
         member_tracked,
         record.as_ref(),
         Some(generation_id),

@@ -261,6 +261,7 @@ pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) ->
     let member_tracked = cluster.heartbeats().is_tracked(&group, request.member_id);
     let record = cluster.group_coordinator().record(&group);
     let ctx = crate::fencing::FencingContext::for_this_node(
+        cluster.replay_in_progress(),
         member_tracked,
         record.as_ref(),
         Some(request.generation_id),

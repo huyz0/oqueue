@@ -344,6 +344,12 @@ declare -A RUST_BOUNDS=(
   # otherwise have won by retrying; raising it risks a longer hold on one
   # request under pathological contention.
   ["crates/oqueue-broker/src/offset_commit.rs|MAX_COMMIT_RETRIES"]="8"
+  # `M4.15a`: how many times `Cluster::wait_until_replayed` yields before
+  # panicking rather than spinning forever. Lowering it risks a false
+  # failure on a legitimately slow (if very unlikely, over an in-memory
+  # fake) replay; raising it only delays how quickly a truly stuck gate is
+  # noticed.
+  ["crates/oqueue-broker/src/cluster/replay.rs|MAX_REPLAY_WAIT_YIELDS"]="10_000"
   # How many batches one index page may name, and how many entries a partition
   # keeps in the cheap tier. Both bound work on paths NFR-2 and NFR-3 bound.
   # `M10.20`: moved from `index_state.rs` to its own `index_state/page.rs`
@@ -473,6 +479,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/leave_group/tests.rs|V1"]="a test's own advertised-version literal, same shape as VERSION above"
   ["crates/oqueue-broker/src/offset_commit/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/offset_fetch/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/cluster/tests.rs|HEARTBEAT_VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
+  ["crates/oqueue-broker/src/cluster/tests.rs|OFFSET_FETCH_VERSION"]="a test's own advertised-version literal, same shape as HEARTBEAT_VERSION above"
   ["crates/oqueue-broker/src/produce/answer.rs|UNASSIGNED"]="the unassigned-offset sentinel a refusal answers with"
   ["crates/oqueue-coordinator/src/commit.rs|UNASSIGNED_OFFSET"]="the unassigned-offset sentinel, beside the type that returns it"
 )

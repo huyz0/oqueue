@@ -108,10 +108,26 @@ pub struct Cluster {
     /// Starts empty by construction, `group_joins`'s own shape.
     heartbeats: crate::heartbeat::Heartbeats,
     /// `M4.12`'s own committed-offset bookkeeping — durable since `M4.14`
-    /// (`ADR-0035`): opened from `seams.group_metadata_log` in
-    /// [`Cluster::new`], replaying every already-committed offset before
-    /// this `Cluster` answers anything.
-    committed_offsets: crate::offset_commit::CommittedOffsets,
+    /// (`ADR-0035`). ⚠️ **`Arc`, since `M4.15a`**: [`Cluster::new`] no
+    /// longer awaits the full replay before returning (`replay_gate`'s own
+    /// doc) — it spawns a background task that shares this same instance
+    /// to run [`crate::offset_commit::CommittedOffsets::replay`], which
+    /// needs to outlive `new`'s own call frame.
+    committed_offsets: Arc<crate::offset_commit::CommittedOffsets>,
+    /// Whether this node has finished the replay above — `M4.15a`,
+    /// `crate::fencing::NodeReadiness::load_in_progress`'s real signal.
+    /// `Arc` for the same reason `committed_offsets` is: the background
+    /// replay task flips it when done.
+    replay_gate: Arc<crate::replay_gate::ReplayGate>,
+    /// The background replay task's own handle — `async-concurrency.md`
+    /// rule 13: a spawned task needs an owner that can observe its
+    /// completion and its panic, or a panic inside it is silently
+    /// swallowed rather than surfaced. `Cluster` is that owner;
+    /// [`Cluster::wait_until_replayed`] is what actually inspects it.
+    /// `std::sync::Mutex`, not held across an `.await` (rule 6): taking
+    /// the handle out happens synchronously, and the handle itself is
+    /// awaited only after the lock is released.
+    replay_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -181,21 +197,44 @@ impl Cluster {
     /// else** — see [`WriterId`]. `ADR-0026`'s unconditional `put` is safe
     /// only because no other live process writes the keys this one will.
     ///
-    /// ⚠️ **`async` since `M4.14`** (`ADR-0035`): opening
-    /// `seams.group_metadata_log` replays every already-committed offset
-    /// before this `Cluster` can answer anything — `Sequencing`'s own
-    /// `Coordinator::open` is the established precedent for "replay before
-    /// serving," done by the caller before `Cluster::new` for the topic log
-    /// and here, internally, for the group log (`ADR-0035`'s own "no hook
-    /// into `Coordinator::open`" decision: the two replays stay separate
-    /// steps, never one call).
+    /// ⚠️ **`async` since `M4.14`, and no longer blocking on replay since
+    /// `M4.15a`.** `M4.14` made this `async` to open
+    /// `seams.group_metadata_log` and await its full replay before
+    /// returning; `M4.15a` moves that replay into a background task
+    /// (`tokio::spawn`) instead, because blocking meant there was no live
+    /// window for `crate::fencing::NodeReadiness::load_in_progress` to
+    /// ever be observed `true` — this `Cluster` now becomes queryable at
+    /// once, answering `COORDINATOR_LOAD_IN_PROGRESS` to every fenced
+    /// request until `replay_gate` reports ready. `Sequencing`'s own
+    /// `Coordinator::open` remains the precedent for "replay before
+    /// serving" on the *topic* log, done synchronously by the caller
+    /// before `Cluster::new` — that log has no gate to answer through and
+    /// is out of `M4.15a`'s own scope.
+    ///
+    /// ⚠️ **A replay failure is no longer returned from this function.**
+    /// Before `M4.15a` it was: `CommittedOffsets::open`'s error propagated
+    /// through `Cluster::new`'s own `Result`, failing broker startup
+    /// outright. Now the replay runs after `new` has already returned
+    /// `Ok`, so a failure instead leaves `replay_gate` permanently
+    /// unready — every fenced request keeps answering
+    /// `COORDINATOR_LOAD_IN_PROGRESS` forever rather than a wrong answer
+    /// (`behavior.md` rule 11), but nothing surfaces *why* outside that
+    /// wire code today. A real health/observability signal for this is
+    /// not yet built (no `tracing` dependency exists in this crate,
+    /// `rust-style.md` rule 12) — named here rather than silently
+    /// assumed, not solved in this task.
     ///
     /// # Errors
     ///
     /// [`Error::EmptyObjectKey`] or [`Error::MalformedWriterId`] if `writer`
     /// is not a usable key component, which [`WriterId::mint`] never
-    /// produces; whatever [`CommittedOffsets::open`](crate::offset_commit::CommittedOffsets::open)
-    /// fails with if the group metadata log cannot be read.
+    /// produces.
+    // ⚠️ `async` with no top-level `.await` since `M4.15a` moved the only
+    // one into the spawned task's own async block — kept anyway rather
+    // than reverting every call site's `.await` a second time: `M4.15b`'s
+    // own row adds group-state replay bootstrap here too, which is
+    // expected to need a genuine `.await` back before this returns.
+    #[allow(clippy::unused_async)]
     pub async fn new(
         host: impl Into<String>,
         port: i32,
@@ -203,8 +242,19 @@ impl Cluster {
         seams: Seams,
         writer: &WriterId,
     ) -> Result<Self, Error> {
-        let committed_offsets =
-            crate::offset_commit::CommittedOffsets::open(seams.group_metadata_log).await?;
+        let committed_offsets = Arc::new(crate::offset_commit::CommittedOffsets::new_empty(
+            seams.group_metadata_log,
+        ));
+        let replay_gate = Arc::new(crate::replay_gate::ReplayGate::new());
+        let replay_task = tokio::spawn({
+            let committed_offsets = Arc::clone(&committed_offsets);
+            let replay_gate = Arc::clone(&replay_gate);
+            async move {
+                if committed_offsets.replay().await.is_ok() {
+                    replay_gate.mark_ready();
+                }
+            }
+        });
         Ok(Self {
             node_id: 0,
             host: host.into(),
@@ -221,6 +271,8 @@ impl Cluster {
             sync_groups: crate::sync_group::SyncGroups::default(),
             heartbeats: crate::heartbeat::Heartbeats::default(),
             committed_offsets,
+            replay_gate,
+            replay_task: Mutex::new(Some(replay_task)),
         })
     }
 
@@ -251,7 +303,7 @@ impl Cluster {
 
     /// The committed-offset bookkeeping every connection's `OffsetCommit`
     /// handler shares (`M4.12`).
-    pub(crate) const fn committed_offsets(&self) -> &crate::offset_commit::CommittedOffsets {
+    pub(crate) fn committed_offsets(&self) -> &crate::offset_commit::CommittedOffsets {
         &self.committed_offsets
     }
 
@@ -412,3 +464,8 @@ impl Cluster {
         read(&topics)
     }
 }
+
+mod replay;
+
+#[cfg(test)]
+mod tests;

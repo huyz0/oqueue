@@ -220,6 +220,18 @@ pub(crate) async fn with_store(
     )
     .await
     .expect("a minted identity is a usable key component, and an empty log opens");
+    // ⚠️ **Ready by default, not just capable by default** — `M4.15a`
+    // moved `Cluster::new`'s own offset replay to a background task, so a
+    // freshly-returned `Cluster` starts `replay_in_progress()`. Every
+    // existing test built against `fixture()` assumes normal (not still-
+    // loading) behaviour the instant it gets a `Fixture` back, the same
+    // way `TestStore`'s own "capable by default" doc already frames this
+    // module's philosophy — a fixture forcing every caller to first deal
+    // with a transient startup race it does not care about would be the
+    // opposite of that. A test that specifically wants the mid-replay
+    // window (`M4.15a`'s own acceptance criterion) builds `Cluster::new`
+    // directly rather than through here.
+    cluster.wait_until_replayed().await;
     for topic in topics {
         cluster.ensure_topic(topic);
     }

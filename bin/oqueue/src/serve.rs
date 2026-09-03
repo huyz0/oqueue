@@ -389,11 +389,25 @@ mod tests {
         let result = super::accept_loop(listener, cluster, serving, SERVE_LIMITS).await;
 
         let error = result.expect_err("a dead coordinator loop must end the accept loop");
-        assert_eq!(
-            error.to_string(),
-            "the coordinator loop failed: task 1 was cancelled",
-            "the reader needs to know it was the coordinator, not merely that \
-             something failed"
+        // ⚠️ **The task number is not asserted** — `tokio::task::JoinError`'s
+        // own `Display` embeds its internal, process-wide spawn counter,
+        // which `M4.15a` shifted by one simply by adding an earlier
+        // `tokio::spawn` inside `Cluster::new` (the offset-replay task) —
+        // this exact string was `"...task 1 was cancelled"` before that and
+        // broke on nothing this test itself changed. What the test's own
+        // doc actually claims — the reader needs to know it was the
+        // *coordinator*, not merely that something failed — only needs the
+        // message to name the coordinator and the cause, not tokio's own
+        // incidental numbering.
+        let message = error.to_string();
+        assert!(
+            message.starts_with("the coordinator loop failed: task "),
+            "the reader needs to know it was the coordinator, not merely \
+             that something failed: {message:?}"
+        );
+        assert!(
+            message.ends_with(" was cancelled"),
+            "the reader needs to know *why* the coordinator loop ended: {message:?}"
         );
     }
 }

@@ -112,8 +112,13 @@ fn fence_rejoin(
 ) -> Result<(), crate::fencing::Refusal> {
     let member_tracked = cluster.heartbeats().is_tracked(group, member_id);
     let record = cluster.group_coordinator().record(group);
-    let ctx =
-        crate::fencing::FencingContext::for_this_node(member_tracked, record.as_ref(), None, None);
+    let ctx = crate::fencing::FencingContext::for_this_node(
+        cluster.replay_in_progress(),
+        member_tracked,
+        record.as_ref(),
+        None,
+        None,
+    );
     crate::fencing::fence(&ctx)
 }
 

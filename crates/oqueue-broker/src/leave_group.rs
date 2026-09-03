@@ -50,7 +50,13 @@ pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) ->
         .iter()
         .map(|&member_id| {
             let member_tracked = cluster.heartbeats().is_tracked(&group, member_id);
-            let ctx = FencingContext::for_this_node(member_tracked, record.as_ref(), None, None);
+            let ctx = FencingContext::for_this_node(
+                cluster.replay_in_progress(),
+                member_tracked,
+                record.as_ref(),
+                None,
+                None,
+            );
             let error_code = fence(&ctx).map_or_else(Refusal::error_code, |()| error_codes::NONE);
             MemberLeft {
                 member_id,

@@ -96,10 +96,28 @@ fn hosting_but_not_ready_is_coordinator_not_available() {
     assert_eq!(fence(&ctx), Err(Refusal::CoordinatorNotAvailable));
 }
 
+/// `for_this_node`'s own wiring, not just `fence`'s bare-literal path
+/// above — `M4.15a` threads `still_loading` through the constructor every
+/// real call site uses, so this proves the constructor itself, not only
+/// that `fence` honours the field once set.
+#[test]
+fn for_this_node_still_loading_true_is_load_in_progress_through_the_real_constructor() {
+    let stable = stable_record();
+    let ctx = FencingContext::for_this_node(
+        true,
+        true,
+        Some(&stable),
+        Some(stable.generation.get()),
+        Some(&[GroupState::Stable]),
+    );
+    assert_eq!(fence(&ctx), Err(Refusal::CoordinatorLoadInProgress));
+}
+
 #[test]
 fn never_tracked_at_all_is_unknown_member() {
     let stable = stable_record();
     let ctx = FencingContext::for_this_node(
+        false,
         false,
         Some(&stable),
         Some(stable.generation.get()),
@@ -112,7 +130,7 @@ fn never_tracked_at_all_is_unknown_member() {
 /// through a real call site, module doc's own note).
 #[test]
 fn tracked_with_no_record_at_all_is_also_unknown_member() {
-    let ctx = FencingContext::for_this_node(true, None, None, None);
+    let ctx = FencingContext::for_this_node(false, true, None, None, None);
     assert_eq!(fence(&ctx), Err(Refusal::UnknownMember));
 }
 
@@ -120,6 +138,7 @@ fn tracked_with_no_record_at_all_is_also_unknown_member() {
 fn tracked_but_a_stale_generation_is_illegal_generation() {
     let stable = stable_record();
     let ctx = FencingContext::for_this_node(
+        false,
         true,
         Some(&stable),
         Some(stable.generation.get() + 1),
@@ -132,6 +151,7 @@ fn tracked_but_a_stale_generation_is_illegal_generation() {
 fn tracked_current_generation_but_the_wrong_state_is_rebalance_in_progress() {
     let preparing = preparing_record();
     let ctx = FencingContext::for_this_node(
+        false,
         true,
         Some(&preparing),
         Some(preparing.generation.get()),
@@ -144,6 +164,7 @@ fn tracked_current_generation_but_the_wrong_state_is_rebalance_in_progress() {
 fn tracked_current_generation_acceptable_state_is_ok() {
     let stable = stable_record();
     let ctx = FencingContext::for_this_node(
+        false,
         true,
         Some(&stable),
         Some(stable.generation.get()),
@@ -158,7 +179,7 @@ fn tracked_current_generation_acceptable_state_is_ok() {
 #[test]
 fn no_generation_field_on_the_wire_means_no_generation_check() {
     let preparing = preparing_record();
-    let ctx = FencingContext::for_this_node(true, Some(&preparing), None, None);
+    let ctx = FencingContext::for_this_node(false, true, Some(&preparing), None, None);
     assert_eq!(
         fence(&ctx),
         Ok(()),
@@ -172,7 +193,7 @@ fn no_generation_field_on_the_wire_means_no_generation_check() {
 #[test]
 fn no_state_requirement_accepts_any_state() {
     for r in [preparing_record(), stable_record()] {
-        let ctx = FencingContext::for_this_node(true, Some(&r), None, None);
+        let ctx = FencingContext::for_this_node(false, true, Some(&r), None, None);
         assert_eq!(fence(&ctx), Ok(()), "{:?} must be accepted", r.state);
     }
 }
