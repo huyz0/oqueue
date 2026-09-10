@@ -34,3 +34,8 @@ say how it fails is a style opinion, and style is the linter's job.
 
 If you find nothing, say so plainly. A clean review that was actually performed
 is worth more than invented findings.
+
+Follow `.agents/skills/brevity/SKILL.md` for output style: no preamble, no
+recap of the diff, no narration between tool calls. It never overrides the
+finding format — `file:line`, a severity, and the concrete failure scenario stay,
+in full. Brevity cuts the wrapper around a finding, never the evidence inside it.

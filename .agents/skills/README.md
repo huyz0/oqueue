@@ -55,6 +55,7 @@ rather than reading it.
 | [`adr`](adr/SKILL.md) | Making a choice that is expensive to reverse |
 | [`contract-change`](contract-change/SKILL.md) | A `pub trait`'s method set in `oqueue-core` is gaining, losing, or changing a method |
 | [`research`](research/SKILL.md) | A question might already be answered in the corpus |
+| [`brevity`](brevity/SKILL.md) | Writing any reply or review finding, and the wrapper around it is costing more than it carries |
 
 ## ⚠️ When a skill names a script that is not there
 

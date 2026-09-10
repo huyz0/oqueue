@@ -98,6 +98,7 @@ spec so they work in any tool that reads `SKILL.md`. A skill calls a script in
 | Skill | Use when |
 |---|---|
 | [`adr`](.agents/skills/adr/SKILL.md) | Write an architecture decision record |
+| [`brevity`](.agents/skills/brevity/SKILL.md) | Write replies and review findings without preamble, recap or narration, keeping every load-bearing detail |
 | [`contract-change`](.agents/skills/contract-change/SKILL.md) | Change a pub trait's method set in oqueue-core |
 | [`milestone`](.agents/skills/milestone/SKILL.md) | Drive a milestone to completion autonomously, one task per commit, without asking between tasks |
 | [`milestone-review`](.agents/skills/milestone-review/SKILL.md) | Review a milestone's commits as a whole, turn what is found into backlog tasks, and re-plan |

@@ -43,3 +43,8 @@ or commits that show it, and what to compare.
 An empty findings list is a valid outcome and invented findings are worse than
 none. But a clean verdict on a milestone nobody actually read is worse than
 both.
+
+Follow `.agents/skills/brevity/SKILL.md` for output style: no preamble, no
+narration between tool calls, no recap of the packet. It never overrides the
+verdict format — every blocking or major finding keeps its concrete evidence and
+what to compare, in full.
