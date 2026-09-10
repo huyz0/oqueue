@@ -177,7 +177,7 @@ and it is not what M-1.24 asked for.
 | M3 | FR-10, FR-11, FR-12, FR-13, FR-32, NFR-2, NFR-3 |
 | M10 | NFR-20 (the method), FR-51 (the method), NFR-21 |
 | M9 | FR-4, FR-40, FR-44, FR-45, NFR-12 |
-| M4 | FR-20, FR-21, FR-22 |
+| M4 | FR-20, FR-21, FR-22 (⚠️ **deferred by `ADR-0033`, not shipped by M4** — v1 ships the classic `JoinGroup`/`SyncGroup`/`Heartbeat` protocol only, and `m4-complete.sh` deliberately asserts nothing about KIP-848. Listed here so the citation is not read as delivery; the obligation is carried by the post-v1 paragraph below. ⚠️ Do not name another requirement's id in this cell — `check-requirements-trace.sh` reads every id in it and compares the set against `M4.md`'s own `Serves:` line, so a cross-reference here reads as coverage drift) |
 | M11 | FR-14 |
 | M5 | FR-33, FR-34, FR-35 |
 | M6 | FR-51, NFR-20, NFR-22, NFR-44 |
@@ -190,7 +190,13 @@ and it is not what M-1.24 asked for.
 
 **Deferred, with nothing scheduled:** FR-15 (transactions and exactly-once) is
 explicitly post-v1 — doc 10 #5. It is the largest single gap between oqueue v1
-and Kafka, and saying so is the point of listing it.
+and Kafka, and saying so is the point of listing it. ⚠️ **FR-22 (the KIP-848
+rebalance protocol) joins it**, deferred by `ADR-0033` rather than by schedule:
+no reference client this project tests against speaks it past early access, so
+a protocol the broker cannot verify against a real client is not one to ship.
+`requirements.md` already stages the two together, and the M4 row above carries
+the same note — this paragraph is the receiver, because neither has a receiving
+milestone and `sdd.md` refuses a deferral that names none.
 
 ## Deferred into a later milestone
 
