@@ -30,14 +30,30 @@
 #   unnarrowed, `-p oqueue-core`, warm               23 s
 #   narrowed, 30 mutants, warm, `oqueue-broker`     102 s   ⚠️ `M4.19`, `dev`
 #   narrowed, 30 mutants, warm, `oqueue-broker`      33 s   ⚠️ `M4.19`, `mutants`
+#   narrowed, 30 mutants, warm, `oqueue-broker`      40 s   ⚠️ `M4.21`, `mutants`, rust-lld
+#   narrowed, 30 mutants, warm, `oqueue-broker`      40 s   ⚠️ `M4.21`, `mutants`, mold
+#   narrowed, 30 mutants, warm, `oqueue-broker`      68 s   ⚠️ `M4.21`, `mutants`, GNU ld
+#
+# ⚠️ **The `M4.21` rows name a linker because two of them are configurations
+# nothing runs.** `rust-lld` is the row that describes this gate: it is the
+# toolchain default on x86-64 Linux from Rust 1.90, this repo pins 1.97.1, and
+# no cargo config here passes `-fuse-ld=` — so a run with no linker flag links
+# with `ld.lld`, verified from the driver rather than assumed. The other two
+# arms had to be forced. ⚠️ **`M4.19`'s 33 s and `M4.21`'s 40 s are the same
+# configuration on two days** — ordinary run-to-run spread on this gate, which
+# also moved 62 s against 68 s between a cold and a warm run inside a single
+# container. Read the table's `oqueue-broker` cost as *tens of seconds, moving
+# by about a fifth between runs*, and never support a ratio with one unpaired
+# pair of readings.
 #
 # ⚠️ **The first row is not a cost, it is a skip**, and quoting it as "narrowed
 # runs take 0.08 s" is how this script's placement was first argued. Review
 # caught that.
 #
-# ⚠️ **The last row is `M4.19`'s correction, and the four rows above it were
-# stale by ~20x for the code this gate actually runs on now.** Every earlier
-# row was measured against `oqueue-core` — a leaf, sans-I/O crate. The same
+# ⚠️ **The four `oqueue-broker` rows are `M4.19`'s and `M4.21`'s correction,
+# and the four rows above them were stale by ~20x for the code this gate
+# actually runs on now.** Every earlier row was measured against
+# `oqueue-core` — a leaf, sans-I/O crate. The same
 # gate over `oqueue-broker`, which sits on top of tokio, rustls and
 # `kafka-protocol`, costs **~4 s per mutant**, so cost tracks *what a mutant
 # forces a rebuild of*, not the mutant count the earlier rows imply. Phase
@@ -54,12 +70,53 @@
 # will reach for `-j` again, and this paragraph is why not to.
 #
 # ⚠️ **What worked instead was making each rebuild cheaper, not running more
-# of them at once** — `[profile.mutants]`, below. That is also the reason to
-# expect *link* time to be the next lever: the container installs no `lld` or
-# `mold`, and every one of these rebuilds pays for it, as do the other two
-# cargo gates. It is a Dockerfile, `gates.yml` and `.cargo/config.toml`
-# change whose workspace-wide `rustflags` the aarch64 cross-build also reads,
-# so it needs its own task and its own cross-compile verification.
+# of them at once** — `[profile.mutants]`, below. It is so far the only thing
+# that has.
+#
+# ⚠️ **Installing a faster linker does not help — measured and rejected,
+# `M4.21`.** The paragraph above invites the next idea: this gate relinks once
+# per mutant, so link time should dominate and mold should halve it. ⚠️ **The
+# premise is wrong, and it is wrong because the fast linker is already here.**
+# Rust ships `rust-lld` as the x86-64 Linux default from 1.90 and this repo
+# pins 1.97.1, so every run of this gate already links with `ld.lld`. Measured
+# three ways in one container, warm, identical 30-mutant diff, `mutants`
+# profile, each arm's linker read back from the driver: **rust-lld 40 s, mold
+# 40 s, GNU ld 68 s**, all three `19 caught, 11 unviable`. mold ties the
+# default. What it beats is a linker nothing here uses.
+#
+# ⚠️ **`docs/researches/18` §3.6 already said so** — "rust-lld is the default
+# linker on x86-64 Linux since Rust 1.90 … mold was 0.7% *slower*; don't
+# cargo-cult it" — and `M4.21` spent three A/B runs rediscovering it. The
+# `research` skill exists to be used before a build-tooling change, not after.
+#
+# ⚠️ **A 1.97x speedup was claimed for mold first, and the claim survived two
+# A/B runs**, which is the more useful half of this comment. In order:
+#
+#   1. against a target directory on the container's *overlayfs* — mold
+#      **slower**, 116 s against 126 s. I/O dominated and masked the link
+#      difference. ⚠️ Benchmark this gate on the filesystem it actually runs
+#      on, or measure the filesystem instead of the change.
+#   2. against the volume — 120 s against 61 s, "1.97x", which is the reading
+#      that installed mold in the image. Its baseline arm was labelled "GNU
+#      ld", and **the gate's baseline is not GNU ld** — so at best it measured
+#      a linker nothing uses against mold, and at worst its arms never
+#      differed, because neither was read back from the driver.
+#   3. the three-arm run the rows above come from: one container, one
+#      volume-backed target directory, every arm spelling out the whole flag
+#      set through `CARGO_ENCODED_RUSTFLAGS` so none inherits a config file,
+#      each run cold then warm, and each arm's linker **verified from the
+#      driver** — `rustc -C link-arg=-Wl,--version` printing `ld.lld`,
+#      `GNU ld`, `mold 2.40.4` — before any timing was believed.
+#
+# ⚠️ **Two mechanical traps are why step 3 is written out.** First: an arm has
+# to be *shown* to differ. Second: selecting a linker by editing a config file
+# inside the container cannot work from `docker-test.sh` — `$CARGO_HOME` is
+# root-owned and the container runs as the invoking uid, so `mv` returns
+# `Permission denied` and the arm silently keeps the image's linker, measured
+# here on a run that then reported two "different" arms one second apart.
+# `CARGO_ENCODED_RUSTFLAGS` avoids both, at the cost of having to restate every
+# flag the config would have supplied — `--cfg tokio_unstable` included, since
+# the variable *replaces* `[build] rustflags` rather than merging with it.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
