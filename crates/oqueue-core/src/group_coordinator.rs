@@ -1,4 +1,4 @@
-//! The consumer-group coordination seam (`M4.2`, FR-20, FR-21, FR-22;
+//! The consumer-group coordination seam (`M4.2`, FR-20, FR-21;
 //! `ADR-0034`).
 
 use crate::{AssignmentEpoch, GenerationId, GroupEvent, GroupId, GroupState, Result};

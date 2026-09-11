@@ -1,4 +1,15 @@
-//! The consumer group state machine (`M4.1`, FR-22; `ADR-0033`).
+//! The consumer group state machine (`M4.1`, FR-20; `ADR-0033`).
+//!
+//! ⚠️ **FR-22 (KIP-848) is `deferred` and this module does not implement it —
+//! but it is the reason for this shape.** `ADR-0033` decision 2 builds the
+//! three-epoch model (group, assignment, member) from the first commit even
+//! though only the classic protocol drives it in v1, so that a later KIP-848
+//! pickup is a coexistence addition rather than a rewrite: the coordinator
+//! translates classic Join/Sync/Heartbeat onto the new group model, and doing
+//! it the other way round is what a single `GenerationId` would have forced.
+//! So the citation here is *shaped by a deferred requirement*, which is not
+//! the same claim as serving it — `M4.25`, after seven sibling modules were
+//! found citing FR-22 for work that is plainly FR-20's.
 //!
 //! Doc 02 §3.1: "the group's internal state machine moves through named
 //! states: Empty (no members) → `PreparingRebalance` (waiting for

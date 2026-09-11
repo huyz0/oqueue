@@ -1,4 +1,4 @@
-//! Group-leader election and protocol-name intersection (`M4.6`, FR-22).
+//! Group-leader election and protocol-name intersection (`M4.6`, FR-20).
 //!
 //! ⚠️ Doc 02 §3.1: "The coordinator designates a group leader (conventionally
 //! the first member to join) and picks the one assignment protocol name

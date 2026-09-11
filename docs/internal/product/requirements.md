@@ -29,7 +29,7 @@ the moment somebody designs against it.
 | `agreed` | Stated and stable |
 | `provisional` | Stated, but derived from research rather than from a stakeholder — may move |
 | `underived` | The requirement is real; the number or detail is not yet known |
-| `deferred` | Explicitly out of scope for v1, with the milestone that would take it up |
+| `deferred` | Explicitly out of scope for v1, with the milestone that would take it up — or, when nothing takes it up, a pointer to `roadmap.md`'s "Deferred, with nothing scheduled" paragraph. ⚠️ Both current rows are that second kind (FR-15, FR-22) and both carry the pointer, so a missing milestone id here is the form rather than an omission. ⚠️ **This is not `sdd.md`'s receiver rule** — that one governs striking an acceptance criterion from a frozen row and demands a backlog row or a `roadmap.md` deferral entry *with* a receiving milestone. A requirement nothing will take up has no such entry to point at, which is the case this second form exists for |
 
 IDs are **stable and never reused**. Specs cite them, tasks cite the spec, and
 commits cite the task — that chain is what makes the loop auditable, and it is
@@ -57,7 +57,7 @@ the reason these have IDs at all.
 | FR-12 | Serve tail reads from cache without an object-storage round trip. | Test asserting a fetch at the high watermark issues zero GETs | agreed |
 | FR-13 | Serve historical reads by resolving offset→object through the index and issuing a ranged GET. | Test asserting a cold fetch issues a bounded number of GETs and **zero LIST** operations | agreed |
 | FR-14 | Support idempotent producers (`enable.idempotence=true`). | Client conformance test: duplicate sequence numbers are deduplicated | provisional |
-| FR-15 | Support transactions and exactly-once semantics. | Client conformance test with `transactional.id` | **deferred** — see open question #5; candidate for post-v1 |
+| FR-15 | Support transactions and exactly-once semantics. | Client conformance test with `transactional.id` | **deferred** — see open question #5. ⚠️ No milestone takes it up, so this row names none — `roadmap.md`'s "Deferred, with nothing scheduled" paragraph is the receiver, as it is for FR-22 |
 
 ### Consumer groups
 

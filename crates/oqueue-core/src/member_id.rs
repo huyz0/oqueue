@@ -1,4 +1,4 @@
-//! Consumer group member identity (`M4.1`, FR-22).
+//! Consumer group member identity (`M4.1`, FR-20).
 
 use crate::{Error, Result};
 

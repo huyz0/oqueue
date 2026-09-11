@@ -1,5 +1,5 @@
 //! The one seam every `M4.7`-`M4.10` handler's own fencing decision routes
-//! through — `M4.11`, FR-22, `error-handling.md` rule 3.
+//! through — `M4.11`, FR-20, `error-handling.md` rule 3.
 //!
 //! ⚠️ **`M9.7`'s "one seam every caller passes through" precedent, applied
 //! to fencing instead of authorization.** `crate::authz::topic_authorized`

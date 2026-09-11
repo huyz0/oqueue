@@ -463,7 +463,7 @@ pub enum Error {
     EmptyMemberId,
 
     /// A consumer group's state has no legal transition for the event it was
-    /// given (`M4.1`, FR-22).
+    /// given (`M4.1`, FR-20).
     ///
     /// ⚠️ **Fields are `String`, not [`crate::GroupState`]/the event type
     /// itself** — this crate's own error enum is a leaf every domain type

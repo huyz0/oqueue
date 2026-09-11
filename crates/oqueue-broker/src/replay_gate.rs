@@ -1,6 +1,5 @@
 //! Whether this node has finished replaying the durable state it needs
-//! before answering a group-protocol request honestly — `M4.15a`, FR-21,
-//! FR-22.
+//! before answering a group-protocol request honestly — `M4.15a`, FR-21.
 //!
 //! ⚠️ **The real signal `crate::fencing::NodeReadiness::load_in_progress`
 //! was built for.** `fencing.rs`'s own module doc named this exactly:

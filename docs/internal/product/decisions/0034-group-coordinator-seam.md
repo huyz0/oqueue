@@ -1,6 +1,10 @@
 # 0034. `GroupCoordinator`: a sans-I/O seam mirroring `MaterializedIndex`
 
-Status: accepted
+Status: accepted; 2026-09-11: `M4.25` — this header's `FR-22` is superseded.
+`ADR-0033` deferred KIP-848 and `M4.24` moved the register to `deferred`, and
+this ADR's body never reasons about KIP-848 at all; the seam it decides is
+FR-20 and FR-21 work. `ADR-0033`'s own identical citation stays, being the
+decision *about* FR-22. The reasoning here is untouched
 Date: 2026-09-03
 Requirements: FR-20, FR-21, FR-22
 
