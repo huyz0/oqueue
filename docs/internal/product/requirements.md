@@ -65,7 +65,7 @@ the reason these have IDs at all.
 |---|---|---|---|
 | FR-20 | Support consumer groups: join, sync, heartbeat, rebalance. | Conformance test with multiple consumers joining and leaving | agreed |
 | FR-21 | Store and serve committed offsets durably. | Restart test: offsets survive a full broker fleet restart | agreed |
-| FR-22 | Support the KIP-848 next-generation rebalance protocol. | Conformance test against a KIP-848-capable client | provisional — v1 may ship the classic protocol only |
+| FR-22 | Support the KIP-848 next-generation rebalance protocol. | Conformance test against a KIP-848-capable client | **deferred** — `ADR-0033` (`M4.0`) settled it: v1 ships the classic protocol only. ⚠️ No milestone takes it up, so this row names none — `roadmap.md`'s "Deferred, with nothing scheduled" paragraph is the receiver, as it is for FR-15 |
 
 ### Storage and lifecycle
 
