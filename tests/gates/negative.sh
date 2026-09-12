@@ -3681,6 +3681,306 @@ invoke_mutants_narrowed() {
   bash "$1/scripts/check-mutants.sh"
 }
 
+# --- check-backlog-rows.sh: the three defects M4.26 found by hand -----------
+#
+# ⚠️ Every fixture needs a real `sdd.md` state list, because the gate reads its
+# vocabulary from there and refuses to invent one — a fixture without it fails
+# on *that*, which `run_case`'s fourth argument would then report as "not for
+# the reason the fixture plants". The helper writes the minimum that parses.
+# rewrite_line <file> <1-based line> <replacement>: portable in-place edit.
+#
+# ⚠️ **`sed -i` is not portable and these were the repository's first uses of
+# it.** BSD sed reads `-i`'s argument as a *backup suffix*, so `sed -i '1s/.../'`
+# on macOS treats the script as the suffix and the path as the script: the
+# fixture is never modified, and `run_case` then reports the case failing "not
+# for the reason the fixture plants" — for a gate that is working. GNU-only `\n`
+# in a replacement has the same problem. `portability.md` rule 2 keeps macOS a
+# platform that runs the fast tiers, and this suite is one of them.
+rewrite_line() {
+  local file="$1" lineno="$2" replacement="$3"
+  awk -v n="$lineno" -v repl="$replacement" \
+    'NR == n { print repl; next } { print }' "$file" > "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+# append_after_marker <file> <marker> <text>: insert <text> on the line after
+# the first line equal to <marker>. Same portability reason as above.
+append_after_marker() {
+  local file="$1" marker="$2" text="$3"
+  awk -v m="$marker" -v tx="$text" \
+    '{ print } $0 == m { print tx }' "$file" > "$file.tmp"
+  mv "$file.tmp" "$file"
+}
+
+_backlog_fixture() {
+  local dir="$1" rows="$2"
+  mkdir -p "$dir/docs/internal/product" "$dir/docs/internal/standards"
+  cat > "$dir/docs/internal/standards/sdd.md" <<'EOF'
+A row's state is one of the words below, between the markers the gate reads.
+
+<!-- states:start -->
+- `todo` — not started, or started and not landed.
+- `done` — the commit that closes it is in history.
+- `dissolved` — the row will never be worked.
+<!-- states:end -->
+
+These are the open states:
+
+<!-- states:open:start -->
+- `todo`
+<!-- states:open:end -->
+EOF
+  # ⚠️ **The seed commit's own row is here deliberately.** It used to commit
+  # `M-1.1: seed the fixture` with no `M-1.1` row, so *every* fixture also
+  # emitted "a commit in HEAD names M-1.1, which has no row" — which satisfied
+  # the expected substring of the one case whose whole point is that leg, making
+  # it pass without its planted scenario. Found by review, by deleting that
+  # case's own commit and watching it still pass.
+  {
+    printf '| Task | Title | Notes | State |\n|---|---|---|---|\n'
+    printf '| M-1.1 | the fixture'"'"'s own seed row | some criterion | done |\n'
+    printf '%s\n' "$rows"
+  } > "$dir/docs/internal/product/backlog.md"
+  (cd "$dir" && git add -A && git commit -qm "M-1.1: seed the fixture")
+}
+
+# A row whose state cell is gone: M11.3's shape as it first appeared.
+setup_backlog_no_state() {
+  local dir; dir="$(new_scratch backlog-no-state)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row whose state cell went missing | some criterion |'
+  printf '%s\n' "$dir"
+}
+invoke_backlog_no_state() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# Rows with no header and delimiter above them: what a stray newline plus a
+# blank line leaves behind, and the half that is invisible to a line-by-line
+# scan because each orphan still looks like a valid row on its own.
+setup_backlog_orphaned_rows() {
+  local dir; dir="$(new_scratch backlog-orphaned-rows)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row before the break | some criterion | done |'
+  cat >> "$dir/docs/internal/product/backlog.md" <<'EOF'
+
+| M-1.3 | orphaned by the blank line above | some criterion | done |
+| M-1.4 | orphaned too | some criterion | done |
+EOF
+  (cd "$dir" && git add -A)
+  printf '%s\n' "$dir"
+}
+invoke_backlog_orphaned_rows() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# A task with a commit in HEAD whose row was never flipped: M4.0 and M11.0.
+setup_backlog_committed_todo() {
+  local dir; dir="$(new_scratch backlog-committed-todo)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a task that has a commit and is still todo | some criterion | todo |'
+  (cd "$dir" && git commit -q --allow-empty -m "M-1.2: land the task whose row stayed todo")
+  printf '%s\n' "$dir"
+}
+invoke_backlog_committed_todo() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ The gate refusing to invent a vocabulary is itself a case: without it, a
+# `sdd.md` that lost its list would leave the gate checking states against
+# nothing and reporting ok.
+setup_backlog_no_vocabulary() {
+  local dir; dir="$(new_scratch backlog-no-vocabulary)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a fine row | some criterion | done |'
+  printf 'this standard no longer names any states\n' \
+    > "$dir/docs/internal/standards/sdd.md"
+  (cd "$dir" && git add -A)
+  printf '%s\n' "$dir"
+}
+invoke_backlog_no_vocabulary() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ A header whose last column is not `State`, holding real task rows. The
+# first version of this gate skipped such a run *silently*, so one missing
+# space in `| ... | State|` disabled every leg for that whole table while the
+# gate reported ok. Review reproduced it; this keeps it reproduced.
+setup_backlog_header_drift() {
+  local dir; dir="$(new_scratch backlog-header-drift)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row under a header that does not say State | criterion | done |'
+  rewrite_line "$dir/docs/internal/product/backlog.md" 1 \
+    '| Task | Title | Notes | Owner |'
+  (cd "$dir" && git add -A)
+  printf '%s\n' "$dir"
+}
+invoke_backlog_header_drift() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ **The spacing variant, which is the round-one finding itself.** The case
+# above plants `| Owner |` and so exercises the *has-rows* failure branch, not
+# the normalization — review pointed out that reverting the fix to
+# `header.endswith("| State |")` left all six earlier cases green while
+# `| … | State|` disabled every leg for that table. This fixture pins the
+# normalization: the header is one space away from the canonical spelling, and
+# the row under it has a state the vocabulary does not define.
+setup_backlog_header_spacing() {
+  local dir; dir="$(new_scratch backlog-header-spacing)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row under a header missing one space | criterion | finished |'
+  rewrite_line "$dir/docs/internal/product/backlog.md" 1 \
+    '| Task | Title | Notes | State|'
+  (cd "$dir" && git add -A)
+  printf '%s\n' "$dir"
+}
+invoke_backlog_header_spacing() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ `sdd.md` says a state is open and `lib.sh` has not been told. Without this
+# check `open_task_ids` and the standard disagree about which rows something
+# will still act on, which is the `dissolved`-looked-open bug one level up.
+setup_backlog_open_drift() {
+  local dir; dir="$(new_scratch backlog-open-drift)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a perfectly fine row | criterion | done |'
+  append_after_marker "$dir/docs/internal/standards/sdd.md" \
+    '<!-- states:open:start -->' '- `superseded`'
+  (cd "$dir" && git add -A)
+  printf '%s\n' "$dir"
+}
+invoke_backlog_open_drift() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ A row split at a table's *last* line. Legs 1 and 2 find a split by its
+# consequence — rows below orphaned from their header — so this one orphans
+# nothing and slipped through until review reproduced it. What is left is a
+# line of prose ending in a state cell, outside every table.
+setup_backlog_trailing_fragment() {
+  local dir; dir="$(new_scratch backlog-trailing-fragment)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row broken in half by a stray newline | the note is cut here | todo |'
+  cat >> "$dir/docs/internal/product/backlog.md" <<'EOF'
+
+and the rest of the note landed out here, rendering as a paragraph | todo |
+
+## the next section
+EOF
+  (cd "$dir" && git add -A)
+  printf '%s\n' "$dir"
+}
+invoke_backlog_trailing_fragment() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ A commit names an id the backlog no longer lists. Leg 3 read
+# `states.get(tid) == "todo"`, so a *deleted* row passed silently — review
+# reproduced it by removing a `done` row whose commit is in HEAD and got `ok`.
+# `check-commit-msg.sh` does not cover it: that validates only the incoming
+# subject, never history.
+setup_backlog_commit_without_row() {
+  local dir; dir="$(new_scratch backlog-commit-without-row)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | the row that survives | criterion | done |'
+  (cd "$dir" && git commit -q --allow-empty -m "M-1.9: a commit whose row was deleted")
+  printf '%s\n' "$dir"
+}
+invoke_backlog_commit_without_row() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ A duplicate id whose second row is `done`, hiding a `todo`. The state map
+# was last-wins, so the task read as closed; order-dependent, which is why the
+# duplicate goes *below* the real row here.
+setup_backlog_duplicate_id() {
+  local dir; dir="$(new_scratch backlog-duplicate-id)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | the real row | criterion | todo |'
+  cat >> "$dir/docs/internal/product/backlog.md" <<'ROWS'
+| M-1.2 | a duplicate below it | criterion | done |
+ROWS
+  (cd "$dir" && git add -A && git commit -q --allow-empty -m "M-1.2: land it")
+  printf '%s\n' "$dir"
+}
+invoke_backlog_duplicate_id() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ An unclosed ``` fence. `lib.sh` blanks fenced lines for every reader, so an
+# odd number of fence lines blanks the rest of the file — and the gate reported
+# `ok` for a backlog it had stopped reading. Review reproduced it with a `todo`
+# row and a state-cell-less row below the fence, both invisible.
+setup_backlog_unbalanced_fence() {
+  local dir; dir="$(new_scratch backlog-unbalanced-fence)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row above the fence | criterion | done |'
+  cat >> "$dir/docs/internal/product/backlog.md" <<'ROWS'
+
+```text
+an unclosed fence, and everything below it is blanked
+
+| M-1.3 | a committed row left todo | criterion | todo |
+ROWS
+  (cd "$dir" && git add -A && git commit -q --allow-empty -m "M-1.3: land it")
+  printf '%s\n' "$dir"
+}
+invoke_backlog_unbalanced_fence() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+# ⚠️ Two state cells on one row — the shape M4.26's *first* repair produced,
+# reading a split row as truncated and appending a second `| done |`. The leg
+# existed with no fixture, so a future narrowing of either of its two regexes
+# would have gone unnoticed.
+setup_backlog_two_state_cells() {
+  local dir; dir="$(new_scratch backlog-two-state-cells)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row repaired by appending a second cell | criterion | done | done |'
+  printf '%s\n' "$dir"
+}
+invoke_backlog_two_state_cells() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
+run_case "check-backlog-rows.sh (row with no state cell)" \
+  setup_backlog_no_state invoke_backlog_no_state "has no state cell"
+run_case "check-backlog-rows.sh (rows orphaned by a blank line)" \
+  setup_backlog_orphaned_rows invoke_backlog_orphaned_rows \
+  "no header and delimiter above them"
+run_case "check-backlog-rows.sh (committed task still todo)" \
+  setup_backlog_committed_todo invoke_backlog_committed_todo \
+  "but a commit in HEAD names it"
+run_case "check-backlog-rows.sh (sdd.md names no states)" \
+  setup_backlog_no_vocabulary invoke_backlog_no_vocabulary \
+  "cannot find the state-vocabulary list"
+run_case "check-backlog-rows.sh (header's last column is not State)" \
+  setup_backlog_header_drift invoke_backlog_header_drift \
+  "not 'State', so none of its rows can be checked"
+run_case "check-backlog-rows.sh (row split at a table's last line)" \
+  setup_backlog_trailing_fragment invoke_backlog_trailing_fragment \
+  "is not inside any table"
+run_case "check-backlog-rows.sh (header one space from canonical)" \
+  setup_backlog_header_spacing invoke_backlog_header_spacing \
+  "which sdd.md does not define"
+run_case "check-backlog-rows.sh (sdd.md opens a state lib.sh has not been told about)" \
+  setup_backlog_open_drift invoke_backlog_open_drift \
+  "open_task_ids and the standard disagree"
+run_case "check-backlog-rows.sh (commit names an id with no row)" \
+  setup_backlog_commit_without_row invoke_backlog_commit_without_row \
+  "which has no row"
+run_case "check-backlog-rows.sh (duplicate id hiding a todo)" \
+  setup_backlog_duplicate_id invoke_backlog_duplicate_id \
+  "already has a row at line"
+run_case "check-backlog-rows.sh (unclosed code fence blanks the rest of the file)" \
+  setup_backlog_unbalanced_fence invoke_backlog_unbalanced_fence \
+  "an odd number"
+run_case "check-backlog-rows.sh (row ending in two state cells)" \
+  setup_backlog_two_state_cells invoke_backlog_two_state_cells \
+  "ends in two state cells"
+
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \
   "over the 10000 ms budget"

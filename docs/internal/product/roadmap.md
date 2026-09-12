@@ -295,7 +295,7 @@ because the requirement they check has no number.
 ⚠️ **M0 was the fourth and no longer is.** Both of its gate constants are
 measured: NFR-55's per-crate coverage floor at 85% (`M0.15`, lowest crate
 carrying logic 91.63%) and NFR-56's pre-commit budget at 10 s (`M0.16`, suite
-measured at 2.27 s across 14 hooks — 15 once the budget gate itself joined them, 16 next, 17 at `M1.21`, 18 at `M11.9`'s `check-idempotence-enabled`, 19 at `M9.11`'s `check-topic-list-scope`, and **20 today** at the `pre-commit` stage (`M9.14`'s `check-secrets`) — `m0-complete.sh` asserts this sentence's number too, at the boundary). ⚠️ Both are **floors** — the workspace they
+measured at 2.27 s across 14 hooks — 15 once the budget gate itself joined them, 16 next, 17 at `M1.21`, 18 at `M11.9`'s `check-idempotence-enabled`, 19 at `M9.11`'s `check-topic-list-scope`, 20 at `M9.14`'s `check-secrets`, 21 at `M4.11`'s `check-fencing-seam` — which was never written down here either — and **22 today** at the `pre-commit` stage (`M4.27`'s `check-backlog-rows`) — `m0-complete.sh` asserts this sentence's number too, at the boundary). ⚠️ Both are **floors** — the workspace they
 were measured on compiles no async runtime and no cloud SDK, which `M1` changes
 — and neither is resolved by raising the literal when it is first breached.
 

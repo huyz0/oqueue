@@ -238,8 +238,73 @@ require_python() {
 # handled gracefully, and it must stay silent here for the same reason: a
 # missing backlog is not this function's failure to report.
 _backlog_from_index() {
-  git -C "$REPO_ROOT" show ":docs/internal/product/backlog.md" 2>/dev/null || true
+  # ⚠️ **Fenced code blocks are blanked, not stripped**, so every reader agrees
+  # about them and line numbers still point at the file. A row quoted inside a
+  # ``` block is documentation, not a row — but `check-backlog-rows.sh` skipped
+  # those lines while these greps did not, so a fenced example naming a real id
+  # made `known_task_ids` emit it twice and `open_task_ids` call a closed row
+  # open, with the gate reporting `ok`. That is the two-parsers-disagree failure
+  # `M4.27` exists to remove, reproduced inside `M4.27`. Blanking rather than
+  # deleting keeps `backlog.md:<n>` in the gate's messages resolvable.
+  #
+  # ⚠️ **`LC_ALL=C`, and it is the whole point rather than a habit.** Without it
+  # `[[:space:]]` follows the ambient locale and matches U+1680, U+2000-U+200A,
+  # U+2028/9, U+205F, U+3000 — while the balance check in
+  # `check-backlog-rows.sh` matches bytes. Review reproduced the gap twice, each
+  # time in the fail-open direction: awk blanked the rest of the file and the
+  # counter saw nothing wrong, so every row below went unchecked with the gate
+  # reporting `ok`. Pinning the locale makes `[[:space:]]` exactly
+  # `[ \t\n\v\f\r]`, which is a definition the other reader can hold too.
+  LC_ALL=C git -C "$REPO_ROOT" show ":docs/internal/product/backlog.md" 2>/dev/null \
+    | LC_ALL=C awk '/^[[:space:]]*```/ { infence = !infence; print ""; next }
+           infence { print ""; next }
+           { print }' \
+    || true
 }
+
+# The shape of a backlog task row's leading cell, and the one definition of it.
+#
+# ⚠️ **Two readers use it today, in two languages** — the functions below, and
+# `check-backlog-rows.sh`, which is handed the pattern rather than writing a
+# second copy. ⚠️ **It is not yet every reader, and saying so is the point**:
+# `milestone-review.sh` hand-writes a milestone-scoped variant, and
+# `check-commit-msg.sh` hand-writes the commit-*subject* form. `TASK_ID_RE`
+# exists so those can converge here without a third spelling appearing first;
+# until they do, an id-form widening still has to visit them. `M4.27` is why it is a constant: that task
+# added a gate whose whole subject is malformed rows, and the first version of
+# it carried its own Python transcription of this pattern. Two parsers
+# disagreeing about a malformed row is the failure that gate exists to catch,
+# reproduced inside the gate.
+#
+# ⚠️ **`[a-z]?` added by `M10.33`.** `M10.0`'s own three-way split of `M3.42`
+# ("one row per gate script, because three scripts is three commits") named
+# two of the rows `M10.18a` and `M10.18b` — the established convention this
+# backlog already uses for a dissolved row's siblings, `M3.41`/`M3.42`/`M3.43`
+# and their own predecessors. Without the suffix here, `M10.18a` matched
+# neither function below: `known_task_ids` returned nothing for it,
+# `check-reviewed.sh` refused a verdict recorded against a genuinely open,
+# correctly-formatted row with "which the backlog does not list", and the row
+# could not be closed at all until this line changed — found by trying to
+# commit against it, not by inspection. ⚠️ That it had to be widened in three
+# places at once is the argument for this constant.
+TASK_ID_RE='M-?[0-9]+\.[0-9]+[a-z]?'
+TASK_ROW_RE="^\\| ($TASK_ID_RE) \\|"
+
+# The states that mean a row is still *open* — one something will act on.
+#
+# ⚠️ **`sdd.md`'s `states:open` marker block is the owner, and
+# `check-backlog-rows.sh` compares this against it in both directions**, so it
+# cannot drift silently the way a second hand-maintained list would.
+#
+# ⚠️ **Open, not closed, and that direction is the fix.** This read
+# `TASK_STATES_CLOSED='done|dissolved'` for one review round, which is a second
+# unchecked copy of the vocabulary wearing a comment that claimed otherwise:
+# review added a fourth state to `sdd.md`, set a row to it, and `open_task_ids`
+# reported that row **open** while the gate said `ok` — the exact
+# `dissolved`-looked-open bug `M4.27` fixes, reintroduced one level up. Listing
+# what is open makes an unknown state closed by default, which is the safe
+# direction: a finding cannot be discharged by a row nobody will work.
+TASK_STATES_OPEN='todo'
 
 # Every task ID this repository knows about, one per line, from the backlog.
 # The backlog is the single source; a gate that keeps its own list drifts.
@@ -263,22 +328,34 @@ known_task_ids() {
   # dies with no output at all — and the `[[ -n "$known" ]]` guard written for
   # exactly that case is never reached. A *missing* backlog returned 0 and was
   # handled gracefully, so the two empty states behaved oppositely.
-  grep -oE '^\| (M-?[0-9]+\.[0-9]+[a-z]?) \|' <<< "$backlog" | tr -d '|' | tr -d ' ' || true
+  LC_ALL=C grep -oE "$TASK_ROW_RE" <<< "$backlog" | tr -d '|' | tr -d ' ' || true
 }
 
-# Task IDs whose backlog row is not yet `done`.
+# Task IDs whose backlog row is one something will still act on.
 #
 # ⚠️ A finding is discharged by a row something will still act on: `next-task`
 # reads `todo`, so citing a row already closed parks the finding where nothing
 # will look again. This is checked when a verdict is *recorded* — while the
 # author is there to pick a different row — and deliberately not by the gate,
 # which would then turn finishing the task into a permanent failure.
+#
+# ⚠️ **`dissolved` is closed, not open, and `M4.27` is where that was fixed.**
+# This read "not `done`" until then, which made a `dissolved` row look open —
+# and `sdd.md`'s state list, which `M4.27` wrote, says `dissolved` means "the
+# row will never be worked". So a blocking finding filed against a `dissolved`
+# row was accepted by `milestone-review.sh record` and parked exactly where
+# nothing looks again, which is the one thing this function exists to prevent.
+# Found by review, as the concrete instance of two parsers disagreeing about
+# what a state cell means.
 open_task_ids() {
   local backlog; backlog="$(_backlog_from_index)"
   [[ -n "$backlog" ]] || return 0
-  grep -E '^\| M-?[0-9]+\.[0-9]+[a-z]? \|' <<< "$backlog" \
-    | grep -vE '\|[[:space:]]*done[[:space:]]*\|[[:space:]]*$' \
-    | grep -oE '^\| (M-?[0-9]+\.[0-9]+[a-z]?) \|' | tr -d '|' | tr -d ' ' || true
+  # ⚠️ `LC_ALL=C` here too: `[[:space:]]` around the state cell must mean the
+  # same bytes it means to `check-backlog-rows.sh`, or a row whose trailing
+  # space is U+00A0 is a valid `todo` row to one reader and closed to the other.
+  LC_ALL=C grep -E "$TASK_ROW_RE" <<< "$backlog" \
+    | LC_ALL=C grep -E "\|[[:space:]]*($TASK_STATES_OPEN)[[:space:]]*\|[[:space:]]*$" \
+    | LC_ALL=C grep -oE "$TASK_ROW_RE" | tr -d '|' | tr -d ' ' || true
 }
 
 # The milestone HEAD is working in: the most recent commit whose subject names a

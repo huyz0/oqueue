@@ -125,6 +125,54 @@ A task is **one commit's worth**: one coherent change leaving the tree green. If
 it cannot be finished that way, split it before writing code, not after
 discovering it.
 
+⚠️ **A row's state is one of the words below, and this list is the only
+definition of them** — `M4.27` found the vocabulary written down nowhere,
+having been told to read it from this standard.
+
+⚠️ **The markers are a contract, not decoration.** `scripts/check-backlog-rows.sh`
+reads the list between them, so adding or removing a state here changes what
+that gate accepts and needs no edit to the gate. ⚠️ **One direction, and the
+asymmetry is deliberate**: a row whose state is not on this list fails, while a
+state listed here that no row uses does not — an unused state is a vocabulary
+waiting for its first row, not a defect. The `states:open` block below *is*
+checked both ways, because there a mismatch means two readers disagree about
+whether a row is still open. ⚠️ Do not write the *count* into the
+sentence above: a gate anchored on "exactly three words" is a standard that
+cannot be changed without editing the script that claims only to read it.
+
+<!-- states:start -->
+- `todo` — not started, or started and not landed. `next-task` reads this.
+- `done` — the commit that closes it is in history. Frozen from then on.
+- `dissolved` — the row will never be worked: its content moved to other rows,
+  or the plan changed. ⚠️ **Not a state of the work, a state of the row**, and
+  deliberately not `done`, which would claim a commit that does not exist. The
+  row says where it went.
+<!-- states:end -->
+
+⚠️ `deferred` is **not** one of them *any more*, and the distinction matters
+because `backlog.md` still describes it in four places. `M1.52` defined it and
+M1 closed eleven rows with it; `M2.0` retired it, rewriting each as `dissolved`
+with a pointer to the task that absorbed it. So a row carrying it today is a
+row following a retired precedent, not an invented state — the gate refuses it
+and names this list, which is the right outcome, but the reason is that the
+state was replaced rather than that it never existed. It survives as
+`requirements.md`'s status for a *requirement*, which is a different register.
+
+⚠️ **These are the *open* states — the rows something will still act on**, and
+`lib.sh`'s `open_task_ids` is checked against this list too, in both directions:
+
+<!-- states:open:start -->
+- `todo`
+<!-- states:open:end -->
+
+⚠️ **Everything else is closed**, `dissolved` included. `open_task_ids` read
+"not `done`" until `M4.27`, so a blocking review finding filed against a
+`dissolved` row was accepted and parked where nothing would look at it again.
+⚠️ **And the list above is why that has a second marker block rather than a
+sentence**: `lib.sh` cannot read prose, so a fourth state added between the
+markers above would otherwise be silently *open* to one reader and closed to
+the other — review reproduced exactly that before this block existed.
+
 **A row is terse, and a `done` row is frozen** (ADR-0016). A row carries the
 task, what it serves, an acceptance criterion, and a state. History lives in
 the commit that closes it (`git log --grep <ID>`), so closing a row edits its

@@ -91,6 +91,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-backlog-rows
+        name: "M4.27: every backlog row has one state cell sdd.md defines, and a task with a commit is not todo"
+        entry: scripts/check-backlog-rows.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-file-size
         name: "code-structure.md rules 16, 17, 24: a file is at most 500 lines, and no module is a dumping ground"
         entry: scripts/check-file-size.sh

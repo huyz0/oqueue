@@ -302,8 +302,10 @@ TEXT
 }
 JSON
   printf '```\n\n'
-  printf '⚠️ **Every blocking and major finding must name a `task_id` that the\n'
-  printf 'backlog lists and has not marked `done`.** That is what "findings\n'
+  printf '⚠️ **Every blocking and major finding must name a `task_id` the\n'
+  printf 'backlog still lists as `todo`.** ⚠️ `done` and `dissolved` are both\n'
+  printf 'closed — a dissolved row will never be worked, so citing one parks the\n'
+  printf 'finding exactly where a closed row would. That is what "findings\n'
   printf 'become backlog tasks" means here — a finding recorded only in a review\n'
   printf 'artifact is one nothing reads, and a closed row is one next-task will\n'
   printf 'never surface again. Add the row first, then cite it. A finding you\n'
@@ -424,8 +426,9 @@ for i, f in enumerate(findings):
         # the gate, which would then flip red the moment the task was finished.
         elif tid and known_tasks and tid not in open_tasks:
             problems.append(
-                f"{where}.task_id {tid!r} is a row the backlog marks done; a finding "
-                f"needs one something will still act on, since next-task reads todo")
+                f"{where}.task_id {tid!r} is a row the backlog has closed — `done` "
+                f"or `dissolved` — and a finding needs one something will still act "
+                f"on, since next-task reads `todo`")
         elif not tid:
             unresolved.append(where)
     f["id"] = hashlib.sha256(
