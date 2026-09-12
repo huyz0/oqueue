@@ -23,36 +23,44 @@
 //! step (`GroupCoordinator::transition`) is also the validator and has no
 //! way to be undone once called.
 //!
-//! ⚠️ **Only three of `M4`'s own four mutating call sites route through
-//! this, by design — `M4.15c`'s own scope.** `heartbeat.rs`'s eviction
-//! sweep (shared by `leave_group.rs`) and `sync_group.rs`'s own
-//! `SyncComplete` call enqueue while already holding their own lock and
-//! await the response after releasing it — `heartbeat.rs`'s own doc
-//! explains why that is safe under `async-concurrency.md` rule 6.
-//! `join_group::round.rs`'s own join-barrier bookkeeping decides its own
-//! mutations *from* the transition's result inside the same lock, which
-//! this shape cannot serve without an optimistic-retry redesign — `M4.15d`,
-//! not this row.
+//! ⚠️ **Every group-state mutation in this crate routes through here as of
+//! `M4.15d`** — `M4.15c` migrated three of `M4`'s four call sites and this
+//! paragraph used to say the fourth was excluded by design.
 //!
-//! ⚠️ **The consequence, named rather than left implicit: a group whose
-//! own state has only ever been touched by `JoinGroup` does not survive a
-//! restart yet.** `Join`, `JoinBarrierComplete`, and
-//! `MemberJoinedDuringSync` are still applied by `join_group::round.rs`'s
-//! own direct `coordinator.transition` call, never durably logged here —
-//! most real groups begin with exactly one of those, so this row's own
-//! acceptance criterion is proven against `heartbeat`/`leave_group`/
-//! `sync_group`-driven transitions specifically (seeded through this same
-//! actor in the test, not through a real `JoinGroup` request), not "every
-//! group survives a restart" in general. `M4.15d` is what makes that
-//! claim true.
+//! `join_group::round.rs`'s own join-barrier bookkeeping used to decide its
+//! own mutations *from* the transition's result inside the same lock, which
+//! this shape cannot serve — `M4.15d` restructured it into
+//! decide-under-the-lock, apply with it released, finalize under it again,
+//! and every one of its transitions now comes through here.
 //!
-//! ⚠️ **That gap is contained to the group it affects, not the whole
+//! ⚠️ **So a group's *record* survives a restart in general as of `M4.15d`,
+//! and did not before it.** ⚠️ **Its membership does not, and the distinction
+//! is load-bearing**: `GroupRecord` is state, generation and assignment
+//! epoch, while `GroupJoins`'s own entries and `heartbeat.rs`'s own tracking
+//! are per-node and in no log. A `Stable` group of three consumers replays as
+//! `Stable` at its own generation, and then each consumer's next `Heartbeat`
+//! is answered `UNKNOWN_MEMBER_ID` because nothing tracks it, so they rejoin
+//! and the group rebalances once. That is the intended degradation — the
+//! group is not lost and no offset is — but it is not "nothing changed". `Join`, `JoinBarrierComplete` and
+//! `MemberJoinedDuringSync` were applied by `join_group::round.rs`'s own
+//! direct `coordinator.transition` call and logged nowhere — and since most
+//! real groups begin with exactly one of those, `M4.15c`'s own acceptance
+//! criterion could only be proven against `heartbeat`/`leave_group`/
+//! `sync_group`-driven transitions, seeded through this actor in the test
+//! rather than by a real `JoinGroup`. `join_group::round`'s own
+//! `an_interleaved_multi_group_sequence_replays_to_the_same_records` is the
+//! version of that test which drives the real path.
+//!
+//! ⚠️ **A group that cannot be replayed poisons only itself, not the whole
 //! cluster — [`GroupTransitionsTask::replay`]'s own doc, round-1 review's
-//! own finding against this row's first version.** Because most real
-//! groups' own first durable record (`sync_group.rs`'s `SyncComplete`, or
-//! an eviction) has no durable `Join` behind it yet, replaying that entry
-//! against a fresh coordinator is `IllegalGroupTransition` on essentially
-//! every restart of a broker that has served real traffic — the first
+//! own finding against `M4.15c`.** ⚠️ **This used to be the common case and
+//! is not any more**: before `M4.15d`, most real groups' own first durable
+//! record (`sync_group.rs`'s `SyncComplete`, or an eviction) had no durable
+//! `Join` behind it, so replaying that entry against a fresh coordinator was
+//! `IllegalGroupTransition` on essentially every restart of a broker that had
+//! served real traffic. A log written since then carries the `Join` too, so a
+//! poisoned group now means a genuinely bad log or a call site bypassing this
+//! actor. The containment still matters because that class remains — the first
 //! version of `replay` propagated that as a fatal error, which stalled
 //! `M4.15a`'s own `ReplayGate` forever for *every* group and every offset
 //! operation, not just the one group this gap actually affects. Replay
@@ -166,21 +174,23 @@ impl GroupTransitionsTask {
     /// event sequence equivalent to what happened live before a restart.
     ///
     /// ⚠️ **An illegal transition poisons only its own group, not the
-    /// whole replay — round-1 review's own finding.** `join_group::round.rs`
-    /// does not durably log `Join`/`JoinBarrierComplete`/`MemberJoinedDuringSync`
-    /// yet (`M4.15d`), so *every* group a real client ever joins durably
-    /// records `sync_group.rs`'s own `SyncComplete` (or `heartbeat.rs`'s
-    /// own eviction) with no durable predecessor — replaying that entry
-    /// against a fresh, `Empty` coordinator is `IllegalGroupTransition` by
-    /// construction, on essentially every restart of a broker that has
-    /// served real traffic. Aborting the whole function on the first such
+    /// whole replay — round-1 review's own finding.** ⚠️ **The condition that
+    /// made this the common case is gone as of `M4.15d`**, which durably
+    /// logs `Join`/`JoinBarrierComplete`/`MemberJoinedDuringSync` too:
+    /// before it, *every* group a real client ever joined durably recorded
+    /// `sync_group.rs`'s own `SyncComplete` (or `heartbeat.rs`'s own
+    /// eviction) with no durable predecessor — replaying that entry against
+    /// a fresh, `Empty` coordinator was `IllegalGroupTransition` by
+    /// construction, on essentially every restart of a broker that had
+    /// served real traffic. The poisoning is kept because the *class*
+    /// remains: a log written before `M4.15d`, or any future call site that
+    /// bypasses this actor, replays exactly that way. Aborting the whole function on the first such
     /// error (this function's own first version) would have left `Cluster`
     /// permanently `COORDINATOR_LOAD_IN_PROGRESS` for *every* group and
     /// every offset operation too (`tokio::join!`'s own all-or-nothing
-    /// gate in `cluster.rs`), not merely the one group whose own durability
-    /// this row does not yet cover — a regression far worse than the
-    /// "does not survive a restart" degradation this row's own module doc
-    /// already names as accepted. Instead: a group whose replay hits an
+    /// gate in `cluster.rs`), not merely the one group whose own record is
+    /// unreplayable — a regression far worse than one group's own state
+    /// being absent. Instead: a group whose replay hits an
     /// illegal transition is marked poisoned and every later entry for it
     /// is skipped (not applied, not retried) — it simply never accrues a
     /// record, `coordinator.record` answering `None` for it exactly as it
@@ -257,18 +267,21 @@ impl GroupTransitionsTask {
 /// — durably appends it only if legal, and only then applies it to the
 /// live `coordinator`.
 ///
-/// ⚠️ **The dry run and the real call are guaranteed to agree *for a
-/// group only `M4.15c`'s own three migrated call sites ever touch*.**
-/// [`GroupTransitionsTask::serve`] processes one request at a time, so
-/// nothing enqueued through [`GroupTransitions`] can change `group`'s own
-/// record between the dry run above and the real call below. It is not
-/// yet true universally: `join_group::round.rs` still calls
-/// `coordinator.transition` directly (module doc's own "only three of
-/// four" scoping, `M4.15d` closes the gap) — a `JoinGroup` racing a
-/// heartbeat eviction or a `LeaveGroup` for the same group can still
-/// invalidate this dry run between the two calls, the identical
-/// cross-lock race `heartbeat.rs`'s own module doc already names and
-/// does not claim to have fixed.
+/// ⚠️ **The dry run and the real call are guaranteed to agree, and as of
+/// `M4.15d` that is unconditional.** [`GroupTransitionsTask::serve`]
+/// processes one request at a time, so nothing enqueued through
+/// [`GroupTransitions`] can change `group`'s own record between the dry run
+/// above and the real call below — and since `M4.15d` migrated
+/// `join_group::round.rs`, the only `coordinator.transition` calls left in
+/// this crate are this one and [`GroupTransitionsTask::replay`]'s. The
+/// `JoinGroup`-racing-an-eviction window this paragraph used to name as
+/// still open is closed by that: both now queue behind the same actor.
+///
+/// ⚠️ **What still holds the claim up is that nothing else may call
+/// `GroupCoordinator::transition`.** It is a `pub` trait method and nothing
+/// mechanically prevents a new call site, so a future one that bypasses
+/// this actor re-opens the window silently — the invariant is a
+/// convention this doc states, not a gate.
 async fn handle_one(
     coordinator: &dyn GroupCoordinator,
     log: &dyn GroupMetadataLog,

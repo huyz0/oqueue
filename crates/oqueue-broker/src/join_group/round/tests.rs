@@ -1,14 +1,22 @@
 #![allow(clippy::expect_used)]
 
+mod durability;
+
+use super::state::RoundOutcome;
 use super::{GroupJoins, JoinOutcome, RoundMember, effective_timeout_ms, mint_member_id};
-use oqueue_core::{FakeGroupCoordinator, GroupCoordinator, GroupEvent, GroupId, GroupState};
+use crate::group_transitions::GroupTransitions;
+use oqueue_core::{
+    FakeGroupCoordinator, FakeGroupMetadataLog, GroupCoordinator, GroupEvent, GroupId,
+    GroupMetadataLog, GroupMetadataRecord, GroupState,
+};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
-fn group(name: &str) -> GroupId {
+pub(super) fn group(name: &str) -> GroupId {
     GroupId::new(name).expect("valid")
 }
 
-fn member(id: &str, protocols: &[&str]) -> RoundMember {
+pub(super) fn member(id: &str, protocols: &[&str]) -> RoundMember {
     member_with_type(id, "consumer", protocols)
 }
 
@@ -20,6 +28,80 @@ fn member_with_type(id: &str, protocol_type: &str, protocols: &[&str]) -> RoundM
             .iter()
             .map(|&p| (p.to_owned(), Vec::new()))
             .collect(),
+    }
+}
+
+/// A live [`GroupTransitions`] actor over a fresh coordinator and log.
+///
+/// ⚠️ **Every test needs one since `M4.15d`**, because the round's own
+/// transitions no longer touch the coordinator directly — they are enqueued
+/// to this task, which validates, durably appends, and only then applies.
+/// A test that built `GroupJoins` alone would hang on the first join: the
+/// actor is the only thing that ever answers.
+pub(super) struct Harness {
+    joins: GroupJoins,
+    transitions: GroupTransitions,
+    coordinator: Arc<FakeGroupCoordinator>,
+    log: Arc<FakeGroupMetadataLog>,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl Harness {
+    pub(super) fn new() -> Self {
+        let coordinator = Arc::new(FakeGroupCoordinator::new());
+        let log = Arc::new(FakeGroupMetadataLog::new());
+        let (transitions, task) = GroupTransitions::new();
+        let serving = tokio::spawn(task.serve(
+            Arc::clone(&coordinator) as Arc<dyn GroupCoordinator>,
+            Arc::clone(&log) as Arc<dyn GroupMetadataLog>,
+        ));
+        Self {
+            joins: GroupJoins::default(),
+            transitions,
+            coordinator,
+            log,
+            _task: serving,
+        }
+    }
+
+    fn coordination(&self) -> super::Coordination<'_> {
+        super::Coordination {
+            transitions: &self.transitions,
+            coordinator: self.coordinator.as_ref(),
+        }
+    }
+
+    pub(super) async fn join(&self, g: &GroupId, m: RoundMember, timeout: Duration) -> JoinOutcome {
+        self.joins.join(self.coordination(), g, m, timeout).await
+    }
+
+    pub(super) async fn close_on_deadline(&self, g: &GroupId, own: &Arc<OnceLock<RoundOutcome>>) {
+        self.joins
+            .close_on_deadline(self.coordination(), g, own)
+            .await;
+    }
+
+    pub(super) fn state(&self, g: &GroupId) -> Option<GroupState> {
+        self.coordinator.record(g).map(|r| r.state)
+    }
+
+    /// Every event this group has durably recorded, in log order — the
+    /// property `M4.15d` exists to create.
+    pub(super) async fn durable_events(&self, g: &GroupId) -> Vec<GroupEvent> {
+        let entries = self
+            .log
+            .read_from(oqueue_core::CommitVersion::ZERO, 1024)
+            .await
+            .expect("the fake log never fails");
+        entries
+            .iter()
+            .filter_map(|e| match e.record() {
+                GroupMetadataRecord::GroupTransitioned { group, event } if group == g => {
+                    Some(*event)
+                }
+                _ => None,
+            })
+            .collect()
     }
 }
 
@@ -38,83 +120,75 @@ fn effective_timeout_falls_back_to_the_session_timeout_below_v1() {
 
 #[tokio::test(start_paused = true)]
 async fn a_fresh_groups_first_member_is_pending_until_its_own_deadline() {
-    let coordinator = FakeGroupCoordinator::new();
-    let joins = GroupJoins::default();
+    let h = Harness::new();
     let g = group("orders");
 
-    let JoinOutcome::Pending { outcome, .. } = joins.join(
-        &coordinator,
-        &g,
-        member("m1", &["range"]),
-        Duration::from_secs(1),
-    ) else {
+    let JoinOutcome::Pending { outcome, .. } = h
+        .join(&g, member("m1", &["range"]), Duration::from_secs(1))
+        .await
+    else {
         panic!("a fresh group's first-ever round has no early-close signal");
     };
-    assert_eq!(
-        coordinator.record(&g).map(|r| r.state),
-        Some(GroupState::PreparingRebalance)
-    );
+    assert_eq!(h.state(&g), Some(GroupState::PreparingRebalance));
 
-    joins.close_on_deadline(&coordinator, &g, &outcome);
-    assert_eq!(
-        coordinator.record(&g).map(|r| r.state),
-        Some(GroupState::CompletingRebalance)
-    );
+    h.close_on_deadline(&g, &outcome).await;
+    assert_eq!(h.state(&g), Some(GroupState::CompletingRebalance));
 }
 
 #[tokio::test(start_paused = true)]
 async fn every_member_of_the_same_round_shares_one_outcome() {
-    let coordinator = FakeGroupCoordinator::new();
-    let joins = GroupJoins::default();
+    let h = Harness::new();
     let g = group("orders");
     let timeout = Duration::from_secs(1);
 
     let JoinOutcome::Pending {
         outcome: outcome_a, ..
-    } = joins.join(&coordinator, &g, member("a", &["range"]), timeout)
+    } = h.join(&g, member("a", &["range"]), timeout).await
     else {
         panic!("expected pending");
     };
     let JoinOutcome::Pending {
         outcome: outcome_b, ..
-    } = joins.join(&coordinator, &g, member("b", &["range"]), timeout)
+    } = h.join(&g, member("b", &["range"]), timeout).await
     else {
         panic!("expected pending -- the second member joins the same open round");
     };
 
-    joins.close_on_deadline(&coordinator, &g, &outcome_a);
+    h.close_on_deadline(&g, &outcome_a).await;
 
-    let close_a = outcome_a.get().expect("closed");
-    let close_b = outcome_b.get().expect("closed");
-    assert!(
-        std::sync::Arc::ptr_eq(close_a, close_b),
-        "one shared close, not two"
-    );
+    let close_a = outcome_a
+        .get()
+        .expect("published")
+        .as_ref()
+        .expect("closed, not abandoned");
+    let close_b = outcome_b
+        .get()
+        .expect("published")
+        .as_ref()
+        .expect("closed, not abandoned");
+    assert!(Arc::ptr_eq(close_a, close_b), "one shared close, not two");
     assert_eq!(close_a.members.len(), 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn a_member_sharing_no_protocol_with_the_round_is_refused_and_never_enrolled() {
-    let coordinator = FakeGroupCoordinator::new();
-    let joins = GroupJoins::default();
+    let h = Harness::new();
     let g = group("orders");
     let timeout = Duration::from_secs(1);
 
-    let JoinOutcome::Pending { outcome, .. } =
-        joins.join(&coordinator, &g, member("a", &["range"]), timeout)
+    let JoinOutcome::Pending { outcome, .. } = h.join(&g, member("a", &["range"]), timeout).await
     else {
         panic!("expected pending");
     };
-    let refused = joins.join(&coordinator, &g, member("b", &["sticky"]), timeout);
+    let refused = h.join(&g, member("b", &["sticky"]), timeout).await;
     assert!(matches!(refused, JoinOutcome::Refused));
 
-    joins.close_on_deadline(&coordinator, &g, &outcome);
+    h.close_on_deadline(&g, &outcome).await;
     // Round 1 closed with exactly one member ("a" alone -- "b" was refused
     // and never enrolled), so round 2's own `expected` is `Some(1)`: "a"
     // rejoining (state is `CompletingRebalance`, so this is
     // `MemberJoinedDuringSync`) closes it immediately, alone.
-    let JoinOutcome::Ready(close) = joins.join(&coordinator, &g, member("a", &["range"]), timeout)
-    else {
+    let JoinOutcome::Ready(close) = h.join(&g, member("a", &["range"]), timeout).await else {
         panic!("round 2's own expected size (1) is met by \"a\" alone");
     };
     assert_eq!(
@@ -126,40 +200,35 @@ async fn a_member_sharing_no_protocol_with_the_round_is_refused_and_never_enroll
 
 #[tokio::test(start_paused = true)]
 async fn an_established_groups_next_round_closes_early_once_its_prior_size_rejoins() {
-    let coordinator = FakeGroupCoordinator::new();
-    let joins = GroupJoins::default();
+    let h = Harness::new();
     let g = group("orders");
     let timeout = Duration::from_mins(1);
 
     // Round 1: two members, closed at the deadline (a fresh group's own
     // round has no early-close signal).
-    joins.join(&coordinator, &g, member("a", &["range"]), timeout);
-    let JoinOutcome::Pending { outcome, .. } =
-        joins.join(&coordinator, &g, member("b", &["range"]), timeout)
+    h.join(&g, member("a", &["range"]), timeout).await;
+    let JoinOutcome::Pending { outcome, .. } = h.join(&g, member("b", &["range"]), timeout).await
     else {
         panic!("expected pending -- the second member joins the same open round");
     };
-    joins.close_on_deadline(&coordinator, &g, &outcome);
-    assert_eq!(
-        coordinator.record(&g).map(|r| r.state),
-        Some(GroupState::CompletingRebalance)
-    );
+    h.close_on_deadline(&g, &outcome).await;
+    assert_eq!(h.state(&g), Some(GroupState::CompletingRebalance));
 
     // The sync phase this milestone does not build a handler for yet
     // (`M4.8`) -- driven directly against the coordinator, `M4.2`'s own
     // fake, to reach `Stable` the way a real `SyncGroup` eventually will.
-    coordinator
+    h.coordinator
         .transition(&g, GroupEvent::SyncComplete)
         .expect("CompletingRebalance -> Stable is legal");
 
     // Round 2: the same two members rejoin. The first alone must not close
     // it -- `expected` is now `Some(2)`, the previous round's own size.
-    let pending = joins.join(&coordinator, &g, member("a", &["range"]), timeout);
+    let pending = h.join(&g, member("a", &["range"]), timeout).await;
     assert!(
         matches!(pending, JoinOutcome::Pending { .. }),
         "one of two expected members must not close the round"
     );
-    let ready = joins.join(&coordinator, &g, member("b", &["range"]), timeout);
+    let ready = h.join(&g, member("b", &["range"]), timeout).await;
     assert!(
         matches!(ready, JoinOutcome::Ready(_)),
         "the second of two expected members closes it without waiting for the deadline"
@@ -173,39 +242,31 @@ async fn an_established_groups_next_round_closes_early_once_its_prior_size_rejoi
 /// wrong member's value a visible, assertable difference.
 #[tokio::test(start_paused = true)]
 async fn a_closed_rounds_own_protocol_type_is_the_leaders_own() {
-    let coordinator = FakeGroupCoordinator::new();
-    let joins = GroupJoins::default();
+    let h = Harness::new();
     let g = group("orders");
     let timeout = Duration::from_mins(1);
 
     // Round 1: two members, so round 2's own `expected` is `Some(2)` --
     // needed so round 2 stays open long enough for both of its own members
     // to be distinguishable by join order.
-    joins.join(&coordinator, &g, member("a", &["range"]), timeout);
-    let JoinOutcome::Pending { outcome, .. } =
-        joins.join(&coordinator, &g, member("b", &["range"]), timeout)
+    h.join(&g, member("a", &["range"]), timeout).await;
+    let JoinOutcome::Pending { outcome, .. } = h.join(&g, member("b", &["range"]), timeout).await
     else {
         panic!("expected pending -- the second member joins the same open round");
     };
-    joins.close_on_deadline(&coordinator, &g, &outcome);
-    coordinator
+    h.close_on_deadline(&g, &outcome).await;
+    h.coordinator
         .transition(&g, GroupEvent::SyncComplete)
         .expect("CompletingRebalance -> Stable is legal");
 
     // Round 2: "b" joins first this time, so "b" -- not "a" -- is this
     // round's own leader.
-    joins.join(
-        &coordinator,
-        &g,
-        member_with_type("b", "typeB", &["range"]),
-        timeout,
-    );
-    let JoinOutcome::Ready(close) = joins.join(
-        &coordinator,
-        &g,
-        member_with_type("a", "typeA", &["range"]),
-        timeout,
-    ) else {
+    h.join(&g, member_with_type("b", "typeB", &["range"]), timeout)
+        .await;
+    let JoinOutcome::Ready(close) = h
+        .join(&g, member_with_type("a", "typeA", &["range"]), timeout)
+        .await
+    else {
         panic!("round 2's own expected size (2) is met by this second join");
     };
     assert_eq!(close.leader, "b");
@@ -228,24 +289,23 @@ async fn a_closed_rounds_own_protocol_type_is_the_leaders_own() {
 /// genuinely open and short of its own `expected` count.
 #[tokio::test(start_paused = true)]
 async fn a_stale_rounds_own_deadline_never_closes_a_later_round() {
-    let coordinator = FakeGroupCoordinator::new();
-    let joins = GroupJoins::default();
+    let h = Harness::new();
     let g = group("orders");
     let timeout = Duration::from_mins(1);
 
     // Round 1: two members, so round 2's own `expected` is `Some(2)` --
     // needed so round 2 stays open once only one of its own two expected
     // members has (re)joined.
-    joins.join(&coordinator, &g, member("a", &["range"]), timeout);
+    h.join(&g, member("a", &["range"]), timeout).await;
     let JoinOutcome::Pending {
         outcome: stale_outcome,
         ..
-    } = joins.join(&coordinator, &g, member("b", &["range"]), timeout)
+    } = h.join(&g, member("b", &["range"]), timeout).await
     else {
         panic!("expected pending -- the second member joins the same open round");
     };
-    joins.close_on_deadline(&coordinator, &g, &stale_outcome);
-    coordinator
+    h.close_on_deadline(&g, &stale_outcome).await;
+    h.coordinator
         .transition(&g, GroupEvent::SyncComplete)
         .expect("CompletingRebalance -> Stable is legal");
 
@@ -254,7 +314,7 @@ async fn a_stale_rounds_own_deadline_never_closes_a_later_round() {
     let JoinOutcome::Pending {
         outcome: round_2_outcome,
         ..
-    } = joins.join(&coordinator, &g, member("a", &["range"]), timeout)
+    } = h.join(&g, member("a", &["range"]), timeout).await
     else {
         panic!("one of two expected members must not close the round");
     };
@@ -262,21 +322,25 @@ async fn a_stale_rounds_own_deadline_never_closes_a_later_round() {
     // The attack this test exists to rule out: a round-1 waiter's own
     // (stale, already-closed) outcome handle reaches `close_on_deadline`
     // while round 2 is open. It must be a no-op.
-    joins.close_on_deadline(&coordinator, &g, &stale_outcome);
+    h.close_on_deadline(&g, &stale_outcome).await;
     assert!(
         round_2_outcome.get().is_none(),
         "round 2 must still be open -- a stale round-1 deadline closed it"
     );
     assert_eq!(
-        coordinator.record(&g).map(|r| r.state),
+        h.state(&g),
         Some(GroupState::PreparingRebalance),
         "round 2 must still be preparing, not already completing"
     );
 
     // Round 2's own legitimate close still works afterward, on its own
     // (correct) membership -- the stale call did not corrupt it.
-    joins.close_on_deadline(&coordinator, &g, &round_2_outcome);
-    let close = round_2_outcome.get().expect("round 2 now closes for real");
+    h.close_on_deadline(&g, &round_2_outcome).await;
+    let close = round_2_outcome
+        .get()
+        .expect("published")
+        .as_ref()
+        .expect("round 2 now closes for real");
     assert_eq!(close.members.len(), 1, "only \"a\" ever joined round 2");
 }
 
@@ -291,24 +355,20 @@ async fn a_stale_rounds_own_deadline_never_closes_a_later_round() {
 /// this module never opened).
 #[tokio::test(start_paused = true)]
 async fn a_group_moved_to_preparing_rebalance_by_an_external_actor_still_accepts_a_join() {
-    let coordinator = FakeGroupCoordinator::new();
-    let joins = GroupJoins::default();
+    let h = Harness::new();
     let g = group("orders");
 
     // The shape `heartbeat.rs`'s own sweep produces: the coordinator moves
     // to PreparingRebalance directly (here, `Empty -> Join`, the same
     // transition a `Stable` group's own partial eviction fires), with no
     // call through `GroupJoins::join` and so no locally-open round.
-    coordinator
+    h.coordinator
         .transition(&g, GroupEvent::Join)
         .expect("Empty -> Join is legal");
 
-    let outcome = joins.join(
-        &coordinator,
-        &g,
-        member("survivor", &["range"]),
-        Duration::from_secs(1),
-    );
+    let outcome = h
+        .join(&g, member("survivor", &["range"]), Duration::from_secs(1))
+        .await;
     assert!(
         matches!(outcome, JoinOutcome::Pending { .. } | JoinOutcome::Ready(_)),
         "a PreparingRebalance group with no locally-open round must still accept a join, not refuse one forever"

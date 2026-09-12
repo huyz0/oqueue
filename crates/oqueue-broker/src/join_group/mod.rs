@@ -45,6 +45,34 @@ use oqueue_core::{GroupId, MemberId};
 pub(crate) use round::GroupJoins;
 use round::{JoinOutcome, RoundClose, RoundMember, effective_timeout_ms, mint_member_id};
 
+/// The wire code a refused join answers with.
+const fn refusal_code(outcome: &JoinOutcome) -> i16 {
+    match outcome {
+        // A dependency failed; the request was fine.
+        JoinOutcome::Unavailable => crate::fencing::Refusal::CoordinatorNotAvailable.error_code(),
+        // The group is contended; rejoining is the right response.
+        JoinOutcome::Busy => crate::fencing::Refusal::RebalanceInProgress.error_code(),
+        // ⚠️ **Listed, not a catch-all, and that is the point.** This arm is
+        // the one code the Java consumer raises out of `poll()` rather than
+        // retrying, and `JoinOutcome` grew two variants in two review rounds —
+        // under `_ =>` the next one would default, silently, to killing the
+        // consumer. Naming every variant makes it a compile error instead.
+        JoinOutcome::Refused | JoinOutcome::Ready(_) | JoinOutcome::Pending { .. } => {
+            error_codes::INCONSISTENT_GROUP_PROTOCOL
+        }
+    }
+}
+
+/// The actor and the coordinator this cluster's rounds transition through —
+/// paired here so no call site can answer "which coordinator" and "which
+/// actor" separately and get two different answers.
+fn coordination(cluster: &Cluster) -> round::Coordination<'_> {
+    round::Coordination {
+        transitions: cluster.group_transitions(),
+        coordinator: cluster.group_coordinator(),
+    }
+}
+
 /// Decodes, joins `group`'s own round (minting a member id if none was
 /// given), waits for it to close, and answers — or closes the connection on
 /// a malformed body.
@@ -72,23 +100,35 @@ pub(crate) async fn handle(
         request.session_timeout_ms,
     )));
 
-    let close = match cluster.group_joins().join(
-        cluster.group_coordinator(),
-        &group,
-        member,
-        rebalance_timeout,
-    ) {
-        JoinOutcome::Refused => {
-            return reply(prelude, &refusal(error_codes::INCONSISTENT_GROUP_PROTOCOL));
+    let close = match cluster
+        .group_joins()
+        .join(coordination(cluster), &group, member, rebalance_timeout)
+        .await
+    {
+        // ⚠️ Two refusals, two codes, and only one of them is the client's
+        // fault: `Unavailable` means a dependency failed, and answering it
+        // `INCONSISTENT_GROUP_PROTOCOL` would kill the consumer permanently.
+        // See `JoinOutcome::Unavailable`'s own doc.
+        outcome @ (JoinOutcome::Refused | JoinOutcome::Unavailable | JoinOutcome::Busy) => {
+            return reply(prelude, &refusal(refusal_code(&outcome)));
         }
         JoinOutcome::Ready(close) => close,
         pending @ JoinOutcome::Pending { .. } => {
-            let Some(close) = wait_for_close(cluster, &group, pending).await else {
-                // See `wait_for_close`'s own doc: unreachable outside an
-                // internal invariant violation, answered rather than held
-                // open forever waiting on a close that evidently is not
-                // coming.
-                return reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR));
+            let Some(close) = wait_for_close(cluster, &group, member_id.as_str(), pending).await
+            else {
+                // ⚠️ **`REBALANCE_IN_PROGRESS`, not `UNKNOWN_SERVER_ERROR`,
+                // and the difference is whether the client comes back.** Since
+                // `M4.15d` this is reachable without anything being wrong: the
+                // round was abandoned because the group moved on under it (a
+                // refused barrier), or a holder of the group's own in-flight
+                // slot outlasted both deadline passes. Rejoining is exactly
+                // the right response to both, and it is what this code asks
+                // for — `UNKNOWN_SERVER_ERROR` is not retriable in the Java
+                // consumer, which raises it out of `poll()`. Found by review.
+                return reply(
+                    prelude,
+                    &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
+                );
             };
             close
         }
@@ -170,11 +210,16 @@ fn member_id_for(requested: &str) -> MemberId {
 /// the round's own notify and its own deadline, re-checking `outcome` on
 /// every wakeup — `fetch::park`'s own re-check-don't-trust-the-wakeup shape.
 ///
-/// Returns `None` only if the deadline has already been tried once (this
-/// call's own [`GroupJoins::close_on_deadline`] call) and `outcome` is
-/// *still* unset — `round.rs`'s own module doc names the only way that
-/// happens: this bookkeeping and the coordinator have diverged, a bug
-/// rather than a case a client can trigger. Bailing out here rather than
+/// Returns `None` in two cases, and ⚠️ **since `M4.15d` neither is a bug**.
+/// One: the round was *abandoned* — a refused `JoinBarrierComplete` destroyed
+/// it and published `Some(None)`, which this returns as `None` on the first
+/// pass with no deadline attempt at all. Two: the deadline has already been
+/// tried once and `outcome` is still unset, which a holder of the group's own
+/// in-flight slot slower than `SLOT_WAIT` reaches with nothing diverged. It
+/// used to mean only that this bookkeeping and the coordinator had diverged.
+/// ⚠️ The caller answers `REBALANCE_IN_PROGRESS` — **not**
+/// `UNKNOWN_SERVER_ERROR`, which the Java consumer raises out of `poll()`
+/// rather than retrying. Bailing out here rather than
 /// looping (the deadline has already passed, so `sleep_until` would return
 /// at once, forever) is `security.md` rule 3's instinct against an
 /// unbounded hold applied to this module's own internal invariant instead
@@ -187,6 +232,7 @@ fn member_id_for(requested: &str) -> MemberId {
 async fn wait_for_close(
     cluster: &Cluster,
     group: &GroupId,
+    member_id: &str,
     pending: JoinOutcome,
 ) -> Option<std::sync::Arc<RoundClose>> {
     let JoinOutcome::Pending {
@@ -199,17 +245,37 @@ async fn wait_for_close(
     };
     let mut deadline_tried = false;
     loop {
-        if let Some(close) = outcome.get() {
-            return Some(std::sync::Arc::clone(close));
+        if let Some(published) = outcome.get() {
+            return published.clone();
         }
         tokio::select! {
             () = tokio::time::sleep_until(deadline) => {
-                cluster.group_joins().close_on_deadline(
-                    cluster.group_coordinator(),
-                    group,
-                    &outcome,
-                );
+                cluster
+                    .group_joins()
+                    .close_on_deadline(coordination(cluster), group, &outcome)
+                    .await;
+                // ⚠️ **Re-read the outcome before giving up.** Since
+                // `M4.15d`, `close_on_deadline` can return having closed
+                // nothing — another task held the group's own in-flight slot
+                // and this one's bounded wait lapsed — which the synchronous
+                // version it replaced could not do. Without this check a
+                // member whose round *did* close, at the generation every
+                // other member was answered with, is told
+                // `UNKNOWN_SERVER_ERROR`. Found by review; the trigger is a
+                // slow durable append behind the single transition actor, not
+                // an invariant violation.
+                if let Some(published) = outcome.get() {
+                    return published.clone();
+                }
                 if deadline_tried {
+                    // ⚠️ **Withdraw before answering, and do it here rather
+                    // than at the call site.** This member is being told to
+                    // rejoin; leaving it in the round's roster gets it
+                    // assigned partitions nobody will ever consume. The
+                    // withdrawal belongs to the function that decides to give
+                    // up, and it needs `outcome` to prove which round the
+                    // enrolment is in. See `GroupJoins::withdraw`.
+                    cluster.group_joins().withdraw(group, member_id, &outcome);
                     return None;
                 }
                 deadline_tried = true;

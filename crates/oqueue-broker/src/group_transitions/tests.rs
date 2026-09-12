@@ -230,10 +230,10 @@ async fn replay_pages_through_more_entries_than_one_page_holds() {
 }
 
 /// Round-1 review's own finding, reproduced directly: an orphaned durable
-/// record (a `SyncComplete` with no `Join` behind it — exactly what
-/// `sync_group.rs`/`heartbeat.rs` durably log today, since
-/// `join_group::round.rs` itself is not migrated until `M4.15d`) must not
-/// abort replay for any *other* group. `orders` is orphaned this way;
+/// record (a `SyncComplete` with no `Join` behind it — what every group's
+/// log looked like before `M4.15d` migrated `join_group::round.rs`, and what
+/// a log written by an older broker still looks like) must not abort replay
+/// for any *other* group. `orders` is orphaned this way;
 /// `payments` has a fully legal sequence right behind it in the same log.
 #[tokio::test(start_paused = true)]
 async fn an_orphaned_transition_poisons_only_its_own_group() {

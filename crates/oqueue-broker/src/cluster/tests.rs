@@ -92,12 +92,13 @@ async fn cluster_over(group_metadata_log: Arc<dyn GroupMetadataLog>) -> Cluster 
 /// `heartbeat.rs`'s `remove_where`, which this test's own direct calls
 /// stand in for) — the mechanism is what needs proving here, and a wire
 /// round-trip would only add encoding noise a real handler test already
-/// covers elsewhere. `join_group::round.rs` itself still calls
-/// `GroupCoordinator::transition` directly in production (module doc's
-/// own "only three of four" scope, `M4.15d`) — but nothing stops *this
-/// test* from routing its own `Join` events through the actor instead:
-/// the actor does not care who the caller is, only `join_group.rs`'s own
-/// real call site has not been retrofitted yet. Seeding `Join` any other
+/// covers elsewhere. ⚠️ This test routes its own `Join` events through the
+/// actor rather than through a real `JoinGroup` request — which it could do
+/// even when `join_group::round.rs` still called
+/// `GroupCoordinator::transition` directly, because the actor does not care
+/// who the caller is. `M4.15d` since retrofitted that call site, so the
+/// shortcut now matches production rather than standing in for it.
+/// Seeding `Join` any other
 /// way here would leave it out of the durable log, and replay would then
 /// fail outright the moment it reached a later `JoinBarrierComplete` with
 /// no matching `Join` behind it.

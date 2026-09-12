@@ -350,6 +350,25 @@ declare -A RUST_BOUNDS=(
   # fake) replay; raising it only delays how quickly a truly stuck gate is
   # noticed.
   ["crates/oqueue-broker/src/cluster/replay.rs|MAX_REPLAY_WAIT_YIELDS"]="10_000"
+  # `M4.15d`: how many times `GroupJoins::join` re-plans after losing a race
+  # to another joiner's own in-flight transition. ⚠️ **A retry here re-plans
+  # and never re-applies** — the pass that loses the race writes nothing — so
+  # this bounds how often one task may be overtaken, not how many durable
+  # records it can produce. Lowering it refuses a well-formed join under
+  # ordinary concurrent membership churn, which is the normal case for a
+  # group whose consumers all start at once; raising it risks a longer hold
+  # on one `JoinGroup` under pathological contention. `MAX_COMMIT_RETRIES`'s
+  # own reasoning, its own constant rather than shared code.
+  ["crates/oqueue-broker/src/join_group/round/state.rs|MAX_JOIN_REPLANS"]="8"
+  # `M4.15d`: the longest a deadline-driven close waits for whoever already
+  # holds the group's own in-flight slot. ⚠️ A liveness bound, not a tuning
+  # knob — it exists so a slot that is never released cannot hang a request
+  # forever. The wait it bounds is a durable object-store append behind one
+  # actor: tens of milliseconds at best, seconds under contention. Lowering
+  # it makes a waiter give up on a close that was genuinely coming and answer
+  # `REBALANCE_IN_PROGRESS` — retriable, so the client rejoins, but a wasted
+  # round trip; raising it lengthens how long one request can be held.
+  ["crates/oqueue-broker/src/join_group/round/state.rs|SLOT_WAIT"]="Duration::from_secs(5)"
   # `M4.15c`: how many `GroupMetadataLog` entries `GroupTransitionsTask::replay`
   # reads per page — `CommittedOffsets::replay`'s own identical reasoning
   # (`REPLAY_PAGE_SIZE` below), a separate constant rather than shared code.

@@ -110,9 +110,11 @@ impl Cluster {
     }
 
     /// The single-writer seam every group-state-mutating handler enqueues
-    /// through (`M4.15c`) — `join_group`'s own barrier bookkeeping is the
-    /// one exception, still calling `group_coordinator().transition(...)`
-    /// directly until `M4.15d`'s own retrofit.
+    /// through — `M4.15c` for three of them, `M4.15d` for
+    /// `join_group`'s own barrier bookkeeping, which until then called
+    /// `group_coordinator().transition(...)` directly. ⚠️ There is no
+    /// exception left: the only direct calls in this crate are the actor's
+    /// own apply and replay.
     pub(crate) const fn group_transitions(&self) -> &crate::group_transitions::GroupTransitions {
         &self.group_transitions
     }
