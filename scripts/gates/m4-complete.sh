@@ -6,6 +6,14 @@
 # merely defined; and cross-principal access is refused on the APIs this
 # milestone adds (FR-40).
 #
+# ⚠️ **And one leg beyond `M4.md`'s own sentence: the TLS + SASL/PLAIN round
+# trip** (`M4.37`). `M4.18` is the commit that first makes `M9`'s security
+# mechanism reachable in the shipped binary at all — `M9` built `tls::acceptor`,
+# `tls_terminated`, `with_credentials`, `with_topic_grants` and `with_quota`
+# and wired none of them — so a run on a host without `openssl` asserted none
+# of it while this gate said the condition held. `m11-complete.sh` gates on
+# `idempotent-conformance` for the identical reason.
+#
 # ## Each leg is falsifiable or says it is not
 #
 # `M3.16`/`M10.15`/`M11.12`'s precedent, and the reason this file is longer
@@ -244,6 +252,29 @@ else
       skip "FR-20 via $leg (that client did not run -- the harness said why)"
     fi
   done
+  # ⚠️ **`M4.18`'s own leg, and `M4.37` is why it is read here.** The harness
+  # records `tls-sasl` on the roster and, until this row, nothing read it:
+  # `M4.18` is the commit that first makes FR-4, FR-40 and FR-45 reachable in
+  # the shipped binary at all — `M9` built every mechanism and wired none —
+  # so a host without `openssl` asserted none of it while this gate said the
+  # completion condition held. `m11-complete.sh` gates on
+  # `idempotent-conformance` for the identical reason, in as many words:
+  # `have_librdkafka` alone would pass on the ordinary round trip while the
+  # leg that milestone exists for silently never ran.
+  if grep -qx 'tls-sasl' "$roster"; then
+    # ⚠️ **FR-40, not FR-4 or FR-45, and review of `M4.37` had to say so.**
+    # What the leg drives is one principal, one topic, one message: it
+    # falsifies authentication and topic authorization, and it cannot
+    # falsify FR-4 (Metadata scoped to the principal — no Metadata response
+    # is inspected) or FR-45 (quota isolation — no second principal, and
+    # nothing approaches `OQUEUE_MAX_IN_FLIGHT`). Naming those two would
+    # have made this the only completion gate printing a green FR-45 line
+    # for a run that drives no quota, which is precisely what
+    # `m9-complete.sh` declines to do and says why.
+    ok "FR-40: a real client authenticated over TLS, and was refused without a credential"
+  else
+    skip "the TLS + SASL/PLAIN leg did not run (no openssl, or no confluent-kafka)"
+  fi
 fi
 
 # ── 5. FR-21: the offset-survival leg reports, and is not asserted ──────────
@@ -283,15 +314,18 @@ fi
 # rather than passing it.
 have_rdkafka=0
 have_java=0
+have_tls=0
 if [[ -f "$roster" ]]; then
   grep -qx 'librdkafka-groups' "$roster" && have_rdkafka=1
   grep -qx 'java-groups' "$roster" && have_java=1
+  grep -qx 'tls-sasl' "$roster" && have_tls=1
 fi
-if (( _FAILURES == 0 )) && (( have_rdkafka )) && (( have_java )); then
+if (( _FAILURES == 0 )) && (( have_rdkafka )) && (( have_java )) && (( have_tls )); then
   ok "M4 completion condition holds (FR-40's five group APIs excepted and deferred, above)"
 elif (( _FAILURES == 0 )); then
   (( have_rdkafka )) || skip "librdkafka never drove a group -- FR-20 is unproven here"
   (( have_java )) || skip "the Java client never drove a group -- FR-20 is unproven here"
+  (( have_tls )) || skip "no client authenticated over TLS -- M4.18's own wiring is unproven here"
   warn "every check that could run passed, but the completion condition was NOT fully asserted"
 fi
 finish
