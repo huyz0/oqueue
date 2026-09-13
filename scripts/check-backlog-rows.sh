@@ -41,19 +41,16 @@
 # every closing commit — which is every commit. `check-commit-msg.sh` splits
 # those two modes for its own reasons and this borrows the distinction.
 #
-# ## ⚠️ What it deliberately does not check
+# ## ⚠️ What it declined to check, and no longer declines
 #
-# **Cell count.** The stronger leg — every task row has exactly four cells —
-# fails on the rows `M4.28` owns, because GFM splits cells on unescaped `|`
-# *including* inside code spans, and those rows carry one in a code span or a
-# quoted string. ⚠️ How many is deliberately not written here: it is derivable
-# (a task row whose `|` count minus its `\|` count is not 5), it goes to zero
-# when `M4.28` lands, and nothing would check it.
-# That is a real rendering defect and it is filed as its own row rather than
-# fixed here (frozen rows) or designed around by weakening this leg into
-# something that accepts it silently. What is checked instead is the defect
-# class that actually recurred: a row that ends in something other than exactly
-# one state cell, and a table that stopped being one.
+# ⚠️ ~~**Cell count.**~~ — **checked since `M4.28`**, which escaped the
+# thirteen rows that made it impossible. The note here used to explain why the
+# stronger leg was declined: GFM splits cells on unescaped `|` *including*
+# inside code spans, those rows carried one, and weakening the leg to accept
+# them would have been the cheaper and worse move. `M4.28` fixed the rows
+# instead, and the leg is the point of having done so. It counts unescaped
+# delimiters rather than cells, because counting cells means splitting the row,
+# which is the thing that is broken.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
@@ -306,6 +303,44 @@ for start, run in runs:
             problems.append(f"backlog.md:{n}: {m.group(1)} has no state cell "
                             f"— the row does not end in '| <state> |'")
             continue
+        # ⚠️ **Cell count, the leg `M4.27` declined and `M4.28` earned.**
+        # GFM splits a row on every unescaped `|`, *including* inside a code
+        # span — so a row quoting `| done |`, a shell `||`, or a type like
+        # `Name(&'a str) | Id(TopicId)` renders with its Notes column
+        # truncated there, its State column filled from whatever followed,
+        # and the rest of the row dropped from every rendered view. Thirteen
+        # rows carried one; `M4.28` escaped them, and this is what stops a
+        # fourteenth.
+        #
+        # ⚠️ **Five unescaped pipes, not four cells.** Counting cells would
+        # mean splitting the row, which is the thing that is broken; counting
+        # the delimiters that would do the splitting is the same fact
+        # measured before it does damage. ⚠️ `(?<!\\)` is why an escaped
+        # pipe does not count — and why a row may legitimately contain as
+        # many as it likes.
+        #
+        # ⚠️ **They read correctly by coincidence today, which is the trap.**
+        # Where the truncated fragment happens to be the row's real state the
+        # rendered cell is right anyway; the identical construction in a
+        # `todo` row displays `done`.
+        # ⚠️ **The remedy has to match the direction.** Too many delimiters
+        # is the defect this leg was built for; too few is a dropped cell or
+        # a delimiter somebody escaped by mistake, and telling that author
+        # to "escape a pipe" sends them the wrong way. Found by review.
+        unescaped = len(re.findall(r'(?<!\\)\|', line))
+        if unescaped > 5:
+            problems.append(
+                f"backlog.md:{n}: {m.group(1)} has {unescaped} unescaped "
+                f"'|' where a task row has exactly 5 — an unescaped pipe "
+                f"inside a cell splits the row when rendered. Escape it "
+                f"as '\\|'"
+            )
+        elif unescaped < 5:
+            problems.append(
+                f"backlog.md:{n}: {m.group(1)} has {unescaped} unescaped "
+                f"'|' where a task row has exactly 5 — a cell is missing, "
+                f"or a delimiter was escaped that should not be"
+            )
         state = tail.group(1)
         if vocab and state not in vocab:
             problems.append(f"backlog.md:{n}: {m.group(1)} has state "

@@ -56,3 +56,12 @@
 # Python bytecode from scripts/lib/, imported by the gates. `M1.32`.
 __pycache__/
 *.pyc
+
+# ⚠️ **Downloaded Python wheels, which a review of `M4.28` nearly committed.**
+# Verifying that backlog rows render as four cells meant installing a real GFM
+# parser, `pip download` left three manylinux wheels in the repo root, and the
+# next `git add -A` staged 719 KB of CPython-3.14 x86_64 binaries — unusable on
+# a macOS or aarch64 clone, referenced by nothing, and permanent once on `main`
+# since this repo commits direct. The tool is right to reach for; the artifacts
+# are not ours to carry.
+*.whl

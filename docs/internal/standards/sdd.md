@@ -184,18 +184,23 @@ command can derive is written into prose. M1 is the measured argument: rows
 grew to hundreds of words duplicating commit messages, and keeping the copies
 consistent cost more review rounds than the code did.
 
-⚠️ **One exception to the freeze, and M3 is why it exists.** An acceptance
-criterion the code does **not** meet is corrected in place, in the commit that
-corrects it, which names itself in the cell. Everything else about a `done` row
-stays frozen. Without it two rules that are each right cannot both hold: the
-freeze says a correction goes in the correcting commit's message, and `M3.19`
-established that the backlog is the artifact a correction must land in, because
-that is where `next-task`, the completion gate and every later task actually
-read. M3's checkpoint review found a `done` row whose criterion its own code
-inverts, and under the unamended rule there was no legal move. ⚠️ **An
-acceptance criterion is a claim about the code, not a record of what someone
-intended** — that is the asymmetry that makes this one case different from
-every other edit the freeze forbids.
+⚠️ **The first of two exceptions to the freeze, and M3 is why it exists.**
+⚠️ The second — a repair that changes what a row *renders as* — is below; a
+reader who stops here will think there is only this one, which is how a legal
+repair gets blocked in review.
+
+An acceptance criterion the code does **not** meet is corrected in place, in
+the commit that corrects it, which names itself in the cell. Everything else
+about a `done` row stays frozen, the second exception aside. Without it two
+rules that are each right cannot both hold: the freeze says a correction goes
+in the correcting commit's message, and `M3.19` established that the backlog is
+the artifact a correction must land in, because that is where `next-task`, the
+completion gate and every later task actually read. M3's checkpoint review
+found a `done` row whose criterion its own code inverts, and under the
+unamended rule there was no legal move. ⚠️ **An acceptance criterion is a claim
+about the code, not a record of what someone intended** — that is the asymmetry
+that makes this case different from every other edit the freeze forbids, the
+rendering repair below included: that one changes no claim at all.
 
 ⚠️ **And it names its direction, because without one the cheaper repair is
 always legal.** Correcting a criterion means one of two things and they are not
@@ -207,6 +212,41 @@ plan is a working hypothesis, expected to change and silently, so an obligation
 that lands only there has been downgraded rather than moved. Non-negotiable 2
 states the same discipline for thresholds and names the weakening direction;
 this is that rule for claims.
+
+⚠️ **The second exception, and `M4.28` is why it exists: a repair that changes
+what a row *renders as*, not what it says.** GFM splits a table row on every
+unescaped `|`, including inside a code span — so a row quoting `| done |`, a
+shell `||`, or a type like `Name(&'a str) | Id(TopicId)` renders with its Notes
+column truncated at that point, its State column filled from whatever followed,
+and the rest of the row dropped from every rendered view. Escaping those pipes
+is permitted on a frozen row.
+
+⚠️ **The three examples above are written unescaped on purpose**, because this
+is prose and not a table row: a bare `|` is only a delimiter inside a table, so
+here it shows the defect rather than becoming one. In a row they would each
+need `\|` — and an earlier draft of this paragraph wrote them that way, which
+illustrated the *repair* while claiming to illustrate the break.
+
+⚠️ **The argument is that no cell's meaning changes**, which is what makes
+this different from the exception above rather than a second hole in the same
+wall. A criterion correction changes what a row *claims*; this changes only
+whether a reader can see the claim that is already there — the source bytes
+said it all along and the renderer was eating them. `M4.26` made the same
+argument to rejoin `M11.3`, whose row a stray newline had split in three:
+restoring a row to the shape it was always meant to have is not a content
+edit to its cells.
+
+⚠️ **It is narrow on purpose.** Escaping a pipe, and nothing else in the row,
+in a commit that names the rows it touched. A repair that also reworded a cell
+would be indistinguishable from an ordinary freeze violation, and the freeze's
+value is that it is cheap to check.
+
+⚠️ **`dissolved` rows are covered too, and saying so is the point.** The
+freeze names `done` and nothing else, so two of `M4.28`'s thirteen rows
+(`M1.50`, `M1.56`) were unfrozen by the letter of the rule. Relying on that
+gap would make the repair legal for an accidental reason rather than the real
+one; the argument above is about rendering and applies identically whatever
+the state cell says.
 
 **A sweep is one row carrying several small fixes that share a theme** — a
 review's unowned minors, a batch of stale claims — one commit, one review

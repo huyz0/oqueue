@@ -3945,8 +3945,27 @@ invoke_backlog_two_state_cells() {
   bash "$1/scripts/check-backlog-rows.sh"
 }
 
+# An unescaped `|` inside a cell: the defect `M4.28` escaped out of thirteen
+# rows, and the one this gate could not check until they were. ⚠️ **The
+# fixture's stray pipe sits where it renders *plausibly***, which is the trap:
+# GFM truncates the Notes cell there and fills State from what follows, so this
+# row displays a State of `done` while its real state cell says `todo`. A gate
+# that read the rendered table would see nothing wrong.
+setup_backlog_unescaped_pipe() {
+  local dir; dir="$(new_scratch backlog-unescaped-pipe)"
+  copy_gate "$dir" check-backlog-rows.sh
+  _backlog_fixture "$dir" '| M-1.2 | a row quoting a table fragment | it mentions | done | in a code span | todo |'
+  printf '%s\n' "$dir"
+}
+invoke_backlog_unescaped_pipe() {
+  bash "$1/scripts/check-backlog-rows.sh"
+}
+
 run_case "check-backlog-rows.sh (row with no state cell)" \
   setup_backlog_no_state invoke_backlog_no_state "has no state cell"
+run_case "check-backlog-rows.sh (unescaped pipe inside a cell)" \
+  setup_backlog_unescaped_pipe invoke_backlog_unescaped_pipe \
+  "unescaped '|' where a task row has exactly 5"
 run_case "check-backlog-rows.sh (rows orphaned by a blank line)" \
   setup_backlog_orphaned_rows invoke_backlog_orphaned_rows \
   "no header and delimiter above them"
