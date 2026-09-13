@@ -36,10 +36,13 @@
 
 #![allow(clippy::redundant_pub_crate)]
 
+mod barrier;
 mod deadline;
 
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
+pub(crate) use barrier::SyncGroups;
+use barrier::{Assignments, Known, assignment_for};
 use deadline::MAX_SYNC_WAIT_MS;
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
@@ -49,174 +52,8 @@ use oqueue_codec::sync_group::{
 };
 use oqueue_core::{GroupEvent, GroupId, GroupState};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::Notify;
 use tokio::time::{Duration, Instant};
-
-/// Every member's own slice of the leader's submitted assignment, by member
-/// id, together with **the generation it was computed for**.
-///
-/// ⚠️ **The generation is the whole point, and leaving it out was a real
-/// defect `M4.17` caught with a real client.** A follower syncing for
-/// generation N would find generation N-1's map already present and be
-/// answered from it at once, without waiting for its own generation's
-/// leader to submit. For a consumer that joined during N-1 that map holds
-/// its own *empty* slice — it was the newcomer, and a cooperative assignor
-/// gives a newcomer nothing in the round that admits it — so the consumer
-/// was answered "you own nothing", went `steady`, and stayed idle forever
-/// while the rest of the group kept every partition. Adding a consumer to a
-/// working group simply did not work.
-#[derive(Debug)]
-struct Assignment {
-    generation: i32,
-    map: Arc<HashMap<String, Vec<u8>>>,
-}
-
-/// The cell a group's current [`Assignment`] lives in.
-///
-/// ⚠️ **A `Mutex<Option<_>>`, not a `OnceLock`.** Each generation replaces
-/// the last, and the previous shape could only ever be *rotated* — replacing
-/// the whole entry, and with it the `Notify` any follower was already parked
-/// on, so a follower that arrived before its leader was left waiting on a
-/// handle nobody would ever signal and timed out. One durable cell and one
-/// durable `Notify` per group means a waiter is woken by every submission
-/// and re-checks the generation itself.
-type Assignments = Arc<Mutex<Option<Assignment>>>;
-
-/// Every group's own assignment barrier: known once the assignment-bearing
-/// submission lands, `None` until then.
-#[derive(Debug, Default)]
-pub(crate) struct SyncGroups {
-    entries: Mutex<HashMap<GroupId, Entry>>,
-}
-
-#[derive(Debug, Default)]
-struct Entry {
-    assignments: Assignments,
-    notify: Arc<Notify>,
-}
-
-/// What the group's cell currently says about `generation`.
-#[derive(Debug)]
-enum Known {
-    /// This generation's assignment, ready to answer with.
-    Mine(Arc<HashMap<String, Vec<u8>>>),
-    /// The cell holds a *later* generation: the group rebalanced again while
-    /// this member was waiting, and its own generation is never coming.
-    Superseded,
-    /// Nothing yet, or an older generation still. Keep waiting.
-    Waiting,
-}
-
-/// What the group's cell currently says about `generation`.
-fn assignment_for(assignments: &Assignments, generation: i32) -> Known {
-    let guard = assignments.lock().unwrap_or_else(PoisonError::into_inner);
-    // ⚠️ **An `Ordering` match, not comparison guards.** The three cases are
-    // exhaustive and mutually exclusive, and spelling them that way says so
-    // to the compiler instead of relying on arm order — with guards, an
-    // earlier `==` arm makes the `>` in a later one unmutatable-but-live
-    // (`cargo mutants` reports `>` -> `>=` surviving, because equality never
-    // reaches it), which is a branch no test can pin. Found by the gate.
-    let known = guard.as_ref().map_or(Known::Waiting, |a| {
-        match a.generation.cmp(&generation) {
-            std::cmp::Ordering::Equal => Known::Mine(Arc::clone(&a.map)),
-            // ⚠️ **A later generation means this waiter's own is never
-            // coming**, and saying so at once is the difference between a
-            // retry and a dead consumer. Without this the member sleeps out
-            // the whole `MAX_SYNC_WAIT_MS` — 50 minutes — and is then
-            // answered `UNKNOWN_SERVER_ERROR`, which the Java consumer
-            // raises out of `poll()` and never retries; real Kafka releases
-            // exactly this case immediately with `REBALANCE_IN_PROGRESS`,
-            // which is what a client rejoins on. The same lesson `M4.15d`
-            // learned four times over: a condition that is nobody's fault
-            // must not reach a fatal code.
-            // Found by review.
-            std::cmp::Ordering::Greater => Known::Superseded,
-            // An older generation still on the cell: this member's own
-            // leader has not submitted yet. Keep waiting.
-            std::cmp::Ordering::Less => Known::Waiting,
-        }
-    });
-    drop(guard);
-    known
-}
-
-impl SyncGroups {
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<GroupId, Entry>> {
-        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// `group`'s own current entry, creating one if this is its first
-    /// `SyncGroup` for the generation now completing.
-    fn entry_for(&self, group: &GroupId) -> (Assignments, Arc<Notify>) {
-        let mut entries = self.lock();
-        let entry = entries.entry(group.clone()).or_default();
-        let handles = (Arc::clone(&entry.assignments), Arc::clone(&entry.notify));
-        drop(entries);
-        handles
-    }
-
-    /// Submits `group`'s own assignment map for `generation` — the leader's
-    /// own call.
-    ///
-    /// ⚠️ **Replaces the previous generation's, and wakes every waiter on
-    /// the group's own durable `Notify`.** Followers for this generation
-    /// that arrived first are parked on it; followers still holding a
-    /// *stale* generation see the new one on waking and re-check rather
-    /// than being answered from a map that was never about them.
-    ///
-    /// `None` means the cell already holds a **later** generation and this
-    /// submission is refused — the caller answers `REBALANCE_IN_PROGRESS`.
-    ///
-    /// ⚠️ **The guard is `>`, not `>=` or `!=`: a leader resubmitting its
-    /// own generation still replaces its own map**, which is the retry path
-    /// `a_resubmitted_assignment_for_the_same_generation_replaces_the_first`
-    /// and `durability::a_second_submission_against_an_already_stable_group_is_still_answered`
-    /// both pin — a leader retrying after a lost response would otherwise be
-    /// refused and burn a generation. `>=` is the mutation that matters and
-    /// turns all three red.
-    ///
-    /// ⚠️ **`M4.35`: this was an unconditional write, and it was the one
-    /// blind post-`await` write M4 left.** `handle`'s fence reads the
-    /// group's record synchronously and the submission then awaits a full
-    /// round trip through the single transitions actor, so a generation
-    /// N submission can arrive after N+1's leader has already submitted —
-    /// and the stale map then replaced it, leaving every N+1 follower not
-    /// yet answered looking at a cell that had gone backwards, waiting out
-    /// `MAX_SYNC_WAIT_MS` for an `UNKNOWN_SERVER_ERROR`. Every other
-    /// post-await write in M4 has this guard: `CommittedOffsets::apply`
-    /// compares a `CommitVersion`, `is_own_open_round` pointer-compares the
-    /// round, `close_on_deadline` re-reads `outcome`. Found by M4's closing
-    /// review.
-    fn submit(
-        &self,
-        group: &GroupId,
-        generation: i32,
-        map: HashMap<String, Vec<u8>>,
-    ) -> Option<Arc<HashMap<String, Vec<u8>>>> {
-        let mut entries = self.lock();
-        let entry = entries.entry(group.clone()).or_default();
-        let map = Arc::new(map);
-        let mut guard = entry
-            .assignments
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if guard.as_ref().is_some_and(|a| a.generation > generation) {
-            drop(guard);
-            drop(entries);
-            return None;
-        }
-        *guard = Some(Assignment {
-            generation,
-            map: Arc::clone(&map),
-        });
-        drop(guard);
-        let notify = Arc::clone(&entry.notify);
-        drop(entries);
-        notify.notify_waiters();
-        Some(map)
-    }
-}
 
 /// Decodes, submits or awaits the group's own assignment, and answers — or
 /// closes the connection on a malformed body.
@@ -262,7 +99,7 @@ pub(crate) async fn handle(
     let map = match wait_for_assignment(&assignments, &notify, request.generation_id).await {
         Known::Mine(map) => map,
         // Retriable: the client rejoins and syncs at the new generation.
-        Known::Superseded => {
+        Known::Superseded | Known::Refused => {
             return reply(
                 prelude,
                 &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
@@ -309,13 +146,7 @@ async fn submit_assignment(
     // one to answer with.
     //
     // ⚠️ **An unreachable log is the case where answering `NONE` is the
-    // worst available answer**, and this refusal leaves one thing
-    // unanswered: a follower already parked on the barrier is not woken,
-    // because `submit` never runs. It is released as `Known::Superseded`
-    // by the next generation's submission -- but while the log stays down
-    // there is no next generation, so it waits out `MAX_SYNC_WAIT_MS`.
-    // Filed rather than fixed here: giving the barrier a failure channel
-    // is a change to `SyncGroups`, not to this branch. Every member is told its assignment is
+    // worst available answer.** Every member is told its assignment is
     // valid and starts consuming, while the group never left
     // `CompletingRebalance` -- so `fence_commit`'s own `[Stable]` fence
     // refuses every `OffsetCommit` and every heartbeat answers
@@ -367,6 +198,7 @@ async fn submit_assignment(
                 r.state == GroupState::Stable && r.generation.get() == request.generation_id
             });
             if !synced {
+                cluster.sync_groups().refuse(group, request.generation_id);
                 return reply(
                     prelude,
                     &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
@@ -374,6 +206,14 @@ async fn submit_assignment(
             }
         }
         Err(_) => {
+            // ⚠️ **And the followers already parked on the barrier, which
+            // `M4.33` left and `M4.43` fixed.** They are normally released
+            // as `Known::Superseded` by the next generation's submission —
+            // but the refusal here *is* the log being unreachable, and every
+            // path to a next generation goes through the same log, so while
+            // the outage lasts there is no next generation and they would
+            // wait out `MAX_SYNC_WAIT_MS` for an assignment nobody submits.
+            cluster.sync_groups().refuse(group, request.generation_id);
             return reply(
                 prelude,
                 &refusal(crate::fencing::Refusal::CoordinatorNotAvailable.error_code()),
@@ -387,6 +227,13 @@ async fn submit_assignment(
         // The group left this generation while the transition was in
         // flight. Retriable, and the same answer its own followers get
         // from `Known::Superseded`.
+        //
+        // ⚠️ **No `refuse` call here, unlike the two arms above.** `submit`
+        // returned `None` precisely because the cell already holds a
+        // *newer* generation, so every follower parked on this one already
+        // reads `Known::Superseded` and was woken by the submission that
+        // put it there. Publishing a refusal would overwrite that newer
+        // map, which is the thing `M4.35` exists to prevent.
         return reply(
             prelude,
             &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),

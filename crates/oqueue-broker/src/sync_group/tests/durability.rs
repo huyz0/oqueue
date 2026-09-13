@@ -141,3 +141,174 @@ async fn the_same_leader_succeeds_once_the_log_heals() {
         "the handler left nothing behind that refuses the retry"
     );
 }
+
+/// ⚠️ **`M4.43`'s own acceptance criterion.** A follower already parked on
+/// the barrier when its leader's submission is refused must be told to
+/// rejoin, not left waiting for an assignment nobody will ever submit.
+///
+/// ⚠️ **Nothing releases it otherwise while the outage lasts.** The
+/// follower is normally freed as `Known::Superseded` by the *next*
+/// generation's submission — but the leader's refusal came from the group
+/// metadata log being unreachable, and every path to a next generation goes
+/// through the same log, so there is no next generation to free it. It
+/// waits out `MAX_SYNC_WAIT_MS` — fifty minutes — and is then answered
+/// `UNKNOWN_SERVER_ERROR`, which this module's own doc records the Java
+/// consumer raising out of `poll()` and never retrying. Found by review of
+/// `M4.33`, which judged the deferral defensible and filed it rather than
+/// widening that commit.
+#[tokio::test(start_paused = true)]
+async fn a_parked_follower_is_woken_when_its_leaders_submission_is_refused() {
+    let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
+
+    let waiting = sync(
+        &fixture.cluster,
+        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
+    );
+    tokio::pin!(waiting);
+    assert!(
+        crate::testing::poll_once(&mut waiting).is_none(),
+        "the follower must park on the barrier rather than answer at once"
+    );
+
+    fixture.refuse_group_metadata_append();
+    let leader = sync(
+        &fixture.cluster,
+        leader_body_at(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"gen1-m1"), ("m2", b"gen1-m2")],
+            1,
+        ),
+    )
+    .await;
+    assert_eq!(
+        leader.error_code,
+        error_codes::COORDINATOR_NOT_AVAILABLE,
+        "the leader is refused -- otherwise this test proves nothing about the follower"
+    );
+
+    let follower = waiting.await;
+    assert_eq!(
+        follower.error_code,
+        error_codes::REBALANCE_IN_PROGRESS,
+        "and the follower is told to rejoin rather than left parked for MAX_SYNC_WAIT_MS"
+    );
+    assert!(
+        follower.assignment.is_empty(),
+        "a refusal carries no assignment"
+    );
+}
+
+/// ⚠️ **An older generation's map must not suppress the refusal**, which is
+/// the case the acceptance test above cannot reach: it starts from a group
+/// that has never synced, so the cell is empty and `refuse`'s guard
+/// short-circuits before looking at anything. Every group that has run a
+/// round leaves a map behind, so this is the *common* shape, and the first
+/// version of the guard failed it — the follower parked for
+/// `MAX_SYNC_WAIT_MS` and was answered `UNKNOWN_SERVER_ERROR`, exactly what
+/// the row exists to remove. Found by review.
+#[tokio::test(start_paused = true)]
+async fn a_refusal_overwrites_an_older_generations_assignment() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    let sync_groups = fixture.cluster.sync_groups();
+    assert!(
+        sync_groups
+            .submit(&g, 1, [("m1".to_owned(), b"gen1".to_vec())].into())
+            .is_some(),
+        "the group synced once before"
+    );
+
+    sync_groups.refuse(&g, 2);
+
+    let (assignments, _) = sync_groups.entry_for(&g);
+    assert!(
+        matches!(
+            super::super::assignment_for(&assignments, 2),
+            super::super::Known::Refused
+        ),
+        "generation 2's followers must be told to rejoin, not left on Waiting behind \
+         generation 1's leftovers"
+    );
+}
+
+/// ⚠️ **A refusal must never overwrite an assignment**, which is the half of
+/// `SyncGroups::refuse` that `cargo mutants` found pinned by nothing — its
+/// guard survived three mutations. Two shapes, and this covers the later
+/// generation's: a refusal arriving for a generation the group has already
+/// moved past is the same hazard `M4.35` exists to prevent, reached through
+/// the other writer.
+#[tokio::test(start_paused = true)]
+async fn a_refusal_does_not_overwrite_a_later_generations_assignment() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    let sync_groups = fixture.cluster.sync_groups();
+    assert!(
+        sync_groups
+            .submit(&g, 2, [("m1".to_owned(), b"gen2".to_vec())].into())
+            .is_some()
+    );
+
+    sync_groups.refuse(&g, 1);
+
+    let (assignments, _) = sync_groups.entry_for(&g);
+    assert!(
+        matches!(super::super::assignment_for(&assignments, 2), super::super::Known::Mine(map)
+            if map.get("m1").map(Vec::as_slice) == Some(b"gen2".as_slice())),
+        "generation 2's map must survive a late refusal for generation 1"
+    );
+}
+
+/// ⚠️ **And this generation's, published by whoever got there first.** A
+/// second connection's submission can land between this one's failed
+/// transition and its `refuse`, and unpublishing it would strand every
+/// follower it was about — the exact failure `refuse` was added to end,
+/// arrived at from the other side.
+#[tokio::test(start_paused = true)]
+async fn a_refusal_does_not_unpublish_this_generations_own_assignment() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    let sync_groups = fixture.cluster.sync_groups();
+    assert!(
+        sync_groups
+            .submit(&g, 2, [("m1".to_owned(), b"gen2".to_vec())].into())
+            .is_some()
+    );
+
+    sync_groups.refuse(&g, 2);
+
+    let (assignments, _) = sync_groups.entry_for(&g);
+    assert!(
+        matches!(super::super::assignment_for(&assignments, 2), super::super::Known::Mine(map)
+            if map.get("m1").map(Vec::as_slice) == Some(b"gen2".as_slice())),
+        "a refusal for a generation that already has an assignment must leave it alone"
+    );
+}
+
+/// ⚠️ **And a later generation's *refusal* must survive too**, which is the
+/// only case the `>` half of that guard decides on its own: when the cell
+/// holds a map, `map.is_some()` answers first, so `cargo mutants` reported
+/// the comparison surviving three mutations until this test existed.
+///
+/// The cost of getting it wrong is the failure `refuse` was added to end,
+/// one generation over: a follower of the later generation would read
+/// `Known::Waiting` again and park for `MAX_SYNC_WAIT_MS`.
+#[tokio::test(start_paused = true)]
+async fn a_late_refusal_does_not_reopen_a_later_generations_refusal() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    let sync_groups = fixture.cluster.sync_groups();
+
+    sync_groups.refuse(&g, 2);
+    sync_groups.refuse(&g, 1);
+
+    let (assignments, _) = sync_groups.entry_for(&g);
+    assert!(
+        matches!(
+            super::super::assignment_for(&assignments, 2),
+            super::super::Known::Refused
+        ),
+        "generation 2's followers must still be told to rejoin, not sent back to Waiting"
+    );
+}

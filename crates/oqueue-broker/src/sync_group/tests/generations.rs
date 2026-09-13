@@ -369,9 +369,10 @@ async fn a_leader_whose_group_reopened_its_barrier_while_parked_is_told_to_rejoi
     assert!(
         matches!(
             super::super::assignment_for(&assignments, 1),
-            super::super::Known::Waiting
+            super::super::Known::Refused
         ),
-        "and nothing was published for the generation the group left"
+        "no assignment was published for the generation the group left, and -- since \
+         `M4.43` -- the barrier says so rather than leaving a parked follower on Waiting"
     );
 }
 
