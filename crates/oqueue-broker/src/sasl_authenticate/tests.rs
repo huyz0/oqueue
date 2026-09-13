@@ -86,6 +86,21 @@ fn correct_credentials_over_tls_succeed() {
     let response = replied(&body, true, &creds);
     assert_eq!(response.error_code, 0, "{:?}", response.error_message);
     assert!(response.error_message.is_none());
+    // ⚠️ **`0` is KIP-368's "this session never expires", and a wrong value
+    // here is protocol-visible in a way no other test would notice.** This
+    // shipped as `i64::MAX` on the belief that `0` meant "expires
+    // immediately"; `M4.18` measured the truth the first time anything
+    // actually spoke `SASL/PLAIN` to this broker — librdkafka's reauth
+    // deadline overflows, it re-authenticates at once, and
+    // `Session::authenticate` is first-wins, so the connection is torn down
+    // and rebuilt in a loop. ⚠️ **Pinned here because the only other thing
+    // that catches a revert is `scripts/harness/tls_sasl.py`**, which is not
+    // a pre-commit gate and skips itself without `openssl`. Found by review.
+    assert_eq!(
+        response.session_lifetime_ms, 0,
+        "0 means no expiry (KIP-368); i64::MAX makes a real client \
+         re-authenticate immediately and lose the connection"
+    );
 }
 
 #[test]

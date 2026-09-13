@@ -116,8 +116,7 @@ const fn refused() -> SaslAuthenticateResponse<'static> {
 ///
 /// `tls` names whether this connection is already TLS-terminated —
 /// `ADR-0032`'s prerequisite, decided by whichever composer accepted the
-/// connection (a TLS listener, once that wiring exists), never guessed at
-/// here. `credentials` is the configured set to check against. On success,
+/// connection — `bin/oqueue`'s own since `M4.18` — never guessed at here. `credentials` is the configured set to check against. On success,
 /// `session` records the matched principal (`Session::authenticate`) —
 /// `M9.7`'s "the rule that every request carries one" made real, since this
 /// is the one place that principal is ever established.
@@ -156,12 +155,26 @@ pub(crate) fn handle(
             error_code: error_codes::NONE,
             error_message: None,
             auth_bytes: Redacted::new(b""),
-            // ⚠️ No expiry: this broker does not yet re-authenticate a
-            // long-lived connection (a real feature, not an omission to
-            // fix here) — Kafka's own convention for "no bound" is the
-            // field's own max representable value, not `0`, which real
-            // Kafka clients treat as "expires immediately."
-            session_lifetime_ms: i64::MAX,
+            // ⚠️ **`0` is KIP-368's "this session never expires", and the
+            // comment here used to claim the opposite.** It said Kafka's
+            // convention for "no bound" was this field's maximum value and
+            // that `0` meant "expires immediately". Both halves are wrong,
+            // and `M4.18` measured it the moment anything actually spoke
+            // `SASL/PLAIN` to this broker: given `i64::MAX`, librdkafka logs
+            // `Received session lifetime 9223372036854775807 ms`, computes a
+            // reauth deadline that overflows, and re-authenticates *at once*
+            // — every time. `Session::authenticate` is first-wins by design
+            // (`ADR-0032`: no re-authentication story yet), so every one of
+            // those is refused, and the client tears the connection down and
+            // reconnects in a loop. Measured over 25 s: with `i64::MAX`, a
+            // continuous REAUTH-then-`SASL authentication failed` cycle;
+            // with `0`, 31 delivered and 0 failed with no REAUTH at all.
+            //
+            // ⚠️ **Nothing caught this until `M9.21` was discharged**, which
+            // is the point: `M9` built the mechanism and no call site, so
+            // the only client that ever exercised this field was a unit test
+            // asserting the constant it was given.
+            session_lifetime_ms: 0,
         });
 
     let mut out = Vec::new();

@@ -7,8 +7,11 @@
 //! protocols on separate ports, or something else. `serve_connection`
 //! (`connection.rs`) is already generic over `S: AsyncRead + AsyncWrite`,
 //! so a [`tokio_rustls::server::TlsStream`] is a drop-in `S` the moment a
-//! composer has one — that wiring, and the real architectural question of
-//! which listener model this broker exposes, is a separate, later task.
+//! composer has one. ⚠️ **`M4.18` built that composer**: `bin/oqueue serve`
+//! terminates TLS on the connection's own task when `OQUEUE_TLS_CERT` and
+//! `OQUEUE_TLS_KEY` name a pair. The listener *model* — TLS-only, or both
+//! protocols on separate ports — is still one deployment's answer and not
+//! this module's.
 //!
 //! ⚠️ **`install_ring_provider` is this crate's own copy, not a call into
 //! `oqueue-store`'s** (`crates/oqueue-store/src/tls.rs`) — that function is

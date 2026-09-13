@@ -395,6 +395,15 @@ declare -A RUST_BOUNDS=(
   # fleet starting together more likely to need a second rebalance, because
   # members arriving after it has elapsed join the next round instead.
   ["crates/oqueue-broker/src/join_group/round/state.rs|INITIAL_REBALANCE_DELAY"]="Duration::from_secs(3)"
+  # `M4.18`: how long a TLS handshake may take before the connection is
+  # dropped. ⚠️ **The one hold that precedes every other limit** —
+  # `ConnectionLimits` governs a session that exists, this governs getting one
+  # at all, and until it completes the peer has authenticated nothing. Raising
+  # it lengthens how long an unauthenticated peer can hold a socket and a task
+  # (measured unbounded before this: still open at 145 s, where the cleartext
+  # path is closed at 120 s by `idle_timeout`); lowering it risks refusing a
+  # real client on a slow link.
+  ["bin/oqueue/src/serve.rs|HANDSHAKE_TIMEOUT"]="Duration::from_secs(10)"
   # `M4.15c`: how many `GroupMetadataLog` entries `GroupTransitionsTask::replay`
   # reads per page — `CommittedOffsets::replay`'s own identical reasoning
   # (`REPLAY_PAGE_SIZE` below), a separate constant rather than shared code.
@@ -644,7 +653,12 @@ declare -A STRUCT_FIELD_BOUNDS=(
   # defect `the_idle_timeout_outlasts_the_longest_park` exists to catch --
   # this pin is what makes that relationship visible to `check-drift.sh`
   # itself, not only to a `cargo test` run.
-  ["bin/oqueue/src/serve.rs|SERVE_LIMITS|idle_timeout"]="std::time::Duration::from_mins(2)"
+  # ⚠️ Spelled `Duration::from_mins(2)` since `M4.18`, not because the bound
+  # moved — it is the same two minutes — but because that commit imported
+  # `Duration` into `serve.rs` and clippy's `unused_qualifications` then
+  # refused the fully-qualified form. The pin tracks the bytes, so a spelling
+  # change has to be recorded here even when the value does not move.
+  ["bin/oqueue/src/serve.rs|SERVE_LIMITS|idle_timeout"]="Duration::from_mins(2)"
 )
 struct_violations=0
 while IFS= read -r open_line; do

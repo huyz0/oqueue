@@ -28,6 +28,14 @@ oqueue-index = { path = "../../crates/oqueue-index" }
 # is in object storage, so this is the first time the binary must *hand* an
 # `ObjectStore` to something.
 oqueue-store = { path = "../../crates/oqueue-store" }
+# `M4.18`: the composition root terminates TLS, so it needs the acceptor type
+# `oqueue-broker`'s own `tls` module hands back. ⚠️ No new C toolchain — the
+# `ring` provider `ADR-0012` chose is already in this tree via `oqueue-crypto`
+# and `oqueue-store`, and this manifest pulls the same one.
+tokio-rustls.workspace = true
+# `M4.18`: the security configuration's own error type, the same way every
+# other crate here spells one.
+thiserror.workspace = true
 # The listener itself -- `net` arrives exactly when the composition root
 # binds one, as oqueue-broker's manifest promised.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "time"] }

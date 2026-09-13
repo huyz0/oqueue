@@ -34,6 +34,8 @@ the entire system be tested with no network, no credentials and no container.
 - `oqueue-index` — `MemoryIndex`, the materialization chosen here. ⚠️ `M3`'s answer, not the project's: doc 10 #12's disk engine is open, and choosing in a composition root is what makes swapping it one line.
 - `oqueue-store` — `S3Store` and `GcsStore`, selected by `OQUEUE_STORE`. ⚠️ **Unset means an in-memory store, which is not durable** — the banner names it and `serve` warns that every acknowledged record is lost at exit. ⚠️ **A value that is neither `s3` nor `gcs` is refused**, not defaulted: `OQUEUE_STORE=S3` is a typo, and a typo must not start a broker that loses records.
 - `tokio` — the runtime under `serve`'s listener; `net` arrived exactly when this binary bound one.
+- `tokio-rustls` — the acceptor `serve` terminates TLS with (`M4.18`). ⚠️ **No new C toolchain**: the `ring` provider `ADR-0012` chose is already here beneath `oqueue-crypto` and `oqueue-store`, and this manifest pulls the same one.
+- `thiserror` — the security configuration's own error type, spelled the way every other crate here spells one.
 - `mimalloc` — the global allocator. ⚠️ C, compiled by `cc` at build time;
   within NFR-42 ("cargo and a C compiler") and recorded in ADR-0007.
 - `tikv-jemallocator` — **optional**, behind the non-default `heap-profiling`
@@ -44,6 +46,35 @@ the entire system be tested with no network, no credentials and no container.
 ⚠️ **A composer.** `check-layering.sh`'s `COMPOSERS` set is
 `{oqueue-broker, oqueue}`; every other crate may depend on `oqueue-core` and
 nothing else here.
+
+## Security configuration
+
+⚠️ **Every source is named by an environment variable and never sniffed, and a
+malformed one stops the process** — `behavior.md` rule 8, and `OQUEUE_STORE`'s
+own argument. A typo'd credential path that fell back to "no credentials"
+would start a broker that accepts every client, which from outside looks
+identical to one configured correctly.
+
+| Variable | Holds | Absent means |
+|---|---|---|
+| `OQUEUE_TLS_CERT`, `OQUEUE_TLS_KEY` | paths to a PEM certificate chain and private key | cleartext, warned about. ⚠️ **Both or neither** — one alone is refused, because falling back to cleartext on a typo'd path starts exactly the broker the operator was avoiding |
+| `OQUEUE_CREDENTIALS` | a file of `principal:password` lines | no authentication, and authorization fails **open**. ⚠️ Requires TLS: `SASL/PLAIN` is only accepted inside a TLS session (`ADR-0032`), so credentials without TLS is refused rather than started — it would serve nobody |
+| `OQUEUE_TOPIC_GRANTS` | a file of `principal:topic` lines, one grant each | no grants. With credentials configured that refuses every authenticated client every topic, so it is warned about |
+| `OQUEUE_MAX_IN_FLIGHT` | a positive integer | no per-principal quota. ⚠️ Inert without credentials, since the quota keys on the authenticated principal — and warned about |
+
+⚠️ **File format**: `name:value`, split on the **first** colon (a password may
+contain one; a principal may not). ⚠️ **Whole-line `#` comments** and blank lines are ignored — a `#` *after* a value is part of that value, so `alice:secret # prod` sets the password to `secret # prod` and the broker then refuses the operator's own client while the file reads correctly. A password may legitimately contain `#`, which is why it cannot be stripped.
+⚠️ **Surrounding whitespace *is* stripped**, on both the name and the value:
+`alice:s3cret ` sets the password to `s3cret`. That is almost always what an
+operator meant, but it is equally invisible in the file — and a password that
+was meant to end in a space is then refused with the deliberately
+uninformative `SASL/PLAIN authentication failed`.
+⚠️ **One grant per line**: `alice:orders,payments` names a single topic called
+`orders,payments`, not two — and the client is then refused with nothing
+saying why. ⚠️ **A named source that parses to nothing is refused** rather
+than treated as absent: an empty credential file would otherwise mean "no
+authentication at all".
+
 
 ## Downstream
 

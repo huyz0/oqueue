@@ -49,6 +49,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+mod security;
 mod serve;
 
 use oqueue_core::{KeyProvider, ObjectStore};
@@ -197,7 +198,26 @@ fn main() {
         // the identity Metadata hands out (doc 02 §7.2: identity is a
         // decision) -- the harness's capture proxy needs clients steered
         // through it rather than at the socket this process bound.
-        (Some("serve"), Some(addr)) => serve(&addr, args.next().as_deref(), &wiring),
+        (Some("serve"), Some(addr)) => {
+            // ⚠️ **Read before the listener binds, and fatal if it cannot
+            // be.** `behavior.md` rule 8: a malformed credential, grant or
+            // quota source must stop the process, never degrade to running
+            // without it — a broker that fell back to "no credentials"
+            // because a path was typo'd accepts every client, which is the
+            // opposite of what was asked for and looks identical from
+            // outside until somebody reads the logs (`M4.18`).
+            let security = match security::configured() {
+                Ok(security) => security,
+                Err(error) => {
+                    eprintln!("oqueue: security configuration could not be used: {error}");
+                    std::process::exit(1);
+                }
+            };
+            for line in security.describe() {
+                eprintln!("{line}");
+            }
+            serve(&addr, args.next().as_deref(), &wiring, &Arc::new(security));
+        }
         (None, _) => run(&wiring),
         (Some(other), _) => {
             eprintln!("unknown argument {other:?}; usage: oqueue [serve <host:port>]");

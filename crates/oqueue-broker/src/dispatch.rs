@@ -114,10 +114,12 @@ impl Dispatcher {
     ///
     /// ⚠️ **The composer's claim, not this crate's to verify.** Whichever
     /// listener accepted the connection (`crate::tls`'s own capability,
-    /// `M9.5`) is the one place that can honestly answer this — `M9.5`'s own
-    /// backlog row named wiring a real TLS listener into `bin/oqueue serve`
-    /// as separate, not-yet-scoped work; this method is where that answer
-    /// will land once it exists.
+    /// `M9.5`) is the one place that can honestly answer this. ⚠️ **That
+    /// composer exists as of `M4.18`**: `bin/oqueue`'s `security::Security`
+    /// calls this exactly when it built a `TlsAcceptor`, so the claim is
+    /// derived from the acceptor rather than set beside it — asserting it on
+    /// a cleartext socket is what would let `SASL/PLAIN` send a password in
+    /// the clear.
     #[must_use]
     pub const fn tls_terminated(mut self) -> Self {
         self.tls = true;

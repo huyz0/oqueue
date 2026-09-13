@@ -134,6 +134,32 @@ else
     note "$(tail -10 "$HARNESS_DIR/idempotent.log" 2>/dev/null || true)"
   fi
 
+  # ── TLS + SASL/PLAIN (M4.18, FR-40/FR-4/FR-45) ────────────────────────────
+  # ⚠️ **The leg `M9.21` was waiting for.** `M9` built TLS termination, the
+  # `SASL/PLAIN` mechanism, topic grants and quotas and wired none of them
+  # into `bin/oqueue serve` — every `Dispatcher` in the tree was built with
+  # plain `new`, so a broker from `M9`'s own crate answered every request
+  # unauthenticated over cleartext. Only a real client connecting can show the
+  # wiring is there: a unit test can assert a builder was called, not that a
+  # password on the wire is checked.
+  #
+  # ⚠️ **Its own broker, because the certificate has to name the address the
+  # client dials** — the shared `$ADDR` broker above runs cleartext on
+  # purpose, since every other leg needs it that way.
+  #
+  # ⚠️ **`openssl` is the one extra tool**, and a missing one is a skip like
+  # any other absent client rather than a failure.
+  if ! command -v openssl >/dev/null 2>&1; then
+    skip "TLS + SASL/PLAIN round trip (no openssl to make a test certificate)"
+  elif python3 scripts/harness/tls_sasl.py > "$HARNESS_DIR/tls-sasl.log" 2>&1 \
+    && grep -q '^TLS SASL OK$' "$HARNESS_DIR/tls-sasl.log"; then
+    ok "librdkafka over TLS with SASL/PLAIN (and refused without a credential)"
+    echo "tls-sasl" >> "$ROSTER"
+  else
+    fail "TLS + SASL/PLAIN round trip failed"
+    note "$(tail -10 "$HARNESS_DIR/tls-sasl.log" 2>/dev/null || true)"
+  fi
+
   # ── offset survival across a broker restart (M4.17, FR-21) ────────────────
   # ⚠️ **Reported, never asserted — and never as a pass.** FR-21's own
   # verification method is "offsets survive a full broker fleet restart" and

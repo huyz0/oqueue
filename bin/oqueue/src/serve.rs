@@ -13,13 +13,19 @@
 use crate::Wiring;
 use oqueue_core::ObjectStore;
 use std::sync::Arc;
+use std::time::Duration;
 
 /// Binds `addr` and serves the M2 protocol until killed.
 ///
 /// ⚠️ The advertised identity is the bound address, verbatim — doc 02 §7.2's
 /// trap says identity must be decided, and for a single local stub the bound
 /// address is the honest choice: it is the one address a client can reach.
-pub(crate) fn serve(addr: &str, advertise: Option<&str>, wiring: &Wiring) {
+pub(crate) fn serve(
+    addr: &str,
+    advertise: Option<&str>,
+    wiring: &Wiring,
+    security: &Arc<crate::security::Security>,
+) {
     // Sized for the harness, not for production: librdkafka's default
     // `message.max.bytes` is 1 MiB, so 16 MiB clears every test frame;
     // 64 in-flight matches its default per-connection pipelining ceiling;
@@ -58,7 +64,7 @@ pub(crate) fn serve(addr: &str, advertise: Option<&str>, wiring: &Wiring) {
         // ⚠️ The line the harness parses; the port is real, not the `:0`
         // the caller may have passed.
         println!("listening on {local}");
-        accept_loop(listener, cluster, serving, limits).await
+        accept_loop(listener, cluster, serving, limits, security).await
     });
     if let Err(error) = result {
         eprintln!("oqueue: serve failed: {error}");
@@ -74,7 +80,7 @@ pub(crate) fn serve(addr: &str, advertise: Option<&str>, wiring: &Wiring) {
 const SERVE_LIMITS: oqueue_broker::ConnectionLimits = oqueue_broker::ConnectionLimits {
     max_frame: 16 * 1024 * 1024,
     max_in_flight: 64,
-    idle_timeout: std::time::Duration::from_mins(2),
+    idle_timeout: Duration::from_mins(2),
 };
 
 /// What an operator must hear about the store this process chose, if anything.
@@ -91,6 +97,69 @@ fn durability_warning(store_name: &str) -> Option<&'static str> {
     )
 }
 
+/// How long a TLS handshake may take before the connection is dropped.
+///
+/// ⚠️ **The one hold that precedes every other limit.** `ConnectionLimits`
+/// governs a session that exists; this governs getting one at all, and until
+/// it completes the peer has authenticated nothing. Generous against a real
+/// client on a slow link — `SERVE_LIMITS.idle_timeout` is 120 s for an
+/// established connection — and small beside the unbounded wait it replaces.
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Serves one accepted connection on its own task, terminating TLS first
+/// when this deployment runs it.
+///
+/// ⚠️ **The handshake happens here, not in the accept loop.** It is a round
+/// trip with the client, so doing it before returning to `accept` would let
+/// one slow or malicious peer stall every other connection — the same reason
+/// the loop does not read a request frame either.
+fn spawn_connection(
+    stream: tokio::net::TcpStream,
+    security: &Arc<crate::security::Security>,
+    cluster: Arc<oqueue_broker::Cluster>,
+    limits: oqueue_broker::ConnectionLimits,
+) {
+    // ⚠️ **Only the acceptor is cloned here; the dispatcher is built on the
+    // spawned task.** Building it clones the credential set and the grant
+    // map, which is work proportional to the configuration — doing it before
+    // returning to `accept` would pay that for every TCP connect, including
+    // peers that never finish a handshake. Cloning a `TlsAcceptor` is an
+    // `Arc` bump. Found by review.
+    let acceptor = security.acceptor.clone();
+    let security = Arc::clone(security);
+    tokio::spawn(async move {
+        if let Some(acceptor) = acceptor {
+            // ⚠️ **Bounded, because a handshake is the one thing here that
+            // runs before any of `serve_connection`'s own limits apply.** A
+            // peer that connects and then says nothing holds a socket and a
+            // task for as long as it likes: measured, still open at 145 s
+            // against TLS where the cleartext path is closed at 120 s by
+            // `idle_timeout`. That is an *unauthenticated* hold, so it is
+            // the cheapest possible way to exhaust this broker's file
+            // descriptors. `async-concurrency.md` rule 4; found by review.
+            //
+            // ⚠️ A failed or timed-out handshake is one connection's problem
+            // and nobody else's: no reply is possible (there is no session to
+            // answer in) and it must not be louder than a dropped
+            // connection, or a port scanner would fill the log.
+            let handshake = tokio::time::timeout(HANDSHAKE_TIMEOUT, acceptor.accept(stream));
+            if let Ok(Ok(stream)) = handshake.await {
+                // ⚠️ **Built after the handshake, not before it.** Review
+                // caught the comment above promising a saving the code did
+                // not make: constructing it first meant every silent TCP
+                // connection held a config-sized clone of the credentials
+                // and grants for the whole `HANDSHAKE_TIMEOUT`, which is the
+                // cost that paragraph exists to avoid.
+                let handler = Arc::new(security.dispatcher(cluster));
+                let _ = oqueue_broker::serve_connection(stream, handler, limits).await;
+            }
+        } else {
+            let handler = Arc::new(security.dispatcher(cluster));
+            let _ = oqueue_broker::serve_connection(stream, handler, limits).await;
+        }
+    });
+}
+
 /// Accepts connections until the listener or the coordinator's loop gives out.
 ///
 /// ⚠️ **Its own function so `serve` stays inside `code-structure.md`'s fifty
@@ -101,6 +170,7 @@ async fn accept_loop(
     cluster: Arc<oqueue_broker::Cluster>,
     mut serving: tokio::task::JoinHandle<()>,
     limits: oqueue_broker::ConnectionLimits,
+    security: &Arc<crate::security::Security>,
 ) -> std::io::Result<()> {
     // ⚠️ **The one operator surface for `reaped_reads`**, and it exists because
     // a counter nobody can read is a counter nobody will act on. Doc 12 §4.6:
@@ -109,7 +179,7 @@ async fn accept_loop(
     // moment ago. `M9` owns the metrics surface; until then this is a line on
     // stderr, printed only when the number moves.
     let mut reported_reaps = 0_u64;
-    let mut reap_tick = tokio::time::interval(std::time::Duration::from_mins(1));
+    let mut reap_tick = tokio::time::interval(Duration::from_mins(1));
     reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         // A connection's ending is that connection's news alone, and so
@@ -154,12 +224,11 @@ async fn accept_loop(
                     // produce raise everybody's freshness bar. The `Cluster`
                     // behind it *is* shared, which is where the cost would
                     // have been.
-                    let handler = Arc::new(oqueue_broker::Dispatcher::new(Arc::clone(&cluster)));
-                    tokio::spawn(oqueue_broker::serve_connection(stream, handler, limits));
+                    spawn_connection(stream, security, Arc::clone(&cluster), limits);
                 }
                 Err(error) => {
                     eprintln!("oqueue: accept failed: {error}");
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                 }
             },
         }
@@ -188,7 +257,7 @@ async fn accept_loop(
 /// that stays up, accepts connections, and answers every produce
 /// `LEADER_NOT_AVAILABLE` forever while no supervisor restarts it, because it
 /// never exits and says nothing.
-async fn build_cluster(
+pub(crate) async fn build_cluster(
     host: String,
     port: i32,
     store: Arc<dyn ObjectStore>,
@@ -253,7 +322,7 @@ fn advertised_identity(
 // Sites below are on values these tests constructed from literals they control.
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::{SERVE_LIMITS, advertised_identity};
+    use super::{Duration, SERVE_LIMITS, advertised_identity};
     use oqueue_core::ObjectStore;
     use std::sync::Arc;
 
@@ -321,7 +390,7 @@ mod tests {
         assert_eq!(SERVE_LIMITS.max_in_flight, 64);
         assert!(
             SERVE_LIMITS.idle_timeout
-                > std::time::Duration::from_millis(
+                > Duration::from_millis(
                     u64::try_from(oqueue_broker::MAX_PARK_MS).expect("a positive ceiling")
                 ),
             "an idle timeout below the park ceiling disconnects every long poll"
@@ -386,7 +455,14 @@ mod tests {
         // just never returns, which a developer notices by a different route
         // than a red gate. Recorded here so a reader does not credit the
         // budget check with a backstop it does not have.
-        let result = super::accept_loop(listener, cluster, serving, SERVE_LIMITS).await;
+        let result = super::accept_loop(
+            listener,
+            cluster,
+            serving,
+            SERVE_LIMITS,
+            &Arc::new(crate::security::Security::cleartext()),
+        )
+        .await;
 
         let error = result.expect_err("a dead coordinator loop must end the accept loop");
         // ⚠️ **The task number is not asserted** — `tokio::task::JoinError`'s
