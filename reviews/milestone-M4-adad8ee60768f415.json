@@ -1,0 +1,162 @@
+{
+  "commits": [
+    "7fb97387f1a55b486f7424d6ae0ec7ae1c2a0ae9",
+    "2e9b8a8efce0c2f6b8f3b04f57c7277faea60cd2",
+    "a0d89fe6c993cb5f72a86dfcd97e25a93f307dd3",
+    "b90f217ac0b3f856f7fd85bebc93535dd1c32a82",
+    "06ef598ca2cd51ec6db2a14c655f1b19c035f6d6",
+    "20ebf3b67b3ed36ac3d28c9c626fa591db105db4",
+    "8f1f5c777a349b78cf4b584af4ff0c3338c69c44",
+    "99afbeaca5ecb342e5b98c7580f2304a80f4d985",
+    "b3b1bb6bd5b34fcdc313f8446d4b9be9a63e3a9d",
+    "4375c1ae87bb48150a6e0574b35ecbf72d05c159",
+    "5d89b024d031cc251eecb56a0a7f2e13feb4acf4",
+    "a56a20435c52459f2b7bbc72c124a5464a6d7cda",
+    "32502df803355a53507ffd1cae02730aa1d71f37",
+    "3de698e3d4b81b3e3d96ef2be054f4aa3ff77903",
+    "7dcc41d4f45bedb028a76c5d235987a2a4a84b59",
+    "76dfdd25bff4a58537e16e35ce73e919ab3d85ca",
+    "2230e2c642c6931b3c58b17587055c16d5d0b4db",
+    "f78653d4112a3836d272d966a259e0d412f219dc",
+    "2931f6bd766c5d169e044521c03f43c4f23a3501",
+    "574ec4683da0c6ea5356488326fc50515dd336b4",
+    "3b597aa24a1a25fee3badd0044cde996e8faa92b",
+    "b13d54e7cf183c136bfb16a666241e3f96200902",
+    "6dc6fe37d29a5c1c4a07edeb8e1b2fb50d276dbf",
+    "29fcb82eb96407a84b243be78c70aadd3bb97647",
+    "0473cb427eba46f741cdf5434c8db9f18abd136f",
+    "69725031e58afea015ad49f65edef4526edd48c6",
+    "3d2b87fb2386fa5721c100047f5379f8547ddb54",
+    "feabaaa97703c8973ba83bb08ec11d8d17468f19",
+    "e29c59dc524c024cd24ad48b061eee433ca01c54",
+    "a5c22fefc0f712ee296324fbf9de81cf4c306bbf",
+    "c2c0f29611b51e3f020e02c12c2b77beab8eb116",
+    "fced761d714c49f64e819ef859cd4e2f499c692f"
+  ],
+  "findings": [
+    {
+      "evidence": "scripts/check-mutants.sh --full is a CI step (.github/workflows/gates.yml:319) and `git log origin/main..HEAD` is 118 commits, spanning M9, M11 and all of M4 \u2014 so CI's half of testing.md rule 16 has not run against any of them, and no local gate substitutes: check-mutants.sh in pre-commit is diff-narrowed. Measured: `cargo mutants --profile mutants -p oqueue-core --file crates/oqueue-core/src/group_state.rs` in the container gives 15 mutants, 3 caught, 12 unviable, 0 missed. So baselines/mutants.txt's entry keyed to group_state.rs:113:9 (the line is now 124:9) argues a mutant that no longer survives \u2014 M4.19's own [profile.mutants] is the likely cause, and the entry's stated discharge condition ('comes out the moment a second constructor exists, M4.7/M4.9') was met and never acted on. check-mutants.sh:129-143 iterates survivors and matches them against the argued list, so it never checks the converse: a baseline entry matching no live survivor cannot fail any gate, which is why a file whose header calls itself 'a list nobody grows quietly' can hold a line nobody can see is dead. \u26a0\ufe0f An interrupted partial --full run listed survivors in connection.rs and oqueue-codec absent from the baseline; that run had nine timeouts and was killed midway, so it is not evidence of the gate's verdict \u2014 which is the finding: nobody knows, and only running it tells anyone.",
+      "id": "49062716e1e6",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "The full mutation gate has not run in 118 commits, and the one baseline entry M4 wrote is stale in the direction nothing can detect",
+      "task_id": "M4.32"
+    },
+    {
+      "evidence": "sync_group.rs:240 `let _ = ...transition(SyncComplete)` with a comment covering only the illegal-transition case; group_transitions.rs:303 `append_durably(...).await?` makes the same call return Err on storage failure since M4.15d. round/mod.rs:226 and round/plan.rs:364 both distinguish Raced from Unavailable and say why. Probe with refuse_group_metadata_append: leader and follower both get error_code 0 and an assignment, coordinator stays CompletingRebalance, every later heartbeat answers 27.",
+      "id": "bca0cbdcbfeb",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "sync_group discards a failed durable append and answers the leader NONE, where both sibling call sites in join_group were fixed not to",
+      "task_id": "M4.33"
+    },
+    {
+      "evidence": "heartbeat.rs:224-231 picks Join for a partial membership loss; group_state.rs:229 admits Join only from (Empty | Stable). Probe: leader dies mid-sync, m1 tracked goes false, state stays CompletingRebalance gen 1 across six sweeps, the parked follower is finally answered -1 after MAX_SYNC_WAIT_MS. Kafka's onExpireHeartbeat handles this state explicitly. This is the three-mechanism disagreement made concrete: Heartbeats, awaiting and the sync barrier all agree the member is gone and the coordinator's table is never told.",
+      "id": "09d8b01b5741",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "Evicting one member of a CompletingRebalance group fires GroupEvent::Join, which the transition table refuses, pinning the group at the old generation with no leader",
+      "task_id": "M4.34"
+    },
+    {
+      "evidence": "sync_group.rs:166-188 writes the cell unconditionally; the fence's generation read at :213 is separated from it by the transition await, which round/state.rs:172 documents as tens of milliseconds good case and seconds plausible. Proven directly: after a gen2 submit gen2 asks Mine; after a late gen1 submit gen2 asks Waiting. Every other post-await write has the guard \u2014 CommittedOffsets::apply compares CommitVersion, is_own_open_round pointer-compares, close_on_deadline re-reads outcome.",
+      "id": "16383d3eed9e",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "SyncGroups::submit overwrites a newer generation's assignment with an older one, the one blind post-await write M4 left",
+      "task_id": "M4.35"
+    },
+    {
+      "evidence": "check-fencing-seam.sh:41-47 CODES omits REBALANCE_IN_PROGRESS; fencing.rs:119-124 has six variants; sync_group.rs:256 constructs error_codes::REBALANCE_IN_PROGRESS directly. Adding the code to CODES makes the gate fail on exactly that line. m4-complete.sh:193-205 derives the list from the enum body and requires six. fencing.rs:114 and offset_fetch.rs:96 both repeat the false 'only place any of them is ever constructed' claim, and .pre-commit-config.yaml:137 names the hook after the stronger property. No case in tests/gates/negative.sh.",
+      "id": "2e65a8cfa2c8",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-fencing-seam.sh enforces five of Refusal's six codes and sync_group.rs:256 violates the sixth, so M4 shipped two gates that disagree about the seam",
+      "task_id": "M4.36"
+    },
+    {
+      "evidence": "kafka-client-harness.sh:164 records tls-sasl on the roster; m4-complete.sh:240 and :284-289 read only librdkafka-groups and java-groups. Measured with openssl forced to the skip path: harness exit 0, roster without tls-sasl, and the gate prints 'M4 completion condition holds'. m2-complete.sh:115 and m11-complete.sh:140 both establish the opposite discipline, m11 specifically because have_librdkafka alone would pass while the idempotent leg silently never ran. M4.18 is the commit that first makes FR-4/FR-40/FR-45 reachable in the shipped binary.",
+      "id": "76522130b4eb",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "m4-complete.sh reports the completion condition holds on a run where the TLS+SASL leg never executed",
+      "task_id": "M4.37"
+    },
+    {
+      "evidence": "rdkafka_groups.py:44 SETTLE_SECONDS=60 against SESSION_TIMEOUT_MS=6000 and MAX_POLL_INTERVAL_MS=20000; GroupRebalance.java:40 the same. Measured: replacing consumers.pop('c2').close() with abandoning c2 still prints GROUP CONFORMANCE OK, settling via the MAXPOLL eviction path. M4.10 is specifically LeaveGroup firing exactly one rebalance.",
+      "id": "01a8114205ea",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "The group harness's removal stage settles on session-timeout eviction, so FR-20's 'drove join, add and remove' does not prove LeaveGroup",
+      "task_id": "M4.38"
+    },
+    {
+      "evidence": "README.md:31, roadmap.md:432 and M4.md:4 all say 'durable committed offsets' after M4.17 struck it from M4.md's Goal; serve.rs:293 wires FakeGroupMetadataLog. M4.md:82 says the composition root still calls Dispatcher::new (false since M4.18's security.rs:170), :78 names a full-fleet-restart test, :134 says 'both gates stay green' (false since M4.23 leg 2). M4.md:12 and roadmap.md:180 omit FR-40 while m4-complete.sh asserts it and three rows cite it. M6.md:12 omits FR-21 and M12.md:12 omits FR-40 although both plans carry the receiving task; M15.md:12 and roadmap.md:189 carry FR-31 as the precedent both skipped. group_transitions.rs:36 claims a group's record survives a restart.",
+      "id": "b2ec1171d115",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "Four documents still claim what M4.17 struck or what M4.18 changed, and both of M4's forward deferrals stopped short of the receiving plan's Serves line",
+      "task_id": "M4.39"
+    },
+    {
+      "evidence": "Whole-workspace grep finds MemberEpoch only in its own module and one re-export at oqueue-core/src/lib.rs:114. GroupRecord (group_coordinator.rs:16-23) holds state, generation and assignment_epoch and no per-member value; heartbeat.rs never mentions it. group_state.rs:28-33 says M4.2's GroupCoordinator holds one per member and M4.9's Heartbeat advances it; neither does. ADR-0033:50-55 asks for the three-epoch model 'from the first commit' so a KIP-848 pickup is a coexistence addition rather than a rewrite; what exists is two epochs plus a newtype with an INITIAL and a get(). The mutants baseline entry blocking above says it comes out 'the moment a second constructor exists (M4.7/M4.9)' \u2014 both shipped, none exists. Whether to build the member epoch or amend the decision is a decision, not a task.",
+      "id": "b0b5af3ced25",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "MemberEpoch has no holder and no advance at the end of the milestone built on the three-epoch model, so ADR-0033 decision 2 is not satisfied by the code"
+    },
+    {
+      "evidence": "M4.md:12 'Serves: FR-20, FR-21, FR-22' against requirements.md:68 'deferred \u2014 ADR-0033 (M4.0)' and M4.md:138's own 'FR-22 (KIP-848) is deferred and this condition does not assert it'. Eleven done rows (M4.1, .2, .5, .6, .7, .8, .9, .10, .11, .15a, .15c) cite FR-22; M4.25 recorded the count as ten and left them as 'correctly left alone'. sdd.md's freeze has exactly two exceptions \u2014 a criterion the code does not meet, and a rendering repair \u2014 and a wrong requirement citation is neither, so by the rule as written those rows are permanently wrong. ADR-0033 was recorded in M4.0, so every one was written after the deferral was decided. Removing FR-22 from M4.md:12 and roadmap.md:180, or widening sdd.md's exception set, is a decision.",
+      "id": "e983d58d0dbd",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "M4's plan serves FR-22, which its own first commit deferred, and eleven frozen rows cite FR-22 for work that is FR-20's wording"
+    },
+    {
+      "evidence": "requirements.md:169 states NFR-56 as 'pre-commit suite completes within 10 s'. target/timings/suite.tsv: 736 rows, 614 compiling, 92 ok, 30 over; the last ten are all compiling:check-coverage.sh at 19.5-36.9 s. check-crate and check-coverage are each structurally over check-budget.sh's 5000 ms exemption threshold on a warm tree because they build separate target dirs, so compiling_n > 0 is permanently true and M2.5's recorded decision makes that branch warn and never fail. The gate warns about this itself. baselines/review.txt's argued finding 8a292bf49bcd predicted it at M0's boundary and M10.25/ADR-0029 recorded it as an open consequence. Either the 10 s number or the exemption is wrong; non-negotiable 2 forbids moving the threshold, so this is a decision.",
+      "id": "f354215b9db6",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "NFR-56 has no reachable failure path: the compiling exemption is 83% of recorded runs and two consecutive warm runs with no source change between them were both exempted"
+    },
+    {
+      "evidence": "ADR-0016:17-18 records backlog.md at ~69,000 words as the problem it was written to fix; rule 2 is 'a row is a task, what it serves, an acceptance criterion, a state'. Measured at HEAD: wc -w backlog.md = 128479, larger than the 110,000-word research corpus, and 111194 at M4.0. Per-section median Notes-cell length in words: M4 442 (max 1201 at M4.14), M9 306, M11 281, M1 265, M3 94, M2 32, M-1 22 \u2014 M4 is 1.7x the M1 median sdd.md:183 cites as the cautionary case. ADR-0016's alternatives record 'generate the backlog from commit history \u2014 deferred, not rejected. Worth revisiting if rule 1 fails to hold in practice.' It has not held.",
+      "id": "35f264857aa6",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "ADR-0016's terse-row rule has measurably reversed and the ADR's own revisit trigger is met"
+    },
+    {
+      "evidence": "grep -c against tests/gates/negative.sh returns 0 for each. M4's own half of this is M4.36; the other three belong to whoever opens next. m-1/m0/m1/m2/m3-complete.sh all have cases.",
+      "id": "62ac3de815f7",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "testing.md rule 20a stopped being followed: check-secrets (M9.14), check-topic-list-scope (M9.11) and check-idempotence-enabled (M11.9) have no case in tests/gates/negative.sh, and neither do m4/m9/m10/m11-complete.sh"
+    },
+    {
+      "evidence": "Leg 3's 'reachable in a test' check is satisfied by a comment: adding `// A note: Err(Refusal::FencedInstanceId) is what KIP-345 would need.` to fencing/tests.rs prints 'every fencing refusal (7) is driven by a test'. The same awk cannot see a final variant with no trailing comma (defended in practice by cargo fmt inside check-crate). The FR-40 tripwire at :160-172 greps five files rather than the handlers' module trees, so a GroupGrants check landing in join_group/round/plan.rs or a new heartbeat/mod.rs leaves the deferral reading 'unmet and reported' \u2014 the missing floor is `(( read < 5 ))`, which the adjacent fencing leg has as `count < 6`. Recorded in fced761's body.",
+      "id": "7916460ead29",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "Three residual holes in m4-complete.sh's own legs, each measured"
+    },
+    {
+      "evidence": "join_group/mod.rs:256 wait_for_close builds a bare notify.notified() inside select! after checking outcome, the one Notify waiter without the Box::pin(..).as_mut().enable() idiom that round/mod.rs:120, round/close.rs:178 and sync_group.rs:273 each document at length; bounded, because the loop re-checks. serve.rs:383 the_idle_timeout_outlasts_the_longest_park still asserts only against MAX_PARK_MS (60 s) while M4 added MAX_BARRIER_MS and MAX_SYNC_WAIT_MS at 3,000,000 ms against a 120 s idle timeout, and connection.rs:44 still states the invariant. rdkafka_groups.py:138 and offset_survival.py:115 call producer.flush(10) with no on_delivery and the return discarded, the exact defect tls_sasl.py documents being fixed twice. group_transitions::append_durably and CommittedOffsets::commit are the same optimistic-append loop with the same retry budget under two names against one shared log, which ADR-0035's 'two small things' precedent stops covering at the third data point.",
+      "id": "5a4a2f88b6d4",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Four small consistencies M4 dropped in its own late commits"
+    },
+    {
+      "evidence": "Harvested from all 32 commit bodies per ADR-0016 rule 4. Document ones are folded into M4.39; the rest are code and test notes from M4.15d (three), M4.16, M4.17, M4.9, M4.10, M4.7, M4.14, M4.1, M4.2, M4.5, M4.13, M4.28. Separately: M4.0 decomposed M4.1-M4.18, twelve rows were opened after it, and roadmap.md's deferral table has no analogue of :210 ('eleven rows M1 opened after its own decomposition -> M2') or :236 for M4; no completion gate checks for open rows. Also README.md:178 says M11 is in progress while README.md:158 and roadmap.md:75 say complete; sdd.md:153 writes a derivable count ('in four places', actually 58) in prose against its own :182 rule; roadmap.md:199 mischaracterises sdd.md's receiver rule and is the paragraph requirements.md:32 points at.",
+      "id": "fc256e56aed4",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "Twelve rule-15 minors recorded in M4 commit bodies were never filed, and no deferral row hands M4's post-decomposition rows forward"
+    }
+  ],
+  "milestone": "M4",
+  "recorded_at": "2026-09-13T16:49:39Z",
+  "reviewer": "claude-opus-5 (three lenses: protocol code, documents and spec, gates and harness)",
+  "verdict": "changes-requested"
+}
