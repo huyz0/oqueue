@@ -16,8 +16,6 @@ mod restart;
 use super::super::{Harness, group, member};
 use crate::join_group::round::JoinOutcome;
 use oqueue_core::{GroupCoordinator, GroupEvent, GroupState};
-use std::future::Future;
-use std::pin::Pin;
 use std::time::Duration;
 
 /// ⚠️ **Two members joining a fresh group concurrently must open *one*
@@ -146,7 +144,7 @@ async fn a_cancelled_join_does_not_leak_the_slot() {
         let joining = h.join(&g, member("m1", &["range"]), Duration::from_secs(1));
         tokio::pin!(joining);
         assert!(
-            futures_lite_poll_once(&mut joining).is_none(),
+            crate::testing::poll_once(&mut joining).is_none(),
             "the join must park on the actor while holding the slot"
         );
         // Dropped here, mid-await, with the claim outstanding.
@@ -201,18 +199,6 @@ async fn a_withdrawn_member_is_not_in_the_round_that_closes() {
     );
 }
 
-/// `futures::poll_once` without the dependency — `Cargo.toml` carries no
-/// `futures`, and `build.md` asks for a recorded reason before one is added,
-/// which a single poll in one test does not earn.
-pub(super) fn futures_lite_poll_once<F: Future>(f: &mut Pin<&mut F>) -> Option<F::Output> {
-    use std::task::{Context, Poll, Waker};
-    let mut cx = Context::from_waker(Waker::noop());
-    match f.as_mut().poll(&mut cx) {
-        Poll::Ready(v) => Some(v),
-        Poll::Pending => None,
-    }
-}
-
 /// **A join that loses a race to another handler's transition re-plans; it is
 /// not refused.** The `BLOCKING` finding of round two: `opening_event` picks
 /// from the state it reads under the mutex, and the actor applies it a
@@ -243,7 +229,7 @@ async fn a_join_that_loses_a_race_re_plans_rather_than_refusing() {
     let joining = h.join(&g, member("m2", &["range"]), Duration::from_secs(1));
     tokio::pin!(joining);
     assert!(
-        futures_lite_poll_once(&mut joining).is_none(),
+        crate::testing::poll_once(&mut joining).is_none(),
         "the join must park on the actor"
     );
     // The leader's own sync lands first, so m2's chosen event is now illegal.
@@ -414,7 +400,7 @@ async fn a_co_member_of_an_abandoned_round_learns_at_once() {
     let filling = h.join(&g, member("m2", &["range"]), Duration::from_secs(1));
     tokio::pin!(filling);
     assert!(
-        futures_lite_poll_once(&mut filling).is_none(),
+        crate::testing::poll_once(&mut filling).is_none(),
         "m2 must park on the actor holding the slot"
     );
     // The last tracked member goes away, making m2's barrier illegal.

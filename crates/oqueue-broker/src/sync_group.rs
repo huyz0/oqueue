@@ -97,6 +97,7 @@ struct Entry {
 }
 
 /// What the group's cell currently says about `generation`.
+#[derive(Debug)]
 enum Known {
     /// This generation's assignment, ready to answer with.
     Mine(Arc<HashMap<String, Vec<u8>>>),
@@ -163,12 +164,36 @@ impl SyncGroups {
     /// that arrived first are parked on it; followers still holding a
     /// *stale* generation see the new one on waking and re-check rather
     /// than being answered from a map that was never about them.
+    ///
+    /// `None` means the cell already holds a **later** generation and this
+    /// submission is refused — the caller answers `REBALANCE_IN_PROGRESS`.
+    ///
+    /// ⚠️ **The guard is `>`, not `>=` or `!=`: a leader resubmitting its
+    /// own generation still replaces its own map**, which is the retry path
+    /// `a_resubmitted_assignment_for_the_same_generation_replaces_the_first`
+    /// and `durability::a_second_submission_against_an_already_stable_group_is_still_answered`
+    /// both pin — a leader retrying after a lost response would otherwise be
+    /// refused and burn a generation. `>=` is the mutation that matters and
+    /// turns all three red.
+    ///
+    /// ⚠️ **`M4.35`: this was an unconditional write, and it was the one
+    /// blind post-`await` write M4 left.** `handle`'s fence reads the
+    /// group's record synchronously and the submission then awaits a full
+    /// round trip through the single transitions actor, so a generation
+    /// N submission can arrive after N+1's leader has already submitted —
+    /// and the stale map then replaced it, leaving every N+1 follower not
+    /// yet answered looking at a cell that had gone backwards, waiting out
+    /// `MAX_SYNC_WAIT_MS` for an `UNKNOWN_SERVER_ERROR`. Every other
+    /// post-await write in M4 has this guard: `CommittedOffsets::apply`
+    /// compares a `CommitVersion`, `is_own_open_round` pointer-compares the
+    /// round, `close_on_deadline` re-reads `outcome`. Found by M4's closing
+    /// review.
     fn submit(
         &self,
         group: &GroupId,
         generation: i32,
         map: HashMap<String, Vec<u8>>,
-    ) -> Arc<HashMap<String, Vec<u8>>> {
+    ) -> Option<Arc<HashMap<String, Vec<u8>>>> {
         let mut entries = self.lock();
         let entry = entries.entry(group.clone()).or_default();
         let map = Arc::new(map);
@@ -176,6 +201,11 @@ impl SyncGroups {
             .assignments
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        if guard.as_ref().is_some_and(|a| a.generation > generation) {
+            drop(guard);
+            drop(entries);
+            return None;
+        }
         *guard = Some(Assignment {
             generation,
             map: Arc::clone(&map),
@@ -184,7 +214,7 @@ impl SyncGroups {
         let notify = Arc::clone(&entry.notify);
         drop(entries);
         notify.notify_waiters();
-        map
+        Some(map)
     }
 }
 
@@ -240,8 +270,9 @@ pub(crate) async fn handle(
 
 /// The assignment-bearing submission: build the map every member's own
 /// slice comes from, fire the state transition, and submit it for *this*
-/// generation, replacing whatever generation's map the group's cell last
-/// held (`submit`'s own doc).
+/// generation — which `M4.35` made conditional, so a submission the group
+/// has already moved past is refused rather than replacing the map that
+/// overtook it (`submit`'s own doc).
 ///
 /// ⚠️ **Its own function because `handle` reached `clippy::too_many_lines`
 /// the moment the transition stopped being one discarded statement.** The
@@ -314,9 +345,18 @@ async fn submit_assignment(
             );
         }
     }
-    let map = cluster
+    let Some(map) = cluster
         .sync_groups()
-        .submit(group, request.generation_id, map);
+        .submit(group, request.generation_id, map)
+    else {
+        // The group left this generation while the transition was in
+        // flight. Retriable, and the same answer its own followers get
+        // from `Known::Superseded`.
+        return reply(
+            prelude,
+            &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
+        );
+    };
     reply(prelude, &response_for(&map, request, version))
 }
 

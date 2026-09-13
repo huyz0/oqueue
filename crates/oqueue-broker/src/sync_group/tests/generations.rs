@@ -190,3 +190,126 @@ async fn a_follower_overtaken_by_a_later_generation_is_told_to_rejoin() {
          consumer and loses it for good"
     );
 }
+
+/// ⚠️ **`M4.35`'s own acceptance criterion**: a submission for an older
+/// generation must not replace a newer generation's map.
+///
+/// ⚠️ **The window is real, not theoretical.** `handle`'s fence reads the
+/// group's record synchronously and the submission then `await`s a full
+/// `mpsc` + `oneshot` round trip through one actor doing a `last_version`
+/// read and an append against object storage, serialized across every
+/// group — `join_group/round/state.rs` calls that wait "tens of
+/// milliseconds in the good case and seconds in a plausible bad one". In
+/// that window a `MemberJoinedDuringSync` plus a `JoinBarrierComplete` can
+/// advance the group and N+1's leader can submit first.
+///
+/// ⚠️ **Every other post-`await` write in M4 has this guard** —
+/// `CommittedOffsets::apply` compares a `CommitVersion`, `is_own_open_round`
+/// pointer-compares the round, `close_on_deadline` re-reads `outcome` after
+/// the actor returns. `submit` was the one blind overwrite left, and the
+/// cost of it is that every N+1 follower not yet answered sees `Waiting`
+/// against a cell that has gone backwards, and waits out `MAX_SYNC_WAIT_MS`
+/// for an `UNKNOWN_SERVER_ERROR`.
+#[tokio::test(start_paused = true)]
+async fn a_late_submission_does_not_replace_a_newer_generations_assignment() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    let sync_groups = fixture.cluster.sync_groups();
+
+    let second = sync_groups.submit(&g, 2, [("m1".to_owned(), b"gen2".to_vec())].into());
+    assert!(second.is_some(), "the current generation's leader submits");
+
+    let late = sync_groups.submit(&g, 1, [("m1".to_owned(), b"gen1".to_vec())].into());
+    assert!(
+        late.is_none(),
+        "a submission for a generation the group has already left is refused, not applied"
+    );
+
+    let (assignments, _) = sync_groups.entry_for(&g);
+    let still_there = super::super::assignment_for(&assignments, 2);
+    assert!(
+        matches!(&still_there, super::super::Known::Mine(map)
+            if map.get("m1").map(Vec::as_slice) == Some(b"gen2".as_slice())),
+        "generation 2's own map must survive the late submission, got {still_there:?}"
+    );
+}
+
+/// ⚠️ **The same generation resubmitting is still allowed**, which is what
+/// stops the guard being written as `>` and silently breaking the
+/// leader-retry path `a_resubmitted_assignment_for_the_same_generation_
+/// replaces_the_first` pins.
+#[tokio::test(start_paused = true)]
+async fn the_same_generation_may_still_resubmit() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    let sync_groups = fixture.cluster.sync_groups();
+
+    assert!(
+        sync_groups
+            .submit(&g, 2, [("m1".to_owned(), b"first".to_vec())].into())
+            .is_some()
+    );
+    let again = sync_groups.submit(&g, 2, [("m1".to_owned(), b"second".to_vec())].into());
+    assert!(
+        again.is_some_and(|map| map.get("m1").map(Vec::as_slice) == Some(b"second".as_slice())),
+        "a leader resubmitting its own generation replaces its own map"
+    );
+}
+
+/// ⚠️ **The client-visible half, which review found nothing executed.**
+/// The guard above is pinned by [`a_late_submission_does_not_replace_a_newer_generations_assignment`],
+/// but what the stale leader is *told* was not: planting a `panic!` in the
+/// refusal arm left the whole suite green, so the code could have been any
+/// of them — including `UNKNOWN_SERVER_ERROR`, which the Java consumer
+/// raises out of `poll()` and never retries.
+///
+/// ⚠️ **The window is opened deterministically rather than waited for.**
+/// `handle` reads the group's record under `fence`, then awaits the
+/// transitions actor; polling it once parks it exactly there, and the
+/// newer generation's submission lands while it is parked. This is
+/// `join_group`'s own refusal-test idiom (`crate::testing::poll_once`),
+/// which `M4.15d` made necessary by putting an `.await` between the
+/// decision and its application.
+#[tokio::test(start_paused = true)]
+async fn a_leader_whose_generation_moved_on_while_it_was_parked_is_told_to_rejoin() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
+
+    let body = leader_body_at(
+        "orders-consumers",
+        "m1",
+        &[("m1", b"gen1-m1"), ("m2", b"gen1-m2")],
+        1,
+    );
+    let submitting = sync(&fixture.cluster, body);
+    tokio::pin!(submitting);
+    assert!(
+        crate::testing::poll_once(&mut submitting).is_none(),
+        "the submission must park on the transitions actor rather than complete synchronously"
+    );
+
+    // The group moved on: generation 2's own leader got there first.
+    assert!(
+        fixture
+            .cluster
+            .sync_groups()
+            .submit(&g, 2, [("m1".to_owned(), b"gen2-m1".to_vec())].into())
+            .is_some()
+    );
+
+    let response = submitting.await;
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
+        "a leader whose generation moved on while it was parked must be told to rejoin -- the \
+         same answer its own followers get from Known::Superseded"
+    );
+
+    let (assignments, _) = fixture.cluster.sync_groups().entry_for(&g);
+    assert!(
+        matches!(super::super::assignment_for(&assignments, 2), super::super::Known::Mine(map)
+            if map.get("m1").map(Vec::as_slice) == Some(b"gen2-m1".as_slice())),
+        "and generation 2's map is untouched"
+    );
+}

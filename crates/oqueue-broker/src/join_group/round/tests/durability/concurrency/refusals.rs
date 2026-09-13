@@ -12,7 +12,6 @@
 #![allow(clippy::expect_used)]
 
 use super::super::super::{Harness, group, member};
-use super::futures_lite_poll_once;
 use crate::group_transitions::GroupTransitions;
 use crate::join_group::round::{Coordination, GroupJoins, JoinOutcome};
 use oqueue_core::{
@@ -53,7 +52,7 @@ async fn a_join_whose_event_turns_illegal_while_parked_is_refused() {
     // Let the join reach its own `.await` on the actor, then move the group
     // out from under it.
     assert!(
-        futures_lite_poll_once(&mut joining).is_none(),
+        crate::testing::poll_once(&mut joining).is_none(),
         "the join must park on the actor rather than complete synchronously"
     );
     h.coordinator

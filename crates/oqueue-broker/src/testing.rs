@@ -41,6 +41,7 @@ pub(crate) type TestStore = CountingObjectStore<FakeObjectStore>;
 /// test asserting `M4.14`'s own "impossible by construction" claim does not
 /// need a second fixture shape.
 pub(crate) type TestGroupMetadataLog = FaultGroupMetadataLog<FakeGroupMetadataLog>;
+use std::future::Future;
 use std::sync::Arc;
 
 /// A cluster and the coordinator loop serving it.
@@ -347,4 +348,24 @@ pub(crate) fn golden_batch_of(values: &[&'static [u8]]) -> Vec<u8> {
     )
     .expect("the dependency encodes its own records");
     buf.to_vec()
+}
+
+/// `futures::poll_once` without the dependency — `Cargo.toml` carries no
+/// `futures`, and `build.md` asks for a recorded reason before one is added,
+/// which a poll in two tests does not earn.
+///
+/// ⚠️ **Polling once is how a race between a handler and the transitions
+/// actor is made deterministic**: the handler parks on the actor, the test
+/// moves the group out from under it, and the resumed handler meets the
+/// state a real concurrent request would have left. `M4.15d` put the
+/// `.await` there; `join_group`'s own refusal tests opened this window
+/// first and `M4.35` needed the same one for `SyncGroup`, which is why the
+/// helper lives here rather than in either module.
+pub(crate) fn poll_once<F: Future>(f: &mut std::pin::Pin<&mut F>) -> Option<F::Output> {
+    use std::task::{Context, Poll, Waker};
+    let mut cx = Context::from_waker(Waker::noop());
+    match f.as_mut().poll(&mut cx) {
+        Poll::Ready(v) => Some(v),
+        Poll::Pending => None,
+    }
 }
