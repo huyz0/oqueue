@@ -1,0 +1,35 @@
+{
+  "commits": [
+    "5fce15384df2c95ee21d00216abfd1bc669f2d00"
+  ],
+  "findings": [
+    {
+      "evidence": "Compare docs/internal/product/roadmap.md:199-205 ('`MemberEpoch` exists as a type with `INITIAL` and `get()` and has no holder and no advance, so decision 2's \"built on the three-epoch model from the first commit\" is not true of the code'), written by M4.40 as the receiver for argued finding b0b5af3ced25, against docs/internal/product/roadmap.md:451-452 in the same file ('the group model is built on the three-epoch shape so KIP-848 is an addition rather than a rewrite'), which M4.40 did not touch. The code confirms which is true: `grep -rn MemberEpoch crates --include=*.rs` returns only crates/oqueue-core/src/group_state.rs (definition, one test at :462) and the re-export at crates/oqueue-core/src/lib.rs:114 -- no holder, no advance. The identical present-tense claim also stands at docs/internal/product/milestones/M4.md:4, M4.md:41, and crates/oqueue-core/src/group_state.rs:5-9 and :20-21. M4.39's row (backlog.md:124) names group_state.rs:28-33 and :110-113 only -- the narrower 'M4.2's GroupCoordinator holds one per member and M4.9's Heartbeat advances it' sentences -- and its acceptance closes on 'each of the nine other claims named in this row is either true or gone', so the five locations above are outside it. Its clause 1 ('no document claims durable offsets') reaches roadmap.md:450 but not :451-452, the next two lines of the same sentence.",
+      "id": "5ec5aebb270e",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "roadmap.md now asserts and denies ADR-0033's three-epoch claim 246 lines apart, and M4.39 -- the only open row for documents contradicting the tree -- enumerates a closed list of claims that excludes it, so a faithful M4.39 leaves the contradiction standing.",
+      "task_id": "M4.39"
+    },
+    {
+      "evidence": "backlog.md:124 (M4.39) cites `README.md:31`, `roadmap.md:432` and `M4.md:4` for the 'durable committed offsets' promise. `grep -n 'durable committed offsets' docs/internal/product/roadmap.md` returns 450, not 432; README.md:31 and M4.md:4 still resolve, as do M4.39's other citations (roadmap.md:180, M4.md:12/:78/:82/:134, README.md:158/:178). The shift is exactly the 18 lines M4.40 added at roadmap.md:193-215. M4.39 is `todo`, so the citation is editable in place.",
+      "id": "ae40d135f947",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "M4.39's own evidence pointer `roadmap.md:432` was broken by M4.40's 18-line insertion into roadmap.md above it; the claim it names is now at :450.",
+      "task_id": ""
+    },
+    {
+      "evidence": "docs/internal/standards/sdd.md:272-274: 'a milestone whose extra rows are new *scope* is the case the cap exists for, and the answer there is still to split.' backlog.md's M4 section notes, bucket 5: 'M4.20 ... and M4.21 ... are **new scope that should have gone to whoever opened next**, and naming them here is the honest outcome of the cap rather than an argument that they belong.' Both rows read `done`, and sdd.md's freeze has no exception that would let them move. Recorded as minor because the argument states the outcome openly and no legal move remains for M4; the residue is that sdd.md's cap rule has one prescribed remedy and no path for the case where the argument is written after the rows close -- which is the only time the argument gets written.",
+      "id": "57708bc03ec2",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "The sdd.md cap argument reaches the conclusion sdd.md says must be answered by splitting, and then does not split; nothing in the standard describes what to do when the rows in question are already frozen `done`.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M4",
+  "recorded_at": "2026-09-13T17:46:09Z",
+  "reviewer": "claude-opus-5 (M4 terminating boundary round, fresh reviewer, did not drive M4)",
+  "verdict": "changes-requested"
+}
