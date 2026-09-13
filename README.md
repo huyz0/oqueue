@@ -28,7 +28,7 @@ A Kafka-protocol-compatible message broker in Rust that uses object storage
 > principal can see) rather than O(topics that exist); the mechanism is
 > built and tested, and wiring it into the binary that ships is M4's own
 > task 18. M4, in progress, is consumer groups — join, sync, heartbeat,
-> rebalance, and durable committed offsets, on the classic protocol
+> rebalance, and committed offsets, on the classic protocol
 > (`ADR-0033`).
 >
 > What is here is worth reading if you are interested in the design space:
@@ -175,7 +175,8 @@ that reviews changes is finished (M-1), the workspace and its crates are built
 (M0), the object store seam has real backends (M1), the Kafka wire protocol
 is a real client's produce and fetch against (M2), the coordinator sequences
 offsets and indexes them (M3), M10's deterministic simulation harness verifies
-every later failure claim, and M11, idempotent producers, is in progress.
+every later failure claim, M9 added authentication and authorization, M11
+shipped idempotent producers, and M4, consumer groups, is in progress.
 
 ## License
 

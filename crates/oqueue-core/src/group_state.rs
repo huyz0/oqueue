@@ -1,7 +1,7 @@
 //! The consumer group state machine (`M4.1`, FR-20; `ADR-0033`).
 //!
 //! ⚠️ **FR-22 (KIP-848) is `deferred` and this module does not implement it —
-//! but it is the reason for this shape.** `ADR-0033` decision 2 builds the
+//! but it is the reason for this shape.** `ADR-0033` decision 2 asks for the
 //! three-epoch model (group, assignment, member) from the first commit even
 //! though only the classic protocol drives it in v1, so that a later KIP-848
 //! pickup is a coexistence addition rather than a rewrite: the coordinator
@@ -17,19 +17,25 @@
 //! `SyncGroup`) → Stable (steady state) → Dead (terminal, on group
 //! deletion/cleanup)."
 //!
-//! ⚠️ **`ADR-0033`'s three-epoch model, not a single counter — built now,
-//! even though only the classic protocol drives it in v1.** `GenerationId`
+//! ⚠️ **`ADR-0033` asks for a three-epoch model, not a single counter, and
+//! ⚠️ two of the three are what this module actually threads.** `GenerationId`
 //! is Group Epoch's own classic-protocol wire name (doc 02 §3.1: it
 //! "increments on every completed rebalance and is echoed by clients as a
 //! fencing token" — the exact role Group Epoch plays). [`AssignmentEpoch`]
 //! is the Group Epoch value that produced the *current target assignment*;
 //! it lags `GenerationId` between `JoinBarrierComplete` (a new target is
 //! now owed) and `SyncComplete` (the target for this generation actually
-//! exists). [`MemberEpoch`] is each member's own progress toward that
-//! target — a per-member value, not part of this module's own group-level
-//! state, `M4.2`'s `GroupCoordinator` is where one is held per member and
-//! `M4.9`'s `Heartbeat` handler is where it actually advances; the type
-//! exists here so nothing downstream invents its own shape for it.
+//! exists). [`MemberEpoch`] is each member's own progress toward that target — a
+//! per-member value, not part of this module's own group-level state.
+//! ⚠️ **Nothing holds one and nothing advances one.** This paragraph said
+//! `M4.2`'s `GroupCoordinator` held one per member and `M4.9`'s `Heartbeat`
+//! advanced it; both shipped and neither does, which M4's closing review
+//! found and `M4.39` corrects here. `GroupRecord` is state, generation and
+//! assignment epoch, and a whole-workspace grep finds this type only in its
+//! own module and one re-export. Whether to build the member epoch or to
+//! amend `ADR-0033` to say the classic protocol needs two is a decision,
+//! argued as `b0b5af3ced25` in `baselines/review.txt` and received by
+//! `roadmap.md`'s "Deferred, with nothing scheduled".
 //!
 //! ⚠️ **Only the legal transitions, nothing else** — a real handler
 //! (`M4.7`-`M4.10`) drives this type through [`GroupState::transition`]
@@ -107,10 +113,12 @@ impl AssignmentEpoch {
 /// A fencing token on that member's own requests, the same role
 /// `GenerationId` plays for the group as a whole.
 ///
-/// ⚠️ **Not part of [`GroupState`]'s own value.** The group has one state
-/// and one generation; it has as many member epochs as it has members, so
-/// this type exists for `M4.2`'s `GroupCoordinator` to hold one per member,
-/// not for this module to track.
+/// ⚠️ **Not part of [`GroupState`]'s own value**, and ⚠️ **not held
+/// anywhere else either.** The group has one state and one generation; it
+/// would have as many member epochs as it has members, and this type was
+/// added for `M4.2`'s `GroupCoordinator` to hold one per member. `M4.2`
+/// shipped and holds none — see this module's own doc, and the argued
+/// finding it names.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct MemberEpoch(i32);
 

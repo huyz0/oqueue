@@ -33,15 +33,23 @@
 //! decide-under-the-lock, apply with it released, finalize under it again,
 //! and every one of its transitions now comes through here.
 //!
-//! ⚠️ **So a group's *record* survives a restart in general as of `M4.15d`,
-//! and did not before it.** ⚠️ **Its membership does not, and the distinction
-//! is load-bearing**: `GroupRecord` is state, generation and assignment
+//! ⚠️ **So a group's *record* is appended to the log on every transition as
+//! of `M4.15d`, and was not before it.** ⚠️ **It does not survive a restart
+//! today, and saying it did was this module's own claim until `M4.39`**:
+//! `serve` wires `FakeGroupMetadataLog`, whose entries are an in-memory
+//! `Vec`, so nothing replays. What `M4.15d` bought is that the record *can*
+//! survive one, the moment `M6.md` task 7c lands a real engine —
+//! `offset_commit.rs`'s own doc states that carefully and this one dropped
+//! the caveat seven commits later. ⚠️ **Its membership will not survive even
+//! then, and the distinction is load-bearing**: `GroupRecord` is state, generation and assignment
 //! epoch, while `GroupJoins`'s own entries and `heartbeat.rs`'s own tracking
 //! are per-node and in no log. A `Stable` group of three consumers replays as
 //! `Stable` at its own generation, and then each consumer's next `Heartbeat`
 //! is answered `UNKNOWN_MEMBER_ID` because nothing tracks it, so they rejoin
 //! and the group rebalances once. That is the intended degradation — the
-//! group is not lost and no offset is — but it is not "nothing changed". `Join`, `JoinBarrierComplete` and
+//! group is not lost and no offset is — ⚠️ **once a real engine exists;
+//! today nothing replays at all**, per the caveat above. But it is not
+//! "nothing changed". `Join`, `JoinBarrierComplete` and
 //! `MemberJoinedDuringSync` were applied by `join_group::round.rs`'s own
 //! direct `coordinator.transition` call and logged nowhere — and since most
 //! real groups begin with exactly one of those, `M4.15c`'s own acceptance
