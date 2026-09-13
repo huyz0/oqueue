@@ -134,7 +134,7 @@ repos:
         pass_filenames: false
         always_run: true
       - id: check-fencing-seam
-        name: "M4.11: no handler constructs a fencing code outside crate::fencing"
+        name: "M4.11, M4.36: no handler constructs any Refusal code outside crate::fencing"
         entry: scripts/check-fencing-seam.sh
         language: system
         stages: [pre-commit]

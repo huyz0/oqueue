@@ -36,7 +36,8 @@ fn stable_record() -> GroupRecord {
 }
 
 /// ⚠️ **`M4.11`'s own acceptance criterion, verbatim**: every one of the
-/// five codes, against the exact state/input that must produce it. Two
+/// codes the seam answers — five when `M4.11` wrote that, six since — against
+/// the exact state/input that must produce it. Two
 /// (`NotCoordinator`, `CoordinatorNotAvailable`) have no real call site in
 /// this milestone's own v1 architecture (`ADR-0033`, module doc) — the
 /// input is constructed directly here rather than through

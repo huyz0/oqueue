@@ -94,9 +94,11 @@ pub(crate) fn handle(
     // top-level `error_code`, unlike `OffsetCommitResponse`, so this
     // refuses the whole request there rather than per topic/partition.
     // ⚠️ **`crate::fencing::Refusal`'s own code, not the raw constant** —
-    // `check-fencing-seam.sh` refuses any of the five codes constructed
-    // outside `fencing.rs` itself, this handler included even though it
-    // routes through no other part of that seam.
+    // `check-fencing-seam.sh` refuses any code the seam answers being
+    // constructed outside `fencing.rs` itself, this handler included even
+    // though it routes through no other part of that seam. ("The five"
+    // until `M4.36`, which stopped the gate carrying its own copy of a list
+    // that had already grown to six.)
     if cluster.replay_in_progress() {
         return reply(
             prelude,

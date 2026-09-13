@@ -8,7 +8,7 @@
 //! produce by any other path — `check-fencing-seam.sh` is this module's own
 //! `check-topic-list-scope.sh`.
 //!
-//! ⚠️ **Two of the five codes are unreachable in this milestone's own v1
+//! ⚠️ **Two of the six codes are unreachable in this milestone's own v1
 //! architecture, on purpose, not by oversight.** `ADR-0033`: every group
 //! resolves to this one node, unconditionally, so nothing in this
 //! milestone's own scope can ever construct a [`FencingContext`] with
@@ -19,7 +19,7 @@
 //! bare struct literal still exists and [`fence`] still honours it, so a
 //! later milestone that adds routing has the wire mapping already done
 //! rather than inventing it from scratch — and so this module's own
-//! table-driven test can prove each of the five codes for the input that
+//! table-driven test can prove each of the six codes for the input that
 //! produces it, `join_group::round`'s own `GroupState::Dead` precedent for
 //! testing an outcome nothing today reaches through a live handler.
 //!
@@ -114,6 +114,18 @@ impl<'a> FencingContext<'a> {
 /// Why [`fence`] refused a request — one variant per wire code it may
 /// produce, [`Refusal::error_code`] the only place any of them is ever
 /// constructed (`check-fencing-seam.sh`).
+///
+/// ⚠️ **That claim was false for `RebalanceInProgress` for the whole of M4
+/// and no gate could see it**: `check-fencing-seam.sh` held a hardcoded
+/// list of `M4.11`'s five codes, so the variant added after it was never
+/// looked for, and `sync_group.rs` built it directly. `M4.36` made the gate
+/// derive its list from [`Refusal::error_code`]'s own arms and require each
+/// variant here to be named in one, so a seventh variant is checked the day
+/// it exists rather than the day somebody remembers a list. ⚠️ It asks
+/// whether each variant *appears*, never how many arms there are: counting
+/// asserts only what `rustc` already enforces for an exhaustive match, and
+/// it misreads an or-pattern arm and two variants honestly sharing a wire
+/// code as defects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Refusal {
     CoordinatorLoadInProgress,

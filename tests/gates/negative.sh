@@ -4000,6 +4000,184 @@ run_case "check-backlog-rows.sh (row ending in two state cells)" \
   setup_backlog_two_state_cells invoke_backlog_two_state_cells \
   "ends in two state cells"
 
+# --- check-fencing-seam.sh: the gate M4's closing review found checking five
+# --- of six codes, and which nothing had ever watched fail ------------------
+#
+# ⚠️ **`M4.36` is why these exist.** The gate held a hardcoded list of
+# `M4.11`'s five codes; `Refusal` grew a sixth, `sync_group.rs` constructed it
+# directly, and the gate reported "none of M4.11's five fencing codes are
+# constructed outside the seam" — a true sentence about the wrong set. It now
+# derives the list from `Refusal::error_code`'s own arms, and these cases are
+# the proof that each of its legs can fail, which `testing.md` rule 20a asks
+# for and which this gate had never had.
+#
+# ⚠️ **Six variants, because the gate has a floor of six.** Deriving a list
+# creates a failure mode a hardcoded one did not have — delete a variant and
+# its arm together and every count shrinks in step — so the gate refuses a
+# seam that answers fewer codes than this one has always had. A fixture with
+# two variants would trip that floor before reaching the defect it plants,
+# which is `run_case`'s "failed, but not for the reason the fixture plants".
+# Review of `M4.36` found the hole; this comment is why the fixtures are the
+# size they are.
+_fencing_fixture() {
+  local dir="$1" seam handler
+  seam="$dir/crates/oqueue-broker/src/fencing.rs"
+  handler="$dir/crates/oqueue-broker/src/sync_group.rs"
+  mkdir -p "$dir/crates/oqueue-broker/src"
+  cat > "$seam" <<'RS'
+pub(crate) enum Refusal {
+    CoordinatorLoadInProgress,
+    NotCoordinator,
+    CoordinatorNotAvailable,
+    UnknownMember,
+    IllegalGeneration,
+    RebalanceInProgress,
+}
+
+impl Refusal {
+    pub(crate) const fn error_code(self) -> i16 {
+        match self {
+            Self::CoordinatorLoadInProgress => error_codes::COORDINATOR_LOAD_IN_PROGRESS,
+            Self::NotCoordinator => error_codes::NOT_COORDINATOR,
+            Self::CoordinatorNotAvailable => error_codes::COORDINATOR_NOT_AVAILABLE,
+            Self::UnknownMember => error_codes::UNKNOWN_MEMBER_ID,
+            Self::IllegalGeneration => error_codes::ILLEGAL_GENERATION,
+            Self::RebalanceInProgress => error_codes::REBALANCE_IN_PROGRESS,
+        }
+    }
+}
+RS
+  printf 'fn handle() -> i16 { Refusal::NotCoordinator.error_code() }\n' > "$handler"
+}
+
+# A handler reaching for a raw constant instead of the seam -- the shape the
+# gate exists for, and the one `sync_group.rs` really had.
+setup_fencing_constructed_outside() {
+  local dir; dir="$(new_scratch fencing-outside)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  printf 'fn other() -> i16 { error_codes::REBALANCE_IN_PROGRESS }\n' \
+    >> "$dir/crates/oqueue-broker/src/sync_group.rs"
+  printf '%s\n' "$dir"
+}
+invoke_fencing_constructed_outside() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+# A variant named in no arm. rustc would refuse this particular file, but the
+# property the leg pins is reachable in compiling code through the wildcard
+# case below -- this is the direct statement of it.
+setup_fencing_variant_without_arm() {
+  local dir; dir="$(new_scratch fencing-no-arm)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  rewrite_line "$dir/crates/oqueue-broker/src/fencing.rs" 7 \
+    '    RebalanceInProgress,
+    FencedInstance(MemberId),'
+  printf '%s\n' "$dir"
+}
+invoke_fencing_variant_without_arm() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+# ⚠️ **A wildcard arm, which compiles and defeats the derivation.** Every
+# variant still "matches" via `_`, so a per-variant check alone would pass,
+# while the code the wildcard answers is absent from the derived list and a
+# handler may then construct it anywhere. The one shape that makes this leg
+# about more than what rustc already enforces.
+setup_fencing_wildcard_arm() {
+  local dir; dir="$(new_scratch fencing-wildcard)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  rewrite_line "$dir/crates/oqueue-broker/src/fencing.rs" 18 \
+    '            _ => error_codes::REBALANCE_IN_PROGRESS,'
+  printf '%s\n' "$dir"
+}
+invoke_fencing_wildcard_arm() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+# ⚠️ **A variant and its arm deleted together** -- still exhaustive, still
+# compiles, and every count shrinks in step, so nothing that *counts*
+# notices. The blocking finding of `M4.36`'s own review: the fixed list this
+# gate used to carry caught it by naming the codes, and the floor is what
+# replaces that.
+setup_fencing_shrunk_seam() {
+  local dir; dir="$(new_scratch fencing-shrunk)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  rewrite_line "$dir/crates/oqueue-broker/src/fencing.rs" 7 ''
+  rewrite_line "$dir/crates/oqueue-broker/src/fencing.rs" 18 ''
+  printf 'fn other() -> i16 { error_codes::REBALANCE_IN_PROGRESS }\n' \
+    >> "$dir/crates/oqueue-broker/src/sync_group.rs"
+  printf '%s\n' "$dir"
+}
+invoke_fencing_shrunk_seam() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+# ⚠️ **A trailing comment carrying an arrow**, which every earlier version
+# of the derivation was fooled by in a different direction — the last one
+# stripped to the *last* arrow on the line and so substituted the comment's
+# code for the arm's, leaving the count unchanged, the floor satisfied and
+# every variant still named while the gate stopped looking for the code a
+# handler was constructing directly. A false pass is worse than a false
+# failure, and this is the case that keeps it closed.
+setup_fencing_comment_arrow() {
+  local dir; dir="$(new_scratch fencing-comment-arrow)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  rewrite_line "$dir/crates/oqueue-broker/src/fencing.rs" 18 \
+    '            Self::RebalanceInProgress => error_codes::REBALANCE_IN_PROGRESS, // was => error_codes::UNKNOWN_SERVER_ERROR'
+  printf 'fn other() -> i16 { error_codes::REBALANCE_IN_PROGRESS }\n' \
+    >> "$dir/crates/oqueue-broker/src/sync_group.rs"
+  printf '%s\n' "$dir"
+}
+invoke_fencing_comment_arrow() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+# ⚠️ **A block-bodied arm, with no comment involved at all.** rustfmt-stable,
+# clippy-clean, and what anyone writes on adding a second statement — and
+# invisible to every line-scanning version of this gate, because the arrow
+# and the code are on different lines. It is the case that ended the awk:
+# no amount of comment stripping reaches it, and `scripts/lib/fencing_seam.py`
+# walks arrows through a brace-matched body instead.
+setup_fencing_block_bodied_arm() {
+  local dir; dir="$(new_scratch fencing-block-arm)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  rewrite_line "$dir/crates/oqueue-broker/src/fencing.rs" 18 \
+    '            Self::RebalanceInProgress => {
+                error_codes::REBALANCE_IN_PROGRESS
+            }'
+  printf 'fn other() -> i16 { error_codes::REBALANCE_IN_PROGRESS }\n' \
+    >> "$dir/crates/oqueue-broker/src/sync_group.rs"
+  printf '%s\n' "$dir"
+}
+invoke_fencing_block_bodied_arm() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+run_case "check-fencing-seam.sh (a raw constant outside the seam)" \
+  setup_fencing_constructed_outside invoke_fencing_constructed_outside \
+  "constructed outside"
+run_case "check-fencing-seam.sh (a variant named in no error_code arm)" \
+  setup_fencing_variant_without_arm invoke_fencing_variant_without_arm \
+  "answers no error_codes:: path"
+run_case "check-fencing-seam.sh (a wildcard arm defeating the derivation)" \
+  setup_fencing_wildcard_arm invoke_fencing_wildcard_arm \
+  "catch-all arm"
+run_case "check-fencing-seam.sh (a trailing comment's arrow hiding a violation)" \
+  setup_fencing_comment_arrow invoke_fencing_comment_arrow \
+  "constructed outside"
+run_case "check-fencing-seam.sh (a block-bodied arm hiding a violation)" \
+  setup_fencing_block_bodied_arm invoke_fencing_block_bodied_arm \
+  "constructed outside"
+run_case "check-fencing-seam.sh (a variant and its arm deleted together)" \
+  setup_fencing_shrunk_seam invoke_fencing_shrunk_seam \
+  "has had at least"
+
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \
   "over the 10000 ms budget"

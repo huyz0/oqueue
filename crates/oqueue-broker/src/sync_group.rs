@@ -262,7 +262,12 @@ pub(crate) async fn handle(
     let map = match wait_for_assignment(&assignments, &notify, request.generation_id).await {
         Known::Mine(map) => map,
         // Retriable: the client rejoins and syncs at the new generation.
-        Known::Superseded => return reply(prelude, &refusal(error_codes::REBALANCE_IN_PROGRESS)),
+        Known::Superseded => {
+            return reply(
+                prelude,
+                &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
+            );
+        }
         Known::Waiting => return reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR)),
     };
     reply(prelude, &response_for(&map, &request, version))

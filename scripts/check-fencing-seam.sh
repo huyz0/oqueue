@@ -1,19 +1,30 @@
 #!/usr/bin/env bash
-# No handler constructs one of `M4.11`'s five fencing codes outside
+# No handler constructs one of `Refusal`'s fencing codes outside
 # `crate::fencing::Refusal::error_code` — structural, not a runtime
 # assertion. `check-topic-list-scope.sh`'s own style, `M9.11`'s precedent
 # applied to fencing instead of the global-topic-list claim.
+#
+# ⚠️ **The code list is derived from the seam, not written here, and
+# `M4.36` is why.** `M4.11` hardcoded its own five; the enum grew
+# `RebalanceInProgress` and the array did not, so `sync_group.rs` built that
+# code directly and this gate reported "none of M4.11's five fencing codes
+# are constructed outside the seam" — true, and not the property anyone
+# wanted. A list of names frozen at the moment a gate is written is a gate
+# that checks the past. M4's closing review found it by reading this file
+# against `m4-complete.sh`, which derives the same list from the same enum
+# and therefore knew there were six.
 #
 #   scripts/check-fencing-seam.sh
 #
 # `crates/oqueue-broker/src/fencing.rs` is the one seam every `M4.7`-`M4.10`
 # handler's own fencing decision is supposed to route through (`M4.11`'s own
 # backlog row, verbatim: "no handler constructs one of these five codes
-# outside the shared function"). A handler that reaches for one of the five
-# constants directly — a shortcut that answers the *right* code for the
-# *wrong* reason, or drifts once a sixth case is added — would satisfy every
-# test in `fencing/tests.rs` while quietly reintroducing the five ad hoc
-# `if`s the task exists to remove. Nothing else would catch that: the wire
+# outside the shared function" — five was the count that day, and taking it
+# for the property is the defect `M4.36` repaired). A handler that reaches
+# for one of those constants directly — a shortcut that answers the *right*
+# code for the *wrong* reason, or drifts once a further case is added —
+# would satisfy every test in `fencing/tests.rs` while quietly
+# reintroducing the ad hoc `if`s the task exists to remove. Nothing else would catch that: the wire
 # code would still be correct, so no handler test would fail either.
 #
 # ⚠️ **`src/` only.** A test asserting `response.error_code ==
@@ -38,13 +49,50 @@ if [[ ! -f "$SEAM" ]]; then
 fi
 ok "the fencing seam exists at $SEAM"
 
-CODES=(
-  UNKNOWN_MEMBER_ID
-  ILLEGAL_GENERATION
-  NOT_COORDINATOR
-  COORDINATOR_NOT_AVAILABLE
-  COORDINATOR_LOAD_IN_PROGRESS
-)
+# ── What the seam answers, read by a parser rather than a line scanner ───
+#
+# ⚠️ **`scripts/lib/fencing_seam.py` exists because four review rounds broke
+# four awks**, each on something ordinary — a comment naming a code, a
+# comment containing an arrow, a greedy strip taking the *last* arrow on the
+# line, and finally a block-bodied arm (`Self::X => { error_codes::Y }`),
+# which is rustfmt-stable and which no amount of comment stripping reaches.
+# Its own module doc records the series. It emits one `variant<TAB>code`
+# line per variant and fails loudly on a catch-all arm or a variant that
+# answers nothing, so this script reads a fact rather than a guess.
+if ! seam_out="$(python3 "$REPO_ROOT/scripts/lib/fencing_seam.py" "$SEAM" 2>&1)"; then
+  fail "the fencing seam could not be read"
+  while IFS= read -r line; do
+    note "$line"
+  done <<<"$seam_out"
+  note "one arm per variant, each answering an error_codes:: path, so the code"
+  note "each variant produces is derivable and this gate can check it"
+  finish
+fi
+
+mapfile -t VARIANTS < <(cut -f1 <<<"$seam_out")
+mapfile -t CODES < <(cut -f2 <<<"$seam_out" | sort -u)
+
+# ⚠️ **A floor, because deriving a list creates a failure mode a hardcoded
+# one did not have**: delete a variant *and* its arm together — still
+# exhaustive, still compiles — and both sides of any count shrink together,
+# so a gate that only counts goes green on the very shape it exists to
+# catch. The old fixed list caught that by naming the codes; this replaces
+# it.
+#
+# ⚠️ **On variants, not on codes.** Flooring the deduped code list rejects a
+# seam where two variants honestly answer one wire code — six variants, six
+# arms, nothing deleted — and the message then names deletion at somebody
+# whose change was fine. `m4-complete.sh` floors variants for this reason.
+# ⚠️ Non-negotiable 2: this number only ever goes up.
+MIN_VARIANTS=6
+if (( ${#VARIANTS[@]} < MIN_VARIANTS )); then
+  fail "Refusal has ${#VARIANTS[@]} variant(s); this seam has had at least ${MIN_VARIANTS} since M4.11"
+  note "a variant and its arm deleted together shrink every count in step, so"
+  note "nothing that counts notices -- raise MIN_VARIANTS when the seam gains one,"
+  note "and never lower it (non-negotiable 2)"
+  finish
+fi
+ok "the seam answers ${#CODES[@]} code(s) across ${#VARIANTS[@]} variant(s)"
 
 violations=0
 for code in "${CODES[@]}"; do
@@ -66,21 +114,7 @@ for code in "${CODES[@]}"; do
 done
 
 if (( violations == 0 )); then
-  ok "none of M4.11's five fencing codes are constructed outside $SEAM"
-fi
-
-# ── The seam itself still names all five, so a rename or a deleted arm    ──
-# ── does not make this check pass by having nothing left to find         ──
-missing=0
-for code in "${CODES[@]}"; do
-  if ! grep -q "error_codes::${code}\b" "$SEAM"; then
-    missing=$((missing + 1))
-    fail "$SEAM no longer constructs error_codes::${code} at all"
-    note "Refusal::error_code's own match should have one arm per code"
-  fi
-done
-if (( missing == 0 )); then
-  ok "the seam itself still answers all five codes"
+  ok "none of the seam's ${#CODES[@]} fencing codes are constructed outside $SEAM"
 fi
 
 finish
