@@ -223,28 +223,7 @@ pub(crate) async fn handle(
     }
 
     if !request.assignments.is_empty() {
-        // The assignment-bearing submission: build the map every member's
-        // own slice comes from, fire the state transition, and submit it
-        // for *this* generation, replacing whatever generation's map the
-        // group's cell last held (`submit`'s own doc).
-        let map: HashMap<String, Vec<u8>> = request
-            .assignments
-            .iter()
-            .map(|a| (a.member_id.to_owned(), a.assignment.to_owned()))
-            .collect();
-        // Refused only if this bookkeeping and the coordinator have
-        // diverged (already `Stable`, a double submission racing another
-        // connection) -- the map this submission carries is still the
-        // right one to answer with either way, so a refusal here does not
-        // stop the reply.
-        let _ = cluster
-            .group_transitions()
-            .transition(group.clone(), GroupEvent::SyncComplete)
-            .await;
-        let map = cluster
-            .sync_groups()
-            .submit(&group, request.generation_id, map);
-        return reply(prelude, &response_for(&map, &request, version));
+        return submit_assignment(cluster, prelude, &group, &request, version).await;
     }
 
     // A follower: answer at once if the assignment is already known,
@@ -257,6 +236,88 @@ pub(crate) async fn handle(
         Known::Waiting => return reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR)),
     };
     reply(prelude, &response_for(&map, &request, version))
+}
+
+/// The assignment-bearing submission: build the map every member's own
+/// slice comes from, fire the state transition, and submit it for *this*
+/// generation, replacing whatever generation's map the group's cell last
+/// held (`submit`'s own doc).
+///
+/// ⚠️ **Its own function because `handle` reached `clippy::too_many_lines`
+/// the moment the transition stopped being one discarded statement.** The
+/// split is along the branch `handle` already had, so the follower path
+/// below is unchanged.
+async fn submit_assignment(
+    cluster: &Cluster,
+    prelude: RequestPrelude,
+    group: &GroupId,
+    request: &SyncGroupRequest<'_>,
+    version: i16,
+) -> HandlerResponse {
+    let map: HashMap<String, Vec<u8>> = request
+        .assignments
+        .iter()
+        .map(|a| (a.member_id.to_owned(), a.assignment.to_owned()))
+        .collect();
+    // ⚠️ **An illegal transition is a lost race; anything else is a broken
+    // dependency, and the two must not be conflated** -- `join_group`'s
+    // `apply` and `close_generation` each say the same thing at their own
+    // call site, and this was the third and last one still conflating them.
+    // `transition` was pure bookkeeping when the discarded `let _ =` was
+    // written; `M4.15d` put a durable append inside it, so `Err` stopped
+    // meaning only "the coordinator disagrees".
+    //
+    // Illegal is the case that `let _ =` was written for and is right
+    // about: already `Stable`, a double submission racing another
+    // connection, and the map this submission carries is still the right
+    // one to answer with.
+    //
+    // ⚠️ **An unreachable log is the case where answering `NONE` is the
+    // worst available answer**, and this refusal leaves one thing
+    // unanswered: a follower already parked on the barrier is not woken,
+    // because `submit` never runs. It is released as `Known::Superseded`
+    // by the next generation's submission -- but while the log stays down
+    // there is no next generation, so it waits out `MAX_SYNC_WAIT_MS`.
+    // Filed rather than fixed here: giving the barrier a failure channel
+    // is a change to `SyncGroups`, not to this branch. Every member is told its assignment is
+    // valid and starts consuming, while the group never left
+    // `CompletingRebalance` -- so `fence_commit`'s own `[Stable]` fence
+    // refuses every `OffsetCommit` and every heartbeat answers
+    // `REBALANCE_IN_PROGRESS`, and nothing re-fires `SyncComplete` when the
+    // log heals, so the group recovers only by burning a whole extra
+    // generation.
+    //
+    // ⚠️ **`COORDINATOR_NOT_AVAILABLE` does not save the generation, and
+    // saying it did was this fix's own first claim.** Both reference
+    // clients rejoin on *any* non-`NONE` SyncGroup code -- the Java
+    // consumer's `SyncGroupResponseHandler` calls `requestRejoin` and
+    // additionally `markCoordinatorUnknown` for this one, and librdkafka
+    // falls through to `rd_kafka_cgrp_rejoin` -- so the generation is spent
+    // either way. What the code buys is the difference between a client
+    // that comes back and one that does not: it is retriable, where the
+    // alternative this branch had was telling every member `NONE` and
+    // letting them consume against a group the coordinator never saw reach
+    // `Stable`. It also matches `join_group`'s answer for the identical
+    // `Applied::Unavailable` failure, which is the reason to prefer it over
+    // `REBALANCE_IN_PROGRESS`. Found by M4's closing review; the claim
+    // about the generation corrected by review of the fix.
+    match cluster
+        .group_transitions()
+        .transition(group.clone(), GroupEvent::SyncComplete)
+        .await
+    {
+        Ok(_) | Err(oqueue_core::Error::IllegalGroupTransition { .. }) => {}
+        Err(_) => {
+            return reply(
+                prelude,
+                &refusal(crate::fencing::Refusal::CoordinatorNotAvailable.error_code()),
+            );
+        }
+    }
+    let map = cluster
+        .sync_groups()
+        .submit(group, request.generation_id, map);
+    reply(prelude, &response_for(&map, request, version))
 }
 
 /// Waits for `assignments` to become known, or gives up after

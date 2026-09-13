@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+mod durability;
 mod generations;
 
 use super::handle;
