@@ -313,3 +313,135 @@ async fn a_leader_whose_generation_moved_on_while_it_was_parked_is_told_to_rejoi
         "and generation 2's map is untouched"
     );
 }
+
+/// ⚠️ **`M4.42`'s own acceptance criterion.** The illegal-transition arm was
+/// argued for one case — already `Stable`, a double submission racing
+/// another connection — and caught a second the argument does not cover:
+/// a newcomer's `JoinGroup` landing between the fence's state read and the
+/// transitions actor fires `MemberJoinedDuringSync`, which is legal, and
+/// the leader's own `SyncComplete` is then illegal from
+/// `PreparingRebalance`.
+///
+/// ⚠️ **Swallowing that one answers `NONE` for a generation the group has
+/// left.** The leader and every follower it feeds start consuming
+/// generation N while the coordinator assembles N+1, in which the newcomer
+/// gets some of the same partitions — which is FR-20's revoke-before-
+/// reassign, the property the whole milestone exists for. Real Kafka
+/// answers `REBALANCE_IN_PROGRESS`. `M4.35`'s own guard does not reach it:
+/// the cell holds nothing newer than N, so the submission is accepted.
+#[tokio::test(start_paused = true)]
+async fn a_leader_whose_group_reopened_its_barrier_while_parked_is_told_to_rejoin() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
+
+    let submitting = sync(
+        &fixture.cluster,
+        leader_body_at(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"gen1-m1"), ("m2", b"gen1-m2")],
+            1,
+        ),
+    );
+    tokio::pin!(submitting);
+    assert!(
+        crate::testing::poll_once(&mut submitting).is_none(),
+        "the submission must park on the transitions actor"
+    );
+
+    // A newcomer joins: legal from `CompletingRebalance`, and it reopens the
+    // barrier under the parked leader.
+    fixture
+        .cluster
+        .group_coordinator()
+        .transition(&g, oqueue_core::GroupEvent::MemberJoinedDuringSync)
+        .expect("CompletingRebalance -> PreparingRebalance is legal");
+
+    let response = submitting.await;
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
+        "a leader whose group reopened its barrier must rejoin, not be told its assignment stands"
+    );
+
+    let (assignments, _) = fixture.cluster.sync_groups().entry_for(&g);
+    assert!(
+        matches!(
+            super::super::assignment_for(&assignments, 1),
+            super::super::Known::Waiting
+        ),
+        "and nothing was published for the generation the group left"
+    );
+}
+
+/// ⚠️ **The generation half of that guard, which nothing pinned.** Review of
+/// `M4.42` found the split's test green with
+/// `r.generation.get() == request.generation_id` deleted, and then built the
+/// window where it is load-bearing: the group leaves generation N *and*
+/// N+1's leader completes its own sync, so the re-read sees `Stable` — at
+/// the wrong generation. Answering with the map then publishes N's
+/// assignment into a cell N+1's followers are waiting on.
+///
+/// ⚠️ **`M4.35`'s guard cannot see it**: N+1's leader has transitioned but
+/// not yet submitted, so the cell holds nothing and there is no later
+/// generation to compare against.
+#[tokio::test(start_paused = true)]
+async fn a_leader_is_not_answered_because_some_later_generation_reached_stable() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
+
+    let submitting = sync(
+        &fixture.cluster,
+        leader_body_at("orders-consumers", "m1", &[("m1", b"gen1-m1")], 1),
+    );
+    tokio::pin!(submitting);
+    assert!(
+        crate::testing::poll_once(&mut submitting).is_none(),
+        "the submission must park on the transitions actor"
+    );
+
+    // The group runs a whole further round while the leader is parked, and
+    // generation 2's own leader syncs -- so the record reads `Stable`, which
+    // is half of what the guard looks for, at a generation this submission
+    // has nothing to do with.
+    for event in [
+        oqueue_core::GroupEvent::MemberJoinedDuringSync,
+        oqueue_core::GroupEvent::JoinBarrierComplete,
+        oqueue_core::GroupEvent::SyncComplete,
+    ] {
+        fixture
+            .cluster
+            .group_coordinator()
+            .transition(&g, event)
+            .expect("a legal round");
+    }
+    let record = fixture
+        .cluster
+        .group_coordinator()
+        .record(&g)
+        .expect("the group exists");
+    assert_eq!(record.state, oqueue_core::GroupState::Stable);
+    assert_eq!(
+        record.generation.get(),
+        2,
+        "a generation the leader never saw"
+    );
+
+    let response = submitting.await;
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
+        "Stable alone is not the double-submission case -- the generation has to match"
+    );
+
+    let (assignments, _) = fixture.cluster.sync_groups().entry_for(&g);
+    assert!(
+        matches!(
+            super::super::assignment_for(&assignments, 2),
+            super::super::Known::Waiting
+        ),
+        "generation 1's map must not land in a cell generation 2's followers are waiting on"
+    );
+}

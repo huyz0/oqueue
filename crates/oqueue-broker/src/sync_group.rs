@@ -342,7 +342,37 @@ async fn submit_assignment(
         .transition(group.clone(), GroupEvent::SyncComplete)
         .await
     {
-        Ok(_) | Err(oqueue_core::Error::IllegalGroupTransition { .. }) => {}
+        Ok(_) => {}
+        // ⚠️ **Illegal is two cases, not one, and `M4.42` is the second.**
+        // The arm was argued for a double submission racing another
+        // connection: the group is already `Stable` at this generation, the
+        // map this submission carries is the one that produced that, and
+        // answering with it is right. It also caught a newcomer's
+        // `JoinGroup` landing between the fence's state read and the actor
+        // — `MemberJoinedDuringSync` is legal from `CompletingRebalance`,
+        // so this `SyncComplete` is illegal from `PreparingRebalance` — and
+        // swallowing *that* tells the leader and every follower it feeds
+        // that generation N stands while the coordinator assembles N+1, in
+        // which a newcomer holds some of the same partitions. That is
+        // FR-20's revoke-before-reassign, and real Kafka answers
+        // `REBALANCE_IN_PROGRESS`.
+        //
+        // ⚠️ **The state the group is actually in is what separates them**,
+        // re-read after the actor rather than inferred from the error's own
+        // `Debug`-formatted strings. `M4.35`'s guard does not reach this:
+        // the cell holds nothing newer than N, so the submission would be
+        // accepted. Found by review of `M4.33`.
+        Err(oqueue_core::Error::IllegalGroupTransition { .. }) => {
+            let synced = cluster.group_coordinator().record(group).is_some_and(|r| {
+                r.state == GroupState::Stable && r.generation.get() == request.generation_id
+            });
+            if !synced {
+                return reply(
+                    prelude,
+                    &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
+                );
+            }
+        }
         Err(_) => {
             return reply(
                 prelude,
