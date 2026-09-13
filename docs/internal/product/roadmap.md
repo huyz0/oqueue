@@ -198,6 +198,24 @@ a protocol the broker cannot verify against a real client is not one to ship.
 the same note — this paragraph is the receiver, because neither has a receiving
 milestone and `sdd.md` refuses a deferral that names none.
 
+⚠️ **Three more join them, from M4's closing review** (`M4.31`, argued in
+`baselines/review.txt` rather than filed because each outcome is a decision and
+not a task). **`ADR-0033`'s third epoch**: `MemberEpoch` exists as a type with
+`INITIAL` and `get()` and has no holder and no advance, so decision 2's "built
+on the three-epoch model from the first commit" is not true of the code —
+building it now for a protocol `ADR-0033` itself deferred, or amending the
+decision to say the classic protocol needs two, is `adr` work and belongs
+beside the FR-22 deferral it is about. **FR-22's citation on eleven frozen M4
+rows**: `sdd.md`'s freeze has exactly two exceptions and a wrong requirement
+citation is neither, so either those rows stay wrong or `sdd.md` gains a single
+test in place of a growing exception list. **A successor to `ADR-0016`**: its
+terse-row rule has not held for four consecutive milestones and `backlog.md` is
+now larger than the research corpus, which is the revisit trigger the ADR's own
+alternatives name ("generate the backlog from commit history — deferred, not
+rejected"). ⚠️ All three are here rather than in the table below for the same
+reason FR-15 and FR-22 are: none has a receiving milestone, and inventing one
+to satisfy the rule would be the decision rather than a record of it.
+
 ## Deferred into a later milestone
 
 ⚠️ Recorded here because a deferral that exists in nobody's plan is indistinguishable

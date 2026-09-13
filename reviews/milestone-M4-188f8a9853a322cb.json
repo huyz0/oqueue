@@ -1,0 +1,56 @@
+{
+  "commits": [
+    "76e204f21e0a17e5d7712fe6a67bfcd2c9df5771"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/backlog.md:42-46 says \"`M4.0`, and `M4.1`-`M4.15d` \u2014 twenty-one ids\" and \"\u26a0\ufe0f `M4.3`, `M4.4` and `M4.15` are dissolved\". Compare the rows: backlog.md:78 (M4.3) and :79 (M4.4) both end `| done |` and have commits b90f217 and 06ef598; backlog.md:92 (M4.15b) ends `| dissolved |` and is not named. Enumerate the range: M4.0 + M4.1..M4.15 + M4.15a-d = 20 ids, not 21, so the bucket sums (21+9+8+2+4=44) only reach the row count because of the inflation \u2014 the other four buckets check out exactly. This is the same defect the commit body records as a rule-15a minor (\"covers 43 of 44 \u2014 M4.18 appears only inside another bucket's prose\"), but M4.18 is not the only gap: two id names are wrong and one dissolved row is missing, which no previous round found. sdd.md:261-262 requires this argument \"in the backlog section's own notes, saying why the rows are still one milestone\", so a classification that misstates which rows are live is the licence for 44 rows resting on wrong facts. No existing todo row covers backlog.md's own cap paragraph (M4.39 lists README.md, roadmap.md, M4.md, M6.md, M12.md and group_transitions.rs, not backlog.md), so this is recorded with no task_id and needs a row.",
+      "id": "0230305d9925",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "The sdd.md cap argument in backlog.md's M4 section notes contradicts the rows it classifies: it names M4.3 and M4.4 as dissolved when both are done with their own commits, omits M4.15b which is the row that actually is dissolved, and reaches its stated 44 only because bucket 1 counts twenty-one ids over a range that holds twenty."
+    },
+    {
+      "evidence": "baselines/review.txt's M0-boundary header: \"\u26a0\ufe0f **An argument that only lives here is the failure `M-1.47` names**, so every line below names where the obligation actually lives \u2014 four in `M1.md`, and the fifth in `roadmap.md`'s deferral table\". Check the earlier lines against the M4 block: 8a292bf49bcd, 59eed6d3205d, a4d96f6ba946, 791bd61fbe20 each end \"M1.md's 'Inherited' section carries it\"; f44f87664480 ends \"Recorded instead in roadmap.md's 'Deferred into a later milestone' table\"; bcf5d6f697f2 names roadmap.md's deferral table into M2; f6d93488a523, 8d5795399752 and 0503718c1131 discharge in the recording commit; a19c2a2289e1 states why no id fits. The four M4 lines (b0b5af3ced25, e983d58d0dbd, f354215b9db6, 35f264857aa6) name no receiver at all. Confirm the absence: docs/internal/product/roadmap.md:206-243 (\"Deferred into a later milestone\") holds two M4-originated rows (FR-40 group grants \u2192 M12, durable GroupMetadataLog \u2192 M6) and nothing for the ADR-0033 amendment, the sdd.md freeze-exception decision, the NFR-56 remedy, or the ADR-0016 successor decision; grep MemberEpoch, FR-22, ADR-0016 across docs/internal/product/milestones/ finds no receiving plan either. Four spec-wrong findings are therefore parked in the one file whose header says that is the failure mode it exists to prevent. Discharged in place by M4.40, the commit that records this verdict.",
+      "id": "e4f7daa6e50b",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "All four of M4's argued entries disclaim ownership (\"adr work\", \"sdd.md work and not M4's\", \"a successor decision\", \"deciding it rather than filing it again\") and none names where the obligation now lives, abandoning the convention every earlier block in baselines/review.txt follows and that the file's own header states."
+    },
+    {
+      "evidence": "baselines/review.txt f354215b9db6 claims the warn-never-fail branch \"is the only branch that runs\" and the finding's summary in reviews/milestone-M4-adad8ee60768f415.json says \"NFR-56 has no reachable failure path\". Compare scripts/check-budget.sh:260, where the exemption is `compiling_n > 0 && warm_ms <= BUDGET_MS` \u2014 a two-conjunct condition \u2014 and :327, the `fail` it falls through to. That path is pinned by two cases in tests/gates/negative.sh: setup_budget_over (:3548) and setup_budget_eroded_behind_a_build (:3575-3610, the header's own worked example, 21600 ms of build plus 19904 ms of eroded suite), so the failure path is not only reachable but is one of the few in this repo that has been watched failing. ADR-0029 (docs/internal/product/decisions/0029-*.md:109-121) states the opposite of the entry as a recorded decision: \"NFR-56 stays satisfied today (worst measured contained sum 9456 ms of 10000)\" and \"the next dependency, gate, or host that pushes the sum itself past 10000 ms is a genuine NFR-56 violation under this reading\". The entry's own 614-of-736 figure also contradicts \"the only branch that runs\" (122 runs took another). And scripts/check-budget.sh:78-81 names the legal exits: \"make the suite faster, or move work to CI and say so. Both are tasks. If neither is possible, that is a finding for a milestone review\" \u2014 the entry considers neither, while backlog.md:98 (M4.19, \"Serves NFR-56\", check-mutants cut 3.1x) and :99 (M4.20, \"Serves NFR-56 from the other side\") are M4 doing remedy 1 twice as ordinary rows. A milestone that filed NFR-56 work as tasks cannot close by arguing NFR-56 work is not a task. Discharged in place by M4.40, the commit that records this verdict.",
+      "id": "c4ad486b3110",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "The argued NFR-56 entry rests on \"no reachable failure path\", which the repository's own negative suite and ADR-0029 both disprove, and it omits the two remedies check-budget.sh names as tasks \u2014 the same two M4 itself filed as rows M4.19 and M4.20."
+    },
+    {
+      "evidence": "baselines/review.txt b0b5af3ced25 ends \"\u26a0\ufe0f The stale doc at `group_state.rs:28-33` (it says `M4.2`'s `GroupCoordinator` holds one per member and `M4.9`'s `Heartbeat` advances it; neither does) is not part of the decision and is `M4.39`'s.\" Read M4.39 at docs/internal/product/backlog.md:126: its body names README.md:31, roadmap.md:432, M4.md:4/:12/:78/:82/:134, M6.md:12, M12.md:12, roadmap.md:180 and group_transitions.rs:36 \u2014 not crates/oqueue-core/src/group_state.rs (the stale claim is live at :28-33 and repeated at :110-113), and its acceptance is \"no document claims durable offsets, and every deferral reaches its receiver's `Serves:` line and coverage cell\", neither clause of which can be satisfied or violated by that doc comment. The same acceptance also leaves four of M4.39's own listed items unclosable: M4.md:82's `Dispatcher::new(cluster)` (false since M4.18), :78's full-fleet-restart test, :134's \"both gates stay green\" (false since M4.23 leg 2) and group_transitions.rs:36's restart claim are covered by neither clause. Third instance of the same shape in the same commit: the verdict's own minor fc256e56aed4 records \"README.md:178 says M11 is in progress while README.md:158 and roadmap.md:75 say complete\" (still true \u2014 README.md:178 reads \"M11, idempotent producers, is in progress\" while :158 says complete and M4 is the in-progress row), and M4.39 lists README.md:31 only. An argued entry that hands work to a row that does not carry it parks the work exactly as a closed row would.",
+      "id": "11751ca0233f",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "The MemberEpoch argument delegates the stale group_state.rs doc to M4.39, but M4.39 names neither that file nor any acceptance clause that could close it, and M4.39's two clauses cover only two of the five defect classes its own body lists.",
+      "task_id": "M4.39"
+    },
+    {
+      "evidence": "docs/internal/product/backlog.md:118 (M4.32): \"Acceptance: the full run has been executed once and its result recorded; the entry is re-keyed and says it is unviable rather than surviving; and a baseline entry matching no live survivor fails something.\" Clause 2 requires keeping the baselines/mutants.txt entry for crates/oqueue-core/src/group_state.rs (now 124:9 \u2014 MemberEpoch::get's `self.0`, confirmed by reading the file) and marking it unviable; the row's own measurement in the same cell is \"15 mutants, 3 caught, 12 unviable, 0 missed\", so that entry matches no live survivor; clause 3 then requires the new check to fail on it. The only reconcilable implementation \u2014 exempt an entry that declares itself unviable \u2014 is not what the criterion says, so an implementer either cannot close the row or closes it against a criterion it does not state. M4.32 is todo and unfrozen, so the criterion can be corrected in place. Compare scripts/check-mutants.sh:136-142, which iterates survivors and matches them against the argued list and never the converse \u2014 the mechanism the row correctly describes.",
+      "id": "37a50d00d637",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "M4.32's acceptance clauses 2 and 3 are jointly unsatisfiable as written, so the row cannot be closed on its own terms \u2014 recorded as a rule-15a minor in the commit body and left standing in the tracked row.",
+      "task_id": "M4.32"
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/heartbeat.rs:224-231 picks `GroupEvent::Join` whenever `members` is non-empty after a retain, with no read of the group's state; crates/oqueue-core/src/group_state.rs:229 admits Join only from `Empty | Stable` and :247 returns Error::IllegalGroupTransition for everything else, so (PreparingRebalance, Join) is refused too. Benign today \u2014 the round is already open and no state change was wanted \u2014 but M4.34's acceptance (\"a test evicts a leader mid-sync and the group reaches a generation that can be joined\") can be met without the fixer ever deciding what a partial loss during PreparingRebalance should do.",
+      "id": "f714008d1af0",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "The eviction path fires GroupEvent::Join for a partial membership loss from any state, not only CompletingRebalance, so PreparingRebalance takes the same refused transition; M4.34 scopes the fix and its test to the mid-sync case.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M4",
+  "recorded_at": "2026-09-13T17:31:41Z",
+  "reviewer": "claude-opus-5 (M4 addendum round, fresh reviewer, did not drive M4)",
+  "verdict": "changes-requested"
+}
