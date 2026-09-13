@@ -32,16 +32,39 @@ BOOTSTRAP = sys.argv[1]
 TOPICS = ["groups-a", "groups-b", "groups-c"]
 GROUP = "m4-17-conformance"
 
-# ⚠️ Long enough that a consumer is not evicted while this script is doing
-# something else, short enough that removing one is noticed inside the
-# timeouts below. The broker's own floor is 6 s (`MIN_SESSION_TIMEOUT_MS`).
-SESSION_TIMEOUT_MS = 6000
+# ⚠️ **Both eviction paths are deliberately longer than `SETTLE_SECONDS`,
+# and `M4.38` is why.** These were 6 s and 20 s against a 60 s settle
+# window, so the "a consumer is removed" stage was satisfied by *any* path
+# that eventually removed the member. Measured: replacing `c2.close()` with
+# abandoning `c2` — never closed, never polled — still printed
+# `GROUP CONFORMANCE OK` after 21.2 s, which is librdkafka's own
+# `MAXPOLL ... leaving group` at the 20 s poll interval. ⚠️ Not the broker's
+# session sweep, which an earlier version of this note blamed: librdkafka
+# heartbeats from its internal thread whether the application polls or not,
+# so the 6 s session never expired. The stage as written
+# constrained "the group converges after a member disappears", not
+# "`LeaveGroup` was handled" — and `M4.10` is specifically `LeaveGroup`
+# firing exactly one rebalance. With both timeouts past the window, the only
+# thing that can remove a member in time is the `LeaveGroup` `close()`
+# sends.
+#
+# ⚠️ The broker's own floor is 6 s (`MIN_SESSION_TIMEOUT_MS`); this is far
+# above it, which costs nothing because nothing here waits out a session.
+SESSION_TIMEOUT_MS = 45000
 # ⚠️ `max.poll.interval.ms` is what a real client seeds `rebalance_timeout_ms`
 # from, and the broker uses that as a round's deadline once a group has a
-# roster to wait for. Kept modest so a stuck round fails this script rather
-# than hanging it.
-MAX_POLL_INTERVAL_MS = 20000
-SETTLE_SECONDS = 60
+# roster to wait for. ⚠️ **It was kept modest so a stuck round would fail
+# this script rather than hang it, and it never did that** — review of
+# `M4.38` stalled a member mid-group and measured the same hang under the
+# old 20 s value: `settle` does raise on its own deadline, but the process
+# then hangs in librdkafka's teardown at interpreter exit, with or without a
+# `finally` that closes. Neither value buys the property that sentence
+# claimed, and what a short one did buy was the second eviction path this
+# stage must not have. The real repair is a `timeout` around the harness's
+# own invocation, which `kafka-client-harness.sh` has for neither script —
+# filed rather than done here.
+MAX_POLL_INTERVAL_MS = 300000
+SETTLE_SECONDS = 30
 
 
 def consumer(name: str) -> Consumer:
@@ -153,6 +176,10 @@ def main() -> None:
 
 
         # ── a consumer is removed ───────────────────────────────────────────
+        # ⚠️ `close()` sends `LeaveGroup`, and that is the whole of what this
+        # stage tests: both eviction timeouts are past `SETTLE_SECONDS`, so a
+        # member that merely stopped polling would still be in the group when
+        # `settle` gives up. See the timeout constants.
         consumers.pop("c2").close()
         assert_disjoint("removed", settle(consumers, "removed", 2))
     finally:

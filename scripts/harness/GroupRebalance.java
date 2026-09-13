@@ -37,7 +37,18 @@ public final class GroupRebalance {
     private static final List<String> TOPICS =
             Arrays.asList("jgroups-a", "jgroups-b", "jgroups-c");
     private static final String GROUP = "m4-17-java";
-    private static final long SETTLE_MILLIS = 60_000;
+    /**
+     * ⚠️ <b>Shorter than either eviction path below, and {@code M4.38} is
+     * why.</b> This was 60 s against a 6 s session timeout and a 20 s poll
+     * interval, so the "a consumer is removed" stage was satisfied by any
+     * path that eventually removed the member rather than by the
+     * {@code LeaveGroup} that {@code close()} sends — and {@code M4.10} is
+     * specifically {@code LeaveGroup} firing exactly one rebalance. Its
+     * librdkafka sibling was measured doing precisely that: abandoning the
+     * consumer instead of closing it still printed
+     * {@code GROUP CONFORMANCE OK}.
+     */
+    private static final long SETTLE_MILLIS = 30_000;
 
     private static KafkaConsumer<byte[], byte[]> consumer(String bootstrap, String name) {
         Properties p = new Properties();
@@ -46,11 +57,20 @@ public final class GroupRebalance {
         p.put("client.id", name);
         p.put("auto.offset.reset", "earliest");
         p.put("enable.auto.commit", "false");
-        p.put("session.timeout.ms", "6000");
+        // ⚠️ Past SETTLE_MILLIS on purpose -- see its own note.
+        p.put("session.timeout.ms", "45000");
         p.put("heartbeat.interval.ms", "2000");
-        // ⚠️ Seeds `rebalance_timeout_ms` on the wire. Kept modest so a round
-        // that never closes fails this harness rather than hanging it.
-        p.put("max.poll.interval.ms", "20000");
+        // ⚠️ Seeds `rebalance_timeout_ms` on the wire, and — like the
+        // session timeout above — deliberately past SETTLE_MILLIS, which is
+        // the whole of M4.38. ⚠️ **Do not restore a short value here.** The
+        // comment that stood in this place said it was "kept modest so a
+        // round that never closes fails this harness rather than hanging
+        // it"; that is SETTLE_MILLIS' job, and the Java client (unlike
+        // librdkafka, which refuses max.poll.interval.ms < session.timeout.ms
+        // outright) will happily accept a 20 s value here — which puts an
+        // eviction path back inside the settle window and makes the removal
+        // stage vacuously satisfiable again. Found by review of M4.38.
+        p.put("max.poll.interval.ms", "300000");
         p.put(
                 "partition.assignment.strategy",
                 "org.apache.kafka.clients.consumer.CooperativeStickyAssignor");
@@ -198,6 +218,10 @@ public final class GroupRebalance {
             consumers.put("c3", c3);
             assertDisjoint("added", settle(consumers, "added", 3), true);
 
+            // ⚠️ close() sends LeaveGroup, and that is the whole of what
+            // this stage tests: both eviction timeouts are past
+            // SETTLE_MILLIS, so a member that merely stopped polling would
+            // still be in the group when settle gives up.
             consumers.remove("c2").close();
             assertDisjoint("removed", settle(consumers, "removed", 2), true);
         } finally {
