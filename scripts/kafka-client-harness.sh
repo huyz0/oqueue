@@ -54,6 +54,13 @@ fi
 mkdir -p "$HARNESS_DIR"
 ROSTER="$HARNESS_DIR/clients.txt"
 : > "$ROSTER"
+# ⚠️ **Truncated for the same reason the roster is.** `m4-complete.sh` reads
+# this log to decide whether FR-21's survival was measured *this run*; a log
+# left over from a previous one would let a host that cannot run the leg at
+# all — no `confluent-kafka`, so the branch is skipped — report a stale
+# `OFFSETS LOST` as if it had just measured it. That is the silent discharge
+# the leg exists to prevent, arriving through the filesystem. Found by review.
+: > "$HARNESS_DIR/offset-survival.log"
 
 # ── The broker under test ───────────────────────────────────────────────────
 if ! cargo build -p oqueue --quiet; then

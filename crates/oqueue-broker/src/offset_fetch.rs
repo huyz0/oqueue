@@ -21,8 +21,10 @@
 //! than left implicit in "any authenticated client may fetch" above,
 //! which is true but was read, by the reviewer, as claiming more scoping
 //! than this handler actually does. A group-level `GroupGrants` seam,
-//! mirroring `TopicGrants`'s own shape, is real, standing, unscheduled
-//! work — not tied to a specific next task.
+//! mirroring `TopicGrants`'s own shape, is real and standing. ⚠️ **It was
+//! unscheduled until `M4.23`**, which found the gap writing M4's completion
+//! gate: `roadmap.md`'s deferred table now carries it, received by `M12.md`
+//! task 3a, and `m4-complete.sh` reports it rather than waiving it.
 //!
 //! ⚠️ **Two shapes, not one standing in for the other** — `M9.9`/`M9.10`'s
 //! own `Metadata` precedent, the shape this task's own acceptance
