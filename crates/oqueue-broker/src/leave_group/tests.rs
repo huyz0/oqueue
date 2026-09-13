@@ -86,9 +86,12 @@ async fn three_batched_members_leaving_produces_exactly_one_rebalance() {
     // (`Heartbeats::remove_where`'s own "emptied" branch,
     // `heartbeat.rs`'s module doc) — a *different* transition than the one
     // this test means to observe. Leaving one member behind keeps this a
-    // partial removal, so the transition under test is `GroupEvent::Join`
-    // (`Stable` -> `PreparingRebalance`), matching a real rebalance caused
-    // by some, not all, members leaving.
+    // partial removal, so the transition under test is
+    // `GroupEvent::MemberLeft` (`Stable` -> `PreparingRebalance`), matching
+    // a real rebalance caused by some, not all, members leaving.
+    // ⚠️ `GroupEvent::Join` until `M4.34`, which gave leaving its own event
+    // because borrowing the one for joining was refused from every state
+    // but `Empty` and `Stable`.
     for member_id in ["m1", "m2", "m3", "m4"] {
         fixture.cluster.heartbeats().register(&g, member_id, 30_000);
     }

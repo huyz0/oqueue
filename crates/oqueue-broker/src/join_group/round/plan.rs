@@ -67,7 +67,9 @@ pub(super) fn opening_event(
         // ⚠️ **Already `PreparingRebalance`, with no locally-open round —
         // not this module's own bug.** An external actor moved the
         // coordinator here directly: `heartbeat.rs`'s own eviction sweep
-        // fires `GroupEvent::Join` on a partial membership loss without
+        // fires `GroupEvent::MemberLeft` on a partial membership loss
+        // (`GroupEvent::Join` before `M4.34`, which is why this comment
+        // used to name that one) without
         // ever touching this bookkeeping (`M4.9`'s own finding, fixed
         // there rather than deferred once it turned out to permanently
         // wedge a group — every future `JoinGroup` would otherwise see

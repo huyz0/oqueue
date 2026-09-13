@@ -23,11 +23,16 @@
 //! `REBALANCE_IN_PROGRESS` — `crate::fencing::fence`, not an ad hoc
 //! `is_current` check this module used to carry.
 //!
-//! ⚠️ **Eviction, and `M4.10`'s own explicit `LeaveGroup`, both reuse
-//! `GroupEvent::Join`** — the same event `join_group`'s own handler fires
-//! for a membership change on an already-`Stable` group, since the state
-//! machine has no event distinct for a member *leaving* rather than
-//! joining. `Heartbeats::remove_where` is the one place either path goes
+//! ⚠️ **Eviction, and `M4.10`'s own explicit `LeaveGroup`, both fire
+//! [`oqueue_core::GroupEvent::MemberLeft`]** — the event `M4.34` added
+//! because the state machine had none for a member *leaving* rather than
+//! joining, and this module borrowed `GroupEvent::Join` instead. That is
+//! right only from `Stable`: the table admits `Join` from `Empty | Stable`
+//! alone, so a partial loss from either rebalancing state took a
+//! transition the coordinator refused, and nothing here read the result —
+//! a leader dying while its group waited on its `SyncGroup` left that
+//! group holding `CompletingRebalance` at the old generation with nobody
+//! able to sync it. `Heartbeats::remove_where` is the one place either path goes
 //! through: `sweep` removes by deadline, `leave` removes by name, and both
 //! fire at most one transition regardless of how many members left in the
 //! same pass (`M4.10`'s own "one rebalance, not N" acceptance criterion).
@@ -226,7 +231,7 @@ impl Heartbeats {
                 let event = if members.is_empty() {
                     GroupEvent::AllMembersGone
                 } else {
-                    GroupEvent::Join
+                    GroupEvent::MemberLeft
                 };
                 Some(group_transitions.enqueue(group.clone(), event))
             });

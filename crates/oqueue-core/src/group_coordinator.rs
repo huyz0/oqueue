@@ -229,6 +229,7 @@ mod tests {
             proptest::prelude::Just(GroupEvent::JoinBarrierComplete),
             proptest::prelude::Just(GroupEvent::SyncComplete),
             proptest::prelude::Just(GroupEvent::MemberJoinedDuringSync),
+            proptest::prelude::Just(GroupEvent::MemberLeft),
             proptest::prelude::Just(GroupEvent::AllMembersGone),
             proptest::prelude::Just(GroupEvent::Expire),
         ]
@@ -285,6 +286,13 @@ mod tests {
             GroupEvent::JoinBarrierComplete,
             GroupEvent::SyncComplete,
             GroupEvent::MemberJoinedDuringSync,
+            // ⚠️ **The only state-preserving arm in the table**, which is
+            // what makes it the variant a divergence hides in: a fake that
+            // skipped its own `insert` when the successor equals the
+            // current state would answer `None` where the real coordinator
+            // answers `Some(PreparingRebalance)`, and every other event
+            // here would still agree. `M4.34`, found by review.
+            GroupEvent::MemberLeft,
             GroupEvent::AllMembersGone,
             GroupEvent::Expire,
         ];

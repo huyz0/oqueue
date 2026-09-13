@@ -141,6 +141,20 @@ pub enum GroupEvent {
     /// barrier rather than completing sync against a membership that has
     /// already changed.
     MemberJoinedDuringSync,
+    /// A member left or was evicted while others remain — `M4.10`'s
+    /// `LeaveGroup` and `M4.9`'s session-timeout sweep, which reach it
+    /// through one place (`Heartbeats::remove_where`).
+    ///
+    /// ⚠️ **Distinct from [`GroupEvent::Join`], which is what the broker
+    /// used to fire for this** — the state machine had no event for
+    /// leaving, so eviction borrowed the one for joining. That is correct
+    /// only from `Stable`: a partial membership loss from
+    /// `PreparingRebalance` or `CompletingRebalance` took a transition the
+    /// table refuses, so the coordinator was never told and a group whose
+    /// leader died mid-sync held its generation with no leader. Real
+    /// Kafka's `onExpireHeartbeat` handles those states explicitly.
+    /// `M4.34`, found by M4's closing review.
+    MemberLeft,
     /// Every member has left or been evicted (`M4.9`, `M4.10`), whichever
     /// state that leaves the group in.
     AllMembersGone,
@@ -163,6 +177,7 @@ impl GroupEvent {
             | Self::JoinBarrierComplete
             | Self::SyncComplete
             | Self::MemberJoinedDuringSync
+            | Self::MemberLeft
             | Self::AllMembersGone
             | Self::Expire => {}
         }
@@ -216,7 +231,8 @@ impl GroupState {
         assignment_epoch: AssignmentEpoch,
     ) -> Result<(Self, GenerationId, AssignmentEpoch)> {
         use GroupEvent::{
-            AllMembersGone, Expire, Join, JoinBarrierComplete, MemberJoinedDuringSync, SyncComplete,
+            AllMembersGone, Expire, Join, JoinBarrierComplete, MemberJoinedDuringSync, MemberLeft,
+            SyncComplete,
         };
         use GroupState::{CompletingRebalance, Dead, Empty, PreparingRebalance, Stable};
 
@@ -226,7 +242,24 @@ impl GroupState {
             // Stable) all land on the same barrier — doc 02 §3.1's own
             // "waiting for JoinGroups" state, regardless of which of the
             // three moments actually opened it.
-            (Empty | Stable, Join) | (CompletingRebalance, MemberJoinedDuringSync) => {
+            // ⚠️ **`MemberLeft` is admitted from every state that still
+            // has members, including the two a rebalance is already under
+            // way in** — one arm with the joins above because the answer is
+            // the same barrier, which is also what `clippy::match_same_arms`
+            // insists on. From `Stable` it does what `Join` did for a
+            // partial loss and the outcome is unchanged; the reason the
+            // event exists is the other two. A member lost from
+            // `CompletingRebalance` must reopen the barrier for exactly the
+            // reason `MemberJoinedDuringSync` does — the leader is
+            // computing an assignment against a membership that no longer
+            // holds. From `PreparingRebalance` the round's own `awaiting`
+            // set has already stopped waiting for it (`M4.16`), so the
+            // self-transition changes no state; what it buys is the
+            // coordinator agreeing rather than refusing an event nobody
+            // reads the result of. `M4.34`.
+            (Empty | Stable, Join)
+            | (CompletingRebalance, MemberJoinedDuringSync)
+            | (PreparingRebalance | Stable | CompletingRebalance, MemberLeft) => {
                 Ok((PreparingRebalance, generation, assignment_epoch))
             }
             (Empty, Expire) => Ok((Dead, generation, assignment_epoch)),
@@ -262,203 +295,4 @@ impl From<GenerationId> for AssignmentEpoch {
 }
 
 #[cfg(test)]
-mod tests {
-    #![allow(clippy::expect_used)]
-
-    use super::{AssignmentEpoch, GenerationId, GroupEvent, GroupState, MemberEpoch};
-    use crate::Error;
-
-    /// Every legal transition doc 02 §3.1 and this module's own doc name,
-    /// exhaustively — the acceptance criterion this task's own backlog row
-    /// asks for.
-    const LEGAL: &[(GroupState, GroupEvent, GroupState)] = &[
-        (
-            GroupState::Empty,
-            GroupEvent::Join,
-            GroupState::PreparingRebalance,
-        ),
-        (GroupState::Empty, GroupEvent::Expire, GroupState::Dead),
-        (
-            GroupState::PreparingRebalance,
-            GroupEvent::JoinBarrierComplete,
-            GroupState::CompletingRebalance,
-        ),
-        (
-            GroupState::PreparingRebalance,
-            GroupEvent::AllMembersGone,
-            GroupState::Empty,
-        ),
-        (
-            GroupState::CompletingRebalance,
-            GroupEvent::SyncComplete,
-            GroupState::Stable,
-        ),
-        (
-            GroupState::CompletingRebalance,
-            GroupEvent::MemberJoinedDuringSync,
-            GroupState::PreparingRebalance,
-        ),
-        (
-            GroupState::CompletingRebalance,
-            GroupEvent::AllMembersGone,
-            GroupState::Empty,
-        ),
-        (
-            GroupState::Stable,
-            GroupEvent::Join,
-            GroupState::PreparingRebalance,
-        ),
-        (
-            GroupState::Stable,
-            GroupEvent::AllMembersGone,
-            GroupState::Empty,
-        ),
-    ];
-
-    const ALL_STATES: &[GroupState] = &[
-        GroupState::Empty,
-        GroupState::PreparingRebalance,
-        GroupState::CompletingRebalance,
-        GroupState::Stable,
-        GroupState::Dead,
-    ];
-    const ALL_EVENTS: &[GroupEvent] = &[
-        GroupEvent::Join,
-        GroupEvent::JoinBarrierComplete,
-        GroupEvent::SyncComplete,
-        GroupEvent::MemberJoinedDuringSync,
-        GroupEvent::AllMembersGone,
-        GroupEvent::Expire,
-    ];
-
-    /// `ALL_STATES`/`ALL_EVENTS` are hand-maintained arrays; this pins them
-    /// against the enums' own exhaustive-match guards so a variant added to
-    /// either enum without a matching array entry fails loudly here rather
-    /// than the exhaustiveness tests below silently covering less than they
-    /// claim to.
-    #[test]
-    fn the_hand_maintained_arrays_are_exhaustive() {
-        for &s in ALL_STATES {
-            s.assert_exhaustive();
-        }
-        for &e in ALL_EVENTS {
-            e.assert_exhaustive();
-        }
-        assert_eq!(
-            ALL_STATES.len(),
-            5,
-            "a GroupState variant was added or removed"
-        );
-        assert_eq!(
-            ALL_EVENTS.len(),
-            6,
-            "a GroupEvent variant was added or removed"
-        );
-    }
-
-    #[test]
-    fn every_legal_transition_succeeds() {
-        for &(from, event, to) in LEGAL {
-            let (got, ..) = from
-                .transition(event, GenerationId::INITIAL, AssignmentEpoch::INITIAL)
-                .expect("legal");
-            assert_eq!(got, to, "{from:?} + {event:?}");
-        }
-    }
-
-    #[test]
-    fn every_other_pair_is_refused() {
-        for &state in ALL_STATES {
-            for &event in ALL_EVENTS {
-                let is_legal = LEGAL.iter().any(|&(s, e, _)| s == state && e == event);
-                let result =
-                    state.transition(event, GenerationId::INITIAL, AssignmentEpoch::INITIAL);
-                if is_legal {
-                    assert!(result.is_ok(), "{state:?} + {event:?} should be legal");
-                } else {
-                    assert_eq!(
-                        result,
-                        Err(Error::IllegalGroupTransition {
-                            state: format!("{state:?}"),
-                            event: format!("{event:?}"),
-                        }),
-                        "{state:?} + {event:?} should be refused"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn the_generation_advances_only_on_join_barrier_complete() {
-        let (_, same, _) = GroupState::Empty
-            .transition(
-                GroupEvent::Join,
-                GenerationId::INITIAL,
-                AssignmentEpoch::INITIAL,
-            )
-            .expect("legal");
-        assert_eq!(same, GenerationId::INITIAL);
-
-        let (_, bumped, _) = GroupState::PreparingRebalance
-            .transition(
-                GroupEvent::JoinBarrierComplete,
-                GenerationId::INITIAL,
-                AssignmentEpoch::INITIAL,
-            )
-            .expect("legal");
-        assert_eq!(bumped.get(), GenerationId::INITIAL.get() + 1);
-    }
-
-    #[test]
-    fn the_assignment_epoch_advances_only_on_sync_complete_and_catches_up_to_the_generation() {
-        let generation = GenerationId::INITIAL;
-        let (_, _, unchanged) = GroupState::PreparingRebalance
-            .transition(
-                GroupEvent::JoinBarrierComplete,
-                generation,
-                AssignmentEpoch::INITIAL,
-            )
-            .expect("legal");
-        // JoinBarrierComplete bumps the generation but not the assignment
-        // epoch yet -- the lag this module's own doc names.
-        assert_eq!(unchanged, AssignmentEpoch::INITIAL);
-
-        // A generation past 1 -- `get`'s mutant that always returns a
-        // constant survives against a bumped generation of exactly 1
-        // (INITIAL.next() once), since that constant coincides with the
-        // real answer; several `.next()` calls rules that out.
-        let advanced_generation = generation.next().next().next();
-        let (_, _, caught_up) = GroupState::CompletingRebalance
-            .transition(
-                GroupEvent::SyncComplete,
-                advanced_generation,
-                AssignmentEpoch::INITIAL,
-            )
-            .expect("legal");
-        assert_eq!(caught_up.get(), advanced_generation.get());
-        assert_eq!(caught_up.get(), 3);
-    }
-
-    #[test]
-    fn assignment_epoch_initial_is_behind_generation_initial() {
-        assert_eq!(AssignmentEpoch::INITIAL.get(), -1);
-        assert!(AssignmentEpoch::INITIAL.get() < GenerationId::INITIAL.get());
-    }
-
-    #[test]
-    fn dead_is_terminal() {
-        for &event in ALL_EVENTS {
-            assert!(
-                GroupState::Dead
-                    .transition(event, GenerationId::INITIAL, AssignmentEpoch::INITIAL)
-                    .is_err()
-            );
-        }
-    }
-
-    #[test]
-    fn member_epoch_starts_at_a_fresh_join() {
-        assert_eq!(MemberEpoch::INITIAL.get(), 0);
-    }
-}
+mod tests;

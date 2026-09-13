@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used)]
 
+mod rebalancing;
+
 use super::handle;
 use crate::connection::HandlerResponse;
 use crate::testing::fixture;
@@ -26,12 +28,12 @@ fn prelude(api_key: i16, version: i16) -> RequestPrelude {
     }
 }
 
-fn group(name: &str) -> oqueue_core::GroupId {
+pub(super) fn group(name: &str) -> oqueue_core::GroupId {
     oqueue_core::GroupId::new(name).expect("valid")
 }
 
 /// One member's own `JoinGroup` -> its own minted member id.
-async fn join(
+pub(super) async fn join(
     cluster: &crate::cluster::Cluster,
     group: &str,
     session_timeout_ms: i32,
@@ -99,7 +101,7 @@ fn heartbeat_body(group: &str, member_id: &str, generation: i32) -> Vec<u8> {
     body
 }
 
-async fn heartbeat(
+pub(super) async fn heartbeat(
     cluster: &crate::cluster::Cluster,
     group: &str,
     member_id: &str,
@@ -201,7 +203,8 @@ async fn a_member_absent_past_its_own_timeout_is_evicted_and_the_group_leaves_st
 /// not be refused forever.** `M4.9`'s own round-1 review finding: without
 /// `join_group::round::open_round`'s own fix, every `JoinGroup` this
 /// survivor sent after the eviction above would see the coordinator
-/// already `PreparingRebalance` (from `sweep`'s own `GroupEvent::Join`)
+/// already `PreparingRebalance` (from `sweep`'s own `GroupEvent::MemberLeft`,
+/// `GroupEvent::Join` before `M4.34`)
 /// with no locally-open round, and refuse it as an internal-invariant
 /// bug — wedging the group permanently, since nothing else can ever fire
 /// `JoinBarrierComplete` for a round `join_group::round` never opened.
