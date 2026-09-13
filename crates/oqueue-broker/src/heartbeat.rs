@@ -238,9 +238,78 @@ impl Heartbeats {
         }
     }
 
+    /// Whether `member_id` is tracked **and** its session has not run out.
+    ///
+    /// ⚠️ **Tracked is not the same as alive, and `M4.16` is why that
+    /// matters.** Nothing reaps in the background — `sweep` runs only when
+    /// some *other* member of the same group sends a `Heartbeat` — so a
+    /// consumer killed with `SIGKILL` stays in this map indefinitely, and in a
+    /// single-consumer group there is nobody left to trigger the sweep at all.
+    /// A round that waits for every *tracked* id therefore waits for the dead
+    /// one until its own `rebalance_timeout_ms` expires: 300 s with the Java
+    /// consumer's defaults, against a 45 s session timeout. Reading the
+    /// deadline directly bounds that wait at the session timeout instead.
+    ///
+    /// ⚠️ **That is a tighter bound than Kafka's own**, which is
+    /// `rebalance.timeout.ms`, and it is only sound because `handle` renews
+    /// a session before answering `REBALANCE_IN_PROGRESS` — so a member
+    /// heartbeating through a long rebalance stays live and is still waited
+    /// for. Remove that renewal and this predicate starts dropping healthy
+    /// incumbents from the roster. Found by review.
+    pub(crate) fn is_live(&self, group: &GroupId, member_id: &str) -> bool {
+        let now = Instant::now();
+        let groups = self.lock();
+        let live = groups
+            .get(group)
+            .and_then(|members| members.get(member_id))
+            .is_some_and(|session| session.deadline > now);
+        drop(groups);
+        live
+    }
+
+    /// The latest session deadline among `member_ids`, if any of them is
+    /// tracked at all — **whether or not it has already passed**.
+    ///
+    /// ⚠️ **The instant at which waiting for this set could become
+    /// pointless.** A round waits for the members in `OpenRound::awaiting`,
+    /// and nothing strikes a *dead* id off that set except
+    /// `GroupJoins::reprune_awaiting`. Waking at this instant and re-pruning
+    /// is what stops a round whose awaited members have all died from sitting
+    /// until its own `rebalance_timeout_ms` — 300 s with the Java consumer's
+    /// defaults. A member that is genuinely alive has renewed by then and
+    /// pushed its own deadline past it, so the wake re-arms rather than
+    /// closing on a live member.
+    ///
+    /// ⚠️ **No liveness filter here, deliberately, and the caller owes one.**
+    /// The one caller has just retained only live ids, so re-testing
+    /// `deadline > now` would be a second copy of `is_live`'s own boundary
+    /// that no test could tell apart. ⚠️ **A caller that does not prune first
+    /// gets a past instant back**, and a past instant used as a wake-up time
+    /// is a hot loop until the round's deadline — so prune, then ask. `None`
+    /// therefore means "none of these ids is tracked", which after that prune
+    /// is the same as "nothing left to wait for". Found by review.
+    pub(crate) fn latest_deadline(
+        &self,
+        group: &GroupId,
+        member_ids: &[String],
+    ) -> Option<Instant> {
+        let groups = self.lock();
+        let latest = groups.get(group).and_then(|members| {
+            member_ids
+                .iter()
+                .filter_map(|id| members.get(id).map(|session| session.deadline))
+                .max()
+        });
+        drop(groups);
+        latest
+    }
+
     /// Whether `member_id` is currently tracked in `group` — `M4.11`'s own
     /// real caller: `crate::fencing::FencingContext::member_tracked` for
     /// every `M4.7`-`M4.10` handler now reads this, not only tests.
+    ///
+    /// ⚠️ **Says nothing about whether that member is still alive**; see
+    /// [`Heartbeats::is_live`], which is the one a round's roster must use.
     pub(crate) fn is_tracked(&self, group: &GroupId, member_id: &str) -> bool {
         let groups = self.lock();
         let tracked = groups
@@ -300,6 +369,27 @@ pub(crate) async fn handle(
         Some(&[GroupState::Stable]),
     );
     if let Err(refusal) = crate::fencing::fence(&ctx) {
+        // ⚠️ **A rebalance renews the session; it does not suspend it.**
+        // `REBALANCE_IN_PROGRESS` is the answer to a *correctly behaving*
+        // consumer — tracked, current generation, group merely mid-round —
+        // and returning it without renewing means a rebalance that outlives
+        // `session_timeout_ms` expires every member still faithfully
+        // heartbeating through it. That matters now that `M4.16` prunes
+        // `OpenRound::awaiting` by `is_live`: the incumbent holding the
+        // partitions drops out of the roster it is being waited for in, the
+        // round closes without it, and the leader hands its partitions to
+        // somebody else while it is still consuming them — `FR-20`'s
+        // revoke-before-reassign invariant failing by a second route.
+        // Real Kafka renews here too: `handleHeartbeat` calls
+        // `completeAndScheduleNextHeartbeatExpiration` *before* answering
+        // `REBALANCE_IN_PROGRESS`. Found by review.
+        //
+        // ⚠️ **Only this refusal renews.** `UNKNOWN_MEMBER_ID` has nothing to
+        // renew, and `ILLEGAL_GENERATION` is a member that has lost track of
+        // the group — neither is evidence of a healthy session.
+        if matches!(refusal, crate::fencing::Refusal::RebalanceInProgress) {
+            cluster.heartbeats().renew(&group, request.member_id);
+        }
         return reply(prelude, version, refusal.error_code());
     }
 

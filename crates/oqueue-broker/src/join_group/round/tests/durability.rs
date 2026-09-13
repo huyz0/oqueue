@@ -72,21 +72,21 @@ async fn a_join_during_sync_durably_records_member_joined_during_sync() {
         .join(&g, member("m2", &["range"]), Duration::from_secs(1))
         .await;
 
-    // ⚠️ **Four events, not three, and the fourth is correct.** The first
-    // round closed with one member, so `last_round_size` is 1 and the round
-    // `MemberJoinedDuringSync` opens is *full* the instant m2 enrols — it
-    // closes immediately rather than waiting out a deadline. Asserting the
-    // three-event prefix would have hidden that; asserting all four says what
-    // the group actually recorded.
+    // ⚠️ **Three events, and the absence of a fourth is the point.** This
+    // asserted a trailing `JoinBarrierComplete` until `M4.16`: the previous
+    // round had one member, so a *count*-based early close fired the instant
+    // m2 enrolled — closing the round on the newcomer alone, with m1 never
+    // asked to give anything up. Rounds now wait for the roster they had
+    // (`OpenRound::awaiting`), so m2 opening a round does not close it, and
+    // this group waits for m1 or for its deadline.
     assert_eq!(
         h.durable_events(&g).await,
         vec![
             GroupEvent::Join,
             GroupEvent::JoinBarrierComplete,
             GroupEvent::MemberJoinedDuringSync,
-            GroupEvent::JoinBarrierComplete,
         ],
-        "a join during sync must durably record the event it fired, and the \
-         immediate close that follows it for an established group"
+        "a join during sync records the event it fired, and does not close the \
+         round on a newcomer that the group's existing members have not joined"
     );
 }

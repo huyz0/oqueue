@@ -43,7 +43,7 @@ use oqueue_codec::join_group::{
 };
 use oqueue_core::{GroupId, MemberId};
 pub(crate) use round::GroupJoins;
-use round::{JoinOutcome, RoundClose, RoundMember, effective_timeout_ms, mint_member_id};
+use round::{JoinOutcome, Reprune, RoundClose, RoundMember, effective_timeout_ms, mint_member_id};
 
 /// The wire code a refused join answers with.
 const fn refusal_code(outcome: &JoinOutcome) -> i16 {
@@ -70,6 +70,7 @@ fn coordination(cluster: &Cluster) -> round::Coordination<'_> {
     round::Coordination {
         transitions: cluster.group_transitions(),
         coordinator: cluster.group_coordinator(),
+        heartbeats: cluster.heartbeats(),
     }
 }
 
@@ -248,8 +249,21 @@ async fn wait_for_close(
         if let Some(published) = outcome.get() {
             return published.clone();
         }
+        let next_check = next_wake(cluster, group, &outcome, deadline).await;
+        if let Some(published) = outcome.get() {
+            return published.clone();
+        }
         tokio::select! {
-            () = tokio::time::sleep_until(deadline) => {
+            () = tokio::time::sleep_until(next_check) => {
+                // ⚠️ **Not necessarily the round's own deadline**: an early
+                // `Recheck` wake lands here too, and it has exhausted
+                // nothing. `deadline_tried` is what gives up and withdraws
+                // the member, so only a pass that really reached the deadline
+                // may spend it.
+                let at_deadline = tokio::time::Instant::now() >= deadline;
+                if !at_deadline {
+                    continue;
+                }
                 cluster
                     .group_joins()
                     .close_on_deadline(coordination(cluster), group, &outcome)
@@ -282,6 +296,62 @@ async fn wait_for_close(
             }
             () = notify.notified() => {}
         }
+    }
+}
+
+/// When this waiter should next wake — and, if every member the round still
+/// awaits has died, the close that makes waiting moot.
+///
+/// ⚠️ **This is the only place a *dead* id is struck off `awaiting`.**
+/// `plan_join` strikes off the enrolling member's own id and nothing else, so
+/// without this a round would wait for every member of the previous roster
+/// until its own `rebalance_timeout_ms` — 300 s with the Java consumer's
+/// defaults — including members that are never coming. The common case is a
+/// consumer restarting *inside* its own session window: it returns under a
+/// new minted id while the old one is still tracked and still live when the
+/// round is installed. The count-based rule this replaced closed such a round
+/// at once, which makes the stall one the roster rule introduced and has to
+/// answer for itself.
+///
+/// ⚠️ **Liveness was once tested here *and* at install *and* on every
+/// enrolment**, and review showed the other two could each be deleted with
+/// the whole suite still green, because this one reaches the same state a hop
+/// later. They are gone: a branch nothing can pin is a branch nothing is
+/// checking. Do not add them back. Found by review.
+///
+/// ⚠️ **A live member has renewed before the instant returned here**, because
+/// `heartbeat::handle` renews even while answering `REBALANCE_IN_PROGRESS` —
+/// so an early wake either finds the member gone or pushes the next check
+/// out. Without that renewal this would close rounds on members that are
+/// merely mid-rebalance.
+async fn next_wake(
+    cluster: &Cluster,
+    group: &GroupId,
+    outcome: &std::sync::Arc<std::sync::OnceLock<round::RoundOutcome>>,
+    deadline: tokio::time::Instant,
+) -> tokio::time::Instant {
+    match cluster
+        .group_joins()
+        .reprune_awaiting(coordination(cluster), group, outcome)
+    {
+        // ⚠️ **Close now, and only here.** The round waits on nobody. This is
+        // not a deadline attempt and must not spend `deadline_tried`, which
+        // is what eventually withdraws the member. If it closes nothing
+        // (another task holds the slot) this yields `deadline` and the caller
+        // sleeps there, so a failed early close costs a wait, not a spin.
+        Reprune::RosterDead => {
+            cluster
+                .group_joins()
+                .close_on_deadline(coordination(cluster), group, outcome)
+                .await;
+            deadline
+        }
+        // Never *later* than the round's own deadline, which is the
+        // client-facing promise; this only ever moves the wake earlier.
+        Reprune::Recheck(next) => next.min(deadline),
+        // ⚠️ Not the same as `RosterDead`: a brand-new group has no roster to
+        // wait for and must still wait out its deadline.
+        Reprune::NotWaiting => deadline,
     }
 }
 

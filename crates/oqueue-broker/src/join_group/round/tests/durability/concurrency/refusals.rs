@@ -91,9 +91,11 @@ async fn a_failing_log_makes_a_join_unavailable_not_refused() {
         Arc::clone(&log) as Arc<dyn GroupMetadataLog>,
     ));
     let joins = GroupJoins::default();
+    let heartbeats = crate::heartbeat::Heartbeats::default();
     let co = Coordination {
         transitions: &transitions,
         coordinator: coordinator.as_ref(),
+        heartbeats: &heartbeats,
     };
     log.refuse_append();
 
@@ -145,11 +147,11 @@ fn every_refusal_answers_the_code_its_cause_deserves() {
 }
 
 /// **A transient append failure must not cost the group its round size.**
-/// Round nine's finding: `abandon_round` cleared `last_round_size` for every
+/// Round nine's finding: `abandon_round` cleared `last_round_members` for every
 /// refused barrier. That is right when the barrier was *illegal* — the group
 /// moved on and its members really are gone — and wrong when the append merely
 /// failed, because then every member is sitting in the next round already. A
-/// round with no expected size has no early-close signal, so it waits out
+/// round with no roster to wait for has no early-close signal, so it waits out
 /// `rebalance_timeout_ms` in full: 300 s with the Java consumer's default. A
 /// storage blip that healed in milliseconds should not cost five minutes.
 ///
@@ -159,7 +161,7 @@ fn every_refusal_answers_the_code_its_cause_deserves() {
 /// this test did exactly that and passed against the defect it was written to
 /// catch. A two-member round lets the open succeed and only the barrier fail.
 #[tokio::test(start_paused = true)]
-async fn a_transient_append_failure_keeps_the_rounds_expected_size() {
+async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
     let g = group("orders");
     let coordinator = Arc::new(FakeGroupCoordinator::new());
     let log = Arc::new(FaultGroupMetadataLog::new(FakeGroupMetadataLog::new()));
@@ -169,9 +171,11 @@ async fn a_transient_append_failure_keeps_the_rounds_expected_size() {
         Arc::clone(&log) as Arc<dyn GroupMetadataLog>,
     ));
     let joins = GroupJoins::default();
+    let heartbeats = crate::heartbeat::Heartbeats::default();
     let co = Coordination {
         transitions: &transitions,
         coordinator: coordinator.as_ref(),
+        heartbeats: &heartbeats,
     };
 
     // Establish a round size of 2.
@@ -184,6 +188,7 @@ async fn a_transient_append_failure_keeps_the_rounds_expected_size() {
     let _ = joins
         .join(co, &g, member("b", &["range"]), Duration::from_secs(1))
         .await;
+    heartbeats.register(&g, "b", 30_000);
     joins.close_on_deadline(co, &g, &outcome).await;
     coordinator
         .transition(&g, GroupEvent::SyncComplete)
@@ -193,10 +198,12 @@ async fn a_transient_append_failure_keeps_the_rounds_expected_size() {
     let _ = joins
         .join(co, &g, member("a", &["range"]), Duration::from_secs(1))
         .await;
+    heartbeats.register(&g, "a", 30_000);
     log.refuse_append();
     let _ = joins
         .join(co, &g, member("b", &["range"]), Duration::from_secs(1))
         .await;
+    heartbeats.register(&g, "b", 30_000);
     log.heal();
 
     // ⚠️ `b`'s failed join already re-planned into a fresh round and enrolled
@@ -206,9 +213,10 @@ async fn a_transient_append_failure_keeps_the_rounds_expected_size() {
     let outcome = joins
         .join(co, &g, member("a", &["range"]), Duration::from_secs(1))
         .await;
+    heartbeats.register(&g, "a", 30_000);
     assert!(
         matches!(outcome, JoinOutcome::Ready(_)),
-        "the group's expected size must survive a transient append failure, or \
+        "the group's known roster must survive a transient append failure, or \
          every member waits out a full rebalance timeout for a blip"
     );
 }

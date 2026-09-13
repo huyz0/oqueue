@@ -90,9 +90,21 @@ pub(super) fn install_round(
     rebalance_timeout: Duration,
 ) {
     let entry = entries.entry(group.clone()).or_default();
+    // ⚠️ **Every id from the previous roster, live or not.** Liveness belongs
+    // to `GroupJoins::reprune_awaiting` alone — filtering here as well was a
+    // second copy nothing could pin, since the re-prune reaches the same state
+    // on the waiter's first pass. A roster whose members are all dead empties
+    // there and closes the round at once rather than on its deadline, which is
+    // what the single-consumer restart needs.
+    //
+    // ⚠️ `None` means "no previous roster at all" — a brand-new group — and
+    // that round waits out its deadline, because a roster it never had cannot
+    // tell it anything. That is *not* the same as a roster that exists and has
+    // died, which is why this is not collapsed to `None`.
+    let awaiting = entry.last_round_members.clone();
     entry.open = Some(OpenRound {
         members: Vec::new(),
-        expected: entry.last_round_size,
+        awaiting,
         deadline: Instant::now() + rebalance_timeout,
         notify: Arc::new(Notify::new()),
         outcome: Arc::new(OnceLock::new()),
@@ -108,7 +120,7 @@ pub(super) fn install_round(
 /// (opening a round, closing it) leave this lock.
 pub(super) fn plan_join(
     entries: &mut HashMap<GroupId, Entry>,
-    coordinator: &dyn GroupCoordinator,
+    co: Coordination<'_>,
     group: &GroupId,
     member: &RoundMember,
     rebalance_timeout: Duration,
@@ -117,7 +129,7 @@ pub(super) fn plan_join(
         .get(group)
         .is_none_or(|e| e.open.as_ref().is_none_or(|r| r.outcome.get().is_some()));
 
-    if needs_open && let Some(step) = plan_open(entries, coordinator, group, rebalance_timeout) {
+    if needs_open && let Some(step) = plan_open(entries, co, group, rebalance_timeout) {
         return step;
     }
 
@@ -139,9 +151,22 @@ pub(super) fn plan_join(
         return Step::Done(JoinOutcome::Refused);
     }
     round.members = trial;
-    let full = round
-        .expected
-        .is_some_and(|expected| round.members.len() >= expected);
+    // ⚠️ **Closed when every member the group already had has rejoined**, not
+    // when a count is reached. A newcomer is not in `awaiting`, so it cannot
+    // close a round on its own and leave the incumbent holding partitions
+    // nobody asked it to give up — see `OpenRound::awaiting`.
+    // ⚠️ **Only the enroller is struck off here — liveness is not consulted.**
+    // Striking off ids that have *died* is `GroupJoins::reprune_awaiting`'s
+    // job, and it runs at the top of every `wait_for_close` pass, so a member
+    // that dies at any point is dropped there. Testing liveness here as well
+    // was redundant: deleting it left the whole suite green, because the
+    // re-prune reached the same state one hop later. Three copies of a
+    // predicate, two of which nothing could pin, is what `is_own_open_round`
+    // was just collapsed for. Found by review.
+    if let Some(awaiting) = round.awaiting.as_mut() {
+        awaiting.retain(|id| id != &member.member_id);
+    }
+    let full = round.awaiting.as_ref().is_some_and(Vec::is_empty);
 
     // ⚠️ **Claim the slot so neither a second joiner nor a waiter's own
     // deadline fires `JoinBarrierComplete` for this round as well.**
@@ -178,7 +203,7 @@ pub(super) fn plan_join(
 /// work [`GroupJoins::join`] must do with the lock released.
 pub(super) fn plan_open(
     entries: &mut HashMap<GroupId, Entry>,
-    coordinator: &dyn GroupCoordinator,
+    co: Coordination<'_>,
     group: &GroupId,
     rebalance_timeout: Duration,
 ) -> Option<Step> {
@@ -193,7 +218,7 @@ pub(super) fn plan_open(
     // exact negation of `needs_open` and had never run. Found by review:
     // documenting protection that the lock discipline is actually providing
     // is how a later refactor gets judged safe on a check that does nothing.
-    match opening_event(coordinator, group) {
+    match opening_event(co.coordinator, group) {
         // The slot stays claimed: `join` releases it once the transition
         // has landed, or failed.
         Ok(Some(event)) => Some(Step::Open(event)),
@@ -223,6 +248,31 @@ pub(super) enum DeadlineClaim {
     Claimed,
 }
 
+/// Whether `round` is the caller's own round, and still open.
+///
+/// ⚠️ `own_outcome` is how a stale waiter is told its own round is gone, not
+/// the group's current one. `entry.open` is *replaced* the moment a new round
+/// opens, keyed only by `GroupId` — so a waiter whose own round already closed
+/// without waking it would otherwise, on its own stale deadline, act on
+/// whatever round is open *now*, a different generation than the one it ever
+/// joined. Pointer equality is what tells "my round, not yet closed" apart
+/// from "a round, but not mine".
+///
+/// ⚠️ **One copy, called from every place that needs it.** It was written out
+/// three times — `deadline_claim`, `GroupJoins::reprune_awaiting` and
+/// `GroupJoins::withdraw` — and the copies no test reached were invisible
+/// until `cargo mutants` flipped one's `||` to `&&` and nothing failed. Both
+/// later copies were found by review, the second only after this comment
+/// claimed there were two. ⚠️ **Do not write the predicate out again**: it
+/// decides whether a stale waiter may act on a round that is no longer its
+/// own, and a copy nothing exercises is a copy that can drift silently.
+pub(super) fn is_own_open_round(
+    round: &OpenRound,
+    own_outcome: &Arc<OnceLock<RoundOutcome>>,
+) -> bool {
+    Arc::ptr_eq(&round.outcome, own_outcome) && round.outcome.get().is_none()
+}
+
 pub(super) fn deadline_claim(
     entries: &mut HashMap<GroupId, Entry>,
     group: &GroupId,
@@ -234,14 +284,7 @@ pub(super) fn deadline_claim(
     let Some(round) = entry.open.as_ref() else {
         return DeadlineClaim::NotMine;
     };
-    // ⚠️ `own_outcome` is how a stale waiter is told its own round is gone,
-    // not the group's current one. `entry.open` is *replaced* the moment a
-    // new round opens, keyed only by `GroupId` — so a waiter whose own round
-    // already closed without waking it would otherwise, on its own stale
-    // deadline, close whatever round is open *now*, a different generation
-    // than the one it ever joined. Pointer equality is what tells "my round,
-    // not yet closed" apart from "a round, but not mine".
-    if !Arc::ptr_eq(&round.outcome, own_outcome) || round.outcome.get().is_some() {
+    if !is_own_open_round(round, own_outcome) {
         return DeadlineClaim::NotMine;
     }
     GroupJoins::claim_or_wait(entries, group).map_or(DeadlineClaim::Claimed, DeadlineClaim::Wait)
@@ -267,7 +310,7 @@ pub(super) fn deadline_claim(
 pub(super) fn abandon_round(
     entries: &mut HashMap<GroupId, Entry>,
     group: &GroupId,
-    forget_size: bool,
+    forget_roster: bool,
 ) {
     if let Some(entry) = entries.get_mut(group)
         && let Some(round) = entry.open.take()
@@ -280,18 +323,18 @@ pub(super) fn abandon_round(
         // `REBALANCE_IN_PROGRESS`, which is what a client rejoins on.
         let _ = round.outcome.set(None);
         round.notify.notify_waiters();
-        // ⚠️ **Forget the size only when the members really are gone.** If
+        // ⚠️ **Forget the roster only when the members really are gone.** If
         // the barrier was *illegal* — `AllMembersGone` took the group out of
-        // `PreparingRebalance` — a fresh round must not expect members that
+        // `PreparingRebalance` — a fresh round must not wait for members that
         // are not coming, or it waits out its own deadline too. But if the
         // append merely *failed*, every member is sitting in the next round
-        // already: clearing the size there leaves it with no early-close
+        // already: clearing the roster there leaves it with no early-close
         // signal, so a storage blip that healed in milliseconds costs the
         // group a full `rebalance_timeout_ms` — 300 s with the Java
         // consumer's default. Found by review; `apply_open` keeps the same
         // two causes apart one function away, for the same reason.
-        if forget_size {
-            entry.last_round_size = None;
+        if forget_roster {
+            entry.last_round_members = None;
         }
     }
 }
@@ -377,6 +420,6 @@ pub(super) fn finalize_close(
     });
     let _ = round.outcome.set(Some(Arc::clone(&close)));
     round.notify.notify_waiters();
-    entry.last_round_size = Some(close.members.len());
+    entry.last_round_members = Some(close.members.iter().map(|m| m.member_id.clone()).collect());
     Some(close)
 }

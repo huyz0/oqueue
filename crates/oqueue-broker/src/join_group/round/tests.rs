@@ -40,6 +40,7 @@ fn member_with_type(id: &str, protocol_type: &str, protocols: &[&str]) -> RoundM
 /// actor is the only thing that ever answers.
 pub(super) struct Harness {
     joins: GroupJoins,
+    heartbeats: crate::heartbeat::Heartbeats,
     transitions: GroupTransitions,
     coordinator: Arc<FakeGroupCoordinator>,
     log: Arc<FakeGroupMetadataLog>,
@@ -57,6 +58,7 @@ impl Harness {
         ));
         Self {
             joins: GroupJoins::default(),
+            heartbeats: crate::heartbeat::Heartbeats::default(),
             transitions,
             coordinator,
             log,
@@ -68,11 +70,26 @@ impl Harness {
         super::Coordination {
             transitions: &self.transitions,
             coordinator: self.coordinator.as_ref(),
+            heartbeats: &self.heartbeats,
         }
     }
 
+    /// ⚠️ **Registers the member so a group looks established.** Since
+    /// `M4.16` a round waits only for members the group still *has*, which it
+    /// reads from `Heartbeats` — so a harness that never registered anyone
+    /// would leave every group looking brand new and no round would ever close
+    /// early. ⚠️ **Not the same as what `join_group::handle` does**, and the
+    /// difference is worth knowing: the handler registers only after a
+    /// successful close, never on a refusal, and with the request's own
+    /// session timeout. This registers unconditionally with a fixed one — so a
+    /// member refused here becomes tracked, where in production it would not.
+    /// Round-closure behaviour these tests show for a group that has refused a
+    /// member does not transfer. Found by review.
     pub(super) async fn join(&self, g: &GroupId, m: RoundMember, timeout: Duration) -> JoinOutcome {
-        self.joins.join(self.coordination(), g, m, timeout).await
+        let member_id = m.member_id.clone();
+        let outcome = self.joins.join(self.coordination(), g, m, timeout).await;
+        self.heartbeats.register(g, &member_id, 30_000);
+        outcome
     }
 
     pub(super) async fn close_on_deadline(&self, g: &GroupId, own: &Arc<OnceLock<RoundOutcome>>) {

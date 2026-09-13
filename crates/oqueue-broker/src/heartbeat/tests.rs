@@ -366,6 +366,97 @@ async fn a_member_at_exactly_its_own_deadline_is_evicted() {
     );
 }
 
+/// ⚠️ **`is_live` reads the deadline, and the exact deadline instant is
+/// already expired** — the same strict `>` boundary
+/// [`a_member_at_exactly_its_own_deadline_is_evicted`] pins for `sweep`,
+/// asserted separately because `is_live` is the predicate a round's roster
+/// consults and nothing sweeps on its behalf.
+///
+/// This also pins the distinction `M4.16` exists for: no heartbeat is sent
+/// here, so no `sweep` runs, so the dead follower is *still tracked*. A round
+/// keyed on `is_tracked` would wait out its whole `rebalance_timeout_ms` for
+/// it; keyed on `is_live` it does not wait at all.
+#[tokio::test(start_paused = true)]
+async fn a_member_at_exactly_its_own_deadline_is_not_live() {
+    let fixture = std::sync::Arc::new(fixture(&[]).await);
+    let (_leader, follower) =
+        a_stable_group_of_two(&fixture.cluster, "orders", [60_000, 10_000]).await;
+
+    // Exactly the follower's own session timeout, and nothing else: under
+    // paused time virtual "now" at the reads below is precisely its deadline.
+    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+
+    assert!(
+        !fixture
+            .cluster
+            .heartbeats()
+            .is_live(&group("orders"), &follower),
+        "exactly-at-deadline must count as expired, not \"not yet\""
+    );
+    assert!(
+        fixture
+            .cluster
+            .heartbeats()
+            .is_tracked(&group("orders"), &follower),
+        "nothing swept it, so it is still tracked — which is why a roster \
+         must read is_live rather than is_tracked"
+    );
+}
+
+/// ⚠️ **A rebalance longer than `session_timeout_ms` must not expire the
+/// members waiting it out.** A consumer mid-rebalance keeps heartbeating and
+/// keeps being told `REBALANCE_IN_PROGRESS`; if that answer does not renew
+/// its session, `M4.16`'s `is_live` pruning drops it from
+/// `OpenRound::awaiting`, the round closes without the incumbent that holds
+/// the partitions, and the leader reassigns them while it is still
+/// consuming — `FR-20`'s revoke-before-reassign invariant failing.
+///
+/// The session timeout here (6 s) is deliberately far shorter than the
+/// rebalance timeout (60 s), which is the configuration the hazard needs and
+/// is legal: Kafka's own defaults are 45 s against 300 s. Found by review.
+#[tokio::test(start_paused = true)]
+async fn a_rebalance_outliving_the_session_timeout_does_not_expire_its_members() {
+    let fixture = std::sync::Arc::new(fixture(&[]).await);
+    let (leader, follower) =
+        a_stable_group_of_two(&fixture.cluster, "orders", [6_000, 6_000]).await;
+
+    // A newcomer moves the group off `Stable`, so every heartbeat below is
+    // answered REBALANCE_IN_PROGRESS rather than NONE.
+    let joining = tokio::spawn({
+        let fixture = std::sync::Arc::clone(&fixture);
+        async move { join(&fixture.cluster, "orders", 6_000, 60_000).await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+    // Both incumbents heartbeat all the way through, at 2s intervals, for
+    // 10s — comfortably past their own 6s session timeout.
+    for _ in 0..5 {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        for member in [&leader, &follower] {
+            let error_code = heartbeat(&fixture.cluster, "orders", member, 1).await;
+            assert_eq!(
+                error_code,
+                oqueue_codec::error_codes::REBALANCE_IN_PROGRESS,
+                "a heartbeat mid-rebalance is answered REBALANCE_IN_PROGRESS"
+            );
+        }
+    }
+
+    for member in [&leader, &follower] {
+        assert!(
+            fixture
+                .cluster
+                .heartbeats()
+                .is_live(&group("orders"), member),
+            "a member that never missed a heartbeat must still be live after \
+             10s of rebalance on a 6s session timeout — otherwise the round \
+             closes without the incumbent that holds the partitions"
+        );
+    }
+
+    joining.abort();
+}
+
 /// A malformed body closes the connection rather than answering — every
 /// other handler's own policy for a frame this broker cannot decode.
 #[tokio::test(start_paused = true)]

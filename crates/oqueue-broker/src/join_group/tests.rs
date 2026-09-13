@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used)]
 
+mod cooperative;
+
 use super::handle;
 use crate::connection::HandlerResponse;
 use crate::testing::fixture;
@@ -9,7 +11,7 @@ use kafka_protocol::messages::join_group_request::JoinGroupRequestProtocol as Kp
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
 use oqueue_codec::frame::RequestPrelude;
 
-const VERSION: i16 = 5;
+pub(super) const VERSION: i16 = 5;
 
 fn prelude(version: i16) -> RequestPrelude {
     RequestPrelude {
@@ -49,7 +51,11 @@ fn decode_response(bytes: &[u8], version: i16) -> KpResponse {
     response
 }
 
-async fn join(cluster: &crate::cluster::Cluster, body: Vec<u8>, version: i16) -> KpResponse {
+pub(super) async fn join(
+    cluster: &crate::cluster::Cluster,
+    body: Vec<u8>,
+    version: i16,
+) -> KpResponse {
     let HandlerResponse::Reply(out) = handle(cluster, prelude(version), &body).await else {
         panic!("a JoinGroup replies");
     };

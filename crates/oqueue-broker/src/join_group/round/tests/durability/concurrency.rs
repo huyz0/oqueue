@@ -56,7 +56,7 @@ async fn a_round_that_fills_records_exactly_one_barrier_complete() {
     let h = Harness::new();
     let g = group("orders");
 
-    // Round one establishes `last_round_size = 1`, so round two closes the
+    // Round one establishes a roster of one, so round two closes the
     // moment its single member joins.
     let JoinOutcome::Pending { outcome, .. } = h
         .join(&g, member("m1", &["range"]), Duration::from_secs(1))
@@ -282,7 +282,7 @@ async fn two_members_filling_one_round_concurrently_close_it_once() {
     let h = Harness::new();
     let g = group("orders");
 
-    // Establish `last_round_size = 2` so the next round closes when two join.
+    // Establish a roster of two, so the next round closes when both rejoin.
     let JoinOutcome::Pending { outcome, .. } = h
         .join(&g, member("a", &["range"]), Duration::from_secs(1))
         .await

@@ -46,10 +46,24 @@ pub(crate) struct RoundClose {
 #[derive(Debug)]
 pub(super) struct OpenRound {
     pub(super) members: Vec<RoundMember>,
-    /// How many members close this round the moment they join, without
-    /// waiting for `deadline` — `None` when nothing is known yet, which
-    /// leaves `deadline` as the only way this round ever closes.
-    pub(super) expected: Option<usize>,
+    /// The member ids this round is still waiting for — the previous
+    /// round's own roster, minus whoever has rejoined so far.
+    ///
+    /// ⚠️ **A set, not a count, and `M4.16` is why.** This was
+    /// `expected: Option<usize>` compared against `members.len()`, which
+    /// closes a round on *whoever* arrives first: a newcomer joining a
+    /// one-member group closed the round on itself alone, became leader of a
+    /// roster of one, and took every partition — while the member that
+    /// actually held them was never asked to revoke anything and went on
+    /// consuming them until its next heartbeat was fenced. Then it rejoined,
+    /// closed a round alone in turn, and took them back. Two consumers never
+    /// converged, and both consumed the same partitions in between. FR-20's
+    /// invariant — a partition is revoked by its previous owner before it is
+    /// handed to a new one — failing with no mixed protocols in sight.
+    ///
+    /// `None` means nothing is known yet, which leaves the deadline as the
+    /// only way the round closes.
+    pub(super) awaiting: Option<Vec<String>>,
     pub(super) deadline: Instant,
     pub(super) notify: Arc<Notify>,
     pub(super) outcome: Arc<OnceLock<RoundOutcome>>,
@@ -59,19 +73,19 @@ pub(super) struct OpenRound {
 #[derive(Debug, Default)]
 pub(super) struct Entry {
     pub(super) open: Option<OpenRound>,
-    /// How many members closed this group's most recently *elected* round —
-    /// the next round's own `expected`, until it closes and updates this.
+    /// Which members closed this group's most recently *elected* round —
+    /// the next round's own `awaiting` set, until it closes and updates this.
     ///
-    /// ⚠️ **`None` for a group that has never closed one — not `Some(1)`.**
-    /// A group's true first-ever round has no prior membership to know a
-    /// count from, so it waits out its own deadline like every other
+    /// ⚠️ **`None` for a group that has never closed one.** A group's true
+    /// first-ever round has no prior membership to wait for, so it waits out
+    /// its own deadline like every other
     /// unresolved round rather than closing the instant its own opener
     /// joins; real Kafka's `group.initial.rebalance.delay.ms` names the
     /// same gap for the same reason (batching concurrently-starting
     /// consumers into one round), and this is that gap, stood in for by
     /// `rebalance_timeout_ms` itself rather than a second, not-yet-built
     /// configuration value.
-    pub(super) last_round_size: Option<usize>,
+    pub(super) last_round_members: Option<Vec<String>>,
     /// Set while a transition for this group is in flight through
     /// [`crate::group_transitions::GroupTransitions`] — `M4.15d`.
     ///
@@ -177,6 +191,17 @@ pub(super) const SLOT_WAIT: Duration = Duration::from_secs(5);
 pub(crate) struct Coordination<'a> {
     pub(crate) transitions: &'a crate::group_transitions::GroupTransitions,
     pub(crate) coordinator: &'a dyn GroupCoordinator,
+    /// ⚠️ **Which members are still *live*, so a round does not wait for one
+    /// that is never coming back.** `awaiting` is keyed on member ids, and a
+    /// consumer that restarts or is fenced comes back with an empty
+    /// `member_id` and is minted a *new* one — so its old id would sit in
+    /// `awaiting` until the round's own deadline, stalling the group for a
+    /// full `rebalance_timeout_ms` on each restart.
+    ///
+    /// ⚠️ **`is_live`, never `is_tracked`.** A `SIGKILL`ed consumer stays
+    /// tracked indefinitely — nothing reaps in the background — so keying on
+    /// tracking reinstates exactly that stall. Found by review.
+    pub(crate) heartbeats: &'a crate::heartbeat::Heartbeats,
 }
 
 /// One pass of [`GroupJoins::join`]'s own plan, decided under the lock and
@@ -195,4 +220,23 @@ pub(super) enum Step {
     Close,
     /// Nothing further to do — hand this outcome to the caller.
     Done(JoinOutcome),
+}
+
+/// What re-pruning an open round's `awaiting` concluded — [`GroupJoins::reprune_awaiting`].
+pub(crate) enum Reprune {
+    /// Every member this round still waits for has died. The round can be
+    /// closed now rather than at its own `rebalance_timeout_ms`.
+    RosterDead,
+    /// Still waiting, and this is the earliest instant the answer could
+    /// change: the latest deadline among the members still awaited. A live
+    /// member renews before then — `heartbeat::handle` renews even while
+    /// answering `REBALANCE_IN_PROGRESS` — so waking here either finds it
+    /// gone or pushes the next check out.
+    Recheck(Instant),
+    /// Nothing for this waiter to re-prune: not its round, already closed, or
+    /// a round with no previous roster to wait for at all. ⚠️ **Not the same
+    /// as `RosterDead`** — a brand-new group has no roster and must still
+    /// wait out its deadline, and conflating the two closed every round on
+    /// its first early wake.
+    NotWaiting,
 }
