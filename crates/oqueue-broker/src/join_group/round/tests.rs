@@ -257,6 +257,16 @@ async fn an_established_groups_next_round_closes_early_once_its_prior_size_rejoi
 /// Every member in a real group advertises the same protocol family, so
 /// this gives each one a distinct one specifically to make picking the
 /// wrong member's value a visible, assertable difference.
+///
+/// ⚠️ **"b" enrols first in round two and is still not its leader**, which
+/// is what makes this test sharper than it used to be. A round's members
+/// are ordered by the previous roster (`finalize_close`), so leadership
+/// follows *group* join order the way Kafka's does, not the order of the
+/// race to enrol in one round. This test asserted the opposite until
+/// `M4.17` found what that cost: the member that opens a round enrols
+/// first, so the newest consumer became leader of every group it joined,
+/// its assignor had no memory of the previous assignment, and the consumer
+/// that had just joined was assigned nothing.
 #[tokio::test(start_paused = true)]
 async fn a_closed_rounds_own_protocol_type_is_the_leaders_own() {
     let h = Harness::new();
@@ -276,8 +286,8 @@ async fn a_closed_rounds_own_protocol_type_is_the_leaders_own() {
         .transition(&g, GroupEvent::SyncComplete)
         .expect("CompletingRebalance -> Stable is legal");
 
-    // Round 2: "b" joins first this time, so "b" -- not "a" -- is this
-    // round's own leader.
+    // Round 2: "b" enrols first this time, and is deliberately *not* the
+    // leader -- round 1's roster was ["a", "b"], so "a" keeps the lead.
     h.join(&g, member_with_type("b", "typeB", &["range"]), timeout)
         .await;
     let JoinOutcome::Ready(close) = h
@@ -286,10 +296,13 @@ async fn a_closed_rounds_own_protocol_type_is_the_leaders_own() {
     else {
         panic!("round 2's own expected size (2) is met by this second join");
     };
-    assert_eq!(close.leader, "b");
     assert_eq!(
-        close.protocol_type, "typeB",
-        "the leader's (\"b\"'s) own protocol_type, not the follower's (\"a\"'s)"
+        close.leader, "a",
+        "the incumbent leader keeps the lead; enrolling first does not win it"
+    );
+    assert_eq!(
+        close.protocol_type, "typeA",
+        "the leader's (\"a\"'s) own protocol_type, not the first enroller's (\"b\"'s)"
     );
 }
 

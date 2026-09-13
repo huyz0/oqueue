@@ -49,14 +49,39 @@ use oqueue_codec::sync_group::{
 };
 use oqueue_core::{GroupEvent, GroupId, GroupState};
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use tokio::sync::Notify;
 use tokio::time::{Duration, Instant};
 
-/// Every member's own slice of the leader's submitted assignment, by
-/// member id — the map [`Entry::assignments`] resolves once the
-/// assignment-bearing submission lands.
-type Assignments = Arc<OnceLock<Arc<HashMap<String, Vec<u8>>>>>;
+/// Every member's own slice of the leader's submitted assignment, by member
+/// id, together with **the generation it was computed for**.
+///
+/// ⚠️ **The generation is the whole point, and leaving it out was a real
+/// defect `M4.17` caught with a real client.** A follower syncing for
+/// generation N would find generation N-1's map already present and be
+/// answered from it at once, without waiting for its own generation's
+/// leader to submit. For a consumer that joined during N-1 that map holds
+/// its own *empty* slice — it was the newcomer, and a cooperative assignor
+/// gives a newcomer nothing in the round that admits it — so the consumer
+/// was answered "you own nothing", went `steady`, and stayed idle forever
+/// while the rest of the group kept every partition. Adding a consumer to a
+/// working group simply did not work.
+#[derive(Debug)]
+struct Assignment {
+    generation: i32,
+    map: Arc<HashMap<String, Vec<u8>>>,
+}
+
+/// The cell a group's current [`Assignment`] lives in.
+///
+/// ⚠️ **A `Mutex<Option<_>>`, not a `OnceLock`.** Each generation replaces
+/// the last, and the previous shape could only ever be *rotated* — replacing
+/// the whole entry, and with it the `Notify` any follower was already parked
+/// on, so a follower that arrived before its leader was left waiting on a
+/// handle nobody would ever signal and timed out. One durable cell and one
+/// durable `Notify` per group means a waiter is woken by every submission
+/// and re-checks the generation itself.
+type Assignments = Arc<Mutex<Option<Assignment>>>;
 
 /// Every group's own assignment barrier: known once the assignment-bearing
 /// submission lands, `None` until then.
@@ -69,6 +94,50 @@ pub(crate) struct SyncGroups {
 struct Entry {
     assignments: Assignments,
     notify: Arc<Notify>,
+}
+
+/// What the group's cell currently says about `generation`.
+enum Known {
+    /// This generation's assignment, ready to answer with.
+    Mine(Arc<HashMap<String, Vec<u8>>>),
+    /// The cell holds a *later* generation: the group rebalanced again while
+    /// this member was waiting, and its own generation is never coming.
+    Superseded,
+    /// Nothing yet, or an older generation still. Keep waiting.
+    Waiting,
+}
+
+/// What the group's cell currently says about `generation`.
+fn assignment_for(assignments: &Assignments, generation: i32) -> Known {
+    let guard = assignments.lock().unwrap_or_else(PoisonError::into_inner);
+    // ⚠️ **An `Ordering` match, not comparison guards.** The three cases are
+    // exhaustive and mutually exclusive, and spelling them that way says so
+    // to the compiler instead of relying on arm order — with guards, an
+    // earlier `==` arm makes the `>` in a later one unmutatable-but-live
+    // (`cargo mutants` reports `>` -> `>=` surviving, because equality never
+    // reaches it), which is a branch no test can pin. Found by the gate.
+    let known = guard.as_ref().map_or(Known::Waiting, |a| {
+        match a.generation.cmp(&generation) {
+            std::cmp::Ordering::Equal => Known::Mine(Arc::clone(&a.map)),
+            // ⚠️ **A later generation means this waiter's own is never
+            // coming**, and saying so at once is the difference between a
+            // retry and a dead consumer. Without this the member sleeps out
+            // the whole `MAX_SYNC_WAIT_MS` — 50 minutes — and is then
+            // answered `UNKNOWN_SERVER_ERROR`, which the Java consumer
+            // raises out of `poll()` and never retries; real Kafka releases
+            // exactly this case immediately with `REBALANCE_IN_PROGRESS`,
+            // which is what a client rejoins on. The same lesson `M4.15d`
+            // learned four times over: a condition that is nobody's fault
+            // must not reach a fatal code.
+            // Found by review.
+            std::cmp::Ordering::Greater => Known::Superseded,
+            // An older generation still on the cell: this member's own
+            // leader has not submitted yet. Keep waiting.
+            std::cmp::Ordering::Less => Known::Waiting,
+        }
+    });
+    drop(guard);
+    known
 }
 
 impl SyncGroups {
@@ -86,31 +155,32 @@ impl SyncGroups {
         handles
     }
 
-    /// Submits `group`'s own assignment map — the leader's own call.
+    /// Submits `group`'s own assignment map for `generation` — the leader's
+    /// own call.
     ///
-    /// ⚠️ **Starts a fresh entry if one is already known.** `OnceLock::set`
-    /// on an already-set cell silently no-ops, so without this a group's
-    /// *second* rebalance would keep answering every follower with its
-    /// *first* generation's assignment forever — not the adversarial
-    /// fencing gap this module's own doc defers to `M4.11`, but the
-    /// ordinary case of a group rebalancing more than once. A follower
-    /// already parked on the entry being replaced keeps its own captured
-    /// handles (`entry_for`'s return value) rather than looking the group
-    /// back up, so it is never corrupted by this rotation — merely
-    /// abandoned to its own deadline, the same safe "time out honestly"
-    /// outcome an unresponsive leader would already produce.
+    /// ⚠️ **Replaces the previous generation's, and wakes every waiter on
+    /// the group's own durable `Notify`.** Followers for this generation
+    /// that arrived first are parked on it; followers still holding a
+    /// *stale* generation see the new one on waking and re-check rather
+    /// than being answered from a map that was never about them.
     fn submit(
         &self,
         group: &GroupId,
+        generation: i32,
         map: HashMap<String, Vec<u8>>,
     ) -> Arc<HashMap<String, Vec<u8>>> {
         let mut entries = self.lock();
         let entry = entries.entry(group.clone()).or_default();
-        if entry.assignments.get().is_some() {
-            *entry = Entry::default();
-        }
         let map = Arc::new(map);
-        let _ = entry.assignments.set(Arc::clone(&map));
+        let mut guard = entry
+            .assignments
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        *guard = Some(Assignment {
+            generation,
+            map: Arc::clone(&map),
+        });
+        drop(guard);
         let notify = Arc::clone(&entry.notify);
         drop(entries);
         notify.notify_waiters();
@@ -155,8 +225,8 @@ pub(crate) async fn handle(
     if !request.assignments.is_empty() {
         // The assignment-bearing submission: build the map every member's
         // own slice comes from, fire the state transition, and submit it
-        // (which starts a fresh entry if a prior generation's own
-        // assignment was already known, `submit`'s own doc).
+        // for *this* generation, replacing whatever generation's map the
+        // group's cell last held (`submit`'s own doc).
         let map: HashMap<String, Vec<u8>> = request
             .assignments
             .iter()
@@ -171,20 +241,20 @@ pub(crate) async fn handle(
             .group_transitions()
             .transition(group.clone(), GroupEvent::SyncComplete)
             .await;
-        let map = cluster.sync_groups().submit(&group, map);
+        let map = cluster
+            .sync_groups()
+            .submit(&group, request.generation_id, map);
         return reply(prelude, &response_for(&map, &request, version));
     }
 
     // A follower: answer at once if the assignment is already known,
     // otherwise wait for it (or this call's own deadline).
     let (assignments, notify) = cluster.sync_groups().entry_for(&group);
-    let map = if let Some(map) = assignments.get() {
-        Arc::clone(map)
-    } else {
-        match wait_for_assignment(&assignments, &notify).await {
-            Some(map) => map,
-            None => return reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR)),
-        }
+    let map = match wait_for_assignment(&assignments, &notify, request.generation_id).await {
+        Known::Mine(map) => map,
+        // Retriable: the client rejoins and syncs at the new generation.
+        Known::Superseded => return reply(prelude, &refusal(error_codes::REBALANCE_IN_PROGRESS)),
+        Known::Waiting => return reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR)),
     };
     reply(prelude, &response_for(&map, &request, version))
 }
@@ -197,18 +267,33 @@ pub(crate) async fn handle(
 /// no timeout field on the wire, so this is a fixed ceiling rather than the
 /// group's own configured rebalance timeout — a provisional answer until a
 /// later task (`M4.9`/`M4.11`) tracks that value across the two phases.
-async fn wait_for_assignment(
-    assignments: &Assignments,
-    notify: &Notify,
-) -> Option<Arc<HashMap<String, Vec<u8>>>> {
+async fn wait_for_assignment(assignments: &Assignments, notify: &Notify, generation: i32) -> Known {
     let deadline = Instant::now() + Duration::from_millis(MAX_SYNC_WAIT_MS);
     loop {
-        if let Some(map) = assignments.get() {
-            return Some(Arc::clone(map));
+        // ⚠️ **Register for the wakeup *before* looking, not after.**
+        // `Notify::notified()` only registers the waiter when the future is
+        // first *polled*, so checking first and constructing the future
+        // second leaves a window: a `submit` landing in between calls
+        // `notify_waiters`, which reaches only tasks already registered, and
+        // this one is not yet — it then parks and sleeps out the whole
+        // `MAX_SYNC_WAIT_MS` for an assignment that arrived while it was
+        // looking. `enable()` performs the registration eagerly, so the
+        // check below happens with the waiter already armed and a submission
+        // in the window wakes it. `join_group::round`'s own
+        // `Box::pin(..).as_mut().enable()` under the lock, for this reason.
+        // Found by review, which also caught this function's own doc
+        // claiming the durable `Notify` made a lost wakeup impossible.
+        let mut notified = Box::pin(notify.notified());
+        notified.as_mut().enable();
+        match assignment_for(assignments, generation) {
+            Known::Waiting => {}
+            answer => return answer,
         }
         tokio::select! {
-            () = tokio::time::sleep_until(deadline) => return assignments.get().map(Arc::clone),
-            () = notify.notified() => {}
+            () = tokio::time::sleep_until(deadline) => {
+                return assignment_for(assignments, generation);
+            }
+            () = notified => {}
         }
     }
 }

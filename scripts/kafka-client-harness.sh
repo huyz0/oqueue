@@ -133,6 +133,67 @@ else
     fail "idempotent-producer conformance failed"
     note "$(tail -10 "$HARNESS_DIR/idempotent.log" 2>/dev/null || true)"
   fi
+
+  # ── offset survival across a broker restart (M4.17, FR-21) ────────────────
+  # ⚠️ **Reported, never asserted — and never as a pass.** FR-21's own
+  # verification method is "offsets survive a full broker fleet restart" and
+  # they do not: `serve` wires `FakeGroupMetadataLog`, an in-memory `Vec`, so
+  # a process restart loses every committed offset. That is a recorded
+  # deferral (`ADR-0035`; `roadmap.md`'s deferred-into-a-later-milestone
+  # table receives the durable engine in `M6`), and `serve` warns about it on
+  # startup. A green harness must not be readable as FR-21 being verified, so
+  # today's outcome is a **skip** naming the reason.
+  #
+  # ⚠️ **It fails if the offsets start surviving**, which is the point: the
+  # good news must not pass unnoticed either. `check-portability.sh`'s
+  # both-directions discipline, applied to a requirement rather than to
+  # prose — the day `M6` lands, this leg says so and asks to be promoted to
+  # an assertion.
+  if python3 scripts/harness/offset_survival.py \
+      > "$HARNESS_DIR/offset-survival.log" 2>&1; then
+    if grep -q '^OFFSETS SURVIVED$' "$HARNESS_DIR/offset-survival.log"; then
+      fail "committed offsets now survive a broker restart — FR-21 is satisfiable"
+      note "promote this leg to an assertion and close FR-21's restart test"
+      note "$(tail -3 "$HARNESS_DIR/offset-survival.log" 2>/dev/null || true)"
+    elif grep -q '^OFFSETS LOST$' "$HARNESS_DIR/offset-survival.log"; then
+      skip "offset survival across a broker restart (FR-21 needs M6's durable group metadata log, ADR-0035)"
+      note "$(grep -E '^committed offset' "$HARNESS_DIR/offset-survival.log" | tail -2)"
+    else
+      fail "offset-survival leg reported neither outcome"
+      note "$(tail -5 "$HARNESS_DIR/offset-survival.log" 2>/dev/null || true)"
+    fi
+  else
+    fail "offset-survival leg failed before it could measure anything"
+    note "$(tail -10 "$HARNESS_DIR/offset-survival.log" 2>/dev/null || true)"
+  fi
+
+  # ── consumer-group conformance (M4.17) ────────────────────────────────────
+  # ⚠️ **Its own leg rather than folded into the round trip above**, because
+  # it asserts something the round trip cannot: `rdkafka_roundtrip.py` uses
+  # `assign()` and never issues a `JoinGroup`, so nothing here exercised the
+  # group protocol with a real client until this. FR-20's invariant — a
+  # partition is revoked by its previous owner before being handed on — is
+  # only observable across a membership *change*, so this drives an initial
+  # join, a consumer added, and a consumer removed.
+  #
+  # ⚠️ **A broker defect came out of writing it**, invisible to the unit
+  # suite: the `SyncGroup` assignment barrier held no generation, so a
+  # follower syncing for generation N that arrived before its leader was
+  # answered from N-1's map — which, for a consumer that joined during N-1,
+  # holds its own *empty* slice. A consumer added to a working group was
+  # told it owned nothing and stayed idle. A second divergence was found
+  # alongside it (the newest member became every group's leader) and fixed,
+  # but this harness passes without that fix, so it is pinned by unit tests
+  # rather than claimed here.
+  if python3 scripts/harness/rdkafka_groups.py "$ADDR" \
+      > "$HARNESS_DIR/rdkafka-groups.log" 2>&1 \
+    && grep -q '^GROUP CONFORMANCE OK$' "$HARNESS_DIR/rdkafka-groups.log"; then
+    ok "librdkafka consumer-group conformance (join, add, remove; no partition assigned twice)"
+    echo "librdkafka-groups" >> "$ROSTER"
+  else
+    fail "librdkafka consumer-group conformance failed"
+    note "$(tail -10 "$HARNESS_DIR/rdkafka-groups.log" 2>/dev/null || true)"
+  fi
 fi
 
 # ── the Java client ─────────────────────────────────────────────────────────
@@ -179,6 +240,25 @@ else
     fail "Java client round trip failed"
     note "$(tail -5 "$HARNESS_DIR/java.log" 2>/dev/null || true)"
     note "$(tail -3 "$HARNESS_DIR/java-stderr.log" 2>/dev/null || true)"
+  fi
+
+  # ── consumer-group conformance, the reference implementation (M4.17) ──────
+  # ⚠️ **Both clients, because they are not interchangeable.** Their assignors
+  # are separate implementations of the same protocol, and a broker can
+  # satisfy one while starving the other — so a group leg that ran only
+  # librdkafka would be evidence about librdkafka, not about the protocol.
+  if javac -cp "$HARNESS_DIR/$KAFKA_CLIENTS_JAR" -d "$HARNESS_DIR" \
+      scripts/harness/GroupRebalance.java 2>"$HARNESS_DIR/java-groups-stderr.log" \
+    && java -cp "$HARNESS_DIR:$HARNESS_DIR/$KAFKA_CLIENTS_JAR:$HARNESS_DIR/$SLF4J_JAR" \
+        GroupRebalance "$ADDR" > "$HARNESS_DIR/java-groups.log" \
+        2>>"$HARNESS_DIR/java-groups-stderr.log" \
+    && grep -q '^GROUP CONFORMANCE OK$' "$HARNESS_DIR/java-groups.log"; then
+    ok "Java client consumer-group conformance (join, add, remove; no partition assigned twice)"
+    echo "java-groups" >> "$ROSTER"
+  else
+    fail "Java client consumer-group conformance failed"
+    note "$(tail -10 "$HARNESS_DIR/java-groups.log" 2>/dev/null || true)"
+    note "$(tail -5 "$HARNESS_DIR/java-groups-stderr.log" 2>/dev/null || true)"
   fi
 fi
 

@@ -14,15 +14,54 @@
 //! for a name that would otherwise need to be `replay_and_transitions.rs`.
 
 use super::Cluster;
+use std::time::Duration;
 
-/// How many times [`Cluster::wait_until_replayed`] yields before giving up
+/// How many times [`Cluster::wait_until_replayed`] polls before giving up
 /// and panicking — `M4.15a`'s own bound against an unbounded poll loop.
-/// ⚠️ Far larger than any legitimate replay over an in-memory fake needs
-/// (a handful of yields in practice) so a genuine, if very slow, replay is
-/// never mistaken for a stuck one; lowering it risks exactly that false
-/// failure, raising it only delays how quickly a truly stuck gate is
-/// noticed.
-const MAX_REPLAY_WAIT_YIELDS: u32 = 10_000;
+/// ⚠️ **Read together with [`REPLAY_WAIT_POLL`]: the bound is their
+/// product**, ~2 s, and that product is what matters rather than either
+/// number. It was `10_000` *yields*, which is not a bound in time at all —
+/// see `REPLAY_WAIT_POLL`. Lowering the product risks a false failure on a
+/// legitimately slow replay; raising it delays how quickly a truly stuck
+/// gate is noticed **and costs `check-mutants` wall clock**, since every
+/// mutant that stalls replay waits the whole product out before failing: at
+/// 10 s that gate measured ~93 s against ~40 s before, and ~72 s at 2 s.
+///
+/// ⚠️ **That cost is not an NFR-56 failure, and an earlier version of this
+/// comment said it was.** `check-budget.sh` removes every gate over
+/// `COMPILING_GATE_MS` (5 s) from the total it judges, so `check-mutants` is
+/// invisible to that gate at any of these durations — `M4.21`'s backlog row
+/// already recorded exactly that. The budget failure seen while choosing
+/// this constant was the *warm* remainder at 10113 ms against a 10000 ms
+/// budget, 113 ms of ordinary erosion, and would have happened at either
+/// ceiling. So 2 s is chosen to keep the suite's wall clock down, not to
+/// stay inside a budget it cannot breach — and restoring a longer bound, if
+/// a real false failure ever argues for one, is a wall-clock trade rather
+/// than something non-negotiable 2 forbids relieving. Two seconds is still
+/// three orders of magnitude more than the one or two polls a real replay
+/// over an in-memory fake needs.
+const MAX_REPLAY_WAIT_POLLS: u32 = 2_000;
+
+/// How long each of those polls waits.
+///
+/// ⚠️ **A sleep, not a `yield_now`, and the difference is a real flake.**
+/// A yield count is not a time bound on a `multi_thread` runtime: yielding
+/// reschedules *this* task, and when every worker is busy — the gate runs
+/// `cargo-mutants` across 12 CPUs — ten thousand of them can elapse in
+/// milliseconds without the replay task ever being scheduled. That is how
+/// `dispatch::tests::api_versions_round_trips_through_a_connection`, the
+/// suite's only real-clock multi-thread test, failed intermittently under
+/// gate load while passing 300 consecutive runs in isolation. Sleeping
+/// bounds the wait in time instead — ~2 s here, the product with
+/// [`MAX_REPLAY_WAIT_POLLS`], and under load each sleep is a floor rather
+/// than a ceiling, so the real bound only grows.
+///
+/// ⚠️ **It is still correct under `start_paused = true`.** Tokio
+/// auto-advances a paused clock only once every task is idle, so a runnable
+/// replay task runs *before* this sleep completes — the paused-time callers
+/// see no wall-clock delay, and get the scheduling guarantee a bare yield
+/// never gave them. Found by `M4.17`'s gate run.
+const REPLAY_WAIT_POLL: Duration = Duration::from_millis(1);
 
 impl Cluster {
     /// Whether a group-protocol request arriving right now should be
@@ -59,16 +98,16 @@ impl Cluster {
     /// inside `CommittedOffsets::replay` surfaces here (via the handle's
     /// own `JoinError`) instead of being silently swallowed by a dropped
     /// handle. Or if replay has not finished after
-    /// [`MAX_REPLAY_WAIT_YIELDS`] — `security.md` rule 13's own instinct
+    /// [`MAX_REPLAY_WAIT_POLLS`] — `security.md` rule 13's own instinct
     /// against an unbounded hold, applied to a poll loop rather than a
-    /// retry: an unbounded `while ... { yield_now().await }` would spin
+    /// retry: an unbounded `while ... { sleep(..).await }` would spin
     /// forever rather than fail loudly the one time replay genuinely never
     /// completes, which nothing in this suite's own timeout-free
     /// `cargo test` invocation (`bin/oqueue/src/serve.rs`'s own test
     /// module names this gap) would ever surface as anything but a hung
     /// CI run.
     pub async fn wait_until_replayed(&self) {
-        for _ in 0..MAX_REPLAY_WAIT_YIELDS {
+        for _ in 0..MAX_REPLAY_WAIT_POLLS {
             if !self.replay_in_progress() {
                 return;
             }
@@ -101,10 +140,10 @@ impl Cluster {
                      replay (CommittedOffsets::replay returned Err)"
                 );
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(REPLAY_WAIT_POLL).await;
         }
         panic!(
-            "Cluster::wait_until_replayed gave up after {MAX_REPLAY_WAIT_YIELDS} yields -- \
+            "Cluster::wait_until_replayed gave up after {MAX_REPLAY_WAIT_POLLS} polls -- \
              replay never finished"
         );
     }

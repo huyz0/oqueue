@@ -412,11 +412,47 @@ pub(super) fn finalize_close(
     generation: GenerationId,
 ) -> Option<Arc<RoundClose>> {
     let entry = entries.get_mut(group)?;
+    // Read before `round` borrows `entry`: the roster this round inherited is
+    // what says which of its members are incumbents.
+    let previous = entry.last_round_members.clone().unwrap_or_default();
     let round = entry.open.as_mut()?;
     if let Some(already) = round.outcome.get() {
         return already.clone();
     }
-    let members = std::mem::take(&mut round.members);
+    let mut members = std::mem::take(&mut round.members);
+    // ⚠️ **Incumbents first, in the order the group has always had them.**
+    // `elect` takes `members.first()`, and a round's members are in the order
+    // they enrolled — which puts the joiner that *opened* the round at the
+    // front. That joiner is usually the new consumer, so the newest member
+    // led every group it joined and the leader changed on every rebalance.
+    // Kafka's group membership is join-ordered and its leader is the
+    // longest-standing member; ordering by position in the previous roster is
+    // that, and a member keeps its place for as long as it stays.
+    //
+    // ⚠️ **This is a conformance divergence found while chasing `M4.17`'s
+    // starved-consumer bug; it is not what caused it.** Review checked, and
+    // the harness passes with this sort removed — `sync_group`'s
+    // generation-keyed assignment barrier is the fix that cured the
+    // starvation. Leader churn is a real divergence worth closing on its own
+    // terms (a sticky assignor is entitled to assume a stable leader, and
+    // this is what Kafka guarantees it), and it is pinned by
+    // `a_newcomer_does_not_take_the_lead_from_an_incumbent` and
+    // `a_closed_rounds_own_protocol_type_is_the_leaders_own` — but no
+    // client-level evidence here shows a symptom it alone produces. Said
+    // plainly because the first version of this comment claimed otherwise.
+    // One pass to index the previous roster, rather than an O(m) scan per
+    // comparison: this runs under `GroupJoins`'s own mutex, which is the one
+    // place on this path where a superlinear term would be felt.
+    let rank: HashMap<&str, usize> = previous
+        .iter()
+        .enumerate()
+        .map(|(i, id)| (id.as_str(), i))
+        .collect();
+    members.sort_by_key(|m| {
+        rank.get(m.member_id.as_str())
+            .copied()
+            .unwrap_or(usize::MAX)
+    });
     let names = protocol_names(&members);
     let elected = oqueue_core::elect(&as_candidates(&members, &names));
     let (leader, protocol_name) = elected.map_or_else(

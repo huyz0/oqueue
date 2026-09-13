@@ -1,5 +1,7 @@
 #![allow(clippy::expect_used)]
 
+mod generations;
+
 use super::handle;
 use crate::connection::HandlerResponse;
 use crate::testing::fixture;
@@ -48,6 +50,47 @@ fn leader_body(group: &str, leader_id: &str, assignments: &[(&str, &[u8])]) -> V
             group.to_owned(),
         )))
         .with_generation_id(1)
+        .with_member_id(StrBytes::from_string(leader_id.to_owned()))
+        .with_assignments(entries);
+    let mut out = Vec::new();
+    request.encode(&mut out, VERSION).expect("encodes");
+    out
+}
+
+/// `follower_body`/`leader_body` at a named generation — the tests that are
+/// *about* generations, rather than the ones that only need a valid one.
+fn follower_body_at(group: &str, member_id: &str, generation: i32) -> Vec<u8> {
+    let request = KpRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(StrBytes::from_string(
+            group.to_owned(),
+        )))
+        .with_generation_id(generation)
+        .with_member_id(StrBytes::from_string(member_id.to_owned()));
+    let mut out = Vec::new();
+    request.encode(&mut out, VERSION).expect("encodes");
+    out
+}
+
+fn leader_body_at(
+    group: &str,
+    leader_id: &str,
+    assignments: &[(&str, &[u8])],
+    generation: i32,
+) -> Vec<u8> {
+    let entries = assignments
+        .iter()
+        .map(|&(id, bytes)| {
+            let mut a = KpAssignment::default();
+            a.member_id = StrBytes::from_string(id.to_owned());
+            a.assignment = bytes::Bytes::from(bytes.to_vec());
+            a
+        })
+        .collect();
+    let request = KpRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(StrBytes::from_string(
+            group.to_owned(),
+        )))
+        .with_generation_id(generation)
         .with_member_id(StrBytes::from_string(leader_id.to_owned()))
         .with_assignments(entries);
     let mut out = Vec::new();
@@ -119,14 +162,21 @@ async fn a_followers_own_slice_is_exactly_its_own_never_anothers() {
     assert_eq!(follower.assignment.as_ref(), b"assignment-for-m2");
 }
 
-/// ⚠️ **A group's own second rebalance gets its own, real answer — not the
-/// first generation's, stale.** `SyncGroups::submit` starts a fresh entry
-/// when a prior generation's own assignment is already known
-/// (`OnceLock::set` on an already-set cell silently no-ops otherwise);
-/// this is the ordinary case of a group rebalancing more than once, not
-/// the adversarial fencing this module's own doc defers to `M4.11`.
+/// ⚠️ **A leader resubmitting for the same generation replaces what the
+/// group's cell holds; it does not silently no-op.** Both submissions below
+/// are at generation 1 — `leader_body`/`follower_body` hardcode it — so this
+/// is a *resubmission*, which is why the name says so.
+///
+/// ⚠️ **It was called `a_second_rebalance_...` and it never was one**, which
+/// `M4.17` caught: it had been written against the old `OnceLock` cell, where
+/// `set` on an already-set cell no-ops and only a whole-entry rotation could
+/// replace a map, so same-generation and next-generation looked like one
+/// case. They are not, and the cell now carries its generation —
+/// `a_follower_is_never_answered_with_a_previous_generations_assignment` is
+/// the one that crosses a generation boundary. A test whose name describes a
+/// scenario it does not run is worse than no test, because it is counted.
 #[tokio::test(start_paused = true)]
-async fn a_second_rebalance_gets_its_own_new_assignment_not_the_first_ones() {
+async fn a_resubmitted_assignment_for_the_same_generation_replaces_the_first() {
     let fixture = fixture(&[]).await;
     seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
     sync(
@@ -134,29 +184,29 @@ async fn a_second_rebalance_gets_its_own_new_assignment_not_the_first_ones() {
         leader_body(
             "orders-consumers",
             "m1",
-            &[("m1", b"gen1-m1"), ("m2", b"gen1-m2")],
+            &[("m1", b"first-m1"), ("m2", b"first-m2")],
         ),
     )
     .await;
     sync(&fixture.cluster, follower_body("orders-consumers", "m2")).await;
 
-    // A second rebalance: the leader submits a new assignment.
+    // The leader submits again, at the same generation.
     let leader = sync(
         &fixture.cluster,
         leader_body(
             "orders-consumers",
             "m1",
-            &[("m1", b"gen2-m1"), ("m2", b"gen2-m2")],
+            &[("m1", b"second-m1"), ("m2", b"second-m2")],
         ),
     )
     .await;
-    assert_eq!(leader.assignment.as_ref(), b"gen2-m1");
+    assert_eq!(leader.assignment.as_ref(), b"second-m1");
 
     let follower = sync(&fixture.cluster, follower_body("orders-consumers", "m2")).await;
     assert_eq!(
         follower.assignment.as_ref(),
-        b"gen2-m2",
-        "the second generation's own assignment, not the first's stale one"
+        b"second-m2",
+        "the resubmitted assignment, not the first one it replaced"
     );
 }
 

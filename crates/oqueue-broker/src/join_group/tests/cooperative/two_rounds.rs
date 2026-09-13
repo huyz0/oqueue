@@ -16,7 +16,7 @@
 mod liveness;
 
 use super::super::{VERSION, join};
-use super::{request_body_offering, request_body_offering_with_timeout, round_of};
+use super::{request_body_offering, round_of};
 use crate::connection::HandlerResponse;
 use crate::testing::fixture;
 use kafka_protocol::messages::JoinGroupResponse as KpResponse;

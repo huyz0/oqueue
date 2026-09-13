@@ -344,12 +344,27 @@ declare -A RUST_BOUNDS=(
   # otherwise have won by retrying; raising it risks a longer hold on one
   # request under pathological contention.
   ["crates/oqueue-broker/src/offset_commit.rs|MAX_COMMIT_RETRIES"]="8"
-  # `M4.15a`: how many times `Cluster::wait_until_replayed` yields before
-  # panicking rather than spinning forever. Lowering it risks a false
-  # failure on a legitimately slow (if very unlikely, over an in-memory
-  # fake) replay; raising it only delays how quickly a truly stuck gate is
-  # noticed.
-  ["crates/oqueue-broker/src/cluster/replay.rs|MAX_REPLAY_WAIT_YIELDS"]="10_000"
+  # `M4.15a`, retimed by `M4.17`: how many times `Cluster::wait_until_replayed`
+  # polls before panicking rather than spinning forever. ⚠️ **The bound is
+  # this count times `REPLAY_WAIT_POLL` below**, ~2 s; neither number means
+  # anything alone. It was 10_000 *yields*, which is no bound in time at all
+  # on a `multi_thread` runtime — under gate load ten thousand of them elapse
+  # in milliseconds without the replay task being scheduled, which is how
+  # `api_versions_round_trips_through_a_connection` failed 8 of 25 runs under
+  # CPU saturation and 0 of 300 in isolation. Lowering the product risks a
+  # false failure on a legitimately slow replay; raising it delays noticing a
+  # truly stuck gate and costs `check-mutants` wall clock, which waits the
+  # product out for every mutant that stalls replay (~93 s at a 10 s ceiling,
+  # ~72 s at 2 s, ~40 s before). ⚠️ That is a wall-clock trade and **not** an
+  # NFR-56 question: `check-budget.sh` removes every gate over 5 s from the
+  # total it judges, so `check-mutants` is invisible to it at any of these
+  # durations — `M4.21`'s row records the same.
+  ["crates/oqueue-broker/src/cluster/replay.rs|MAX_REPLAY_WAIT_POLLS"]="2_000"
+  # `M4.17`: how long each of those polls waits. A sleep rather than a
+  # `yield_now`, so the loop is bounded in time; still instant under
+  # `start_paused = true`, since tokio auto-advances only once every task is
+  # idle and a runnable replay task therefore runs first.
+  ["crates/oqueue-broker/src/cluster/replay.rs|REPLAY_WAIT_POLL"]="Duration::from_millis(1)"
   # `M4.15d`: how many times `GroupJoins::join` re-plans after losing a race
   # to another joiner's own in-flight transition. ⚠️ **A retry here re-plans
   # and never re-applies** — the pass that loses the race writes nothing — so
