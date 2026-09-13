@@ -369,6 +369,17 @@ declare -A RUST_BOUNDS=(
   # `REBALANCE_IN_PROGRESS` — retriable, so the client rejoins, but a wasted
   # round trip; raising it lengthens how long one request can be held.
   ["crates/oqueue-broker/src/join_group/round/state.rs|SLOT_WAIT"]="Duration::from_secs(5)"
+  # `M4.29`: how long a round with no previous roster waits before closing on
+  # whoever has arrived — Kafka's own `group.initial.rebalance.delay.ms`,
+  # which defaults to the same 3 s. ⚠️ **Without it a brand-new group holds
+  # its first joiner for the client's whole `rebalance_timeout_ms`**, which
+  # both librdkafka and the Java consumer seed from `max.poll.interval.ms`:
+  # 300 s by default, measured against real librdkafka rather than derived.
+  # The same `None` covers a restarted broker, since `GroupJoins` is
+  # per-node. Raising it delays every first assignment; lowering it makes a
+  # fleet starting together more likely to need a second rebalance, because
+  # members arriving after it has elapsed join the next round instead.
+  ["crates/oqueue-broker/src/join_group/round/state.rs|INITIAL_REBALANCE_DELAY"]="Duration::from_secs(3)"
   # `M4.15c`: how many `GroupMetadataLog` entries `GroupTransitionsTask::replay`
   # reads per page — `CommittedOffsets::replay`'s own identical reasoning
   # (`REPLAY_PAGE_SIZE` below), a separate constant rather than shared code.

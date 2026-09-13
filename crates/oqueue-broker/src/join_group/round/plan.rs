@@ -13,7 +13,8 @@
 
 use super::GroupJoins;
 use super::state::{
-    Coordination, Entry, JoinOutcome, OpenRound, RoundClose, RoundMember, RoundOutcome, Step,
+    Coordination, Entry, INITIAL_REBALANCE_DELAY, JoinOutcome, OpenRound, RoundClose, RoundMember,
+    RoundOutcome, Step,
 };
 use oqueue_core::{Candidate, GenerationId, GroupCoordinator, GroupEvent, GroupId, GroupState};
 use std::collections::HashMap;
@@ -102,10 +103,22 @@ pub(super) fn install_round(
     // tell it anything. That is *not* the same as a roster that exists and has
     // died, which is why this is not collapsed to `None`.
     let awaiting = entry.last_round_members.clone();
+    let first_round = awaiting.is_none();
     entry.open = Some(OpenRound {
         members: Vec::new(),
         awaiting,
-        deadline: Instant::now() + rebalance_timeout,
+        // ⚠️ **A round with no roster to wait for closes on the initial
+        // delay, not on the client's own timeout.** Nothing can empty an
+        // `awaiting` that is `None`, so this deadline is the *only* thing
+        // that closes such a round — and `rebalance_timeout` is 300 s with
+        // either real client's defaults. `min`, because a client asking for
+        // less than the delay must still get the answer it asked for.
+        deadline: Instant::now()
+            + if first_round {
+                INITIAL_REBALANCE_DELAY.min(rebalance_timeout)
+            } else {
+                rebalance_timeout
+            },
         notify: Arc::new(Notify::new()),
         outcome: Arc::new(OnceLock::new()),
     });
@@ -330,9 +343,12 @@ pub(super) fn abandon_round(
         // append merely *failed*, every member is sitting in the next round
         // already: clearing the roster there leaves it with no early-close
         // signal, so a storage blip that healed in milliseconds costs the
-        // group a full `rebalance_timeout_ms` — 300 s with the Java
-        // consumer's default. Found by review; `apply_open` keeps the same
-        // two causes apart one function away, for the same reason.
+        // group its whole initial-rebalance delay before anybody is answered
+        // again — `INITIAL_REBALANCE_DELAY`, since a forgotten roster is a
+        // round with nothing to wait for. That was a full
+        // `rebalance_timeout_ms` (300 s with either real client's defaults)
+        // until `M4.29` bounded it. Found by review; `apply_open` keeps the
+        // same two causes apart one function away, for the same reason.
         if forget_roster {
             entry.last_round_members = None;
         }

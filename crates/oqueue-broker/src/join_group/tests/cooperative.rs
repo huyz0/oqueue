@@ -30,11 +30,12 @@ use kafka_protocol::protocol::{Encodable, StrBytes};
 /// cooperative-sticky client's owned set is carried by the same round trip
 /// every other subscription field is, and what `M4.16` has to prove is that
 /// the round trip is faithful — not that the broker understands the field.
-pub(super) fn request_body_offering(
+pub(super) fn request_body_offering_with_timeout(
     group: &str,
     member_id: &str,
     protocols: &[(&str, &[u8])],
     version: i16,
+    rebalance_timeout_ms: i32,
 ) -> Vec<u8> {
     let offered = protocols
         .iter()
@@ -50,7 +51,7 @@ pub(super) fn request_body_offering(
             group.to_owned(),
         )))
         .with_session_timeout_ms(30_000)
-        .with_rebalance_timeout_ms(10_000)
+        .with_rebalance_timeout_ms(rebalance_timeout_ms)
         .with_member_id(StrBytes::from_string(member_id.to_owned()))
         .with_protocol_type(StrBytes::from_static_str("consumer"))
         .with_protocols(offered)
@@ -58,6 +59,17 @@ pub(super) fn request_body_offering(
     let mut out = Vec::new();
     request.encode(&mut out, version).expect("encodes");
     out
+}
+
+/// `request_body_offering_with_timeout` at this harness's own default barrier
+/// of 10 s — what every case that is not *about* the timeout wants.
+pub(super) fn request_body_offering(
+    group: &str,
+    member_id: &str,
+    protocols: &[(&str, &[u8])],
+    version: i16,
+) -> Vec<u8> {
+    request_body_offering_with_timeout(group, member_id, protocols, version, 10_000)
 }
 
 /// Joins `members` into one round together and lets that round close on its

@@ -65,11 +65,15 @@ pub(super) async fn join(
 /// ⚠️ **`M4.7`'s own acceptance criterion, verbatim**: N members' own
 /// `JoinGroup` frames, driven through a real handler over a real cluster —
 /// the leader alone receives every member's own metadata, and every
-/// follower receives none. A fresh group's own first round has no
-/// early-close signal (`round`'s own module doc), so it waits out its own
-/// `rebalance_timeout_ms` under paused time rather than closing the moment
-/// the last member joins — the deadline path, not the early-close one
-/// (`round::tests` already covers that one directly).
+/// follower receives none. A fresh group's own first round has no roster to
+/// wait for and so no early-close signal (`round`'s own module doc): it
+/// closes on its deadline under paused time rather than the moment the last
+/// member joins — the deadline path, not the early-close one (`round::tests`
+/// already covers that one directly). ⚠️ Since `M4.29` that deadline is
+/// `INITIAL_REBALANCE_DELAY` rather than the requested
+/// `rebalance_timeout_ms`, so the round closes well before the sleep below
+/// elapses; the sleep is left at the requested timeout because this case is
+/// about *who gets whose metadata*, not about when the round closes.
 #[tokio::test(start_paused = true)]
 async fn n_members_join_together_the_leader_alone_gets_every_metadata() {
     const REBALANCE_TIMEOUT_MS: i32 = 10_000;

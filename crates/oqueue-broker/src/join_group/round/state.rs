@@ -82,9 +82,10 @@ pub(super) struct Entry {
     /// unresolved round rather than closing the instant its own opener
     /// joins; real Kafka's `group.initial.rebalance.delay.ms` names the
     /// same gap for the same reason (batching concurrently-starting
-    /// consumers into one round), and this is that gap, stood in for by
-    /// `rebalance_timeout_ms` itself rather than a second, not-yet-built
-    /// configuration value.
+    /// consumers into one round), and [`INITIAL_REBALANCE_DELAY`] is that
+    /// gap here — bounded at 3 s rather than at `rebalance_timeout_ms`,
+    /// which `M4.29` measured as five minutes of silence against a real
+    /// client.
     pub(super) last_round_members: Option<Vec<String>>,
     /// Set while a transition for this group is in flight through
     /// [`crate::group_transitions::GroupTransitions`] — `M4.15d`.
@@ -178,6 +179,65 @@ pub(super) const MAX_JOIN_REPLANS: usize = 8;
 /// and answer `REBALANCE_IN_PROGRESS`; raising it lengthens how long one
 /// request can be held by a bug elsewhere.
 pub(super) const SLOT_WAIT: Duration = Duration::from_secs(5);
+
+/// How long a round with no previous roster waits before closing on whoever
+/// has arrived — Kafka's own `group.initial.rebalance.delay.ms`, which
+/// defaults to the same 3 s.
+///
+/// ⚠️ **Without this a brand-new group holds its first joiner for the
+/// client's whole `rebalance_timeout_ms`.** `awaiting` is seeded from the
+/// previous roster, and a group nobody has joined before has none — so
+/// nothing can empty it, nothing closes the round early, and it runs to its
+/// deadline. Both librdkafka and the Java consumer seed
+/// `rebalance_timeout_ms` from `max.poll.interval.ms`, **300 s** by default:
+/// five minutes before a consumer receives its first partition. `M4.29`
+/// measured it against real librdkafka rather than deriving it from the
+/// defaults, which is what that row asked for.
+///
+/// ⚠️ **The same `None` covers a restarted broker.** `GroupJoins` is
+/// per-node and in no log by design, so a restart loses `last_round_members`
+/// and every group's next round looks brand new. One bound answers both, and
+/// the defect was never restart-specific — which is how `M4.29` framed it
+/// before the measurement.
+///
+/// ⚠️ **A floor on latency, so it is deliberately small.** Every group pays
+/// it once per round that has no roster to wait for. Raising it delays every
+/// first assignment; lowering it makes a fleet starting together more likely
+/// to need a second rebalance, since members arriving after it has elapsed
+/// join the next round rather than this one. 3 s is Kafka's own number for
+/// that trade and there is no measurement here arguing for a different one.
+///
+/// ⚠️ **This window is fixed; Kafka's is re-armed, and that is a real
+/// difference rather than a detail.** Kafka restarts the delay on each new
+/// joiner, capped at the rebalance timeout, so a fleet arriving over 30 s
+/// lands in *one* generation. Here the window runs from the round's install
+/// and members arriving after it join the next round instead — the same 30 s
+/// fleet costs roughly ten generations. For a *starting* fleet each is a
+/// correct rebalance and no partition is double-assigned, so there it is a
+/// churn cost rather than a safety one. Re-arming needs the round's deadline
+/// to move after waiters have already captured it, which is a larger change
+/// than this bound. Named by review rather than left for a reader to assume
+/// parity.
+///
+/// ⚠️ **After a broker restart the shortened window is a real trade, not a
+/// free one**, and the churn argument above does not cover it. A restarted
+/// node has lost `last_round_members`, so it cannot tell "nobody has joined
+/// yet" from "an incumbent has not reconnected yet". If one consumer returns
+/// at once and another is still backing off — librdkafka's
+/// `reconnect.backoff.max.ms` defaults to 10 s, longer than this delay — the
+/// round closes on the first alone, and a cooperative assignor that sees no
+/// other owner hands it a partition the absent member still holds. The
+/// absent member is fenced `UNKNOWN_MEMBER_ID` on its first heartbeat or
+/// `OffsetCommit` *after it reconnects* — not before, since both go to the
+/// coordinator connection that is down — so the overlap is bounded by its
+/// reconnect backoff plus one `heartbeat.interval.ms`: roughly 10 s with
+/// librdkafka's defaults, not unbounded, but an overlap during which two
+/// consumers can process the same partition. The 300 s deadline this
+/// replaces always held the round open long enough. The trade is taken deliberately — five minutes of silence on
+/// every restart is the worse failure — and the real fix is a roster the
+/// restarted node can *read*, which needs the durable group metadata log
+/// `roadmap.md` defers to `M6` (`ADR-0035`). Found by review.
+pub(super) const INITIAL_REBALANCE_DELAY: Duration = Duration::from_secs(3);
 
 /// The two collaborators every round operation needs, bundled because they
 /// always travel together and never apart: the actor that applies a

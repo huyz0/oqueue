@@ -152,8 +152,10 @@ fn every_refusal_answers_the_code_its_cause_deserves() {
 /// moved on and its members really are gone — and wrong when the append merely
 /// failed, because then every member is sitting in the next round already. A
 /// round with no roster to wait for has no early-close signal, so it waits out
-/// `rebalance_timeout_ms` in full: 300 s with the Java consumer's default. A
-/// storage blip that healed in milliseconds should not cost five minutes.
+/// its initial-rebalance delay instead — `M4.29` bounded that at 3 s, where it
+/// used to be `rebalance_timeout_ms` in full, 300 s with either real client's
+/// default. A storage blip that healed in milliseconds should still not cost
+/// the group a fresh rebalance it did not need.
 ///
 /// ⚠️ **The round is opened before the log is broken, on purpose.** Refusing
 /// appends up front fails the *opening* transition too, so the join answers
@@ -217,6 +219,7 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
     assert!(
         matches!(outcome, JoinOutcome::Ready(_)),
         "the group's known roster must survive a transient append failure, or \
-         every member waits out a full rebalance timeout for a blip"
+         a blip that healed in milliseconds costs the group a fresh round it \
+         did not need"
     );
 }
