@@ -41,6 +41,7 @@ fn member_with_type(id: &str, protocol_type: &str, protocols: &[&str]) -> RoundM
 pub(super) struct Harness {
     joins: GroupJoins,
     heartbeats: crate::heartbeat::Heartbeats,
+    sync_groups: crate::sync_group::SyncGroups,
     transitions: GroupTransitions,
     coordinator: Arc<FakeGroupCoordinator>,
     log: Arc<FakeGroupMetadataLog>,
@@ -59,6 +60,7 @@ impl Harness {
         Self {
             joins: GroupJoins::default(),
             heartbeats: crate::heartbeat::Heartbeats::default(),
+            sync_groups: crate::sync_group::SyncGroups::default(),
             transitions,
             coordinator,
             log,
@@ -71,6 +73,7 @@ impl Harness {
             transitions: &self.transitions,
             coordinator: self.coordinator.as_ref(),
             heartbeats: &self.heartbeats,
+            sync_groups: &self.sync_groups,
         }
     }
 

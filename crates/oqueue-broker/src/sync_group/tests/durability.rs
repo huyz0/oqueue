@@ -1,21 +1,32 @@
-//! What the barrier says when a generation's assignment is not coming.
+//! A durable append that failed, and the publishing rule underneath it.
 //!
 //! ⚠️ **Its own file because the subject is absence, not bytes.** Its
 //! siblings ask which slice a member gets and which generation those bytes
 //! belong to; these ask what a member waiting on an assignment is told when
-//! there will not be one — because the leader's own `SyncComplete` could
-//! not be made durable (`M4.33`, `M4.43`), or because the leader left
-//! before submitting at all (`M4.47`).
+//! there will not be one.
 //!
-//! ⚠️ **Two shapes, and the second has no leader at all.** Where a leader
-//! does submit (`M4.33`), its map is correct and what is wrong is that
-//! nothing recorded the group reaching `Stable` — a handler answering
-//! `NONE` there has told every member to start consuming against a
-//! coordinator that will refuse them. Where the leader leaves instead
-//! (`M4.47`), there is no map and no submission: what is wrong is that
-//! nothing told the members already waiting. The half of this paragraph
-//! claiming a correct leader map in *every* test survived one round of
-//! review after the tests it describes had stopped having one.
+//! **Two halves, and neither is a superset of the other.** The first drives
+//! the real handler with the group metadata log refusing: the leader's map
+//! is correct and what is wrong is that nothing recorded the group reaching
+//! `Stable` (`M4.33`, `M4.43`) — a handler answering `NONE` there has told
+//! every member to start consuming against a coordinator that will refuse
+//! them. The second drives `SyncGroups::submit`/`refuse` directly, with no
+//! leader and no handler at all, and asks which generation's cell a refusal
+//! may overwrite.
+//!
+//! ⚠️ **The second half is here rather than in `reopened.rs` on purpose**:
+//! the overwrite guard is a property of the publishing rule, not of the
+//! route that reached it, and every route in that file depends on it
+//! holding. Naming this file after the first half alone was the wording
+//! `M4.58`'s review caught, false for four of its eight tests.
+//!
+//! ⚠️ **What is *not* here since `M4.58`**: a follower parked where there is
+//! no map and no submission at all, because the leader left, was evicted,
+//! or a newcomer reopened the round under it. That is `reopened.rs`. This
+//! doc has now been wrong about its own contents twice — the half claiming
+//! a correct leader map in *every* test survived a round of review after
+//! the tests it described had stopped having one, and the title survived
+//! the split that took half its subject away.
 
 #![allow(clippy::expect_used)]
 
@@ -319,156 +330,5 @@ async fn a_late_refusal_does_not_reopen_a_later_generations_refusal() {
             super::super::Known::Refused
         ),
         "generation 2's followers must still be told to rejoin, not sent back to Waiting"
-    );
-}
-
-/// ⚠️ **`M4.47`'s own acceptance criterion, and `M4.43`'s defect through the
-/// route it did not cover.** That row gave the barrier a way to say a
-/// generation was refused and wired it to the one place a refusal is
-/// issued: `submit_assignment`. Every *other* way out of
-/// `CompletingRebalance` — `LeaveGroup`, the session-timeout sweep, and a
-/// group emptying — goes through `Heartbeats::remove_where`, which reopens
-/// the barrier in the coordinator (`M4.34`) and left the cell holding
-/// nothing.
-///
-/// ⚠️ **Measured before the fix**: the coordinator moves to
-/// `PreparingRebalance`, the follower is not released, and it is answered
-/// `-1` after `waited_ms=3000000` — fifty minutes to a code the Java
-/// consumer raises out of `poll()` and never retries. Found by M4's final
-/// boundary review, which is the fourth time this milestone has caught a
-/// repair applied to the instance a review named rather than to the class.
-#[tokio::test(start_paused = true)]
-async fn a_parked_follower_is_woken_when_the_leader_leaves_instead_of_submitting() {
-    let fixture = fixture(&[]).await;
-    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
-    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
-
-    let waiting = sync(
-        &fixture.cluster,
-        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
-    );
-    tokio::pin!(waiting);
-    assert!(
-        crate::testing::poll_once(&mut waiting).is_none(),
-        "the follower must park on the barrier rather than answer at once"
-    );
-
-    // The leader leaves rather than submitting. `M4.34` makes the
-    // coordinator reopen the barrier; the question is whether anything
-    // tells the member already waiting on it.
-    fixture
-        .cluster
-        .heartbeats()
-        .leave(&g, &["m1"], crate::heartbeat::Removal::of(&fixture.cluster))
-        .await;
-
-    let follower = waiting.await;
-    assert_eq!(
-        follower.error_code,
-        error_codes::REBALANCE_IN_PROGRESS,
-        "a follower whose leader left must be told to rejoin, not left for MAX_SYNC_WAIT_MS"
-    );
-    assert!(
-        follower.assignment.is_empty(),
-        "a refusal carries no assignment"
-    );
-}
-
-/// ⚠️ **And when the transition itself fails.** `members.retain` drops the
-/// member before the event is ever enqueued, so a refused or unavailable
-/// transition leaves it gone all the same: the coordinator was not moved,
-/// but the member was, and its generation's assignment is not coming
-/// either.
-///
-/// ⚠️ **The first version of `M4.47` refused only on `Ok` and said in a
-/// comment that this path owed nothing.** Review disproved it by refusing
-/// the metadata append and watching the follower wait out
-/// `MAX_SYNC_WAIT_MS` for `-1` — the row's own defect, one path over, under
-/// a comment asserting it could not happen. `submit_assignment`'s `Err(_)`
-/// arm refuses for this identical outage, so the same dependency failure
-/// was being handled two opposite ways.
-#[tokio::test(start_paused = true)]
-async fn a_parked_follower_is_woken_even_when_the_leave_transition_fails() {
-    let fixture = fixture(&[]).await;
-    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
-    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
-
-    let waiting = sync(
-        &fixture.cluster,
-        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
-    );
-    tokio::pin!(waiting);
-    assert!(crate::testing::poll_once(&mut waiting).is_none());
-
-    fixture.refuse_group_metadata_append();
-    fixture
-        .cluster
-        .heartbeats()
-        .leave(&g, &["m1"], crate::heartbeat::Removal::of(&fixture.cluster))
-        .await;
-
-    assert!(
-        !fixture.cluster.heartbeats().is_tracked(&g, "m1"),
-        "the member is dropped before the enqueue, whatever the transition answers"
-    );
-    assert_eq!(
-        fixture
-            .cluster
-            .group_coordinator()
-            .record(&g)
-            .map(|r| r.state),
-        Some(GroupState::CompletingRebalance),
-        "and the coordinator was not moved -- which is what made this look harmless"
-    );
-
-    let follower = waiting.await;
-    assert_eq!(
-        follower.error_code,
-        error_codes::REBALANCE_IN_PROGRESS,
-        "the follower is still told to rejoin: while the log is down no next generation can \
-         release it, so this is the path with the longest wait, not the shortest"
-    );
-}
-
-/// ⚠️ **`M4.48`'s own acceptance criterion: the last fatal give-up code in
-/// the group protocol.** A follower that waits out `MAX_SYNC_WAIT_MS` was
-/// answered `UNKNOWN_SERVER_ERROR`, which this module's own doc records the
-/// Java consumer raising out of `poll()` and never retrying — and every
-/// sibling give-up arm had already been changed away from it, each with the
-/// reason written out: `join_group/mod.rs:120` ("the difference is whether
-/// the client comes back"), `barrier.rs`'s `Known::Superseded`,
-/// `join_group/mod.rs:221`. This one was missed, and nothing enforced the
-/// rule because `check-fencing-seam.sh` covers `Refusal`'s six codes and
-/// this is not one of them.
-///
-/// ⚠️ **Reachable with nothing wrong.** `M4.47`'s route reaches it when a
-/// leader leaves during a log outage, and a leader that dies between
-/// `JoinBarrierComplete` and its own `SyncGroup` reaches it with no outage
-/// at all — nothing reaps in the background, and a parked follower is not
-/// heartbeating, so nothing sweeps on its behalf. Found by M4's final
-/// boundary review.
-#[tokio::test(start_paused = true)]
-async fn a_follower_that_waits_out_the_deadline_is_told_to_rejoin_not_given_a_fatal_code() {
-    let fixture = fixture(&[]).await;
-    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
-
-    // Nobody submits, nobody leaves, nothing is refused: the leader simply
-    // never arrives, which is what a SIGKILL between the barrier closing
-    // and its own SyncGroup looks like from here.
-    let follower = sync(
-        &fixture.cluster,
-        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
-    )
-    .await;
-
-    assert_eq!(
-        follower.error_code,
-        error_codes::REBALANCE_IN_PROGRESS,
-        "a wait that runs out is nobody's fault, and must not reach a code the client cannot \
-         retry"
-    );
-    assert!(
-        follower.assignment.is_empty(),
-        "a refusal carries no assignment"
     );
 }

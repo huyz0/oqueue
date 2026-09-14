@@ -21,6 +21,35 @@ use oqueue_core::{
 use std::sync::Arc;
 use std::time::Duration;
 
+/// The bundles [`Coordination`] borrows, owned so the borrow outlives the
+/// statement that builds it.
+///
+/// ⚠️ **Added because a field did what a field will do again.** `M4.58` gave
+/// `Coordination` a `sync_groups`, and the two extra lines that cost each
+/// site here pushed one test past `clippy::too_many_lines`. A shared holder
+/// makes the next field one line in one place rather than two in every test
+/// — the reason `round/tests.rs`'s own `Harness` has the same shape.
+#[derive(Default)]
+struct Borrowed {
+    heartbeats: crate::heartbeat::Heartbeats,
+    sync_groups: crate::sync_group::SyncGroups,
+}
+
+impl Borrowed {
+    fn coordination<'a>(
+        &'a self,
+        transitions: &'a GroupTransitions,
+        coordinator: &'a dyn GroupCoordinator,
+    ) -> Coordination<'a> {
+        Coordination {
+            transitions,
+            coordinator,
+            heartbeats: &self.heartbeats,
+            sync_groups: &self.sync_groups,
+        }
+    }
+}
+
 /// **The refusal this row actually names**, which the `Dead`-group case above
 /// does not reach: the event was *legal when chosen* and the coordinator's
 /// own state made it illegal before the actor applied it.
@@ -90,12 +119,8 @@ async fn a_failing_log_makes_a_join_unavailable_not_refused() {
         Arc::clone(&log) as Arc<dyn GroupMetadataLog>,
     ));
     let joins = GroupJoins::default();
-    let heartbeats = crate::heartbeat::Heartbeats::default();
-    let co = Coordination {
-        transitions: &transitions,
-        coordinator: coordinator.as_ref(),
-        heartbeats: &heartbeats,
-    };
+    let borrowed = Borrowed::default();
+    let co = borrowed.coordination(&transitions, coordinator.as_ref());
     log.refuse_append();
 
     let outcome = joins
@@ -172,12 +197,8 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
         Arc::clone(&log) as Arc<dyn GroupMetadataLog>,
     ));
     let joins = GroupJoins::default();
-    let heartbeats = crate::heartbeat::Heartbeats::default();
-    let co = Coordination {
-        transitions: &transitions,
-        coordinator: coordinator.as_ref(),
-        heartbeats: &heartbeats,
-    };
+    let borrowed = Borrowed::default();
+    let co = borrowed.coordination(&transitions, coordinator.as_ref());
 
     // Establish a round size of 2.
     let JoinOutcome::Pending { outcome, .. } = joins
@@ -189,7 +210,7 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
     let _ = joins
         .join(co, &g, member("b", &["range"]), Duration::from_secs(1))
         .await;
-    heartbeats.register(&g, "b", 30_000);
+    borrowed.heartbeats.register(&g, "b", 30_000);
     joins.close_on_deadline(co, &g, &outcome).await;
     coordinator
         .transition(&g, GroupEvent::SyncComplete)
@@ -199,12 +220,12 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
     let _ = joins
         .join(co, &g, member("a", &["range"]), Duration::from_secs(1))
         .await;
-    heartbeats.register(&g, "a", 30_000);
+    borrowed.heartbeats.register(&g, "a", 30_000);
     log.refuse_append();
     let _ = joins
         .join(co, &g, member("b", &["range"]), Duration::from_secs(1))
         .await;
-    heartbeats.register(&g, "b", 30_000);
+    borrowed.heartbeats.register(&g, "b", 30_000);
     log.heal();
 
     // ⚠️ `b`'s failed join already re-planned into a fresh round and enrolled
@@ -214,7 +235,7 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
     let outcome = joins
         .join(co, &g, member("a", &["range"]), Duration::from_secs(1))
         .await;
-    heartbeats.register(&g, "a", 30_000);
+    borrowed.heartbeats.register(&g, "a", 30_000);
     assert!(
         matches!(outcome, JoinOutcome::Ready(_)),
         "the group's known roster must survive a transient append failure, or \

@@ -262,6 +262,16 @@ pub(crate) struct Coordination<'a> {
     /// tracked indefinitely — nothing reaps in the background — so keying on
     /// tracking reinstates exactly that stall. Found by review.
     pub(crate) heartbeats: &'a crate::heartbeat::Heartbeats,
+    /// ⚠️ **The sync barrier, because opening a round can strand the
+    /// followers parked on the round before it.** `M4.43` gave the barrier a
+    /// way to say a generation was refused and wired it to
+    /// `submit_assignment`; `M4.47` wired it to every route a member is
+    /// *lost* by. `MemberJoinedDuringSync` is the remaining route out of
+    /// `CompletingRebalance`, and it is this module's: a newcomer's join
+    /// reopens the barrier while the previous generation's leader is still
+    /// computing, so the wake belongs wherever the barrier is reopened
+    /// rather than wherever a member is removed. `M4.58`.
+    pub(crate) sync_groups: &'a crate::sync_group::SyncGroups,
 }
 
 /// One pass of [`GroupJoins::join`]'s own plan, decided under the lock and

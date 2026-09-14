@@ -3,6 +3,7 @@
 mod durability;
 mod generations;
 mod parked;
+mod reopened;
 
 use super::handle;
 use crate::connection::HandlerResponse;

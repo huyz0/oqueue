@@ -71,6 +71,7 @@ fn coordination(cluster: &Cluster) -> round::Coordination<'_> {
         transitions: cluster.group_transitions(),
         coordinator: cluster.group_coordinator(),
         heartbeats: cluster.heartbeats(),
+        sync_groups: cluster.sync_groups(),
     }
 }
 

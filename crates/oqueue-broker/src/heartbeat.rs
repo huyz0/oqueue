@@ -124,11 +124,23 @@ pub(crate) struct Heartbeats {
 /// `clippy::too_many_arguments` once the barrier joined the transitions
 /// actor and the coordinator**, and because `cluster.rs` is at
 /// `code-structure.md` rule 16's limit so the accessor could not live
-/// there. ⚠️ **Not the same three things as
-/// `join_group::round::state::Coordination`**, which an earlier version
-/// of this claimed: that one carries `heartbeats` where this carries
-/// `sync_groups`, and both types remain. They are two bundles under the
-/// same argument-count pressure, not one idea spelled twice. `M4.47`.
+/// there. ⚠️ **`join_group::round::state::Coordination` is a strict
+/// superset of this since `M4.58`, and the two still do not collapse.**
+/// The distinction written here was the field sets — "that one carries
+/// `heartbeats` where this carries `sync_groups`" — and `M4.58` gave
+/// `Coordination` a `sync_groups` too, which makes that sentence false and
+/// is why it is gone. What remains true is the direction of the borrow:
+/// `remove_where` is `&self` on `Heartbeats`, so a `heartbeats` field on
+/// its bundle would be a second path to the map it is already mutating —
+/// reachable from a caller that cannot see which handle is which.
+/// ⚠️ **This is about ownership, not hold time.** That function takes
+/// `self.lock()` briefly and drops it before awaiting the transition,
+/// which its own doc below spends three paragraphs establishing; nothing
+/// here should be read as a lock held across an `.await`.
+/// ⚠️ Third wording of this paragraph in two milestones: the first two
+/// were claims about field sets, which is the part that moves, and the
+/// third had to be scoped because "it already holds that lock" read as the
+/// opposite of what the function does. `M4.47`, `M4.58`.
 pub(crate) struct Removal<'a> {
     pub(crate) transitions: &'a crate::group_transitions::GroupTransitions,
     pub(crate) coordinator: &'a dyn oqueue_core::GroupCoordinator,

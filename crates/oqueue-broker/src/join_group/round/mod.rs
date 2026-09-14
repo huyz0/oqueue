@@ -217,12 +217,41 @@ impl GroupJoins {
         event: GroupEvent,
         rebalance_timeout: Duration,
     ) -> Applied {
+        let reopens_the_barrier = matches!(event, GroupEvent::MemberJoinedDuringSync);
         let applied = co.transitions.transition(group.clone(), event).await;
         let mut entries = self.lock();
         if applied.is_ok() {
             install_round(&mut entries, group, rebalance_timeout);
         }
         drop(entries);
+        // ⚠️ **A newcomer's join strands the previous generation's followers
+        // unless something tells them, and this is the route `M4.47` does
+        // not cover.** That row wired the barrier's refusal into
+        // `Heartbeats::remove_where`, which is every way a member is *lost*;
+        // `MemberJoinedDuringSync` is the way a round is *opened* on top of
+        // one still syncing, and the leader computing that generation's
+        // assignment will never submit it. Without this the follower waits
+        // on the next round's join deadline rather than on
+        // `MAX_SYNC_WAIT_MS`, which is why `M4.58` is its own row and not a
+        // blocking finding against `M4.47` — lesser, and the same class.
+        //
+        // ⚠️ **The generation is the interrupted one, not a new one.**
+        // `group_state.rs` advances the generation only at
+        // `JoinBarrierComplete`, so `(CompletingRebalance,
+        // MemberJoinedDuringSync) -> PreparingRebalance` carries it
+        // unchanged and the record read back names exactly the generation
+        // whose followers are parked.
+        //
+        // ⚠️ **Only on `Ok`, and here that is right** — unlike
+        // `remove_where`, where `members.retain` drops the member before the
+        // enqueue so a refused transition strands it anyway (`M4.47`'s own
+        // second test). Nothing is mutated before this transition: a refused
+        // or unavailable one leaves the group in `CompletingRebalance` with
+        // its leader still able to submit, and refusing the barrier would
+        // strand followers whose assignment is still coming.
+        if reopens_the_barrier && let Ok(record) = &applied {
+            co.sync_groups.refuse(group, record.generation.get());
+        }
         match applied {
             Ok(_) => Applied::Installed,
             // ⚠️ **An illegal transition is a lost race; anything else is a
