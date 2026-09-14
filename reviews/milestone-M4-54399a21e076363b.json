@@ -1,0 +1,108 @@
+{
+  "commits": [
+    "6441ab034d080d2594bf07234de8057a2343f65b",
+    "4bfc55f6117c6f8d8fbff6ea8494fecc48253d9a",
+    "d7429d6f5213af037c6b07b1ba9a1c58796e3be1",
+    "ae31520acbf2fe73f5de3e51d77801373d4147ee",
+    "bb2cae114e916f617390b5dc9e86b9e81e42724c",
+    "d0cf6465982e215d578d352212a4c7b8fecc10f4",
+    "a8324c38e8d98fbc86c5bf1869118fe61a862c8c",
+    "15be401921b77194a1369f78b5dd23c411cb2ec4",
+    "33dae31dc582975da91abfa047cc071621f0e976",
+    "1fc356b73d1ef979be081f5403107e73ede039ce",
+    "2a2e0f9f1340231aa1dd908027e4277bea38a0b7",
+    "37dd921375686b39f94773c72ae75010991bd4a4",
+    "1473c4a4d2e6cb42e77612171e96add1d6703725"
+  ],
+  "findings": [
+    {
+      "evidence": "M4.34 added GroupEvent::MemberLeft so a group losing its leader mid-sync reopens the join barrier; M4.43 added SyncGroups::refuse/Known::Refused so followers already parked are released when no assignment is coming. `grep -rn '\\.refuse(' crates/oqueue-broker/src/` outside tests returns two lines, both sync_group.rs:219 and :230 inside submit_assignment. Heartbeats::leave, Heartbeats::sweep and AllMembersGone therefore reopen the barrier in the coordinator while the cell keeps holding nothing. Probed: seat m1,m2 at CompletingRebalance@1, park m2 on the barrier, have m1 leave via Heartbeats::leave -- state=PreparingRebalance gen=1, follower not released, error_code=-1 after waited_ms=3000000. durability.rs's a_parked_follower_is_woken_when_its_leaders_submission_is_refused proves the release works on the one path that was wired.",
+      "id": "c27d69ce7d32",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "SyncGroups::refuse is called only from submit_assignment, so every other route out of CompletingRebalance strands the followers parked on the barrier",
+      "task_id": "M4.47"
+    },
+    {
+      "evidence": "join_group/mod.rs:120-132 changed the structurally identical arm away from this code and wrote the reason out: 'UNKNOWN_SERVER_ERROR is not retriable in the Java consumer, which raises it out of poll()'. barrier.rs:112-119, barrier.rs:83-89, join_group/mod.rs:221-223 and generations.rs:116-123 each state the same rule. Probed: seat m1,m2 at CompletingRebalance@1, park m2, submit nothing -- error_code=-1 waited_ms=3000000. Reachable with nothing wrong, by M4.47's route and by a leader dying between JoinBarrierComplete and its SyncGroup. check-fencing-seam.sh covers Refusal's six codes and UNKNOWN_SERVER_ERROR is not one, so nothing enforces the convention.",
+      "id": "37073dd3a0dc",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "sync_group.rs:108 answers UNKNOWN_SERVER_ERROR where every sibling give-up arm in the group protocol answers REBALANCE_IN_PROGRESS",
+      "task_id": "M4.48"
+    },
+    {
+      "evidence": "scripts/gates/m4-complete.sh:53-57 says check-fencing-seam.sh 'lists five codes', that sync_group.rs 'constructs REBALANCE_IN_PROGRESS directly', and that the seam is 'a convention this gate neither enforces nor pretends to'. check-fencing-seam.sh now derives its list from scripts/lib/fencing_seam.py and reports 6 codes across 6 variants; grep for error_codes::REBALANCE_IN_PROGRESS under sync_group* returns only comments and test assertions; .pre-commit-config.yaml:137 names the hook 'M4.11, M4.36: no handler constructs any Refusal code outside crate::fencing' with six negative cases. M4.36 corrected fencing.rs, fencing/tests.rs, offset_fetch.rs and the hook name and missed this file -- the one its own row says the bug was found by reading against.",
+      "id": "e07b4db98eb7",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "m4-complete.sh's header states as current fact the three things M4.36 removed, and tells the reader the fencing seam is unenforced convention",
+      "task_id": "M4.49"
+    },
+    {
+      "evidence": "m4-complete.sh:168 loops over find_coordinator.rs join_group/mod.rs sync_group.rs heartbeat.rs leave_group.rs. The handlers now also live in join_group/round/{mod,state,slot,plan,close}.rs, join_group/deadline.rs, sync_group/deadline.rs, sync_group/barrier.rs (created by M4.43, after the leg was written) and heartbeat/deadline.rs. Measured: a group_authorized(..) using AuthzContext appended to barrier.rs leaves the leg printing 'ok FR-40 on the five group APIs: unmet and reported'. M4.23 recorded the missing floor as a minor; this is the same leg proven reachable, and M12 task 3a landing its check in round/plan.rs would leave the deferral reported open forever.",
+      "id": "b871158b3f4e",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "Leg 2b's FR-40 tripwire opens five files where code-structure.md rule 16 has split the five handlers across fourteen",
+      "task_id": "M4.50"
+    },
+    {
+      "evidence": "scripts/check-mutants.sh:30-31 carries M0.17's oqueue-core-only figure and names its own trigger: 'the day it is not, a nightly schedule is the change rule 16 actually describes'. baselines/mutants.txt:26 says '6-hour'. That day was M4.32 and nothing acted on it. testing.md:288 sends readers to this header as the authority on what runs. `grep -c timeout-minutes .github/workflows/gates.yml` is 0, so the step sits at a hosted runner's 360-minute default and CI cannot distinguish red-on-55-survivors from cancelled-at-the-ceiling.",
+      "id": "5c70e37b6de7",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "check-mutants.sh argues the full run belongs per-push 'At 23 s', against a run M4.32 measured at six hours, and CI declares no timeout-minutes",
+      "task_id": "M4.51"
+    },
+    {
+      "evidence": "tests/gates/negative.sh:4283-4284 invoke setup_mutants_weakened and setup_mutants_narrowed with no fourth argument. run_case's own doc at :224-233 says that argument 'is what stops a case going vacuously green' and that 'the day one of those grows a second property is the day its case needs this too'. M4.32 repaired the fixture -- the missing [profile.mutants] that had made both cases exit on a tool failure since M4.19 -- and added three cases that all carry the argument, without adding it to these two. Measured: removing the profile again gives 'FAIL cargo mutants exited 4 with no surviving mutants reported', exit 1, which run_case counts as the gate catching the defect. check-mutants.sh has at least six distinct fail paths.",
+      "id": "24d90e237417",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "The two oldest check-mutants negative cases still carry no expected message, so the vacuous-green class M4.32 found is one fixture edit from returning",
+      "task_id": "M4.52"
+    },
+    {
+      "evidence": "kafka-client-harness.sh bounds :239 (rdkafka_groups.py) and :314 (GroupRebalance). Bare: :108 rdkafka_roundtrip.py, :143 idempotent_conformance.py, :170 tls_sasl.py, :194 offset_survival.py. M4.38 measured the hang as librdkafka's teardown at interpreter exit after an assertion escapes with a client alive, and all four bare legs have that shape -- each raises on its own deadline with a live Consumer/Producer in scope (rdkafka_roundtrip.py:72, idempotent_conformance.py:181/251, tls_sasl.py:76, offset_survival.py:66/120). offset_survival.py also starts a broker subprocess the harness EXIT trap does not cover. M4.44's commit body argued 'both wrapped commands are leaf processes, which review confirmed by reading both scripts' -- two, of six. The same harness is m2-complete.sh's and m11-complete.sh's FR-20 leg.",
+      "id": "446dd7c90a7f",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "run_bounded reached two of the six harness legs that can hang, and the hang is a property of none of the two",
+      "task_id": "M4.53"
+    },
+    {
+      "evidence": "group_state.rs:87-93 says the epoch 'Lags GenerationId between a join barrier closing and a sync completing ... so a caller can always tell a rebalance started from a rebalance produced an assignment'. Probed with parked.rs's own interleaving -- a parked generation-1 SyncComplete applied while the group sits at CompletingRebalance@2 -- the record reads state=Stable gen=2 assignment_epoch=2 while no assignment for generation 2 exists or has been submitted. Minor only because grep finds no reader outside group_state.rs, group_coordinator.rs and the actor's own fold; it becomes live the day one exists. Same class as the MemberEpoch claim M4.39 corrected one paragraph above.",
+      "id": "a56567936f67",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "AssignmentEpoch's documented invariant is falsifiable and nothing reads it"
+    },
+    {
+      "evidence": "barrier.rs:177-204 and :218-248 both take the entries lock, or_default the entry, take the assignments lock, evaluate a generation guard, write an Assignment, drop both and notify_waiters. The difference is Some(map) versus None and one disjunct. The guards deliberately disagree at equality in opposite directions and must be reasoned about as a pair, which a single publish(group, generation, Option<map>) with one predicate would make checkable in one place. Each half is individually pinned by durability.rs:203-314, so this is shape rather than defect.",
+      "id": "7cb26eaa83f4",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "submit and refuse are a thirty-line duplicate of one lock/guard/write/notify dance, and the guards are the part that took four commits to get right"
+    },
+    {
+      "evidence": "roadmap.md:76 says M5 has 20 tasks; `grep -c '^[0-9]\\+\\. '` on M5.md is 21 after M4.32 added task 21, which M4.32 itself recorded against its own commit and closed anyway. M4.md:158-160 still says 'This milestone will make a sizing assumption; write it down' and it did not -- M7.md:180 carries it as 'deferred from M4 and still open here' while roadmap.md's deferred table has no row, which AGENTS.md names as where such an obligation lives. check-mutants.sh:118's comment claims the skip regex is 'Anchored to the line mutants.sh itself emits, not a substring' while the pattern's `.*skip` alternative makes it exactly a substring match. check-mutants.sh:246 harvests ^MISSED only, so an argued entry whose mutant flips to TIMEOUT is reported stale and the note tells the maintainer to delete a live suppression -- and connection.rs:256:17 appears in the full log as both.",
+      "id": "ad4f02628ec7",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "Four documentation and gate claims left inconsistent by this milestone's own sweeps"
+    },
+    {
+      "evidence": "milestone-review/SKILL.md's 'Findings become backlog tasks' requires sweeping the commit bodies since the last checkpoint for rule-15 minors and turning them into sweep rows, closing bcf5d6f697f2. All 13 covered commits record minors -- 24 of them, five in 33dae31 alone -- and none of M4.47-M4.53 is a sweep row. Two are still true at HEAD and were verified: barrier.rs:29's doc block sits after #[derive(Debug)] so rustdoc concatenates it onto the M4.17 paragraph above, and barrier.rs:62's pub(super) Assignments alias plus entry_for's raw handle lets any caller erase a published map with no notify, returning that generation's followers to Known::Waiting -- the same stranding class as M4.47, recorded as a minor and dropped. M11.18's row records this exact failure mode once already. Harvested into M4.55 (sixteen prose claims), M4.56 (fencing_seam.py's three parser gaps) and M4.57 (the three that are behaviour rather than prose).",
+      "id": "4b7aa8c0b891",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "The rule-15 harvest ADR-0016 makes this round's job was skipped, and this is M4's final round so no later one covers these commits",
+      "task_id": "M4.55"
+    }
+  ],
+  "milestone": "M4",
+  "recorded_at": "2026-09-14T03:04:20Z",
+  "reviewer": "claude-opus-5 (two lenses: the protocol after five rounds of repair, and the gates, harness and documents)",
+  "verdict": "changes-requested"
+}
