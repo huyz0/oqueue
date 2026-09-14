@@ -62,6 +62,15 @@ ROSTER="$HARNESS_DIR/clients.txt"
 # the leg exists to prevent, arriving through the filesystem. Found by review.
 : > "$HARNESS_DIR/offset-survival.log"
 
+# ⚠️ **Comfortably above what a healthy run takes, and far below a hang.**
+# `M4.38` measured the slowest stage of either group script at 6.5 s and the
+# whole run well under a minute; both scripts' own settle windows are 30 s per
+# stage across three stages. 300 s leaves a wide margin for a loaded host
+# while still turning a stalled round into a red gate inside five minutes
+# instead of never. ⚠️ A ceiling, so raising it weakens the guard
+# (non-negotiable 2).
+GROUP_CONFORMANCE_CEILING_S=300
+
 # ── The broker under test ───────────────────────────────────────────────────
 if ! cargo build -p oqueue --quiet; then
   fail "cargo build -p oqueue failed -- no broker to test against"
@@ -218,11 +227,30 @@ else
   # alongside it (the newest member became every group's leader) and fixed,
   # but this harness passes without that fix, so it is pinned by unit tests
   # rather than claimed here.
-  if python3 scripts/harness/rdkafka_groups.py "$ADDR" \
-      > "$HARNESS_DIR/rdkafka-groups.log" 2>&1 \
+  # ⚠️ **Bounded, because its own deadline is not enough** — `M4.44`.
+  # `settle` raises at `SETTLE_SECONDS`, and the process then hangs inside
+  # librdkafka's teardown at interpreter exit, with or without a `finally`
+  # that closes; `M4.38` measured that under two different timeout settings.
+  # A broker regression that leaves a round open therefore stalls this gate
+  # rather than failing it, and a job that never ends is worse than a red
+  # one. `run_bounded` rather than `timeout(1)`, which stock macOS does not
+  # ship — `lib.sh`'s own note, and `sha256_stdin`'s precedent.
+  groups_rc=0
+  run_bounded "$GROUP_CONFORMANCE_CEILING_S" \
+    python3 scripts/harness/rdkafka_groups.py "$ADDR" \
+    > "$HARNESS_DIR/rdkafka-groups.log" 2>&1 || groups_rc=$?
+  # ⚠️ **A ceiling is not a conformance failure, and reporting it as one sends
+  # the reader after a protocol bug that is not there** — the log a killed
+  # process never finished writing is usually empty, so the `note` below was
+  # blank. Found by review.
+  if (( groups_rc == 0 )) \
     && grep -q '^GROUP CONFORMANCE OK$' "$HARNESS_DIR/rdkafka-groups.log"; then
     ok "librdkafka consumer-group conformance (join, add, remove; no partition assigned twice)"
     echo "librdkafka-groups" >> "$ROSTER"
+  elif (( groups_rc == 124 )); then
+    fail "librdkafka consumer-group conformance did not finish in ${GROUP_CONFORMANCE_CEILING_S}s"
+    note "a round the broker never closed, or a client that hung past its own settle deadline"
+    note "$(tail -10 "$HARNESS_DIR/rdkafka-groups.log" 2>/dev/null || true)"
   else
     fail "librdkafka consumer-group conformance failed"
     note "$(tail -10 "$HARNESS_DIR/rdkafka-groups.log" 2>/dev/null || true)"
@@ -280,14 +308,29 @@ else
   # are separate implementations of the same protocol, and a broker can
   # satisfy one while starving the other — so a group leg that ran only
   # librdkafka would be evidence about librdkafka, not about the protocol.
+  jgroups_rc=0
   if javac -cp "$HARNESS_DIR/$KAFKA_CLIENTS_JAR" -d "$HARNESS_DIR" \
-      scripts/harness/GroupRebalance.java 2>"$HARNESS_DIR/java-groups-stderr.log" \
-    && java -cp "$HARNESS_DIR:$HARNESS_DIR/$KAFKA_CLIENTS_JAR:$HARNESS_DIR/$SLF4J_JAR" \
-        GroupRebalance "$ADDR" > "$HARNESS_DIR/java-groups.log" \
-        2>>"$HARNESS_DIR/java-groups-stderr.log" \
+      scripts/harness/GroupRebalance.java 2>"$HARNESS_DIR/java-groups-stderr.log"; then
+    run_bounded "$GROUP_CONFORMANCE_CEILING_S" \
+      java -cp "$HARNESS_DIR:$HARNESS_DIR/$KAFKA_CLIENTS_JAR:$HARNESS_DIR/$SLF4J_JAR" \
+      GroupRebalance "$ADDR" > "$HARNESS_DIR/java-groups.log" \
+      2>>"$HARNESS_DIR/java-groups-stderr.log" || jgroups_rc=$?
+  else
+    # ⚠️ A distinct code, so the compile failure is not reported as a run
+    # that answered wrongly -- the stderr log holds only `javac`'s output.
+    jgroups_rc=200
+  fi
+  if (( jgroups_rc == 0 )) \
     && grep -q '^GROUP CONFORMANCE OK$' "$HARNESS_DIR/java-groups.log"; then
     ok "Java client consumer-group conformance (join, add, remove; no partition assigned twice)"
     echo "java-groups" >> "$ROSTER"
+  elif (( jgroups_rc == 124 )); then
+    fail "Java client consumer-group conformance did not finish in ${GROUP_CONFORMANCE_CEILING_S}s"
+    note "a round the broker never closed, or a client that hung past its own settle deadline"
+    note "$(tail -10 "$HARNESS_DIR/java-groups.log" 2>/dev/null || true)"
+  elif (( jgroups_rc == 200 )); then
+    fail "GroupRebalance.java did not compile"
+    note "$(tail -5 "$HARNESS_DIR/java-groups-stderr.log" 2>/dev/null || true)"
   else
     fail "Java client consumer-group conformance failed"
     note "$(tail -10 "$HARNESS_DIR/java-groups.log" 2>/dev/null || true)"

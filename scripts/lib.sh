@@ -191,6 +191,69 @@ sha256_stdin() {
   fi
 }
 
+# Runs a command with a wall-clock ceiling, and returns 124 if it hit one.
+#
+# ⚠️ **Not `timeout(1)`, which stock macOS does not ship** — the same reason
+# `sha256_stdin` above exists, and `portability.md` rule 2 makes macOS a
+# first-class development platform. GNU coreutils' `timeout` is available
+# through Homebrew as `gtimeout` and not at all by default, so a gate built on
+# it works for half the people who are supposed to be able to run it.
+#
+# ⚠️ **A ceiling is not a nicety for a harness that drives real clients.** A
+# broker regression that leaves a rebalance round open makes the client library
+# wait, and a script whose own deadline fires can still hang at interpreter
+# exit inside that library's teardown — measured for `confluent-kafka` in
+# `M4.38`. Without a ceiling the gate stalls instead of failing, which is worse
+# than a red run: nobody reads a job that never ends.
+#
+# `SIGTERM` first so a runtime gets to flush, then `SIGKILL`, with a fixed
+# two-second grace between them — so a child that dies at once on `SIGTERM`
+# still costs those two seconds, and a ceiling of N returns at about N+2. The
+# `wait` on each of the two exit paths is what reaps the child rather than
+# leaving a zombie for the caller.
+#
+# ⚠️ **Three limits `timeout(1)` does not have, measured by review of
+# `M4.44`.** None is reachable from this file's own call sites, where the
+# wrapped command is a leaf process — but every gate in `scripts/` sources
+# `lib.sh`, so they are written down rather than left to be rediscovered
+# (an earlier version of this sentence carried a count, which was wrong and
+# would have drifted on the next script added):
+#
+#   * **Only the direct child is signalled.** `run_bounded 3 bash -c 'sleep 222 &
+#     sleep 100'` returns 124 with `sleep 222` still running. A wrapped shell
+#     function behaves the same way. Killing a process group would need
+#     `set -m` and a negative pid, which changes job-control behaviour for the
+#     whole caller.
+#   * **Liveness is `kill -0` on a pid this shell has already reaped**, so on
+#     pid reuse the loop can time a stranger and then signal it. Low
+#     probability, not zero.
+#   * **The `wait` after `SIGKILL` is unbounded.** A child wedged in
+#     uninterruptible sleep — a hung bind mount under WSL2 is the realistic
+#     one — reproduces the stall this function exists to remove, one line
+#     further on.
+run_bounded() {
+  local seconds="$1"
+  shift
+  "$@" &
+  local pid=$!
+  local waited=0
+  while (( waited < seconds )); do
+    kill -0 "$pid" 2>/dev/null || break
+    sleep 1
+    waited=$((waited + 1))
+  done
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -TERM "$pid" 2>/dev/null || true
+    sleep 2
+    kill -KILL "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    return 124
+  fi
+  local rc=0
+  wait "$pid" || rc=$?
+  return "$rc"
+}
+
 # ⚠️ Deliberately a `fail`, not the `skip` that `require_tool` gives every other
 # tool. The convention exists so a missing tool is distinguishable from a
 # failing check — but a gate built *on* a hash cannot skip the hash and still
