@@ -4348,9 +4348,185 @@ run_case "check-fencing-seam.sh (a variant and its arm deleted together)" \
 run_case "check-fencing-seam.sh (a group handler answering a fatal code)" \
   setup_fencing_fatal_giveup invoke_fencing_fatal_giveup \
   "answers UNKNOWN_SERVER_ERROR"
+# ⚠️ **A variant carrying an explicit discriminant, whose code is then
+# constructed outside the seam.** `fencing_seam.py`'s `VARIANT_RE` did not
+# match `FencedInstance = 9,`, so that variant never entered the derived
+# list, `MIN_VARIANTS` stayed satisfied at six, and the construction below
+# passed unnoticed — a false *pass*, which is the one thing this gate exists
+# to prevent. Recorded by `M4.36`'s own commit body and unharvested until
+# `M4.56`. Measured against the parser as it stood: one fewer line out,
+# exit 0.
+setup_fencing_discriminant_variant() {
+  local dir; dir="$(new_scratch fencing-discriminant)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  # ⚠️ **The seam is written whole, not patched.** An in-place edit that
+  # silently matches nothing leaves a fixture that plants no defect, and the
+  # first version of the sibling case below did exactly that — `perl -0pi`
+  # exits 0 whether or not its pattern matched, so reindenting
+  # `_fencing_fixture`'s heredoc would have turned a must-pass case green
+  # while testing nothing. Found by review of `M4.56`. ⚠️ It also keeps
+  # `perl` out of the suite's dependencies: these were its only callers in
+  # the repository, and `portability.md` rule 10 wants a named skip rather
+  # than a setup that aborts the run on a host without it.
+  cat > "$dir/crates/oqueue-broker/src/fencing.rs" <<'RS'
+pub(crate) enum Refusal {
+    CoordinatorLoadInProgress,
+    NotCoordinator,
+    CoordinatorNotAvailable,
+    UnknownMember,
+    IllegalGeneration,
+    RebalanceInProgress,
+    FencedInstance = 9,
+}
+
+impl Refusal {
+    pub(crate) const fn error_code(self) -> i16 {
+        match self {
+            Self::CoordinatorLoadInProgress => error_codes::COORDINATOR_LOAD_IN_PROGRESS,
+            Self::NotCoordinator => error_codes::NOT_COORDINATOR,
+            Self::CoordinatorNotAvailable => error_codes::COORDINATOR_NOT_AVAILABLE,
+            Self::UnknownMember => error_codes::UNKNOWN_MEMBER_ID,
+            Self::IllegalGeneration => error_codes::ILLEGAL_GENERATION,
+            Self::RebalanceInProgress => error_codes::REBALANCE_IN_PROGRESS,
+            Self::FencedInstance => error_codes::FENCED_INSTANCE_ID,
+        }
+    }
+}
+RS
+  printf 'fn evil() -> i16 { error_codes::FENCED_INSTANCE_ID }\n' \
+    >> "$dir/crates/oqueue-broker/src/sync_group.rs"
+  printf '%s\n' "$dir"
+}
+invoke_fencing_discriminant_variant() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+# ⚠️ **An arm answering two codes.** `CODE_RE.search` took the first and
+# dropped the rest silently, so the second stayed out of the derived list and
+# a handler could construct it anywhere. There is no correct single answer
+# for such an arm, so the parser refuses rather than choosing.
+setup_fencing_two_codes_in_one_arm() {
+  local dir; dir="$(new_scratch fencing-two-codes)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  cat > "$dir/crates/oqueue-broker/src/fencing.rs" <<'RS'
+pub(crate) enum Refusal {
+    CoordinatorLoadInProgress,
+    NotCoordinator,
+    CoordinatorNotAvailable,
+    UnknownMember,
+    IllegalGeneration,
+    RebalanceInProgress,
+}
+
+impl Refusal {
+    pub(crate) const fn error_code(self) -> i16 {
+        match self {
+            Self::CoordinatorLoadInProgress => error_codes::COORDINATOR_LOAD_IN_PROGRESS,
+            Self::NotCoordinator => {
+                if true { error_codes::NOT_COORDINATOR } else { error_codes::UNKNOWN_SERVER_ERROR }
+            }
+            Self::CoordinatorNotAvailable => error_codes::COORDINATOR_NOT_AVAILABLE,
+            Self::UnknownMember => error_codes::UNKNOWN_MEMBER_ID,
+            Self::IllegalGeneration => error_codes::ILLEGAL_GENERATION,
+            Self::RebalanceInProgress => error_codes::REBALANCE_IN_PROGRESS,
+        }
+    }
+}
+RS
+  printf '%s\n' "$dir"
+}
+invoke_fencing_two_codes_in_one_arm() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
+# ⚠️ **A correct seam whose or-pattern rustfmt wrapped, which must PASS** —
+# so `run_case` cannot express it, the same shape as the `unviable:`
+# exemption below. The parser took the pattern's *last line* only, so
+# `Self::A\n| Self::B =>` lost `Self::A` and the gate reported
+# `Refusal::NotCoordinator answers no error_codes:: path` against
+# a seam with nothing wrong with it. A false failure costs a commit rather
+# than a violation, which is why it ranks below the two cases above — and a
+# gate that cries wolf on correct code is one people learn to route around.
+setup_fencing_wrapped_or_pattern() {
+  local dir; dir="$(new_scratch fencing-wrapped-or)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  cat > "$dir/crates/oqueue-broker/src/fencing.rs" <<'RS'
+pub(crate) enum Refusal {
+    CoordinatorLoadInProgress,
+    NotCoordinator,
+    CoordinatorNotAvailable,
+    UnknownMember,
+    IllegalGeneration,
+    RebalanceInProgress,
+}
+
+impl Refusal {
+    pub(crate) const fn error_code(self) -> i16 {
+        match self {
+            Self::CoordinatorLoadInProgress => error_codes::COORDINATOR_LOAD_IN_PROGRESS,
+            Self::NotCoordinator
+            | Self::CoordinatorNotAvailable => error_codes::NOT_COORDINATOR,
+            Self::UnknownMember => error_codes::UNKNOWN_MEMBER_ID,
+            Self::IllegalGeneration => error_codes::ILLEGAL_GENERATION,
+            Self::RebalanceInProgress => error_codes::REBALANCE_IN_PROGRESS,
+        }
+    }
+}
+RS
+  # ⚠️ **Every handler, because this fixture has to reach `ok` on all four
+  # legs, not just the parser's.** `_fencing_fixture` writes `sync_group.rs`
+  # alone, which is enough for a case that only has to fail — the walk's own
+  # refusal is a non-zero exit like any other. A case asserting a *pass*
+  # cannot borrow that shortcut, and the first version of this one reported
+  # `refused a legitimate artifact` for the missing handlers rather than for
+  # the or-pattern it exists to cover.
+  local root="$dir/crates/oqueue-broker/src"
+  mkdir -p "$root/join_group/round" "$root/sync_group" "$root/heartbeat"
+  local f
+  for f in find_coordinator.rs leave_group.rs heartbeat.rs \
+           join_group/mod.rs join_group/deadline.rs \
+           join_group/round/mod.rs join_group/round/state.rs \
+           join_group/round/slot.rs join_group/round/plan.rs \
+           join_group/round/close.rs \
+           sync_group/deadline.rs sync_group/barrier.rs heartbeat/deadline.rs; do
+    printf '// a handler module\n' > "$root/$f"
+  done
+  printf '%s\n' "$dir"
+}
+
 run_case "check-fencing-seam.sh (a group handler with no source file)" \
   setup_fencing_missing_handler invoke_fencing_missing_handler \
   "no source file for handler(s): leave_group"
+# ⚠️ **The pin names the *code*, and `constructed outside` alone did not.**
+# That substring is in the gate's own success line too — `none of the seam's
+# N fencing codes are constructed outside ...` — so with the `VARIANT_RE`
+# discriminant fix reverted the case reported `ok` while the defect it
+# plants went unnoticed, which is the acceptance criterion it exists to
+# meet. Found by review of `M4.56`; rule 20a's "pin the message of the
+# defect it plants" is about telling one *outcome* from another, not one
+# gate from another.
+run_case "check-fencing-seam.sh (a variant with an explicit discriminant)" \
+  setup_fencing_discriminant_variant invoke_fencing_discriminant_variant \
+  "error_codes::FENCED_INSTANCE_ID constructed outside"
+run_case "check-fencing-seam.sh (one arm answering two codes)" \
+  setup_fencing_two_codes_in_one_arm invoke_fencing_two_codes_in_one_arm \
+  "answers more than one error_codes:: path"
+# ⚠️ **This one must *pass*** — `run_case` asserts a non-zero exit, which is
+# the whole of what it checks, so a seam that is merely formatted differently
+# is driven by hand. `M4.56`.
+_fencing_wrapped_dir="$(setup_fencing_wrapped_or_pattern)"
+TOTAL=$((TOTAL + 1))
+if bash "$_fencing_wrapped_dir/scripts/check-fencing-seam.sh" >/dev/null 2>&1; then
+  ok "check-fencing-seam.sh (a rustfmt-wrapped or-pattern) passes on a legitimate artifact"
+else
+  fail "check-fencing-seam.sh (a rustfmt-wrapped or-pattern) refused a legitimate artifact"
+  note "$(bash "$_fencing_wrapped_dir/scripts/check-fencing-seam.sh" 2>&1 | sed 's/^/     /')"
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
 
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \

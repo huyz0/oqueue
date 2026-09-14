@@ -37,9 +37,23 @@ import sys
 
 ENUM_RE = re.compile(r"^pub\(crate\) enum Refusal \{$", re.MULTILINE)
 FN_RE = re.compile(r"fn error_code\(")
-# A variant declaration: `Name,`, `Name(T),`, or `Name { .. }` — plus the
-# last one, which may carry no trailing comma at all.
-VARIANT_RE = re.compile(r"^\s+([A-Z][A-Za-z0-9]*)\s*[({,]?\s*$|^\s+([A-Z][A-Za-z0-9]*)\s*[({]")
+# A variant declaration: `Name,`, `Name(T),`, `Name { .. }`, or
+# `Name = 9,` — plus the last one, which may carry no trailing comma at all.
+#
+# ⚠️ **The discriminant form was missed, and it was the one gap that was a
+# false *pass*.** `M4.36`'s own commit body recorded it and nobody acted;
+# `M4.56` is that row. Measured before the fix: a copy of the seam with
+# `FencedInstance = 9,` and its `Self::FencedInstance =>
+# error_codes::FENCED_INSTANCE_ID,` arm printed the same six variant/code
+# lines and exited 0, so `FENCED_INSTANCE_ID` never entered `CODES`,
+# `MIN_VARIANTS` stayed satisfied, and a handler could construct that code
+# anywhere while `check-fencing-seam.sh` said nothing. This module's own
+# header claims it "fails loudly rather than guessing"; for that input it
+# guessed.
+VARIANT_RE = re.compile(
+    r"^\s+([A-Z][A-Za-z0-9]*)\s*(?:=\s*[^,{(]+?)?\s*[({,]?\s*$"
+    r"|^\s+([A-Z][A-Za-z0-9]*)\s*[({]"
+)
 CODE_RE = re.compile(r"\berror_codes::([A-Z][A-Z0-9_]*)")
 SELF_RE = re.compile(r"\bSelf::([A-Z][A-Za-z0-9]*)")
 
@@ -76,12 +90,58 @@ def variants(source: str) -> list[str]:
         raise ValueError("no `pub(crate) enum Refusal {` in the seam")
     body = _balanced_block(source, m.end() - 1)
     found = []
-    for line in strip_comments(body).splitlines():
-        if not line.strip() or line.lstrip().startswith("#["):
+    # ⚠️ **Attributes are consumed by bracket depth, not by their first
+    # line.** Skipping a line that merely *starts* `#[` leaves the
+    # continuations of one rustfmt wrapped past 100 columns to be judged as
+    # declarations, which the refusal below then rejects: a seam that parsed
+    # cleanly, failing on its formatting, with the message pointing at a line
+    # that is not a declaration. Found by review of `M4.56` — the same commit
+    # that made an unmatched line fatal and so created the hazard.
+    lines = strip_comments(body).splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        index += 1
+        if line.lstrip().startswith("#["):
+            depth = line.count("[") - line.count("]")
+            while depth > 0 and index < len(lines):
+                depth += lines[index].count("[") - lines[index].count("]")
+                index += 1
+            # ⚠️ **Brackets that never balance are a refusal, not a shorter
+            # list.** Running off the end silently consumed every declaration
+            # after the attribute — a partial answer with no diagnostic,
+            # which is the exact class the branch below was added to close
+            # and which this walk reintroduced one round later. Found by
+            # review of `M4.56`.
+            if depth > 0:
+                raise ValueError(
+                    f"unbalanced attribute in the Refusal enum body: {line.strip()!r}"
+                )
+            continue
+        if not line.strip():
             continue
         got = VARIANT_RE.match(line)
         if got:
             found.append(got.group(1) or got.group(2))
+            continue
+        # ⚠️ **An unmatched line is a refusal, not a skip** — `M4.56`'s own
+        # review, and the difference between fixing the instance and closing
+        # the class. Widening `VARIANT_RE` for `Name = 9,` left the *silent*
+        # half intact: `Name = (9),` and `Name = compute(),` are valid
+        # discriminants this regex still rejects, and without this branch each
+        # dropped its variant with no diagnostic — so its code never entered
+        # the derived list, `MIN_VARIANTS` stayed satisfied, and a handler
+        # constructing it passed. Bit for bit the defect this task closes, one
+        # syntax over.
+        #
+        # ⚠️ **A struct variant's field lines are why this is not simply
+        # "every unmatched line"**: its body spans lines this regex is not
+        # meant to match. They are skipped by shape — `name: Type,` or a
+        # closing brace — so a genuinely unrecognised *declaration* still
+        # fails loudly.
+        if re.match(r"^\s*(\}|[a-z_][A-Za-z0-9_]*\s*:)", line):
+            continue
+        raise ValueError(f"unrecognised line in the Refusal enum body: {line.strip()!r}")
     return found
 
 
@@ -110,8 +170,38 @@ def arms(source: str) -> list[tuple[str, str]]:
             cut = max(body.rfind("Self::"), body.rfind("\n"))
             if cut > 0:
                 body = body[:cut]
-        out.append((pattern.strip().splitlines()[-1].strip(), body.strip()))
+        out.append((_pattern_of(pattern), body.strip()))
     return out
+
+
+def _pattern_of(fragment: str) -> str:
+    """This arm's pattern, with the previous arm's body trimmed off the front.
+
+    ⚠️ **The last line alone is not the pattern when rustfmt wraps an
+    or-pattern**, which was the second of `M4.36`'s three recorded gaps.
+    `Self::A\n| Self::B =>` kept only `| Self::B`, so `Self::A` matched no
+    arm and the gate reported `Refusal::A answers no error_codes:: path`
+    against a correct seam — a false *failure*, which costs a commit rather
+    than a violation, and is why it ranks below the discriminant gap.
+
+    Walking back while the lines are joined by `|` keeps both spellings
+    rustfmt produces (the bar trailing the previous line, or leading the
+    next) without re-parsing Rust: a line that neither ends nor is followed
+    by one belongs to the previous arm's body.
+    """
+    lines = fragment.strip().splitlines()
+    if not lines:
+        return ""
+    taken = [lines[-1]]
+    index = len(lines) - 2
+    while index >= 0:
+        previous = lines[index].strip()
+        if previous.endswith("|") or taken[0].strip().startswith("|"):
+            taken.insert(0, lines[index])
+            index -= 1
+        else:
+            break
+    return " ".join(line.strip() for line in taken).strip()
 
 
 def main() -> int:
@@ -138,11 +228,55 @@ def main() -> int:
 
     answered: dict[str, str] = {}
     for pattern, body in arm_list:
-        code = CODE_RE.search(body)
-        if not code:
+        # ⚠️ **Every `error_codes::` path in the body, not the first one** —
+        # the third of `M4.36`'s recorded gaps. `search` exported the first
+        # and dropped the rest silently, so an arm answering two codes put
+        # one of them outside the derived list and a handler could then
+        # construct *that* one anywhere. There is no correct single answer
+        # for such an arm, so this refuses rather than choosing: a seam whose
+        # arm is a conditional is a seam this gate cannot describe, and
+        # saying so is the whole of what `fails loudly rather than guessing`
+        # is supposed to mean.
+        #
+        # ⚠️ **Exporting *both* was the alternative, and it is rejected
+        # rather than unconsidered** — review asked, and the cost of refusing
+        # is real: a later milestone writing a legitimate conditional arm
+        # blocks every commit until the enum is restructured, and
+        # `check-fencing-seam.sh` calls `finish` on a `PROBLEM`, so its
+        # handler-scan leg does not run either. Exporting both would
+        # grep-protect both codes — strictly more coverage, and no false
+        # pass. ⚠️ **What breaks is the caller's parsing of this output, and
+        # the direction matters** — *one-to-many*, not many-to-one. Two
+        # variants answering one code is already supported and correct: the
+        # or-pattern fixture is that shape, and `check-fencing-seam.sh:82`
+        # floors variants rather than deduped codes in bold for exactly that
+        # reason. One variant answering two codes has no good spelling.
+        # Printing two lines makes `cut -f1` count that variant twice, so the
+        # floor reads seven for a six-variant enum and `the seam answers N
+        # code(s) across M variant(s)` lies. Printing `Variant\tA,B` is
+        # worse: `CODES` then holds the literal `A,B` and the grep for
+        # `error_codes::A,B\b` matches nothing, silently losing protection
+        # for *both* codes. ⚠️ A first version of this paragraph argued from
+        # `MIN_VARIANTS` counting variants against codes, which it does not;
+        # review caught that, and the conclusion survives on the mechanism
+        # above rather than the one first written down.
+        # Refusing keeps the gate's own model honest and makes the day such
+        # an arm is written a deliberate decision rather than a silent
+        # widening. Revisit here, not in the caller.
+        codes = dict.fromkeys(CODE_RE.findall(body))
+        if not codes:
             continue
+        if len(codes) > 1:
+            named = ", ".join(f"Refusal::{n}" for n in SELF_RE.findall(pattern)) or "an arm"
+            print(
+                f"PROBLEM {named} answers more than one error_codes:: path: "
+                f"{', '.join(codes)}",
+                file=sys.stderr,
+            )
+            return 2
+        code = next(iter(codes))
         for named in SELF_RE.findall(pattern):
-            answered[named] = code.group(1)
+            answered[named] = code
 
     missing = [v for v in vs if v not in answered]
     if missing:
