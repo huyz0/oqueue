@@ -4510,6 +4510,126 @@ RS
 run_case "check-fencing-seam.sh (a group handler with no source file)" \
   setup_fencing_missing_handler invoke_fencing_missing_handler \
   "no source file for handler(s): leave_group"
+# ── the FR-40 tripwire's pattern (M4.59) ────────────────────────────────────
+#
+# ⚠️ **`m4-complete.sh` cannot carry a `negative.sh` case**, for the reason
+# `M4.50`'s row states: `has_rust` and its `cargo test --workspace` leg both
+# `finish` before leg 2b runs, so a scratch tree never reaches it. The
+# pattern that leg turns on lives in `lib.sh` since `M4.59` precisely so it
+# can be driven here, with no workspace and no cargo — the same move
+# `fencing_seam.py` made for the seam parser.
+#
+# ⚠️ **Both directions, because a tripwire fails in both.** A pattern that
+# stops matching a check that is present leaves the leg green forever while
+# `M12` lands `GroupGrants`; one that matches a handler with no check at all
+# fails every commit until someone deletes the leg. `run_case` asserts a
+# non-zero exit, so neither of these is a `run_case`: they are driven by
+# hand, the shape the `unviable:` exemption and the wrapped-or-pattern case
+# already use.
+_fr40_pattern_dir() {
+  local dir; dir="$(new_scratch fr40-pattern)"
+  mkdir -p "$dir/scripts"
+  cp "$REPO_ROOT/scripts/lib.sh" "$dir/scripts/lib.sh"
+  printf '%s\n' "$dir"
+}
+
+_fr40_pattern_case() {
+  local label="$1" body="$2" expect="$3" dir rc=0
+  dir="$(_fr40_pattern_dir)"
+  printf '%s\n' "$body" > "$dir/handler.rs"
+  TOTAL=$((TOTAL + 1))
+  bash -c '
+    OQUEUE_SUPPRESS_TIMING=1 source "$1/scripts/lib.sh" 2>/dev/null
+    group_names_a_principal "$1/handler.rs"
+  ' _ "$dir" >/dev/null 2>&1 || rc=$?
+  # ⚠️ **`1`, not "any non-zero", and that distinction is the whole case.**
+  # `grep` answers 0 for a match and 1 for none; everything else is an error
+  # — 2 for a bad pattern or an unreadable file, 127 when the helper is
+  # absent or `lib.sh` fails to source. Accepting any non-zero reported `ok`
+  # for a run that never happened: measured by renaming
+  # `group_names_a_principal` in the copied `lib.sh`, where the negative case
+  # agreed all was well while every positive one accused the pattern.
+  # `lib.sh` is copied alone, so the day it sources a sibling that is exactly
+  # what happens. Rule 20a's "not merely a non-zero exit", one layer down.
+  # Found by review of `M4.59`.
+  # ⚠️ `should` is derived rather than interpolated: `"should $expect"` reads
+  # "should does not match" for the negative direction, which review left on
+  # screen after the first repair and is worth one `case` arm to avoid.
+  local want should
+  case "$expect" in
+    matches) want=0; should="must match" ;;
+    *) want=1; should="must not match" ;;
+  esac
+  if [[ "$rc" == "$want" ]]; then
+    ok "the FR-40 tripwire's pattern $expect: $label"
+  elif [[ "$rc" != 0 && "$rc" != 1 ]]; then
+    fail "the FR-40 tripwire's pattern could not be run against $label (rc=$rc)"
+    note "rc 2 is a bad pattern or an unreadable file; 127 is a missing helper"
+    FAILED_CASES=$((FAILED_CASES + 1))
+  else
+    fail "the FR-40 tripwire's pattern $should: $label (rc=$rc)"
+    note "a tripwire wrong in this direction is what M12.md task 3a's promotion"
+    note "signal depends on -- see group_names_a_principal's own note in lib.sh"
+    FAILED_CASES=$((FAILED_CASES + 1))
+  fi
+}
+
+# ⚠️ **One body per alternative, and each names *only* its own spelling.**
+# A first version used `fn handle(principal: &Principal)` for the first
+# case, which carries both spellings — so deleting either from the pattern
+# failed nothing, and two of the five alternatives stayed exactly as
+# unguarded as before this row. Review measured it and named what then slips
+# through: `fn handle(req: &JoinGroupRequest, principal: &str)`, a check
+# naming only the binding, which is the spelling `M12` is most likely to
+# write.
+_fr40_pattern_case "a lowercase principal binding" \
+  'fn handle(req: &Req, principal: &str) -> i16 { 0 }' matches
+_fr40_pattern_case "a capitalised Principal type" \
+  'fn handle(p: &Principal) -> i16 { 0 }' matches
+_fr40_pattern_case "an AuthzContext argument" \
+  'fn handle(authz: AuthzContext) -> i16 { 0 }' matches
+_fr40_pattern_case "an authz:: path" \
+  'fn handle() -> i16 { authz::refuse() }' matches
+_fr40_pattern_case "this repo's own _authorized( idiom" \
+  'fn handle(g: &GroupId) -> i16 { group_authorized(g) }' matches
+# ⚠️ **And a handler with no check at all must not match**, or the leg fails
+# every commit until someone deletes it — the other way a tripwire dies.
+_fr40_pattern_case "a handler that checks nothing" \
+  'fn handle(request: &JoinGroupRequest) -> i16 { error_codes::NONE }' "does not match"
+
+# ⚠️ **The other half of the leg that turns on a literal.** `M4.59`'s row
+# names "the pattern and the strip", and the module layout under these
+# handlers has already moved once beneath this leg (`M4.50`). When it moves
+# again, a prefix that stops matching leaves the FAIL line naming offenders
+# by full repo-relative path — legible, and not what the leg says it prints.
+# ⚠️ **`|| _fr40_rc=$?`, because an unguarded `$( )` aborts the suite.**
+# `lib.sh` sets `-e`, so a subshell that fails — a missing
+# `group_handler_label`, a `lib.sh` that will not source — makes the
+# assignment fail and the whole run stop there, silently: the remaining
+# cases never execute and the `SKIPPED_COUNT` line the harness's own step in
+# `gates.yml` greps is never printed. A case that cannot fail, in the row
+# whose subject is exactly that. Found by review of `M4.59`, one fix behind
+# the same correction to the pattern cases above.
+TOTAL=$((TOTAL + 1))
+_fr40_rc=0
+_fr40_label="$(
+  OQUEUE_SUPPRESS_TIMING=1 bash -c '
+    source "$1/scripts/lib.sh" 2>/dev/null
+    group_handler_label "crates/oqueue-broker/src/join_group/round/plan.rs"
+  ' _ "$(_fr40_pattern_dir)" 2>/dev/null
+)" || _fr40_rc=$?
+if (( _fr40_rc != 0 )); then
+  fail "the FR-40 tripwire's label helper could not be run (rc=$_fr40_rc)"
+  note "a missing group_handler_label, or a lib.sh that will not source"
+  FAILED_CASES=$((FAILED_CASES + 1))
+elif [[ "$_fr40_label" == "join_group/round/plan.rs" ]]; then
+  ok "the FR-40 tripwire names a handler by its path below the crate's source root"
+else
+  fail "the FR-40 tripwire's label is '$_fr40_label', not 'join_group/round/plan.rs'"
+  note "the leg's FAIL line would name offenders by a path its own text does not describe"
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
 # ⚠️ **The pin names the *code*, and `constructed outside` alone did not.**
 # That substring is in the gate's own success line too — `none of the seam's
 # N fencing codes are constructed outside ...` — so with the `VARIANT_RE`

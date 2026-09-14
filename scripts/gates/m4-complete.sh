@@ -227,15 +227,15 @@ while IFS= read -r handler; do
     continue
   fi
   read_files=$((read_files + 1))
-  # ⚠️ **Several spellings, because one identifier is not the property.** A
-  # `GroupGrants` check written in this repo's own idiom —
-  # `group_authorized(&request.group_id, authz)` taking an `AuthzContext` —
-  # contains no lowercase `principal` at all, so M12 task 3a could land and
-  # this leg would still print "unmet and reported". It errs toward a false
-  # *failure*, the safe direction for a tripwire whose job is to notice that
-  # a deferral became dischargeable. Found by review.
-  if grep -qE '(principal|Principal|AuthzContext|authz::|_authorized\()' "$path"; then
-    scoped="$scoped ${handler#crates/oqueue-broker/src/}"
+  # ⚠️ **The pattern is `lib.sh`'s `group_names_a_principal`, not a regex
+  # here** — `M4.59`. This leg's only content is that pattern, and it was
+  # the one part of the leg nothing guarded: everything else refuses a
+  # missing handler or a loop that opened nothing, while an edit to the
+  # regex, or the idiom `M12` actually writes, would leave the tripwire
+  # printing "unmet and reported" forever. It has its own negative cases
+  # now, which need no built workspace.
+  if group_names_a_principal "$path"; then
+    scoped="$scoped $(group_handler_label "$handler")"
   fi
 done <<<"$handler_list"
 if (( read_files != expected )); then

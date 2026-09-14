@@ -281,6 +281,45 @@ group_handler_files() {
   printf '%s' "$out"
 }
 
+# Does `$1` (a file) contain a principal check, in any spelling this repo
+# would plausibly write one in?
+#
+# ⚠️ **The pattern lives here, not inline in the gate, because a tripwire's
+# only content is its pattern.** `m4-complete.sh`'s FR-40 leg exists to fail
+# the day `M12`'s `GroupGrants` lands on the five group APIs, and `M12.md`
+# task 3a states in terms that the gate failing is the signal to promote the
+# leg to an assertion. Everything else about that leg is guarded — the walk
+# refuses a missing handler, the floor catches a loop that opened nothing —
+# and the one thing that decides the answer was guarded by nothing. Edit the
+# regex, or simply be outlived by the idiom `M12` writes, and the leg prints
+# `unmet and reported` forever while FR-40 is covered on paper by
+# `roadmap.md` and asserted by nothing. `M4.59`; `fencing_seam.py` is the
+# precedent for putting the deciding logic where a test can reach it.
+#
+# ⚠️ **Several spellings, because one identifier is not the property.** A
+# check written in this repo's own idiom —
+# `group_authorized(&request.group_id, authz)` taking an `AuthzContext` —
+# contains no lowercase `principal` at all. It errs toward a false
+# *failure*, the safe direction for a tripwire whose job is to notice that a
+# deferral became dischargeable.
+group_names_a_principal() {
+  grep -qE '(principal|Principal|AuthzContext|authz::|_authorized\()' "$1"
+}
+
+# How `m4-complete.sh`'s FR-40 leg names one of `group_handler_files`'
+# entries in its own output — the repo-relative path with the crate's source
+# root trimmed.
+#
+# ⚠️ **Beside the pattern because it is the leg's other unguarded half.**
+# `M4.59`'s row names "the pattern and the strip"; the module layout under
+# these handlers has already moved once under this leg (`M4.50`), and when
+# it moves again a `${handler#...}` that stops matching leaves the FAIL line
+# naming offenders by full repo-relative path with nothing to notice. Its
+# own case in `tests/gates/negative.sh` is what notices.
+group_handler_label() {
+  printf '%s' "${1#crates/oqueue-broker/src/}"
+}
+
 # Runs a command with a wall-clock ceiling, and returns 124 if it hit one.
 #
 # ⚠️ **Not `timeout(1)`, which stock macOS does not ship** — the same reason
