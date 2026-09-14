@@ -137,7 +137,45 @@ impl Wiring {
 /// a config file, per-bucket settings and validation are an operability
 /// milestone's, and `M3` has none.
 fn chosen_store() -> Result<(Arc<dyn ObjectStore>, &'static str), oqueue_core::Error> {
-    store_for(std::env::var("OQUEUE_STORE").ok().as_deref())
+    store_for(selection_from(std::env::var("OQUEUE_STORE"))?.as_deref())
+}
+
+/// `OQUEUE_STORE`'s three outcomes, with the environment read out of it.
+///
+/// ⚠️ **`std::env::var(..).ok()` collapses the distinction that matters**, and
+/// this function exists because `chosen_store` used to make exactly that
+/// collapse: `NotPresent` is an operator declining to name a backend, and
+/// `NotUnicode` is a mistake, and `.ok()` maps both to `None` — which
+/// [`store_for`] then reads as "nobody asked" and answers with
+/// `FakeObjectStore`. So `OQUEUE_STORE=$'s3\xff'` started a broker that
+/// acknowledges records into a heap and loses every one at exit, which is the
+/// outcome this module's own doc argues against two paragraphs up while the
+/// code did it. Measured, not inferred.
+///
+/// ⚠️ **`bin/oqueue/src/security/sources.rs`'s `from_var` already draws this
+/// distinction** and is tested on all three arms; `M4.18` applied it to the
+/// five variables it introduced and this is the one composition-root variable
+/// that predates it. Filed by that task's own review, built by `M4.30`.
+///
+/// ⚠️ **It fails *loudly*, which is why it was not folded into `M4.18`**: the
+/// banner names `FakeObjectStore` and `serve`'s `durability_warning` says
+/// every acknowledged record is lost at exit. A mis-read `OQUEUE_CREDENTIALS`
+/// failed silently *open*, which is a different risk class and got the more
+/// urgent fix.
+///
+/// # Errors
+///
+/// [`oqueue_core::Error::Permanent`] when the variable is set to something
+/// that is not valid Unicode — the same answer an unrecognised name gets,
+/// because a value this process cannot read is not one it may guess at.
+fn selection_from(
+    var: Result<String, std::env::VarError>,
+) -> Result<Option<String>, oqueue_core::Error> {
+    match var {
+        Ok(value) => Ok(Some(value)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => Err(oqueue_core::Error::Permanent),
+    }
 }
 
 /// The selection itself, with the environment read out of it.
@@ -179,9 +217,25 @@ fn main() {
     let wiring = match Wiring::unencrypted() {
         Ok(wiring) => wiring,
         Err(error) => {
+            // ⚠️ `var_os`, not `var`: the value that *cannot* be decoded is
+            // exactly the one an operator most needs echoed back, and
+            // `var(..).unwrap_or_default()` prints an empty string for it —
+            // naming the variable while hiding what it was set to. `M4.30`.
+            // ⚠️ **Lossy *and* `{:?}`, and the first version of this had only
+            // the first half.** `clippy::pedantic` refuses `{:?}` on an
+            // `OsString`, which is why the value is rendered lossily — but
+            // `to_string_lossy` answers a `Cow<str>`, which `{:?}` is fine
+            // on, so the escaping was given up for nothing. A value
+            // containing a newline then printed a forged second line:
+            // review set `OQUEUE_STORE` to `s3\noqueue: using S3Store
+            // (durable, encrypted)` and the banner asserted the opposite of
+            // what had happened. Escaped, an undecodable byte still shows as
+            // U+FFFD, which is the signal the operator needs.
             eprintln!(
                 "oqueue: OQUEUE_STORE={:?} could not be used: {error}",
-                std::env::var("OQUEUE_STORE").unwrap_or_default()
+                std::env::var_os("OQUEUE_STORE")
+                    .unwrap_or_default()
+                    .to_string_lossy()
             );
             eprintln!(
                 "oqueue: valid values are \"s3\" and \"gcs\"; unset means an in-memory store"
@@ -250,7 +304,7 @@ fn run(wiring: &Wiring) {
 // Sites below are on values this test constructed from literals it controls.
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::{KeyProvider, Wiring, store_for};
+    use super::{KeyProvider, Wiring, selection_from, store_for};
     use oqueue_core::{Error, KeyId, Redacted};
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
@@ -300,6 +354,39 @@ mod tests {
                 "{typo:?} must not resolve to any store at all"
             );
         }
+    }
+
+    /// ⚠️ **`M4.30`'s own acceptance criterion: `NotPresent` and `NotUnicode`
+    /// are not the same answer.** `std::env::var(..).ok()` made them one, so a
+    /// variable set to bytes this process cannot decode selected the in-memory
+    /// store — the operator asked for durability, made a typo no shell would
+    /// show them, and got a broker that loses every acknowledged record at
+    /// exit.
+    /// ⚠️ **No `#[cfg(unix)]`, and the first version had one.**
+    /// `selection_from` matches the *variant* and never its payload, so the
+    /// `OsString` inside it need not be undecodable for the test to mean
+    /// what it says — `M4.18`'s own test of the `from_var` this mirrors
+    /// (`security/tests/composition.rs`) constructs `NotUnicode` with a
+    /// perfectly ordinary string for the same reason. The cfg would have
+    /// been this repository's only gated test, against `testing.md` rule 2,
+    /// and it excluded the two portable assertions below as well.
+    #[test]
+    fn an_undecodable_selection_is_refused_where_an_absent_one_defaults() {
+        assert_eq!(
+            selection_from(Err(std::env::VarError::NotPresent)).expect("unset is legal"),
+            None,
+            "nobody asked, so the in-memory store is the honest answer"
+        );
+        assert_eq!(
+            selection_from(Ok("s3".to_owned())).expect("a set value is passed through"),
+            Some("s3".to_owned())
+        );
+
+        let undecodable = std::ffi::OsString::from("s3");
+        assert!(
+            selection_from(Err(std::env::VarError::NotUnicode(undecodable))).is_err(),
+            "a value this process cannot read is not one it may guess at"
+        );
     }
 
     /// ⚠️ And *no* selection is the honest default: nobody asked for a
