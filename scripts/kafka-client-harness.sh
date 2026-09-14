@@ -71,6 +71,43 @@ ROSTER="$HARNESS_DIR/clients.txt"
 # (non-negotiable 2).
 GROUP_CONFORMANCE_CEILING_S=300
 
+# ⚠️ **Every leg that drives a real client is bounded, and `M4.44` bounded
+# only the two group scripts.** Its commit body argued "both wrapped commands
+# are leaf processes, which review confirmed by reading both scripts" — true
+# of the two it wrapped, and the reason the rest went unexamined. ⚠️ **No
+# count is written here on purpose**: `run_bounded`'s own header records an
+# earlier sentence that "carried a count, which was wrong and would have
+# drifted on the next script added", and the rule is the class, not the
+# roster — **anything below that starts a real Kafka client gets a ceiling**.
+#
+# ⚠️ **The hang is not a property of the group scripts**: `M4.38` measured it
+# as librdkafka's teardown at interpreter exit after an assertion escapes
+# with a client still alive, and every Python leg here has that shape — each
+# raises on its own deadline with a live `Consumer`/`Producer` in scope. The
+# Java legs are bounded too; their client is not librdkafka, but a leg that
+# can wait on a broker can stall on one.
+#
+# ⚠️ **Measured, so the margin is a fact rather than a guess.** One healthy
+# run in the container: round trip 1 s, idempotent conformance 1 s, TLS +
+# SASL/PLAIN 8 s (the group legs, on their own ceiling, 13 s). 120 s is
+# fifteen times the slowest of those and turns a stalled leg into a red gate
+# in two minutes instead of never. ⚠️ A ceiling, so raising it weakens the
+# guard (non-negotiable 2).
+CLIENT_LEG_CEILING_S=120
+
+# ⚠️ **The offset-survival leg needs its own, and the healthy runtime is the
+# wrong thing to size it against.** That leg runs 4 s healthy, but it stacks
+# its own deadlines without any of them failing the run: 10 s to see a broker
+# listen, 10 s to flush, a 30 s consume loop, 10 s for `committed`, 10 s to
+# reap the broker, then a second broker (10 s), a second `committed` (10 s)
+# and a second reap (10 s) — about 100 s of legitimate worst case. Under
+# `CLIENT_LEG_CEILING_S` a loaded host running every stage near its own
+# deadline would be SIGKILLed and reported as a hang, for a run that was
+# about to answer `OFFSETS LOST` correctly. Found by review. 300 s is three
+# times that budget, and matches the group ceiling above rather than
+# inventing a third number. ⚠️ Also a ceiling (non-negotiable 2).
+SURVIVAL_LEG_CEILING_S=300
+
 # ── The broker under test ───────────────────────────────────────────────────
 if ! cargo build -p oqueue --quiet; then
   fail "cargo build -p oqueue failed -- no broker to test against"
@@ -105,10 +142,22 @@ elif ! python3 -c 'import confluent_kafka' 2>/dev/null; then
   skip "librdkafka round trip (confluent-kafka not importable; pip install confluent-kafka)"
 else
   LIBRDKAFKA_VERSION="$(python3 -c 'import confluent_kafka; print(confluent_kafka.libversion()[0])')"
-  if python3 scripts/harness/rdkafka_roundtrip.py "$ADDR" > "$HARNESS_DIR/rdkafka.log" 2>&1 \
+  roundtrip_rc=0
+  run_bounded "$CLIENT_LEG_CEILING_S" \
+    python3 scripts/harness/rdkafka_roundtrip.py "$ADDR" \
+    > "$HARNESS_DIR/rdkafka.log" 2>&1 || roundtrip_rc=$?
+  if (( roundtrip_rc == 0 )) \
     && grep -q '^ROUND TRIP OK$' "$HARNESS_DIR/rdkafka.log"; then
     ok "librdkafka $LIBRDKAFKA_VERSION produce+fetch round trip"
     echo "librdkafka $LIBRDKAFKA_VERSION" >> "$ROSTER"
+  elif (( roundtrip_rc == 124 )); then
+    # ⚠️ A ceiling is not a conformance failure, and reporting it as one sends
+    # the reader after a protocol bug that is not there — the same correction
+    # review made to the group leg below. A killed process usually leaves a
+    # log it never finished writing, so the tail is often empty.
+    fail "librdkafka round trip did not finish in ${CLIENT_LEG_CEILING_S}s"
+    note "a client that hung rather than a round trip that answered wrongly"
+    note "$(tail -5 "$HARNESS_DIR/rdkafka.log" 2>/dev/null || true)"
   else
     fail "librdkafka round trip failed"
     note "$(tail -5 "$HARNESS_DIR/rdkafka.log" 2>/dev/null || true)"
@@ -140,11 +189,24 @@ else
   # is where that property is verified, at the fidelity actually available:
   # a hand-rolled wire-level client, the same tool `M11.7`'s own admission
   # tests already use for exactly this reason.
-  if python3 scripts/harness/idempotent_conformance.py \
-      > "$HARNESS_DIR/idempotent.log" 2>&1 \
+  idempotent_rc=0
+  run_bounded "$CLIENT_LEG_CEILING_S" \
+    python3 scripts/harness/idempotent_conformance.py \
+    > "$HARNESS_DIR/idempotent.log" 2>&1 || idempotent_rc=$?
+  if (( idempotent_rc == 0 )) \
     && grep -q '^DEDUPLICATED OK$' "$HARNESS_DIR/idempotent.log"; then
     ok "librdkafka idempotent-producer conformance (a lost ack is deduplicated, not doubled)"
     echo "idempotent-conformance" >> "$ROSTER"
+  elif (( idempotent_rc == 124 )); then
+    # ⚠️ **This leg starts its own broker**, so a ceiling here leaves that
+    # process behind — `run_bounded` signals the direct child only, and this
+    # script's EXIT trap covers only the broker *it* started. ⚠️ Its
+    # frame-dropping proxy is an `asyncio.start_server` inside the same
+    # interpreter, so that one dies with the child; review corrected a first
+    # version of this comment that named it too. `M4.61`.
+    fail "idempotent-producer conformance did not finish in ${CLIENT_LEG_CEILING_S}s"
+    note "a client that hung rather than a duplicate that was not deduplicated"
+    note "$(tail -10 "$HARNESS_DIR/idempotent.log" 2>/dev/null || true)"
   else
     fail "idempotent-producer conformance failed"
     note "$(tail -10 "$HARNESS_DIR/idempotent.log" 2>/dev/null || true)"
@@ -167,13 +229,25 @@ else
   # any other absent client rather than a failure.
   if ! command -v openssl >/dev/null 2>&1; then
     skip "TLS + SASL/PLAIN round trip (no openssl to make a test certificate)"
-  elif python3 scripts/harness/tls_sasl.py > "$HARNESS_DIR/tls-sasl.log" 2>&1 \
-    && grep -q '^TLS SASL OK$' "$HARNESS_DIR/tls-sasl.log"; then
-    ok "librdkafka over TLS with SASL/PLAIN (and refused without a credential)"
-    echo "tls-sasl" >> "$ROSTER"
   else
-    fail "TLS + SASL/PLAIN round trip failed"
-    note "$(tail -10 "$HARNESS_DIR/tls-sasl.log" 2>/dev/null || true)"
+    tls_rc=0
+    run_bounded "$CLIENT_LEG_CEILING_S" \
+      python3 scripts/harness/tls_sasl.py \
+      > "$HARNESS_DIR/tls-sasl.log" 2>&1 || tls_rc=$?
+    if (( tls_rc == 0 )) \
+      && grep -q '^TLS SASL OK$' "$HARNESS_DIR/tls-sasl.log"; then
+      ok "librdkafka over TLS with SASL/PLAIN (and refused without a credential)"
+      echo "tls-sasl" >> "$ROSTER"
+    elif (( tls_rc == 124 )); then
+      # ⚠️ **Its own broker too**, for the certificate's sake — so the same
+      # leak as the leg above when this ceiling fires.
+      fail "TLS + SASL/PLAIN round trip did not finish in ${CLIENT_LEG_CEILING_S}s"
+      note "a client that hung rather than a credential that was wrongly accepted"
+      note "$(tail -10 "$HARNESS_DIR/tls-sasl.log" 2>/dev/null || true)"
+    else
+      fail "TLS + SASL/PLAIN round trip failed"
+      note "$(tail -10 "$HARNESS_DIR/tls-sasl.log" 2>/dev/null || true)"
+    fi
   fi
 
   # ── offset survival across a broker restart (M4.17, FR-21) ────────────────
@@ -191,8 +265,19 @@ else
   # both-directions discipline, applied to a requirement rather than to
   # prose — the day `M6` lands, this leg says so and asks to be promoted to
   # an assertion.
-  if python3 scripts/harness/offset_survival.py \
-      > "$HARNESS_DIR/offset-survival.log" 2>&1; then
+  survival_rc=0
+  run_bounded "$SURVIVAL_LEG_CEILING_S" \
+    python3 scripts/harness/offset_survival.py \
+    > "$HARNESS_DIR/offset-survival.log" 2>&1 || survival_rc=$?
+  if (( survival_rc == 124 )); then
+    # ⚠️ **Before the outcome branches**, because a killed run writes neither
+    # marker and would otherwise fall into "reported neither outcome" — which
+    # reads as the leg answering ambiguously rather than as it never
+    # finishing.
+    fail "offset-survival leg did not finish in ${SURVIVAL_LEG_CEILING_S}s"
+    note "it starts and restarts a broker of its own; a ceiling here leaves that behind"
+    note "$(tail -10 "$HARNESS_DIR/offset-survival.log" 2>/dev/null || true)"
+  elif (( survival_rc == 0 )); then
     if grep -q '^OFFSETS SURVIVED$' "$HARNESS_DIR/offset-survival.log"; then
       fail "committed offsets now survive a broker restart — FR-21 is satisfiable"
       note "promote this leg to an assertion and close FR-21's restart test"
@@ -291,12 +376,31 @@ elif { fetch_jar "$KAFKA_CLIENTS_JAR" "$KAFKA_CLIENTS_URL" "$KAFKA_CLIENTS_SHA25
     skip "Java client round trip (pinned jars not fetchable from Maven Central)"
   fi
 else
-  if javac -cp "$HARNESS_DIR/$KAFKA_CLIENTS_JAR" -d "$HARNESS_DIR" scripts/harness/RoundTrip.java \
-    && java -cp "$HARNESS_DIR:$HARNESS_DIR/$KAFKA_CLIENTS_JAR:$HARNESS_DIR/$SLF4J_JAR" \
-        RoundTrip "$ADDR" > "$HARNESS_DIR/java.log" 2>"$HARNESS_DIR/java-stderr.log" \
+  # ⚠️ **Compiled first and run under a ceiling**, the shape the Java group
+  # leg below already uses — `javac` inside the bounded command would make a
+  # compile failure and a hang the same exit code, and `200` is what keeps
+  # them apart.
+  jroundtrip_rc=0
+  if javac -cp "$HARNESS_DIR/$KAFKA_CLIENTS_JAR" -d "$HARNESS_DIR" \
+      scripts/harness/RoundTrip.java 2>"$HARNESS_DIR/java-stderr.log"; then
+    run_bounded "$CLIENT_LEG_CEILING_S" \
+      java -cp "$HARNESS_DIR:$HARNESS_DIR/$KAFKA_CLIENTS_JAR:$HARNESS_DIR/$SLF4J_JAR" \
+      RoundTrip "$ADDR" > "$HARNESS_DIR/java.log" \
+      2>>"$HARNESS_DIR/java-stderr.log" || jroundtrip_rc=$?
+  else
+    jroundtrip_rc=200
+  fi
+  if (( jroundtrip_rc == 0 )) \
     && grep -q '^ROUND TRIP OK$' "$HARNESS_DIR/java.log"; then
     ok "Java client (kafka-clients 3.9.1) produce+fetch round trip"
     echo "java kafka-clients-3.9.1" >> "$ROSTER"
+  elif (( jroundtrip_rc == 124 )); then
+    fail "Java client round trip did not finish in ${CLIENT_LEG_CEILING_S}s"
+    note "a client that hung rather than a round trip that answered wrongly"
+    note "$(tail -5 "$HARNESS_DIR/java.log" 2>/dev/null || true)"
+  elif (( jroundtrip_rc == 200 )); then
+    fail "RoundTrip.java did not compile"
+    note "$(tail -5 "$HARNESS_DIR/java-stderr.log" 2>/dev/null || true)"
   else
     fail "Java client round trip failed"
     note "$(tail -5 "$HARNESS_DIR/java.log" 2>/dev/null || true)"

@@ -303,11 +303,18 @@ group_handler_files() {
 # leaving a zombie for the caller.
 #
 # ⚠️ **Three limits `timeout(1)` does not have, measured by review of
-# `M4.44`.** None is reachable from this file's own call sites, where the
-# wrapped command is a leaf process — but every gate in `scripts/` sources
-# `lib.sh`, so they are written down rather than left to be rediscovered
-# (an earlier version of this sentence carried a count, which was wrong and
-# would have drifted on the next script added):
+# `M4.44`.** ⚠️ **The first of them is reachable now**, and this paragraph
+# said the opposite until `M4.53`: it read "none is reachable from this
+# file's own call sites, where the wrapped command is a leaf process", which
+# was true of the two group scripts `M4.44` wrapped and is what left the
+# harness's other client legs unexamined. `M4.53` bounded them, and
+# `idempotent_conformance.py`, `tls_sasl.py` and `offset_survival.py` each
+# start a broker of their own, so a ceiling that fires leaves it running —
+# `kafka-client-harness.sh`'s EXIT trap covers only the broker *it* started.
+# `M4.61` is the row. Every gate in `scripts/` sources `lib.sh`, so all three
+# limits are written down rather than left to be rediscovered (an earlier
+# version of this sentence carried a count, which was wrong and would have
+# drifted on the next script added):
 #
 #   * **Only the direct child is signalled.** `run_bounded 3 bash -c 'sleep 222 &
 #     sleep 100'` returns 124 with `sleep 222` still running. A wrapped shell
