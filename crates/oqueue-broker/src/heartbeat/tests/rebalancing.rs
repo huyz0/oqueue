@@ -166,5 +166,19 @@ async fn a_member_lost_while_the_barrier_is_open_reaches_the_coordinator() {
          transition table with nobody reading the result"
     );
 
+    // ⚠️ **Awaited, not merely aborted** — `M4.57`. `abort()` on a handle
+    // nobody joins drops the task's result on the floor, *including a
+    // panic*: `join` can raise one on `HandlerResponse::Close` or a failed
+    // decode, and a broker regression that made this parked rejoin panic
+    // would have left this test green. The three outcomes are not equally
+    // acceptable, so they are spelled out rather than collapsed into
+    // "ignore the result".
     rejoin.abort();
+    match rejoin.await {
+        // It closed its round on its own before the abort landed — which is
+        // legitimate here and is not what this test is about.
+        Ok(_) => {}
+        Err(error) if error.is_cancelled() => {}
+        Err(error) => panic!("the parked rejoin panicked rather than being cancelled: {error}"),
+    }
 }

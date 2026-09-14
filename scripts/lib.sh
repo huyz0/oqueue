@@ -316,11 +316,13 @@ group_handler_files() {
 # version of this sentence carried a count, which was wrong and would have
 # drifted on the next script added):
 #
-#   * **Only the direct child is signalled.** `run_bounded 3 bash -c 'sleep 222 &
+#   * **Only the direct child is signalled** — by the ceiling, and by the
+#     interrupt forwarding below alike. `run_bounded 3 bash -c 'sleep 222 &
 #     sleep 100'` returns 124 with `sleep 222` still running. A wrapped shell
 #     function behaves the same way. Killing a process group would need
 #     `set -m` and a negative pid, which changes job-control behaviour for the
-#     whole caller.
+#     whole caller. `M4.61` is the row for the three harness legs where this
+#     is reachable.
 #   * **Liveness is `kill -0` on a pid this shell has already reaped**, so on
 #     pid reuse the loop can time a stranger and then signal it. Low
 #     probability, not zero.
@@ -333,6 +335,50 @@ run_bounded() {
   shift
   "$@" &
   local pid=$!
+  # ⚠️ **Ctrl-C did not stop the wrapped command, and `&` is why** — `M4.57`.
+  # A script runs with job control off, and bash makes an asynchronous job
+  # ignore `SIGINT` there; the terminal delivers the interrupt to the whole
+  # foreground process group, so this shell took it and the *client* did not.
+  # A developer interrupting a stalled harness leg stopped neither it nor the
+  # harness — and killing the harness instead fired its `EXIT` trap on the
+  # broker while leaving the client orphaned. Forwarding it here is what
+  # restores the ordinary meaning of Ctrl-C without `set -m`, which would
+  # change job-control behaviour for every caller of this file.
+  #
+  # ⚠️ **`INT` re-raises rather than returning a code.** A shell that swallows
+  # its own interrupt and carries on is the second half of the same
+  # complaint: the trap is removed first so the default disposition applies,
+  # and the signal is re-sent to this shell so callers up the stack see a
+  # terminated run rather than a gate that failed.
+  # ⚠️ **A probe for this must not start the runner as an async job**, and
+  # three of them measured their own scaffolding before one measured this.
+  # Bash sets an async job's `SIGINT` to `SIG_IGN`, that survives `exec`, and
+  # bash then *refuses to install a trap* for a signal ignored at startup —
+  # `trap -p INT` prints `trap -- '' SIGINT` and the line below is a no-op.
+  # A developer's terminal gives the harness the default disposition, so the
+  # probe has to as well: launch it through something that resets the
+  # disposition before `exec`, then signal the process group.
+  #
+  # ⚠️ **Both arms re-raise, and the `TERM` one did not until review caught
+  # it.** A handler that stops the child and returns leaves the *caller*
+  # running: measured against a harness-shaped caller, `kill` on it killed
+  # only the client, `run_bounded` returned 143, the `|| rc=$?` at the call
+  # site swallowed it, and the harness went on to start the next leg — so
+  # `docker stop` would have been ignored until the daemon's SIGKILL, and
+  # 143 is neither 0 nor 124, so every leg branch reports a deliberately
+  # terminated run as a conformance failure. Swallowing a signal is the
+  # complaint this function exists to answer, one signal over.
+  #
+  # ⚠️ **The caller's own disposition is restored, not cleared.** `trap` is
+  # shell-global rather than function-scoped, so `trap - INT TERM` on return
+  # would silently delete a `trap cleanup INT TERM` the caller installed
+  # before calling — latent today, since no script in `scripts/` sets one,
+  # and invisible when it arrives because the caller's trap line is still
+  # there to read.
+  local saved_traps
+  saved_traps="$(trap -p INT TERM)"
+  trap '_run_bounded_stop "$pid"; _run_bounded_restore "$saved_traps"; trap - INT; kill -INT $$' INT
+  trap '_run_bounded_stop "$pid"; _run_bounded_restore "$saved_traps"; trap - TERM; kill -TERM $$' TERM
   local waited=0
   while (( waited < seconds )); do
     kill -0 "$pid" 2>/dev/null || break
@@ -340,15 +386,55 @@ run_bounded() {
     waited=$((waited + 1))
   done
   if kill -0 "$pid" 2>/dev/null; then
-    kill -TERM "$pid" 2>/dev/null || true
-    sleep 2
-    kill -KILL "$pid" 2>/dev/null || true
+    _run_bounded_stop "$pid"
     wait "$pid" 2>/dev/null || true
+    _run_bounded_restore "$saved_traps"
     return 124
   fi
   local rc=0
   wait "$pid" || rc=$?
+  # ⚠️ **Restored on every return path**, or the next command in the caller
+  # runs under a trap naming a `$pid` this function has already reaped — and
+  # on pid reuse that signals a stranger, which is the hazard the second
+  # bullet above already records.
+  _run_bounded_restore "$saved_traps"
   return "$rc"
+}
+
+# `SIGTERM`, a grace period, then `SIGKILL` — the escalation `run_bounded`
+# uses both when its ceiling fires and when it forwards an interrupt.
+#
+# ⚠️ **The interrupt path had no escalation and review caught that too.** It
+# sent one `TERM` and then killed its own shell in the same handler, so a
+# child that ignores or blocks in a `SIGTERM` handler was not stopped at all
+# and nothing survived to escalate — the Java legs are the realistic case,
+# where a JVM runs shutdown hooks against a broker the caller's `EXIT` trap
+# is killing at that same moment.
+#
+# ⚠️ **Polls rather than sleeping the whole grace**, so a child that dies at
+# once costs milliseconds instead of the two seconds the ceiling path used to
+# spend unconditionally.
+_run_bounded_stop() {
+  local pid="$1" waited=0
+  kill -TERM "$pid" 2>/dev/null || true
+  while (( waited < 2 )) && kill -0 "$pid" 2>/dev/null; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  kill -KILL "$pid" 2>/dev/null || true
+}
+
+# Puts back whatever `INT`/`TERM` disposition the caller had, given the
+# output of `trap -p INT TERM` taken before `run_bounded` installed its own.
+#
+# ⚠️ **Clear first, then re-apply.** An empty capture means the caller had no
+# handler, and `eval ""` alone would leave `run_bounded`'s still installed.
+_run_bounded_restore() {
+  trap - INT TERM
+  if [[ -n "$1" ]]; then
+    eval "$1"
+  fi
+  return 0
 }
 
 # ⚠️ Deliberately a `fail`, not the `skip` that `require_tool` gives every other

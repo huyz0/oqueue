@@ -59,7 +59,30 @@ pub(super) struct Assignment {
 /// handle nobody would ever signal and timed out. One durable cell and one
 /// durable `Notify` per group means a waiter is woken by every submission
 /// and re-checks the generation itself.
-pub(super) type Assignments = Arc<Mutex<Option<Assignment>>>;
+///
+/// ⚠️ **A newtype, not the bare `Arc<Mutex<Option<_>>>` it wraps**, and what
+/// the wrapper buys is a write nobody can make from outside this file.
+/// `entry_for` hands this handle to `sync_group.rs` and to every test in the
+/// module tree; as a plain alias, `*handle.lock().unwrap() = None` erased a
+/// published map **with no notify** and returned that generation's followers
+/// to [`Known::Waiting`] — the stranding `M4.43` exists to end, reachable
+/// from a caller that only meant to read, and bypassing both `submit`'s
+/// generation guard (`M4.35`) and `refuse`'s (`M4.43`). The same asymmetry
+/// `Assignment`'s own fields already had, one level out; found by M4's final
+/// boundary review, and `M4.57` is the row.
+///
+/// Mutation is `SyncGroups::submit` and `SyncGroups::refuse`. What a holder
+/// of this type can do is [`assignment_for`], which reads.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Assignments(Arc<Mutex<Option<Assignment>>>);
+
+impl Assignments {
+    /// ⚠️ **Private, and that is the whole mechanism.** `pub(super)` here
+    /// would restore exactly the reach the newtype removes.
+    fn guard(&self) -> std::sync::MutexGuard<'_, Option<Assignment>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// Every group's own assignment barrier: known once the assignment-bearing
 /// submission lands, `None` until then.
@@ -93,7 +116,7 @@ pub(super) enum Known {
 
 /// What the group's cell currently says about `generation`.
 pub(super) fn assignment_for(assignments: &Assignments, generation: i32) -> Known {
-    let guard = assignments.lock().unwrap_or_else(PoisonError::into_inner);
+    let guard = assignments.guard();
     // ⚠️ **An `Ordering` match, not comparison guards.** The three cases are
     // exhaustive and mutually exclusive, and spelling them that way says so
     // to the compiler instead of relying on arm order — with guards, an
@@ -137,7 +160,7 @@ impl SyncGroups {
     pub(super) fn entry_for(&self, group: &GroupId) -> (Assignments, Arc<Notify>) {
         let mut entries = self.lock();
         let entry = entries.entry(group.clone()).or_default();
-        let handles = (Arc::clone(&entry.assignments), Arc::clone(&entry.notify));
+        let handles = (entry.assignments.clone(), Arc::clone(&entry.notify));
         drop(entries);
         handles
     }
@@ -183,10 +206,7 @@ impl SyncGroups {
         let mut entries = self.lock();
         let entry = entries.entry(group.clone()).or_default();
         let map = Arc::new(map);
-        let mut guard = entry
-            .assignments
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut guard = entry.assignments.guard();
         if guard.as_ref().is_some_and(|a| a.generation > generation) {
             drop(guard);
             drop(entries);
@@ -218,10 +238,7 @@ impl SyncGroups {
     pub(crate) fn refuse(&self, group: &GroupId, generation: i32) {
         let mut entries = self.lock();
         let entry = entries.entry(group.clone()).or_default();
-        let mut guard = entry
-            .assignments
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
+        let mut guard = entry.assignments.guard();
         // ⚠️ **`map.is_some()` has to be qualified by the generation, and
         // the first version of this was not** — so an *older* generation's
         // map, which every group that has ever synced leaves behind,
