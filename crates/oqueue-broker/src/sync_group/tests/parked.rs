@@ -6,7 +6,16 @@
 //! for is no longer the one the group is on. Every test here opens the
 //! window the same way — `crate::testing::poll_once` stops the submission
 //! at its first pending await, which `M4.15d` put between the fence's state
-//! read and its application — and then moves the coordinator underneath it.
+//! read and its application — and then moves the group underneath it.
+//!
+//! ⚠️ **"Moves the group", not "moves the coordinator", because three of
+//! the four do one and the fourth does the other.** The first test below
+//! publishes the newer generation's assignment with
+//! `sync_groups().submit(..)`; its three siblings drive
+//! `group_coordinator().transition(..)`. Both bypass the transitions
+//! queue, which is the property that matters and why either works. The
+//! narrower wording stood here while the test below it said the opposite,
+//! so one file asserted both. `M4.63`.
 //! ⚠️ **Not "parks on the actor", which `M4.42`'s commit body records as
 //! misstating the mechanism**: the transitions channel is an mpsc the actor
 //! drains in order, so nothing can be applied ahead of an event already
@@ -44,12 +53,13 @@ use crate::testing::fixture;
 /// `handle` reads the group's record under `fence`, then awaits the
 /// transitions actor; polling it once stops it at that await, **with its
 /// own event enqueued but not yet applied**, and the newer generation's
-/// move lands in the window that opens. ⚠️ **Whatever moves the group must
-/// bypass the transitions queue, and every test in this file does.** This
-/// one publishes generation 2's assignment through
-/// `sync_groups().submit(..)`; its three siblings move the coordinator with
-/// `group_coordinator().transition(..)`. Neither goes near the actor, and
-/// that is the point: `enqueue` is an unbounded mpsc send that never awaits,
+/// move lands in the window that opens — here, generation 2's assignment
+/// published through `sync_groups().submit(..)`. ⚠️ **Which of the two
+/// queue-bypassing moves each test uses is the module doc's, not repeated
+/// here**, because a count kept in two places is a count that goes wrong in
+/// one: adding a fifth test would have to update both. What matters at this
+/// call site is *why* the move must bypass the queue at all: `enqueue` is
+/// an unbounded mpsc send that never awaits,
 /// so the parked handler's own event is already *ahead* of anything sent
 /// afterwards — firing the competing one through
 /// `group_transitions().transition(..)` would let the actor drain
@@ -58,8 +68,12 @@ use crate::testing::fixture;
 /// this paragraph said the competing event here goes through
 /// `group_coordinator()`, which is true of the siblings and not of this
 /// test; repairing the test to match would have deleted the only coverage
-/// of `M4.35`'s cell guard. `M4.62`, and the third wording of this
-/// sentence. This is
+/// of `M4.35`'s cell guard. ⚠️ **No count of its own revisions is kept
+/// here**, and one was, wrongly: this sentence has been rewritten enough
+/// times that an ordinal in it goes stale the next time it is touched,
+/// which `M4.53`'s leg count and `heartbeat.rs`'s revision count each
+/// taught separately. What is worth recording is *what* was wrong, above,
+/// not how many times. `M4.62`, `M4.63`. This is
 /// `join_group`'s own refusal-test idiom (`crate::testing::poll_once`),
 /// which `M4.15d` made necessary by putting an `.await` between the
 /// decision and its application.

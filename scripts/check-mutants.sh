@@ -134,38 +134,28 @@ if [[ -z "$n_tested" ]] || (( n_tested == 0 )); then
 fi
 
 
-# ⚠️ **Anchored to the start of the line, and it was not until `M4.62`.**
-# The pattern was `^(skip|.*skip) ...`, and `.*skip` reaches a line's
-# interior: only the *phrase* after `skip` was pinned, so a rustc error
-# reading `error: could not skip mutation testing (no Rust staged)` matched
-# and turned a tool failure into a propagated skip — the vacuous-green shape
-# this gate exists to refuse, in the branch that decides whether it ran at
-# all. `M4.55` corrected the comment's claim; this is the regex.
+# ⚠️ **There is no propagate-a-skip branch, and `M4.63` removed the one
+# there was**, because it could not fire for either case it named.
 #
-# ⚠️ **No colour escape is admitted, because none can occur.** `lib.sh` sets
-# `_DIM`/`_OFF` from `[[ -t 1 ]]` alone and has no force-colour switch, and
-# this script always redirects `mutants.sh` to `$out`, so `skip` prints the
-# bare word. A first version of this pattern carried two optional
-# `.\[[0-9;]*m` groups for a caller that could force colour on; review
-# measured that such a caller cannot exist, and an unreachable alternative is
-# how the old one got there.
+# `mutants.sh` skips two ways and neither reaches here. **No cargo-mutants**:
+# this script runs its own `cargo mutants --version` check far above, prints
+# `skip mutation testing (cargo-mutants not installed)` and `finish`es, so
+# `mutants.sh` is never invoked and `$out` never exists. **No Rust staged**:
+# `mutants.sh` prints its skip and no `N mutants tested` line, so the
+# `n_tested` guard above returns first with its own wording. Measured, with
+# a stub `mutants.sh` printing exactly that skip: the gate answers
+# `skip mutation testing (no mutants in this diff — nothing to constrain)`.
 #
-# ⚠️ **And this branch cannot fire on a real skip at all**, which is worth
-# knowing before anyone widens it again: a skipping run prints no
-# `N mutants tested` line, so the `n_tested` guard above returns first with
-# its own (differently worded) skip. The only way here is the *false*
-# positive this commit removed — output that is not a skip but contains the
-# phrase. The branch is kept rather than deleted because deleting it would
-# make `n_tested`'s wording the sole report of a skipped run, and that is a
-# behaviour change beyond `M4.62`. `M4.63` if it is worth one.
-if grep -qE '^skip (mutation testing \((cargo-mutants not installed|no Rust staged))' "$out"; then
-  # mutants.sh already reported the skip; propagate it rather than inventing a
-  # verdict of our own.
-  sed -n '1,4p' "$out"
-  rm -f "$out"
-  skip "mutation testing (see above)"
-  finish
-fi
+# ⚠️ **Its only reachable use was a false positive**, which is how it came to
+# be examined: the pattern was `^(skip|.*skip) ...`, and `.*skip` reaches a
+# line's interior, so a rustc error reading `error: could not skip mutation
+# testing (no Rust staged)` turned a failed run into a reported skip. `M4.62`
+# anchored the pattern, which left a branch that fires on nothing. `M4.63`
+# then recorded a *reason* to keep it — that `n_tested`'s wording would
+# otherwise be the sole report for a host with no cargo-mutants — and review
+# measured that false: such a host never reaches `n_tested` either. Two
+# copies of a wrong rationale are worse than no branch, and the branch was
+# already worth nothing.
 
 # The argued list, comments and blanks stripped.
 declare -a argued=()

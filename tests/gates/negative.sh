@@ -4762,6 +4762,16 @@ fi
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \
   "over the 10000 ms budget"
+# ⚠️ **What this case pins changed under it, and that is worth knowing.**
+# `M4.63` deleted the propagate-a-skip branch entirely, having measured it
+# unreachable for both cases it named — so this fixture now reaches the
+# survivor loop because there is no branch in front of it, not because the
+# pattern in that branch is anchored. It keeps its value as a regression
+# guard: reintroduce any branch that swallows a `MISSED` line on the
+# strength of a phrase in the output, and this case fails. It no longer
+# distinguishes an anchored pattern from a loose one, because there is no
+# pattern.
+#
 # ⚠️ **A tool failure whose output contains the skip phrase.** The propagate
 # -a-skip branch matched `^(skip|.*skip) ...` until `M4.62`, and `.*skip`
 # reaches a line's interior — so a rustc error reading `error: could not skip
@@ -4775,16 +4785,19 @@ setup_mutants_skip_phrase_in_an_error() {
   mkdir -p "$dir/baselines" "$dir/scripts"
   printf '# fixture: nothing argued\n' > "$dir/baselines/mutants.txt"
   printf '[workspace]\nmembers = []\nresolver = "2"\n' > "$dir/Cargo.toml"
-  # ⚠️ **It must reach the propagate-a-skip branch, and three earlier checks
-  # stand in front of it.** A stub that merely fails is caught by the
-  # tool-failure branch (non-zero with no `MISSED`), and one that merely
-  # succeeds is indistinguishable from a pass whichever way the regex goes.
-  # The shape that isolates the regex is the one the reviewer's scenario
-  # names: a *real* unargued survivor, reported with a non-zero exit, whose
-  # output also carries the phrase. Under the old pattern the skip wins and
-  # the survivor is never compared against the baseline; under the anchored
-  # one the gate reports it. The first version of this fixture stopped at
-  # the tool-failure branch and passed either way — measured.
+  # ⚠️ **The shape is a *real* unargued survivor, reported with a non-zero
+  # exit, whose output also carries the phrase.** A stub that merely fails
+  # is caught by the tool-failure branch (non-zero with no `MISSED`) three
+  # checks earlier, and one that merely succeeds is indistinguishable from a
+  # pass — the first version of this fixture stopped at that branch and
+  # passed whatever the gate did, measured.
+  #
+  # ⚠️ **Why that shape, in the past tense**: it was built to isolate the
+  # propagate-a-skip branch, where under the pattern `M4.62` replaced the
+  # skip won and the survivor was never compared against the baseline.
+  # `M4.63` then deleted that branch as unreachable, so the shape is now
+  # what makes the fixture reach the survivor loop with nothing in front of
+  # it. See the note above the `run_case` for what this still pins.
   cat > "$dir/scripts/mutants.sh" <<'STUB'
 #!/usr/bin/env bash
 echo "error: could not skip mutation testing (no Rust staged) -- rustc said so"
