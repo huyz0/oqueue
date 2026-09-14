@@ -168,42 +168,45 @@ async fn submit_assignment(
     // `Applied::Unavailable` failure, which is the reason to prefer it over
     // `REBALANCE_IN_PROGRESS`. Found by M4's closing review; the claim
     // about the generation corrected by review of the fix.
-    match cluster
+    // ⚠️ **One question, asked once, whatever the transition returned**:
+    // is this group `Stable` at *this* generation? That is the only state
+    // in which the map this submission carries is the one to answer with,
+    // and `M4.42` and `M4.45` are the two halves of arriving at it.
+    //
+    // `M4.42` split the illegal arm, which had been argued for a double
+    // submission racing another connection — already `Stable` at this
+    // generation, map still right — but also caught a newcomer's
+    // `JoinGroup` landing between the fence's state read and the actor:
+    // `MemberJoinedDuringSync` is legal from `CompletingRebalance`, so this
+    // `SyncComplete` is illegal from `PreparingRebalance`, and swallowing
+    // it told the leader generation N stood while the coordinator assembled
+    // N+1.
+    //
+    // ⚠️ **`M4.45` is the same hazard through the `Ok` arm**, which that
+    // split left alone: let the competing round get as far as
+    // `CompletingRebalance@N+1` and the parked `SyncComplete` is *legal*
+    // again, so it succeeds — at the wrong generation — and answering with
+    // the map tells N's leader its assignment stands while the group is on
+    // N+1, and hands N's parked followers that map. ⚠️ Not a harm to N+1's
+    // followers, which an earlier version of this claimed: they read
+    // `Waiting` and are released normally by their own leader's
+    // submission. Neither existing guard reaches it: `M4.35`'s because the
+    // cell is empty, `M4.42`'s because the transition did not fail. Asking
+    // the one question of both outcomes is what ends the series, rather
+    // than a third arm-specific check.
+    //
+    // ⚠️ **`Ok` carries the record it produced**, so that half needs no
+    // second read and no second race; only the illegal arm re-reads, and it
+    // has to, because the error carries nothing but `Debug`-formatted
+    // strings.
+    let record = match cluster
         .group_transitions()
         .transition(group.clone(), GroupEvent::SyncComplete)
         .await
     {
-        Ok(_) => {}
-        // ⚠️ **Illegal is two cases, not one, and `M4.42` is the second.**
-        // The arm was argued for a double submission racing another
-        // connection: the group is already `Stable` at this generation, the
-        // map this submission carries is the one that produced that, and
-        // answering with it is right. It also caught a newcomer's
-        // `JoinGroup` landing between the fence's state read and the actor
-        // — `MemberJoinedDuringSync` is legal from `CompletingRebalance`,
-        // so this `SyncComplete` is illegal from `PreparingRebalance` — and
-        // swallowing *that* tells the leader and every follower it feeds
-        // that generation N stands while the coordinator assembles N+1, in
-        // which a newcomer holds some of the same partitions. That is
-        // FR-20's revoke-before-reassign, and real Kafka answers
-        // `REBALANCE_IN_PROGRESS`.
-        //
-        // ⚠️ **The state the group is actually in is what separates them**,
-        // re-read after the actor rather than inferred from the error's own
-        // `Debug`-formatted strings. `M4.35`'s guard does not reach this:
-        // the cell holds nothing newer than N, so the submission would be
-        // accepted. Found by review of `M4.33`.
+        Ok(record) => Some(record),
         Err(oqueue_core::Error::IllegalGroupTransition { .. }) => {
-            let synced = cluster.group_coordinator().record(group).is_some_and(|r| {
-                r.state == GroupState::Stable && r.generation.get() == request.generation_id
-            });
-            if !synced {
-                cluster.sync_groups().refuse(group, request.generation_id);
-                return reply(
-                    prelude,
-                    &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
-                );
-            }
+            cluster.group_coordinator().record(group)
         }
         Err(_) => {
             // ⚠️ **And the followers already parked on the barrier, which
@@ -219,6 +222,16 @@ async fn submit_assignment(
                 &refusal(crate::fencing::Refusal::CoordinatorNotAvailable.error_code()),
             );
         }
+    };
+    let synced = record.is_some_and(|r| {
+        r.state == GroupState::Stable && r.generation.get() == request.generation_id
+    });
+    if !synced {
+        cluster.sync_groups().refuse(group, request.generation_id);
+        return reply(
+            prelude,
+            &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
+        );
     }
     let Some(map) = cluster
         .sync_groups()
