@@ -4234,6 +4234,44 @@ invoke_fencing_comment_arrow() {
   bash "$1/scripts/check-fencing-seam.sh"
 }
 
+# ⚠️ **A fatal code answered by a group handler, planted in a submodule the
+# gate's predecessor never opened.** `M4.48`'s leg walks the five handlers'
+# whole module trees rather than five named files, because
+# `code-structure.md` rule 16 has split them into fourteen — so this fixture
+# plants the code in `sync_group/barrier.rs`, which `M4.43` created after
+# the FR-40 tripwire beside it was written and which that tripwire still
+# cannot see (`M4.50`).
+setup_fencing_fatal_giveup() {
+  local dir; dir="$(new_scratch fencing-fatal)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  # ⚠️ **All fourteen, because the leg has a floor.** `MIN_HANDLER_FILES`
+  # refuses a handler set that has shrunk — a list that derives itself can
+  # go quiet when a file moves, which is what review caught this leg doing
+  # with `0 file(s) read`. A fixture with two files would trip that floor
+  # instead of the defect it plants, which is `run_case`'s own "failed, but
+  # not for the reason the fixture plants".
+  local root="$dir/crates/oqueue-broker/src"
+  mkdir -p "$root/join_group/round" "$root/sync_group" "$root/heartbeat"
+  local f
+  for f in find_coordinator.rs leave_group.rs sync_group.rs heartbeat.rs \
+           join_group/mod.rs join_group/deadline.rs \
+           join_group/round/mod.rs join_group/round/state.rs \
+           join_group/round/slot.rs join_group/round/plan.rs \
+           join_group/round/close.rs \
+           sync_group/deadline.rs heartbeat/deadline.rs; do
+    printf '// a handler module\n' > "$root/$f"
+  done
+  # The fourteenth, and the one that matters: a submodule created after the
+  # gate's predecessor named its five files.
+  printf 'fn evil() -> i16 { error_codes::UNKNOWN_SERVER_ERROR }\n' \
+    > "$root/sync_group/barrier.rs"
+  printf '%s\n' "$dir"
+}
+invoke_fencing_fatal_giveup() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
 # ⚠️ **A block-bodied arm, with no comment involved at all.** rustfmt-stable,
 # clippy-clean, and what anyone writes on adding a second statement — and
 # invisible to every line-scanning version of this gate, because the arrow
@@ -4274,6 +4312,9 @@ run_case "check-fencing-seam.sh (a block-bodied arm hiding a violation)" \
 run_case "check-fencing-seam.sh (a variant and its arm deleted together)" \
   setup_fencing_shrunk_seam invoke_fencing_shrunk_seam \
   "has had at least"
+run_case "check-fencing-seam.sh (a group handler answering a fatal code)" \
+  setup_fencing_fatal_giveup invoke_fencing_fatal_giveup \
+  "answers UNKNOWN_SERVER_ERROR"
 
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \

@@ -429,3 +429,46 @@ async fn a_parked_follower_is_woken_even_when_the_leave_transition_fails() {
          release it, so this is the path with the longest wait, not the shortest"
     );
 }
+
+/// ⚠️ **`M4.48`'s own acceptance criterion: the last fatal give-up code in
+/// the group protocol.** A follower that waits out `MAX_SYNC_WAIT_MS` was
+/// answered `UNKNOWN_SERVER_ERROR`, which this module's own doc records the
+/// Java consumer raising out of `poll()` and never retrying — and every
+/// sibling give-up arm had already been changed away from it, each with the
+/// reason written out: `join_group/mod.rs:120` ("the difference is whether
+/// the client comes back"), `barrier.rs`'s `Known::Superseded`,
+/// `join_group/mod.rs:221`. This one was missed, and nothing enforced the
+/// rule because `check-fencing-seam.sh` covers `Refusal`'s six codes and
+/// this is not one of them.
+///
+/// ⚠️ **Reachable with nothing wrong.** `M4.47`'s route reaches it when a
+/// leader leaves during a log outage, and a leader that dies between
+/// `JoinBarrierComplete` and its own `SyncGroup` reaches it with no outage
+/// at all — nothing reaps in the background, and a parked follower is not
+/// heartbeating, so nothing sweeps on its behalf. Found by M4's final
+/// boundary review.
+#[tokio::test(start_paused = true)]
+async fn a_follower_that_waits_out_the_deadline_is_told_to_rejoin_not_given_a_fatal_code() {
+    let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
+
+    // Nobody submits, nobody leaves, nothing is refused: the leader simply
+    // never arrives, which is what a SIGKILL between the barrier closing
+    // and its own SyncGroup looks like from here.
+    let follower = sync(
+        &fixture.cluster,
+        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
+    )
+    .await;
+
+    assert_eq!(
+        follower.error_code,
+        error_codes::REBALANCE_IN_PROGRESS,
+        "a wait that runs out is nobody's fault, and must not reach a code the client cannot \
+         retry"
+    );
+    assert!(
+        follower.assignment.is_empty(),
+        "a refusal carries no assignment"
+    );
+}

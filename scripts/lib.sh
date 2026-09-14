@@ -191,6 +191,36 @@ sha256_stdin() {
   fi
 }
 
+# Every non-test source file of the five group-protocol handlers.
+#
+# ⚠️ **The five handlers are not five files, and two gates have assumed they
+# are.** `code-structure.md` rule 16 splits a file at 500 lines, so
+# `join_group` is `mod.rs`, `deadline.rs` and five more under `round/`;
+# `sync_group` gained `barrier.rs` when `M4.43` gave the barrier a failure
+# channel; `heartbeat` has its own `deadline.rs`. A gate naming
+# `join_group/mod.rs` reads one of seven. `M4.32`'s own subject one register
+# over: a list written the day a gate was, checking the past.
+#
+# ⚠️ **Tests are excluded by path**, the same scoping
+# `check-fencing-seam.sh` argues for itself: a test asserting on an error
+# code is reading an answer, not producing one. ⚠️ **By path only, which
+# does not reach an inline `#[cfg(test)] mod tests`** — two of the fourteen
+# carry one (`join_group/deadline.rs`, `heartbeat/deadline.rs`), so a unit
+# test written there that names a code it is asserting about would be read
+# as producing it. Found by review; no such test exists today, and the
+# repair is to move it to a `tests.rs` beside the module, which
+# `code-structure.md` rule 8 already prefers.
+group_handler_files() {
+  local root="crates/oqueue-broker/src"
+  local handler
+  for handler in find_coordinator join_group sync_group heartbeat leave_group; do
+    [[ -f "$root/$handler.rs" ]] && printf '%s\n' "$root/$handler.rs"
+    [[ -d "$root/$handler" ]] || continue
+    find "$root/$handler" -name '*.rs' -type f \
+      -not -name 'tests.rs' -not -path '*/tests/*' | sort
+  done
+}
+
 # Runs a command with a wall-clock ceiling, and returns 124 if it hit one.
 #
 # ⚠️ **Not `timeout(1)`, which stock macOS does not ship** — the same reason

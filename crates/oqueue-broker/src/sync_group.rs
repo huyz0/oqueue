@@ -98,14 +98,35 @@ pub(crate) async fn handle(
     let (assignments, notify) = cluster.sync_groups().entry_for(&group);
     let map = match wait_for_assignment(&assignments, &notify, request.generation_id).await {
         Known::Mine(map) => map,
-        // Retriable: the client rejoins and syncs at the new generation.
-        Known::Superseded | Known::Refused => {
+        // ⚠️ **Every way of not having this generation's assignment is
+        // answered the same, and `M4.48` is what made that true.** The
+        // three differ in what the cell says — a later generation is
+        // already there (`Superseded`), this one was refused
+        // (`Refused`), or the wait simply ran out (`Waiting`) — and they
+        // do not differ in what the client should do, which is rejoin.
+        // Spelling them as one arm says so; `clippy::match_same_arms`
+        // insists on it once they agree.
+        //
+        // ⚠️ **`Waiting` answered `UNKNOWN_SERVER_ERROR` until `M4.48`**,
+        // while every sibling give-up arm had already been changed away
+        // from it — `join_group/mod.rs`'s own two, each recording that the
+        // Java consumer raises that code out of `poll()` and never
+        // retries, so the difference is whether the client comes back at
+        // all. Nothing enforced the rule: `check-fencing-seam.sh` covered
+        // `Refusal`'s six codes and this is not one of them, which is the
+        // leg `M4.48` added beside it.
+        //
+        // ⚠️ **`Waiting` here is reachable with nothing wrong**, which is
+        // what makes a fatal answer wrong: a leader that dies between
+        // `JoinBarrierComplete` and its own `SyncGroup` leaves the barrier
+        // holding nothing, nothing reaps in the background, and a parked
+        // follower is not heartbeating so nothing sweeps on its behalf.
+        Known::Superseded | Known::Refused | Known::Waiting => {
             return reply(
                 prelude,
                 &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
             );
         }
-        Known::Waiting => return reply(prelude, &refusal(error_codes::UNKNOWN_SERVER_ERROR)),
     };
     reply(prelude, &response_for(&map, &request, version))
 }

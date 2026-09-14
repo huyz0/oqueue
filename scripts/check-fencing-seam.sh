@@ -117,4 +117,71 @@ if (( violations == 0 )); then
   ok "none of the seam's ${#CODES[@]} fencing codes are constructed outside $SEAM"
 fi
 
+# ── No group handler answers a code its client cannot retry ────────────────
+#
+# ⚠️ **`M4.48`, and the rule was written down four times before it was
+# enforced once.** `UNKNOWN_SERVER_ERROR` is what the Java consumer raises
+# out of `poll()` and never retries, so a *give-up* path answering it ends
+# the consumer rather than sending it back. `join_group` changed both of its
+# own arms away from it with the reason spelled out, `Known::Superseded` did
+# the same, and `sync_group`'s `Known::Waiting` was missed — reachable with
+# nothing wrong, because a leader can die between the barrier closing and
+# its own `SyncGroup` and nothing reaps in the background.
+#
+# ⚠️ **Not part of the seam above**, deliberately: this code is not a
+# `Refusal` variant and should not become one — it is not a fencing
+# decision. What it shares with the seam is that the rule was convention
+# until something read it.
+#
+# ⚠️ **`offset_commit.rs` is out of scope and argued**: its own module doc
+# records that a durable-log failure answers this code on purpose, per
+# `behavior.md`, and that is a per-partition result rather than a give-up.
+mapfile -t handler_files < <(group_handler_files)
+
+# ⚠️ **A floor, for the reason `MIN_VARIANTS` twenty lines above has one** —
+# and the first version of this leg had none, which review caught by moving
+# the five handler roots under a new parent (the rule-16 reshuffle
+# `group_handler_files`' own doc cites as why the old list went stale). It
+# reported `0 file(s) read` and exited 0 with a fatal code planted. ⚠️ **And
+# an empty list is worse than a false pass**: `grep PATTERN $(...)` with no
+# file operands reads *stdin*, so the gate blocked forever on a terminal —
+# measured at exit 124 under `timeout`. Deriving a list creates failure
+# modes a hardcoded one did not have, which is the argument that paragraph
+# already makes; this leg did not inherit it.
+# ⚠️ Non-negotiable 2: a floor only ever goes up.
+MIN_HANDLER_FILES=14
+if (( ${#handler_files[@]} < MIN_HANDLER_FILES )); then
+  fail "found ${#handler_files[@]} group handler file(s); this protocol has had at least ${MIN_HANDLER_FILES} since M4.43"
+  note "a handler renamed or moved makes this list shrink silently, and a shrunk"
+  note "list reads every remaining file and reports the rest clean"
+  finish
+fi
+
+# ⚠️ **The comment is deleted before the line is looked at**, which is the
+# lesson `scripts/lib/fencing_seam.py` records at length: four versions of
+# that parser were defeated by a comment, and a leg matching raw text is the
+# first of them. A trailing `// ... UNKNOWN_SERVER_ERROR ...` is prose about
+# the rule, not an answer to a client, and failing a commit for writing one
+# is a gate nobody keeps.
+mapfile -t fatal < <(
+  awk '{
+    line = $0
+    sub(/\/\*.*\*\//, "", line)
+    sub(/\/\/.*$/, "", line)
+    if (line ~ /error_codes::UNKNOWN_SERVER_ERROR/) {
+      printf "%s:%d: %s\n", FILENAME, FNR, line
+    }
+  }' "${handler_files[@]}"
+)
+if (( ${#fatal[@]} > 0 )); then
+  fail "a group handler answers UNKNOWN_SERVER_ERROR, which a client cannot retry"
+  for site in "${fatal[@]}"; do
+    note "$site"
+  done
+  note "a give-up path answers a retriable code -- REBALANCE_IN_PROGRESS is what the"
+  note "siblings use, and the client rejoining is the only useful next move"
+else
+  ok "no group handler answers UNKNOWN_SERVER_ERROR (${#handler_files[@]} file(s) read)"
+fi
+
 finish
