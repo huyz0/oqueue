@@ -85,6 +85,33 @@ OQUEUE_SUPPRESS_TIMING=1 bash "$REPO_ROOT/scripts/mutants.sh" "$@" > "$out" 2>&1
 # survivor. Anything else it prints is not this gate's business.
 mapfile -t survivors < <(grep -E '^MISSED ' "$out" | sed 's/^MISSED  *//' || true)
 
+if (( run_rc != 0 && ${#survivors[@]} == 0 )); then
+  # ⚠️ A non-zero exit with no `MISSED` line is a *tool* failure — a build
+  # error, a timeout — not a clean run. Reporting ok here would be the vacuous
+  # shape this project keeps finding.
+  fail "cargo mutants exited $run_rc with no surviving mutants reported"
+  tail -20 "$out" >&2
+  rm -f "$out"
+  finish
+fi
+
+# ⚠️ **Zero mutants tested is not a pass.** A narrowed run over a diff that
+# touches only tests, comments or non-Rust files generates nothing, and
+# `cargo mutants` says `No mutants to filter` and exits 0. Reporting `ok` there
+# would be the vacuous-green shape this project keeps finding — the gate would
+# be reporting that nothing survived a run that never happened. Found while
+# testing this script: it said "0 survivor(s), all argued" for a diff of pure
+# test changes.
+n_tested="$(grep -oE '^[0-9]+ mutants? tested' "$out" | tail -1 | grep -oE '^[0-9]+' || true)"
+if [[ -z "$n_tested" ]] || (( n_tested == 0 )); then
+  rm -f "$out"
+  skip "mutation testing (no mutants in this diff — nothing to constrain)"
+  note "a diff touching only tests, comments or non-Rust files generates none"
+  note "⚠️ this gate proved nothing about this commit; run: scripts/mutants.sh --full"
+  finish
+fi
+
+
 # ⚠️ Anchored to the line `mutants.sh` itself emits, not a substring of the
 # whole tool output — a rustc error quoting either phrase would otherwise turn a
 # failure into exit 0.
@@ -150,35 +177,89 @@ if (( unargued > 0 )); then
   note "kill it with a test, or argue it in $BASELINE as:"
   note "  <file>:<line>:<col>: <mutation>  <why this survivor is acceptable>"
   note "⚠️ the baseline is a list nobody grows quietly — testing.md rule 17"
+fi
+
+stale=0
+# ── And the converse: an entry that argues nothing ──────────────────────────
+#
+# ⚠️ **This loop runs the other way round, and `M4.32` is why it exists.**
+# Everything above walks survivors and asks whether each is argued; nothing
+# walked the baseline and asked whether each entry still matches a survivor.
+# So an entry whose mutant *moved* suppresses nothing and no gate can see it
+# — measured inside one task, where a single entry needed re-keying four
+# times: the guard gained a conjunct, the file split at the 500-line limit,
+# and the fourth time a nine-line doc comment nine lines above moved it. Each
+# was caught only because that mutant kept *surviving*, which made the
+# mismatch surface as an unargued survivor. An entry whose mutant became
+# killable would have gone quiet instead, and the baseline would carry a
+# suppression for something no longer there — `testing.md` rule 17's "a list
+# nobody grows quietly" read from the shrinking side.
+#
+# ⚠️ **Both loops run and both report before either exits.** The first
+# version put this after the `unargued` exit, so on a run with any unargued
+# survivor it never executed — and the one run that matters, the first full
+# one, had 56. The worker clearing those would have had to fix them all
+# before learning that an entry was also stale. ⚠️ **And after the
+# run-validity guards, which moved up beside the survivors they judge**: a
+# run that generated nothing has an empty survivor list, so every entry
+# "argues no surviving mutant", which is what this reported against a
+# fixture whose crate produced no mutants at all.
+#
+# ⚠️ **Only on a full run.** A narrowed run generates mutants for the staged
+# diff alone, so almost every entry legitimately matches nothing; asking this
+# question there would fail every commit. `--full` is the only mode in which
+# "matched nothing" means "argues nothing".
+#
+# ⚠️ **`unviable:` is the exemption, and it has to exist.** A mutant can stop
+# being *generated* as well as stop surviving: `cargo mutants` reports one
+# that no longer compiles as unviable and never lists it at all, which is
+# indistinguishable here from one that was killed. An entry whose reason
+# begins `unviable:` says that is what happened and why, which is a claim a
+# reader can check — where silence is not.
+# ⚠️ **`$1`, exactly as `mutants.sh` reads it.** That script's own `case`
+# matches on `${1:-}` alone, so `check-mutants.sh oqueue-core --full` takes
+# `oqueue-core` as the crate and stays *narrowed* — and a `$*` substring test
+# called it full and reported every entry outside that crate stale. Mirroring
+# the parse is the only way the two cannot disagree, which is `build.md` rule
+# 22's reason for this script delegating to that one in the first place.
+if [[ "${1:-}" == "--full" ]]; then
+  for a in "${argued[@]}"; do
+    loc="${a%%  *}"
+    reason="${a#*  }"
+    matched=0
+    for s in "${survivors[@]}"; do
+      [[ "$s" == "$loc"* ]] && { matched=1; break; }
+    done
+    if [[ "${reason#"${reason%%[![:space:]]*}"}" == unviable:* ]]; then
+      # ⚠️ **An `unviable:` claim that matches a survivor is a claim the run
+      # just disproved**, and accepting it silently is how this very entry
+      # came to suppress nothing: `M4.32` re-keyed one from stale prose
+      # instead of from the log it had produced, marked it unviable, and the
+      # loop below skipped it — inside the commit that added the loop.
+      if (( matched == 1 )); then
+        fail "baseline entry claims 'unviable:' for a mutant that survived: $loc"
+        stale=$((stale + 1))
+      fi
+      continue
+    fi
+    if (( matched == 0 )); then
+      fail "baseline entry argues no surviving mutant: $loc"
+      stale=$((stale + 1))
+    fi
+  done
+  if (( stale > 0 )); then
+    note "the mutant was killed, moved, or stopped being generated -- delete the"
+    note "entry, re-key it, or say 'unviable: <why it no longer compiles>'"
+    note "⚠️ a suppression for something that is not there is one nobody can see"
+  fi
+  (( stale == 0 )) && ok "every baseline entry still argues a surviving mutant"
+fi
+
+if (( unargued > 0 || stale > 0 )); then
   rm -f "$out"
   finish
 fi
 
-if (( run_rc != 0 && ${#survivors[@]} == 0 )); then
-  # ⚠️ A non-zero exit with no `MISSED` line is a *tool* failure — a build
-  # error, a timeout — not a clean run. Reporting ok here would be the vacuous
-  # shape this project keeps finding.
-  fail "cargo mutants exited $run_rc with no surviving mutants reported"
-  tail -20 "$out" >&2
-  rm -f "$out"
-  finish
-fi
-
-# ⚠️ **Zero mutants tested is not a pass.** A narrowed run over a diff that
-# touches only tests, comments or non-Rust files generates nothing, and
-# `cargo mutants` says `No mutants to filter` and exits 0. Reporting `ok` there
-# would be the vacuous-green shape this project keeps finding — the gate would
-# be reporting that nothing survived a run that never happened. Found while
-# testing this script: it said "0 survivor(s), all argued" for a diff of pure
-# test changes.
-n_tested="$(grep -oE '^[0-9]+ mutants? tested' "$out" | tail -1 | grep -oE '^[0-9]+' || true)"
-if [[ -z "$n_tested" ]] || (( n_tested == 0 )); then
-  rm -f "$out"
-  skip "mutation testing (no mutants in this diff — nothing to constrain)"
-  note "a diff touching only tests, comments or non-Rust files generates none"
-  note "⚠️ this gate proved nothing about this commit; run: scripts/mutants.sh --full"
-  finish
-fi
 
 rm -f "$out"
 ok "mutation testing (${n_tested} mutants tested, ${#survivors[@]} survivor(s), all argued)"

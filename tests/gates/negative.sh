@@ -2306,10 +2306,23 @@ target-dir = "$REPO_ROOT/target/tmp/negative-$1"
 EOF
 
   mkdir -p "$dir/crates/k/src"
+  # ⚠️ **`[profile.mutants]`, because `mutants.sh` passes `--profile mutants`
+  # and cargo refuses a profile nobody defined.** Without it every
+  # `check-mutants.sh` case here failed with `profile 'mutants' is not
+  # defined` — still a non-zero exit, so `run_case` counted them green while
+  # testing nothing about mutation at all. The two pre-existing cases had been
+  # passing that way since `M4.19` added the profile to the real workspace and
+  # not to this fixture; `M4.32` found it by adding a case whose expected
+  # message could not appear. That is the third way this fixture has been
+  # vacuously green, after the two its own comment above records.
   cat > "$dir/Cargo.toml" <<'EOF'
 [workspace]
 members = ["crates/k"]
 resolver = "2"
+
+[profile.mutants]
+inherits = "dev"
+debug = false
 EOF
   cat > "$dir/crates/k/Cargo.toml" <<'EOF'
 [package]
@@ -3653,6 +3666,90 @@ invoke_mutants_weakened() {
   bash "$1/scripts/check-mutants.sh" --full
 }
 
+# ⚠️ **A baseline entry that argues nothing, which nothing could see until
+# `M4.32`.** The gate walked survivors and asked whether each was argued; it
+# never walked the baseline and asked whether each entry still matched one. So
+# an entry whose mutant was killed, moved, or stopped being generated
+# suppressed nothing and no gate said so — measured inside one task, where a
+# single entry needed re-keying four times and each was caught only because
+# that mutant kept surviving. This fixture argues a location no mutant occupies
+# while the real survivor is argued correctly, so the case cannot pass by
+# tripping the survivor loop instead.
+setup_mutants_stale_baseline() {
+  local dir; dir="$(_crate_scratch mutants_stale)"
+  copy_gate "$dir" mutants.sh
+  copy_gate "$dir" check-mutants.sh
+  mkdir -p "$dir/baselines"
+  cat > "$dir/crates/k/src/lib.rs" <<'EOF'
+pub fn classify(n: i32) -> &'static str {
+    if n < 0 { "negative" } else { "non-negative" }
+}
+
+#[test]
+fn it_returns_something() {
+    let _ = classify(-1);
+    let _ = classify(1);
+}
+EOF
+  (cd "$dir" && cargo fmt --all >/dev/null 2>&1 || true)
+  # ⚠️ **Every real survivor argued, by bare location prefix.** The fixture
+  # yields five (two `classify -> &'static str` replacements and three
+  # comparison mutations), and the gate matches on the location prefix — so
+  # two entries cover all five. Arguing fewer would fail this case on the
+  # *survivor* loop, which is `run_case`'s "not for the reason the fixture
+  # plants", and is what the first version of this fixture did.
+  cat > "$dir/baselines/mutants.txt" <<'EOF'
+crates/k/src/lib.rs:2:5: replace classify  every survivor at this location, argued so this case cannot pass on the survivor loop
+crates/k/src/lib.rs:2:10: replace < with  and every survivor at this one
+crates/k/src/lib.rs:999:1: replace nothing with nothing  a line no mutant occupies -- the stale suppression this case exists for
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M4.32: a baseline that argues nothing")
+  printf '%s\n' "$dir"
+}
+invoke_mutants_stale_baseline() {
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
+# ⚠️ **And `unviable:` is the exemption**, because a mutant can stop being
+# *generated* as well as stop surviving — `cargo mutants` never lists one that
+# no longer compiles, which is indistinguishable from one that was killed. An
+# entry saying so is a claim a reader can check; silence is not. Same fixture,
+# same absent locations, prefix added: the gate must accept it.
+setup_mutants_unviable_exempt() {
+  local dir; dir="$(setup_mutants_stale_baseline)"
+  cat > "$dir/baselines/mutants.txt" <<'EOF'
+crates/k/src/lib.rs:2:5: replace classify  every survivor at this location, argued
+crates/k/src/lib.rs:2:10: replace < with  and every survivor at this one
+crates/k/src/lib.rs:999:1: replace nothing with nothing  unviable: the mutated body no longer compiles under this profile
+EOF
+  (cd "$dir" && git add -A && git commit -q --amend --no-edit)
+  printf '%s\n' "$dir"
+}
+invoke_mutants_unviable_exempt() {
+  # ⚠️ Inverted: this one must **pass**. `run_case` asserts a non-zero exit, so
+  # it is driven by hand below rather than through it.
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
+# ⚠️ **An `unviable:` claim the run disproves.** The prefix exempts an entry
+# from the staleness loop, so anyone can write it — and `M4.32` did, on this
+# very baseline, re-keying from stale prose instead of from the six-hour log
+# beside it and marking a live survivor unviable. The check that catches that
+# is one line inside the same loop, and the loop is nothing without a case
+# that watches it fire.
+setup_mutants_false_unviable() {
+  local dir; dir="$(setup_mutants_stale_baseline)"
+  cat > "$dir/baselines/mutants.txt" <<'EOF'
+crates/k/src/lib.rs:2:5: replace classify  unviable: a claim the run disproves -- this location has survivors
+crates/k/src/lib.rs:2:10: replace < with  and every survivor at this one, argued honestly
+EOF
+  (cd "$dir" && git add -A && git commit -q --amend --no-edit)
+  printf '%s\n' "$dir"
+}
+invoke_mutants_false_unviable() {
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
 setup_mutants_narrowed() {
   local dir; dir="$(setup_mutants_weakened)"
   # ⚠️ The **narrowed** mode, which is the one pre-commit runs and the one both
@@ -4185,9 +4282,33 @@ _have_mutants() { cargo mutants --version >/dev/null 2>&1; }
 if _have_mutants; then
   run_case "check-mutants.sh (test constrains nothing)" setup_mutants_weakened invoke_mutants_weakened
   run_case "check-mutants.sh (narrowed, test constrains nothing)" setup_mutants_narrowed invoke_mutants_narrowed
+  run_case "check-mutants.sh (a baseline entry that argues nothing)" \
+    setup_mutants_stale_baseline invoke_mutants_stale_baseline \
+    "argues no surviving mutant"
+  run_case "check-mutants.sh (an 'unviable:' claim the run disproves)" \
+    setup_mutants_false_unviable invoke_mutants_false_unviable \
+    "claims 'unviable:' for a mutant that survived"
+  # ⚠️ **The one case that must *pass*, so `run_case` cannot express it** —
+  # that helper asserts a non-zero exit, which is the whole of what it checks.
+  # A gate that refuses a legitimate `unviable:` entry is as broken as one that
+  # accepts a stale suppression, and only the first kind has a helper.
+  TOTAL=$((TOTAL + 1))
+  _unviable_dir="$(setup_mutants_unviable_exempt)"
+  # ⚠️ Output captured, not discarded: a must-pass case that only says "it
+  # refused" sends the reader back to rebuild the fixture by hand to find out
+  # why, which is what the first version of this case cost.
+  _unviable_out="$(invoke_mutants_unviable_exempt "$_unviable_dir" 2>&1)" && _unviable_rc=0 || _unviable_rc=$?
+  if (( _unviable_rc == 0 )); then
+    ok "check-mutants.sh (an 'unviable:' entry is exempt) passes on a legitimate artifact"
+  else
+    fail "check-mutants.sh (an 'unviable:' entry is exempt) refused a legitimate artifact"
+    note "an entry that says why its mutant is no longer generated must not be stale"
+    while IFS= read -r _line; do note "$_line"; done <<<"$(tail -8 <<<"$_unviable_out")"
+    FAILED_CASES=$((FAILED_CASES + 1))
+  fi
 else
   skip_case check-mutants.sh "cargo-mutants not installed" \
-    "install: cargo install cargo-mutants" 2
+    "install: cargo install cargo-mutants" 5
 fi
 
 # --- the harness checks itself ----------------------------------------------
