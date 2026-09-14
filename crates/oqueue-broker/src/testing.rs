@@ -352,12 +352,24 @@ pub(crate) fn golden_batch_of(values: &[&'static [u8]]) -> Vec<u8> {
 
 /// `futures::poll_once` without the dependency — `Cargo.toml` carries no
 /// `futures`, and `build.md` asks for a recorded reason before one is added,
-/// which a poll in two tests does not earn.
+/// which ten lines of local code do not earn. ⚠️ **This said "a poll in two
+/// tests", and the count was stale the milestone it was written in** — it
+/// was five call sites when `M4.31`'s review read it and is thirteen now
+/// (seventeen is the grep-hit count, four of which are prose — review
+/// caught that too).
+/// The argument is the dependency's cost against this function's size, not
+/// how many callers it has; a count here only ever goes wrong. `M4.55`.
 ///
 /// ⚠️ **Polling once is how a race between a handler and the transitions
-/// actor is made deterministic**: the handler parks on the actor, the test
-/// moves the group out from under it, and the resumed handler meets the
-/// state a real concurrent request would have left. `M4.15d` put the
+/// actor is made deterministic**: the handler is stopped at its first
+/// pending await, the test moves the group out from under it, and the
+/// resumed handler meets the state a real concurrent request would have
+/// left. ⚠️ **This said "the handler parks on the actor", and `M4.42`'s own
+/// commit body records that as misstating the mechanism** — the transitions
+/// channel is an mpsc the actor drains in order, so nothing can be applied
+/// ahead of an event already enqueued. The reachable window is *before* the
+/// send, and a reader auditing reachability from the old sentence concludes
+/// the refusal arm is dead code and deletes it. `M4.55`. `M4.15d` put the
 /// `.await` there; `join_group`'s own refusal tests opened this window
 /// first and `M4.35` needed the same one for `SyncGroup`, which is why the
 /// helper lives here rather than in either module.

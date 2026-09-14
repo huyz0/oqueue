@@ -4,10 +4,15 @@
 //! Its sibling asks which generation's assignment a *follower* is answered
 //! with; these ask what the *leader* is told when the round it submitted
 //! for is no longer the one the group is on. Every test here opens the
-//! window the same way — `crate::testing::poll_once` parks the submission
-//! on the transitions actor, `M4.15d` having put an `.await` between the
-//! fence's state read and its application — and then moves the coordinator
-//! underneath it.
+//! window the same way — `crate::testing::poll_once` stops the submission
+//! at its first pending await, which `M4.15d` put between the fence's state
+//! read and its application — and then moves the coordinator underneath it.
+//! ⚠️ **Not "parks on the actor", which `M4.42`'s commit body records as
+//! misstating the mechanism**: the transitions channel is an mpsc the actor
+//! drains in order, so nothing can be applied ahead of an event already
+//! enqueued. The reachable window is *before* the send, and a reader
+//! auditing reachability from the old sentence deletes the refusal arm as
+//! dead code. `M4.55`.
 //!
 //! ⚠️ **Four tests, four different distances the group can travel** in that
 //! window, and each was a separate defect: `PreparingRebalance` at the same
@@ -25,7 +30,11 @@ use super::{leader_body_at, seat, sync};
 use crate::testing::fixture;
 
 /// ⚠️ **The client-visible half, which review found nothing executed.**
-/// The guard above is pinned by [`a_late_submission_does_not_replace_a_newer_generations_assignment`],
+/// The guard above is pinned by `generations.rs`'s
+/// `a_late_submission_does_not_replace_a_newer_generations_assignment`
+/// — ⚠️ **named rather than linked**, because that test is in a *sibling*
+/// module and the intra-doc link this carried resolved to nothing, so
+/// rustdoc rendered it as plain code (`M4.55`) —
 /// but what the stale leader is *told* was not: planting a `panic!` in the
 /// refusal arm left the whole suite green, so the code could have been any
 /// of them — including `UNKNOWN_SERVER_ERROR`, which the Java consumer
@@ -33,8 +42,9 @@ use crate::testing::fixture;
 ///
 /// ⚠️ **The window is opened deterministically rather than waited for.**
 /// `handle` reads the group's record under `fence`, then awaits the
-/// transitions actor; polling it once parks it exactly there, and the
-/// newer generation's submission lands while it is parked. This is
+/// transitions actor; polling it once stops it at that await, before its
+/// own event is sent, and the newer generation's submission lands in the
+/// window that opens. This is
 /// `join_group`'s own refusal-test idiom (`crate::testing::poll_once`),
 /// which `M4.15d` made necessary by putting an `.await` between the
 /// decision and its application.
@@ -54,7 +64,7 @@ async fn a_leader_whose_generation_moved_on_while_it_was_parked_is_told_to_rejoi
     tokio::pin!(submitting);
     assert!(
         crate::testing::poll_once(&mut submitting).is_none(),
-        "the submission must park on the transitions actor rather than complete synchronously"
+        "the submission must stop at its first pending await rather than complete synchronously"
     );
 
     // The group moved on: generation 2's own leader got there first.
@@ -115,7 +125,7 @@ async fn a_leader_whose_group_reopened_its_barrier_while_parked_is_told_to_rejoi
     tokio::pin!(submitting);
     assert!(
         crate::testing::poll_once(&mut submitting).is_none(),
-        "the submission must park on the transitions actor"
+        "the submission must stop at its first pending await"
     );
 
     // A newcomer joins: legal from `CompletingRebalance`, and it reopens the
@@ -171,7 +181,7 @@ async fn a_leader_is_not_answered_because_some_later_generation_reached_stable()
     tokio::pin!(submitting);
     assert!(
         crate::testing::poll_once(&mut submitting).is_none(),
-        "the submission must park on the transitions actor"
+        "the submission must stop at its first pending await"
     );
 
     // The group runs a whole further round while the leader is parked, and
@@ -253,7 +263,7 @@ async fn a_leader_whose_round_completed_under_it_is_told_to_rejoin() {
     tokio::pin!(submitting);
     assert!(
         crate::testing::poll_once(&mut submitting).is_none(),
-        "the submission must park on the transitions actor"
+        "the submission must stop at its first pending await"
     );
 
     // A newcomer joins and the barrier closes again, so the group is back at

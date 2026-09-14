@@ -26,16 +26,24 @@ use tokio::sync::Notify;
 /// was answered "you own nothing", went `steady`, and stayed idle forever
 /// while the rest of the group kept every partition. Adding a consumer to a
 /// working group simply did not work.
-#[derive(Debug)]
+///
 /// ⚠️ **`pub(super)` on the struct, private on its fields**, and the
-/// asymmetry is deliberate: the type leaks through the `Assignments` alias
-/// in `entry_for`'s and `assignment_for`'s signatures, so it has to be
+/// asymmetry is deliberate: the type leaks through `Assignments` in
+/// `entry_for`'s and `assignment_for`'s signatures, so it has to be
 /// nameable — but `entry_for` hands out the cell's own handle, and exported
 /// fields would let anything in this module tree write an `Assignment`
 /// directly and pin a state neither writer can produce, bypassing both
 /// `submit`'s generation guard (`M4.35`) and `refuse`'s (`M4.43`). Found by
 /// review, which measured that the fields can be private while the struct
 /// cannot.
+///
+/// ⚠️ **`#[derive]` goes below the whole doc comment, not between its two
+/// halves.** It sat between them until `M4.55`, which rustdoc renders as one
+/// run-on paragraph — `M4.17`'s generation argument above and this
+/// visibility argument glued together, so a reader cannot tell which claim
+/// the emphasis belongs to. Recorded by `M4.36`'s commit body and
+/// unharvested until the sweep.
+#[derive(Debug)]
 pub(super) struct Assignment {
     generation: i32,
     /// `None` means this generation was *refused* — its leader's submission

@@ -327,7 +327,15 @@ else
   if grep -qx 'tls-sasl' "$roster"; then
     # ⚠️ **FR-40, not FR-4 or FR-45, and review of `M4.37` had to say so.**
     # What the leg drives is one principal, one topic, one message: it
-    # falsifies authentication and topic authorization, and it cannot
+    # falsifies authentication, and the *wiring* of the grant path — the
+    # broker is started with `OQUEUE_TOPIC_GRANTS` naming
+    # `<principal>:<topic>` and the produce succeeds, where before `M4.18`
+    # no grant was consulted at all. ⚠️ **It does not falsify topic
+    # authorization**, which this comment claimed until `M4.55`: nothing in
+    # `tls_sasl.py` asks for a topic the principal has no grant for, so a
+    # broker that ignored grants entirely would pass this leg. The
+    # cross-principal refusal is leg 2's, on `OffsetCommit` and
+    # `OffsetFetch`. ⚠️ And this leg cannot
     # falsify FR-4 (Metadata scoped to the principal — no Metadata response
     # is inspected) or FR-45 (quota isolation — no second principal, and
     # nothing approaches `OQUEUE_MAX_IN_FLIGHT`). Naming those two would
@@ -375,6 +383,13 @@ fi
 # and without this the gate exited 0 on a host where neither ran, which is the
 # one leg this milestone exists for. A skipped leg withholds the verdict
 # rather than passing it.
+#
+# ⚠️ **Three conditions, not the two that paragraph names**, and `M4.55`
+# corrected it: `have_tls` is required beside `have_rdkafka` and `have_java`
+# below. It is not an FR-20 client — it is `M4.18`'s wiring leg, added by
+# `M4.37` for the reason leg 4 gives at length — so a reader auditing this
+# verdict against the sentence above finds a third conjunct the sentence does
+# not explain and has to guess whether it is deliberate. It is.
 have_rdkafka=0
 have_java=0
 have_tls=0

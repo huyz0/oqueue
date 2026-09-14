@@ -167,7 +167,11 @@ async fn submit_assignment(
     // one to answer with.
     //
     // ⚠️ **An unreachable log is the case where answering `NONE` is the
-    // worst available answer.** Every member is told its assignment is
+    // worst available answer**, and what follows describes that *rejected*
+    // answer rather than the code below — a paragraph inserted to correct
+    // the generation claim orphaned the sentence, which then read as
+    // annotating the branch it sits above. `M4.33` recorded it; `M4.55`
+    // rewrote it. Under `NONE`, every member is told its assignment is
     // valid and starts consuming, while the group never left
     // `CompletingRebalance` -- so `fence_commit`'s own `[Stable]` fence
     // refuses every `OffsetCommit` and every heartbeat answers
@@ -181,11 +185,16 @@ async fn submit_assignment(
     // consumer's `SyncGroupResponseHandler` calls `requestRejoin` and
     // additionally `markCoordinatorUnknown` for this one, and librdkafka
     // falls through to `rd_kafka_cgrp_rejoin` -- so the generation is spent
-    // either way. What the code buys is the difference between a client
-    // that comes back and one that does not: it is retriable, where the
-    // alternative this branch had was telling every member `NONE` and
-    // letting them consume against a group the coordinator never saw reach
-    // `Stable`. It also matches `join_group`'s answer for the identical
+    // either way. ⚠️ **What the code buys is an immediate retriable answer
+    // instead of a false success corrected a heartbeat later** — this said
+    // "the difference between a client that comes back and one that does
+    // not", which over-claims: under the rejected `NONE` the leader's next
+    // heartbeat is fenced on `[Stable]`, answers `REBALANCE_IN_PROGRESS`,
+    // and the Java consumer rejoins within one `heartbeat.interval.ms`. The
+    // client comes back either way. What it does not do either way is
+    // consume against a group the coordinator never saw reach `Stable`, and
+    // closing that window is the whole gain. `M4.33` recorded the
+    // over-claim; `M4.55` corrected it. It also matches `join_group`'s answer for the identical
     // `Applied::Unavailable` failure, which is the reason to prefer it over
     // `REBALANCE_IN_PROGRESS`. Found by M4's closing review; the claim
     // about the generation corrected by review of the fix.
@@ -233,10 +242,21 @@ async fn submit_assignment(
             // ⚠️ **And the followers already parked on the barrier, which
             // `M4.33` left and `M4.43` fixed.** They are normally released
             // as `Known::Superseded` by the next generation's submission —
-            // but the refusal here *is* the log being unreachable, and every
-            // path to a next generation goes through the same log, so while
-            // the outage lasts there is no next generation and they would
-            // wait out `MAX_SYNC_WAIT_MS` for an assignment nobody submits.
+            // and when this arm is an unreachable log, every path to a next
+            // generation goes through that same log, so while the outage
+            // lasts there is no next generation and they would wait out
+            // `MAX_SYNC_WAIT_MS` for an assignment nobody submits.
+            //
+            // ⚠️ **This arm is not only the log being unreachable, and
+            // saying it was is what `M4.43` recorded against itself.**
+            // `Error::Transient` reaches here with a *healthy* log — after
+            // `MAX_APPEND_RETRIES` version collisions on a log shared with
+            // `OffsetCommit` writers, or when the actor task has ended — and
+            // in the contention case a next generation is reachable, so the
+            // followers would have been released anyway. The `refuse` call
+            // is right regardless: the map never landed, so rejoining is the
+            // answer whichever failure this was. Only the justification was
+            // too narrow. `M4.55`.
             cluster.sync_groups().refuse(group, request.generation_id);
             return reply(
                 prelude,
@@ -248,6 +268,20 @@ async fn submit_assignment(
         r.state == GroupState::Stable && r.generation.get() == request.generation_id
     });
     if !synced {
+        // ⚠️ **Why this `refuse` is safe, which the arm it replaced carried
+        // bare.** `M4.43` recorded that the `IllegalGroupTransition` arm
+        // called `refuse` with no stated reason while its two siblings each
+        // gave one, and that its reason is a *different* one. ⚠️ **It does
+        // not rest on a next generation being on its way**, which is not
+        // true of every state reaching here — an `AllMembersGone` group
+        // re-reads as `Empty`, and an illegal transition never reached
+        // `append_durably` at all. What makes the call safe in every case is
+        // that `refuse` never overwrites a *later* generation's map
+        // (`M4.35`'s guard, and `barrier.rs`'s own note), so publishing a
+        // refusal for this generation cannot strand anyone waiting on a
+        // newer one. That arm has since been folded into this one question
+        // asked of every outcome, so the claim's subject is gone and its
+        // reason belongs here. `M4.55`.
         cluster.sync_groups().refuse(group, request.generation_id);
         return reply(
             prelude,

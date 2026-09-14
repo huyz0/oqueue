@@ -134,9 +134,15 @@ if [[ -z "$n_tested" ]] || (( n_tested == 0 )); then
 fi
 
 
-# ⚠️ Anchored to the line `mutants.sh` itself emits, not a substring of the
-# whole tool output — a rustc error quoting either phrase would otherwise turn a
-# failure into exit 0.
+# ⚠️ **This is a substring match, and calling it anchored was wrong.**
+# `.*skip` is what makes the alternation reach a line's interior: only the
+# *phrase* after `skip` is pinned, so `error: could not skip mutation
+# testing (no Rust staged)` inside a rustc error matches and turns a failure
+# into a propagated skip. The intent was to match the line `mutants.sh`
+# itself emits and nothing else; the pattern does not achieve it. Narrowing
+# it is `M4.62`'s, because the two skips `mutants.sh` emits begin a line and
+# the leading-junk alternative exists for a reason nobody wrote down.
+# `M4.55` corrected the claim rather than the regex.
 if grep -qE '^(skip|.*skip) (mutation testing \((cargo-mutants not installed|no Rust staged))' "$out"; then
   # mutants.sh already reported the skip; propagate it rather than inventing a
   # verdict of our own.
@@ -209,13 +215,29 @@ stale=0
 # walked the baseline and asked whether each entry still matches a survivor.
 # So an entry whose mutant *moved* suppresses nothing and no gate can see it
 # — measured inside one task, where a single entry needed re-keying four
-# times: the guard gained a conjunct, the file split at the 500-line limit,
-# and the fourth time a nine-line doc comment nine lines above moved it. Each
-# was caught only because that mutant kept *surviving*, which made the
-# mismatch surface as an unargued survivor. An entry whose mutant became
-# killable would have gone quiet instead, and the baseline would carry a
-# suppression for something no longer there — `testing.md` rule 17's "a list
-# nobody grows quietly" read from the shrinking side.
+# times, and five by the time `M4.55` read it again: the guard gained a
+# conjunct, the file split at the 500-line limit, a doc comment was added
+# above it, and then a type one level out grew an accessor. ⚠️ **The last
+# two touched none of that code.** Each of the first four was caught only
+# because the mutant kept *surviving*, which made the mismatch surface as an
+# unargued survivor. An entry whose mutant became killable would have gone
+# quiet instead, and the baseline would carry a suppression for something no
+# longer there — `testing.md` rule 17's "a list nobody grows quietly" read
+# from the shrinking side.
+#
+# ⚠️ **`cargo mutants --list` re-derives a key in seconds, and nothing said
+# so until `M4.55`.** It enumerates every mutant's file, line and column
+# without running a test, so a key can be checked the moment a file moves
+# rather than waiting for the next `--full` pass — which is the six-hour job
+# `.github/workflows/mutants.yml` now runs nightly. The fifth re-key was
+# found that way; the four before it were each found the slow way.
+#
+# ⚠️ **And `--list` is the *last* step, not a preparatory one.** `M4.55` took
+# its listing before making its own edits to the same file, re-keyed from it,
+# and shipped a key that was stale on arrival — review caught it, and it
+# would have been the sixth instance of exactly what that entry narrates.
+# Any change touching a file with a baseline entry re-derives the key after
+# the edit settles.
 #
 # ⚠️ **Both loops run and both report before either exits.** The first
 # version put this after the `unargued` exit, so on a run with any unargued

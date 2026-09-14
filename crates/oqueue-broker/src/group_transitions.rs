@@ -40,7 +40,11 @@
 //! `Vec`, so nothing replays. What `M4.15d` bought is that the record *can*
 //! survive one, the moment `M6.md` task 7c lands a real engine —
 //! `offset_commit.rs`'s own doc states that carefully and this one dropped
-//! the caveat seven commits later. ⚠️ **Its membership will not survive even
+//! the caveat. ⚠️ **"Seven commits later" stood here and is not a measure**
+//! — commits between two files' docs say nothing about when either was
+//! written or how long the gap lasted, and a reader cannot check it against
+//! anything. What is checkable is that `offset_commit.rs` carries the
+//! caveat and this module did not until `M4.39`. `M4.55`. ⚠️ **Its membership will not survive even
 //! then, and the distinction is load-bearing**: `GroupRecord` is state, generation and assignment
 //! epoch, while `GroupJoins`'s own entries and `heartbeat.rs`'s own tracking
 //! are per-node and in no log. A `Stable` group of three consumers replays as

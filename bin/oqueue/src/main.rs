@@ -367,9 +367,14 @@ mod tests {
     /// `OsString` inside it need not be undecodable for the test to mean
     /// what it says — `M4.18`'s own test of the `from_var` this mirrors
     /// (`security/tests/composition.rs`) constructs `NotUnicode` with a
-    /// perfectly ordinary string for the same reason. The cfg would have
-    /// been this repository's only gated test, against `testing.md` rule 2,
-    /// and it excluded the two portable assertions below as well.
+    /// perfectly ordinary string for the same reason. It also excluded the
+    /// two portable assertions below. ⚠️ **This said the cfg "would have
+    /// been this repository's only gated test", and that was false when
+    /// written** — `bin/oqueue/tests/it/startup.rs:43` carries a
+    /// `#[cfg(unix)]`, added by this commit's own sibling, and
+    /// `oqueue-codec`'s `compress.rs` gates several tests on `gzip` and
+    /// `snappy` features. `testing.md` rule 2 is the argument; uniqueness
+    /// never was. `M4.55`.
     #[test]
     fn an_undecodable_selection_is_refused_where_an_absent_one_defaults() {
         assert_eq!(

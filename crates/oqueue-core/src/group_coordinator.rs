@@ -286,12 +286,19 @@ mod tests {
             GroupEvent::JoinBarrierComplete,
             GroupEvent::SyncComplete,
             GroupEvent::MemberJoinedDuringSync,
-            // ⚠️ **The only state-preserving arm in the table**, which is
-            // what makes it the variant a divergence hides in: a fake that
-            // skipped its own `insert` when the successor equals the
+            // ⚠️ **Included for completeness, and this loop does not reach
+            // what it was added for.** `MemberLeft` names the table's only
+            // state-preserving arm — `(PreparingRebalance, MemberLeft) =>
+            // PreparingRebalance` — and the argument written here was that a
+            // fake skipping its own `insert` when the successor equals the
             // current state would answer `None` where the real coordinator
-            // answers `Some(PreparingRebalance)`, and every other event
-            // here would still agree. `M4.34`, found by review.
+            // answers `Some(PreparingRebalance)`. True of that arm, and
+            // unreachable from this test: every event below is applied to a
+            // *fresh* coordinator, so both sides start from `Empty`,
+            // `(Empty, MemberLeft)` is in no arm, and the pair lands in the
+            // `(Err(_), Err(_))` case having compared nothing. `M4.34` wrote
+            // the claim, `M4.55` measured it, and `M4.62` is the row for
+            // reaching the arm.
             GroupEvent::MemberLeft,
             GroupEvent::AllMembersGone,
             GroupEvent::Expire,
