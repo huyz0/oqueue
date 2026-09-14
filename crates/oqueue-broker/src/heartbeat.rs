@@ -118,6 +118,46 @@ pub(crate) struct Heartbeats {
     groups: Mutex<HashMap<GroupId, HashMap<String, MemberSession>>>,
 }
 
+/// The three collaborators a removal has to reach, bundled.
+///
+/// ⚠️ **A struct because `remove_where` reached
+/// `clippy::too_many_arguments` once the barrier joined the transitions
+/// actor and the coordinator**, and because `cluster.rs` is at
+/// `code-structure.md` rule 16's limit so the accessor could not live
+/// there. ⚠️ **Not the same three things as
+/// `join_group::round::state::Coordination`**, which an earlier version
+/// of this claimed: that one carries `heartbeats` where this carries
+/// `sync_groups`, and both types remain. They are two bundles under the
+/// same argument-count pressure, not one idea spelled twice. `M4.47`.
+pub(crate) struct Removal<'a> {
+    pub(crate) transitions: &'a crate::group_transitions::GroupTransitions,
+    pub(crate) coordinator: &'a dyn oqueue_core::GroupCoordinator,
+    /// ⚠️ **The one `M4.47` added**, and the reason this is a struct. A
+    /// member lost by any route leaves the followers parked on *its*
+    /// generation's assignment barrier waiting for something that is not
+    /// coming, and until `M4.47` only a leader's refused submission told
+    /// them.
+    pub(crate) sync_groups: &'a crate::sync_group::SyncGroups,
+}
+
+impl<'a> Removal<'a> {
+    /// The three, taken off the cluster that owns them.
+    ///
+    /// ⚠️ **Here rather than on `Cluster`**, so the bundle is built beside
+    /// the thing it is a bundle *of* — and because `cluster.rs` is at
+    /// `code-structure.md` rule 16's limit, which this accessor pushed it
+    /// over. A caller that reaches for two of the three and forgets the
+    /// barrier is the defect `M4.47` fixed; there is now no spelling of
+    /// this call that omits one.
+    pub(crate) fn of(cluster: &'a Cluster) -> Self {
+        Self {
+            transitions: cluster.group_transitions(),
+            coordinator: cluster.group_coordinator(),
+            sync_groups: cluster.sync_groups(),
+        }
+    }
+}
+
 impl Heartbeats {
     fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<GroupId, HashMap<String, MemberSession>>> {
         self.groups.lock().unwrap_or_else(PoisonError::into_inner)
@@ -155,16 +195,10 @@ impl Heartbeats {
     /// Evicts every member of `group` whose own deadline has already
     /// passed, firing one coordinator transition if any were — module
     /// doc's own "which event" answer.
-    async fn sweep(
-        &self,
-        group: &GroupId,
-        group_transitions: &crate::group_transitions::GroupTransitions,
-    ) {
+    async fn sweep(&self, group: &GroupId, removal: Removal<'_>) {
         let now = Instant::now();
-        self.remove_where(group, group_transitions, |_, session| {
-            session.deadline > now
-        })
-        .await;
+        self.remove_where(group, removal, |_, session| session.deadline > now)
+            .await;
     }
 
     /// Removes every one of `member_ids` from `group`'s own tracked
@@ -172,13 +206,8 @@ impl Heartbeats {
     /// named member is removed under one lock acquisition, so a request
     /// naming several members triggers at most one coordinator transition,
     /// not one per member (`M4.10`'s own acceptance criterion).
-    pub(crate) async fn leave(
-        &self,
-        group: &GroupId,
-        member_ids: &[&str],
-        group_transitions: &crate::group_transitions::GroupTransitions,
-    ) {
-        self.remove_where(group, group_transitions, |id, _| !member_ids.contains(&id))
+    pub(crate) async fn leave(&self, group: &GroupId, member_ids: &[&str], removal: Removal<'_>) {
+        self.remove_where(group, removal, |id, _| !member_ids.contains(&id))
             .await;
     }
 
@@ -216,9 +245,27 @@ impl Heartbeats {
     async fn remove_where(
         &self,
         group: &GroupId,
-        group_transitions: &crate::group_transitions::GroupTransitions,
+        removal: Removal<'_>,
         mut keep: impl FnMut(&str, &MemberSession) -> bool,
     ) {
+        // ⚠️ **Read before the removal, and used whatever the transition
+        // answers.** `MemberLeft` and `AllMembersGone` both carry the
+        // generation through unchanged, so this names the same one the
+        // actor would return — and unlike that record it exists on the
+        // failure path too. `members.retain` below drops the member
+        // *unconditionally*, before the enqueue, so a refused or
+        // unavailable transition still leaves it gone: the coordinator was
+        // not moved, but the member was, and its generation's assignment is
+        // not coming either. The first version of this called `refuse` only
+        // on `Ok` and said in a comment that the failure path owed nothing
+        // — review proved otherwise by refusing the metadata append and
+        // watching the follower wait out `MAX_SYNC_WAIT_MS` for `-1`, which
+        // is the row's own defect one path over. `submit_assignment`'s own
+        // `Err(_)` arm refuses for this identical outage.
+        let generation = removal
+            .coordinator
+            .record(group)
+            .map(|r| r.generation.get());
         let receiver = {
             let mut groups = self.lock();
             let receiver = groups.get_mut(group).and_then(|members| {
@@ -233,13 +280,36 @@ impl Heartbeats {
                 } else {
                     GroupEvent::MemberLeft
                 };
-                Some(group_transitions.enqueue(group.clone(), event))
+                Some(removal.transitions.enqueue(group.clone(), event))
             });
             drop(groups);
             receiver
         };
-        if let Some(receiver) = receiver {
-            let _ = receiver.await;
+        let Some(receiver) = receiver else { return };
+        let _ = receiver.await;
+
+        // ⚠️ **And the followers already parked on the sync barrier**, which
+        // `M4.43` built the channel for and wired to `submit_assignment`
+        // alone. `M4.34` makes the coordinator reopen the barrier when a
+        // member is lost from `CompletingRebalance`; until `M4.47` nothing
+        // told the members already waiting on the *assignment* barrier, so
+        // a follower whose leader left waited out `MAX_SYNC_WAIT_MS` — 50
+        // minutes — and was answered `UNKNOWN_SERVER_ERROR`. Measured
+        // before the fix at `waited_ms=3000000`.
+        //
+        // ⚠️ **Here rather than at the two call sites**, because this
+        // function's own doc calls itself "the one place either path goes
+        // through": a third caller gets the wake by construction instead of
+        // by remembering. That is the property the fix it repairs did not
+        // have, four times over in this milestone.
+        //
+        // ⚠️ **`refuse` never overwrites an assignment**, so calling it on
+        // every removal is safe: a leader that submitted before a follower
+        // left keeps its published map (the guard declines to unpublish
+        // this generation's own), and a later generation's map is
+        // protected by the same guard's `>` half.
+        if let Some(generation) = generation {
+            removal.sync_groups.refuse(group, generation);
         }
     }
 
@@ -349,7 +419,7 @@ pub(crate) async fn handle(
     // module doc's own "no background reaper" answer.
     cluster
         .heartbeats()
-        .sweep(&group, cluster.group_transitions())
+        .sweep(&group, Removal::of(cluster))
         .await;
 
     // ⚠️ **`M4.11`'s own audited seam, not an ad hoc `is_current` check.**

@@ -76,7 +76,7 @@ pub(crate) async fn handle(
 
     cluster
         .heartbeats()
-        .leave(&group, &member_ids, cluster.group_transitions())
+        .leave(&group, &member_ids, crate::heartbeat::Removal::of(cluster))
         .await;
 
     reply(

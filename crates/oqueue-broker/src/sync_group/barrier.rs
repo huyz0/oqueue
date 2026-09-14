@@ -215,7 +215,7 @@ impl SyncGroups {
     /// reached from the other side. A leader's retry after the log heals
     /// goes through `submit`, which does replace, so nothing needs `refuse`
     /// to.
-    pub(super) fn refuse(&self, group: &GroupId, generation: i32) {
+    pub(crate) fn refuse(&self, group: &GroupId, generation: i32) {
         let mut entries = self.lock();
         let entry = entries.entry(group.clone()).or_default();
         let mut guard = entry
