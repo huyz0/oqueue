@@ -4357,8 +4357,39 @@ run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded
   "over the 10000 ms budget"
 _have_mutants() { cargo mutants --version >/dev/null 2>&1; }
 if _have_mutants; then
-  run_case "check-mutants.sh (test constrains nothing)" setup_mutants_weakened invoke_mutants_weakened
-  run_case "check-mutants.sh (narrowed, test constrains nothing)" setup_mutants_narrowed invoke_mutants_narrowed
+  # ⚠️ **Both pin the survivor message, and `M4.32` is why.** These two were
+  # the suite's oldest `check-mutants` cases and carried no expected string,
+  # so `run_case` asked only for a non-zero exit — and from `M4.19` until
+  # `M4.32` both had been passing on `profile 'mutants' is not defined`,
+  # counted green while proving nothing about a surviving mutant. `M4.32`
+  # repaired the fixture and left the cases unpinned; `M4.52` is this.
+  #
+  # ⚠️ **The justification is this fixture's measured output, not the gate's
+  # branch count** — rule 20a says the second in terms ("a gate with nine
+  # `fail` branches whose fixture trips exactly one of them needs no pin,
+  # which is why most cases carry none"), and this suite says the same just
+  # below its `check-readmes.sh` cases — "one property per *fixture output*,
+  # not per gate". What
+  # earns the pin here is that these fixtures' output demonstrably carries a
+  # *second* kind: delete `[profile.mutants]` from `_crate_scratch`'s
+  # workspace manifest and both print `cargo mutants exited 4 with no
+  # surviving mutants reported` instead — measured, and the regression
+  # `M4.32` found. The pinned string comes from the unargued-survivor branch;
+  # the other is the tool-failure branch. ⚠️ **Branch names, not line
+  # numbers** — six of those were written here first and `M4.55` is already
+  # the row for sixteen decayed references of exactly that kind.
+  #
+  # ⚠️ **Both pin the same string, so the narrowed case does not assert that
+  # it narrowed** — argued rather than fixed, because `run_case` takes one
+  # expectation and the alternative (`running cargo mutants (narrowed)`) is
+  # printed before the run and survives a build failure, so it would trade a
+  # strong property for a weak one. Carrying both needs `run_case` to accept
+  # a list, which is a harness change and not this row's. Recorded in
+  # `M4.52`.
+  run_case "check-mutants.sh (test constrains nothing)" setup_mutants_weakened invoke_mutants_weakened \
+    "surviving mutant, not killed and not argued"
+  run_case "check-mutants.sh (narrowed, test constrains nothing)" setup_mutants_narrowed invoke_mutants_narrowed \
+    "surviving mutant, not killed and not argued"
   run_case "check-mutants.sh (a baseline entry that argues nothing)" \
     setup_mutants_stale_baseline invoke_mutants_stale_baseline \
     "argues no surviving mutant"
