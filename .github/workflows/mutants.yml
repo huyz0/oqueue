@@ -1,0 +1,162 @@
+# The nightly tier's mutation leg — `testing.md` rule 16's second half,
+# delivered by an actual schedule rather than by a per-push step that could
+# not finish. `M4.51`.
+#
+# ⚠️ **This step used to live in `gates.yml`, and the placement was argued
+# from a number that described something else.** `check-mutants.sh`'s header
+# said the full run was affordable per-push "At 23 s"; 23 s is `M0.17`'s
+# *unnarrowed `oqueue-core`* figure, one leaf crate. `M4.32` ran the whole
+# workspace for the first time — **2294 mutants, and the log it produced is
+# described in `baselines/mutants.txt:26` and `M4.32`'s own commit body as a
+# six-hour run**. That header named its own trigger: "the day it is not [23
+# s], a nightly schedule is the change rule 16 actually describes." `M4.32`
+# was that day.
+#
+# ⚠️ **Two things were wrong with it sitting in `gates.yml`, not one.** A
+# GitHub-hosted job is cancelled at **360 minutes**, and that job also walks
+# every commit in the push through `pre-commit run --all-files` first — so a
+# ~6 h step guaranteed the job hit the ceiling, and a cancelled job is not
+# distinguishable from a red one. And the cheap high-signal steps after it —
+# the negative suite, the seed-corpus replay — were serialised behind six
+# hours despite `if: always()`.
+#
+# ⚠️ **What this job is expected to do tonight: hit the bound and report no
+# verdict at all.** `timeout-minutes: 330` does not make a six-hour run fit —
+# and a hosted runner has 4 cores against the 12 the container `M4.32`
+# measured on, so it is longer here, not shorter. The bound does not buy a
+# result; it buys a failure that *says* the run did not fit, where the
+# platform's own 360-minute cancellation says nothing. ⚠️ **Do not read a
+# timeout here as the workflow being broken, and do not re-dispatch it**:
+# until `M4.60` lands there is no run short enough to finish.
+#
+# ⚠️ **The step log will be empty on that timeout**, which is why the
+# `if: always()` upload below exists: `check-mutants.sh` redirects the whole
+# `mutants.sh` run into `target/tmp/mutants-run.$$` and prints nothing until
+# it returns, so a killed step has printed nothing. The artifact is the only
+# place the partial run survives.
+#
+# ⚠️ **Rule 16's word is "sharded", and `M4.60` is that row** —
+# `cargo mutants --shard k/n` is how, and it is a row rather than a flag
+# because sharding breaks `check-mutants.sh`'s converse loop: a shard sees
+# 1/k of the mutants, so every baseline entry arguing a survivor in another
+# shard looks dead to it.
+#
+# ⚠️ **And when a run does finish, it is red on its own merits**: `M4.32`'s
+# run left 55 unargued survivors, 42 of them in `oqueue-codec`. That is M5's,
+# recorded in `roadmap.md`'s deferred table and `M5.md` task 21. ⚠️ So there
+# are two distinct reds ahead of this workflow being informative, and the
+# survivor list is `M5.md` task 21's copy, not something this job prints
+# today.
+#
+# ⚠️ Scheduled AND `workflow_dispatch`, for `fuzz.yml`'s stated reason: a
+# cron-only job that breaks stays broken invisibly until the next night
+# someone happens to look.
+name: mutants
+
+"on":
+  schedule:
+    # 02:11 UTC daily — off-peak, and deliberately not :00, because GitHub
+    # delays on-the-hour crons under load. ⚠️ **The minute is not a stagger,
+    # and no small offset from it could be.** This is the repository's *third*
+    # nightly: `fuzz.yml` runs 03:17-04:02 and `seeds.yml` 04:23-05:08 under
+    # their 45-minute bounds, while this one runs 02:11 to its 330-minute
+    # bound — so it contains both, and shifting it by minutes changes
+    # nothing. (A start after ~05:10 would clear them, at the cost of the
+    # off-peak window; that trade is not worth making for a job `M4.60` is
+    # about to shorten.) ⚠️ **`seeds.yml:14` is the comment this makes
+    # false** — "not the same minute as fuzz.yml, so a slow night does not
+    # queue the two against each other" — and it is the only one: `fuzz.yml`
+    # argues its own minute and names no other workflow. Correcting
+    # `seeds.yml` is not this row's.
+    - cron: "11 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    runs-on: ubuntu-latest
+    # ⚠️ **Job-level, and `build.md` rule 21 is why it has to be.** Incremental
+    # compilation is pure overhead where every build starts clean, and it is
+    # worse than overhead here: this job is a per-mutant rebuild loop whose
+    # sources live under a fresh `TMPDIR` path per mutant, so every one of
+    # ~2294 rebuilds writes an incremental cache nothing will ever key to
+    # again — write amplification into a runner's ~14 GB, which is the
+    # `No space left on device` failure doc 19 §9 records for this exact
+    # tool. ⚠️ **`gates.yml`'s full step never set this itself**: it inherited
+    # it from `Swatinem/rust-cache`'s `GITHUB_ENV` export, and that action
+    # returns early when the cache service is unavailable, so the old step
+    # could run incremental too. Its own comment called the job-level form
+    # the fix and called it out of scope; this is the job, so it is in scope.
+    env:
+      CARGO_INCREMENTAL: "0"
+    # ⚠️ Under the platform's own 360-minute job ceiling on purpose: a bound
+    # that fires first is a bound whose message a reader can act on.
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+
+      # No version named here: `rust-toolchain.toml` is what decides it, and a
+      # version written in a workflow is a second place holding the toolchain
+      # fact (`build.md` rule 1). Same shape as `gates.yml`'s step.
+      - name: install the pinned toolchain
+        run: |
+          rustup show
+          cargo --version
+
+      # ⚠️ Not cached. `Swatinem/rust-cache` helps a job that compiles once;
+      # this one is a per-mutant rebuild loop over its own `target/mutants`
+      # tree (`scripts/mutants.sh`'s `--profile mutants`), so the cache would
+      # be restored, missed against, and re-uploaded nightly at full size.
+      - name: install cargo-mutants
+        run: |
+          cargo install cargo-mutants --locked
+          cargo mutants --version
+
+      # ⚠️ Through `check-mutants.sh`, never `cargo mutants` directly: the
+      # gate is the comparison against `baselines/mutants.txt`, and
+      # `mutants.sh` owns `TMPDIR`, the profile and the target directory.
+      - name: mutation testing (full)
+        # ⚠️ **A step bound below the job's, and that ordering is the whole
+        # mechanism.** A step killed by its own `timeout-minutes` is marked
+        # *failed*, and the job carries on to the next step — so the upload
+        # below runs under ordinary non-cancelled semantics. A job killed at
+        # the job bound cancels instead, and whether a later step runs then is
+        # the one thing this file cannot verify. 320 against 330 leaves ten
+        # minutes for the upload and keeps the job bound as the backstop it
+        # should be rather than the path taken every night.
+        timeout-minutes: 320
+        run: scripts/check-mutants.sh --full
+
+      # ⚠️ **The timeout is the case this exists for** — the step above prints
+      # nothing until `check-mutants.sh` returns, and it is not expected to
+      # return, so the artifact is the only place tonight's partial run
+      # survives. `seeds.yml`'s "Upload any failing seed" is the same shape
+      # for the same reason, and this borrows it rather than inventing one.
+      #
+      # ⚠️ **`always()` is the backstop, not the mechanism**, and the
+      # difference matters because the mechanism is checkable and the
+      # backstop is not. The step bound above is what makes this run on the
+      # expected path: the mutation step fails at 320 minutes and the job
+      # continues here normally. `always()` covers what is left — a job-level
+      # cancellation at 330, or an interrupted run — and **whether an
+      # `always()` step survives a job-level `timeout-minutes` cancellation is
+      # not verified by running it**, because nothing in this checkout can.
+      # `review.md` rule 12a, and `M1.34`'s precedent for exactly this shape:
+      # the first scheduled run is what settles it, stated here rather than
+      # claimed away. ⚠️ `seeds.yml` does not settle it either — its job is
+      # bounded at 45 minutes and is not expected to time out, so its
+      # `always()` upload has never been exercised by a cancellation.
+      #
+      # ⚠️ A missing file is not an error: `check-mutants.sh` removes
+      # `$out` on every path that reaches a verdict, so the artifact is
+      # absent exactly when the step log carries the answer instead.
+      - name: keep the run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-run-log
+          path: target/tmp/mutants-run.*
+          if-no-files-found: ignore
+          retention-days: 14

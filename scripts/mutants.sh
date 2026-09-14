@@ -27,7 +27,8 @@
 #   narrowed, 1 mutant                                1.2 s
 #   narrowed, 13 mutants, warm, `oqueue-core`         4.8 s
 #   narrowed, 13 mutants, cold, `oqueue-core`         9.7 s
-#   unnarrowed, `-p oqueue-core`, warm               23 s
+#   unnarrowed, `-p oqueue-core`, warm               23 s   ⚠️ one leaf crate
+#   unnarrowed, the whole workspace              ~6 hours   ⚠️ `M4.32`, 2294 mutants
 #   narrowed, 30 mutants, warm, `oqueue-broker`     102 s   ⚠️ `M4.19`, `dev`
 #   narrowed, 30 mutants, warm, `oqueue-broker`      33 s   ⚠️ `M4.19`, `mutants`
 #   narrowed, 30 mutants, warm, `oqueue-broker`      40 s   ⚠️ `M4.21`, `mutants`, rust-lld
@@ -49,6 +50,16 @@
 # ⚠️ **The first row is not a cost, it is a skip**, and quoting it as "narrowed
 # runs take 0.08 s" is how this script's placement was first argued. Review
 # caught that.
+#
+# ⚠️ **The `23 s` row is one leaf crate, and quoting it as the cost of `--full`
+# is how the *full* run's placement was argued** — per-push, for the whole of
+# M4, against a workspace pass `M4.32` measured at 2294 mutants over roughly
+# six hours. `M4.51` moved it to `.github/workflows/mutants.yml`'s nightly
+# schedule. ⚠️ **The six-hour figure is `M4.32`'s, read from its run's log and
+# from `baselines/mutants.txt:26`, not re-measured here** — `mutants.out` is
+# overwritten by every run and that log is gone. The 2294 is exact; treat the
+# wall clock as "hours, not minutes", which is the only part the placement
+# turns on.
 #
 # ⚠️ **The four `oqueue-broker` rows are `M4.19`'s and `M4.21`'s correction,
 # and the four rows above them were stale by ~20x for the code this gate

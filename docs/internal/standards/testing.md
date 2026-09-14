@@ -284,8 +284,13 @@ claim as a seed exploring every interleaving that run could take.
 16. ⚠️ **"Sharded" describes an intent, not `scripts/mutants.sh`** — `--full`
     is one unsharded pass over the workspace, and the bare invocation is
     diff-narrowed. `M0.17` implemented the first half of this rule exactly and
-    the second approximately: per-push rather than nightly, and unsharded. Read
-    the rule as the target and `check-mutants.sh`'s header as what runs.
+    the second approximately: per-push rather than nightly, and unsharded.
+    ⚠️ **`M4.51` moved it to nightly** — `.github/workflows/mutants.yml`, a
+    `schedule:` with a declared `timeout-minutes` — after `M4.32` measured the
+    workspace pass at 2294 mutants over roughly six hours against the 23 s
+    figure the per-push placement had been argued from. Still unsharded;
+    `M4.60` is that row. Read the rule as the target and
+    `check-mutants.sh`'s header as what runs.
     **Diff-narrowed mutation runs on every commit; the full sharded run is
     nightly.** Cost becomes proportional to the change rather than to the
     codebase. → `scripts/mutants.sh`

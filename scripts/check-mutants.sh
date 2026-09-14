@@ -23,12 +23,34 @@
 #
 # ## Where this runs
 #
-# **Narrowed in pre-commit, full in CI.** `testing.md` rule 16 asks for
-# "diff-narrowed on every commit; the full sharded run is nightly" — ⚠️ this
-# gets the first half exactly and the second **approximately**: the full run is
-# per-push rather than nightly, and unsharded, because there is no scheduled
-# workflow to hang it on. At 23 s that is affordable; the day it is not, a
-# nightly schedule is the change rule 16 actually describes.
+# **Narrowed in pre-commit, full in the nightly tier.** `testing.md` rule 16
+# asks for "diff-narrowed on every commit; the full sharded run is nightly" —
+# ⚠️ this gets the first half exactly and the second **partly**: nightly since
+# `M4.51` (`.github/workflows/mutants.yml`), still unsharded.
+#
+# ⚠️ **It was per-push until `M4.51`, argued from a number that described
+# something else.** This paragraph said "At 23 s that is affordable; the day it
+# is not, a nightly schedule is the change rule 16 actually describes" — and
+# 23 s is `M0.17`'s *unnarrowed `oqueue-core`* figure, one leaf crate, not the
+# workspace. `M4.32` ran the workspace for the first time: **2294 mutants**,
+# and `baselines/mutants.txt:26` and that commit's own body both describe the
+# log it produced as a **six-hour** run. That was the day this paragraph named,
+# and it went on saying the opposite for the rest of M4.
+#
+# ⚠️ **Per-push was worse than merely slow.** A GitHub-hosted job is cancelled
+# at 360 minutes and `gates.yml`'s job also walks every commit in the push
+# through `pre-commit run --all-files` first, so the step could not finish —
+# and a cancelled job is not distinguishable from a red one. The negative
+# suite and the seed-corpus replay were serialised behind it despite
+# `if: always()`.
+#
+# ⚠️ **The nightly job declares `timeout-minutes: 330`, and that bound is
+# expected to fire until sharding lands.** It does not make a six-hour run
+# fit; it makes the failure *say* the run did not fit, which the platform's
+# own cancellation does not. `cargo mutants --shard k/n` is what makes it fit
+# and `M4.60` is the row — sharding interacts with the converse loop below,
+# because a shard tests 1/k of the mutants and every baseline entry arguing a
+# survivor in another shard looks dead to it.
 #
 # ⚠️ **The placement was argued twice from bad numbers before it was argued from
 # good ones.** First against 23 s, which is the *unnarrowed* run; then against
