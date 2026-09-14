@@ -85,6 +85,16 @@ import subprocess
 import sys
 import time
 
+import os.path
+import sys
+
+# ⚠️ **`reap` before anything that starts a broker.** Importing it installs
+# a `SIGTERM` handler and an `atexit` reaper, so a `run_bounded` ceiling
+# stops this leg's own `oqueue serve` instead of orphaning it — `M4.61`, and
+# `reap.py`'s own doc for what that does and does not cover.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import reap  # noqa: E402  -- must follow the sys.path line above
+
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer, TopicPartition
 
 TOPIC = "idempotent-conformance"
@@ -171,13 +181,13 @@ def start_broker(advertise_addr: str) -> tuple[subprocess.Popen, str]:
     """Starts `oqueue serve`, bound to a fresh port but advertising
     `advertise_addr` — the proxy's own address, so a real client's
     post-bootstrap connections land on the proxy too."""
-    proc = subprocess.Popen(
+    proc = reap.track(subprocess.Popen(
         ["target/debug/oqueue", "serve", "127.0.0.1:0", advertise_addr],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-    )
+    ))
     deadline = time.time() + 10
     while time.time() < deadline:
         line = proc.stdout.readline()

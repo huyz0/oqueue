@@ -408,12 +408,23 @@ run_bounded() {
   # terminated run as a conformance failure. Swallowing a signal is the
   # complaint this function exists to answer, one signal over.
   #
-  # ⚠️ **The caller's own disposition is restored, not cleared.** `trap` is
-  # shell-global rather than function-scoped, so `trap - INT TERM` on return
-  # would silently delete a `trap cleanup INT TERM` the caller installed
-  # before calling — latent today, since no script in `scripts/` sets one,
-  # and invisible when it arrives because the caller's trap line is still
-  # there to read.
+  # ⚠️ **The caller's own disposition is restored on the two *return* paths,
+  # and deleted again on the signal paths.** `trap` is shell-global rather
+  # than function-scoped, so clearing on return would silently delete a
+  # `trap cleanup INT TERM` the caller installed before calling — latent
+  # today, since no script in `scripts/` sets one, and invisible when it
+  # arrives because the caller's trap line is still there to read.
+  #
+  # ⚠️ **On a signal the handler restores and then deletes one statement
+  # later, so the caller's own handler never runs**, and a first version of
+  # this paragraph claimed otherwise. That is deliberate — re-raising with
+  # the default disposition is what makes callers up the stack see a
+  # terminated run rather than a gate that failed — but it means
+  # `trap 'kill "$BROKER_PID"' INT` in a caller does not fire when Ctrl-C
+  # lands inside a bounded leg. `M4.61` chose the leg-side reaper
+  # (`scripts/harness/reap.py`) over changing this, because the leg owns the
+  # process it started and this function cannot know what a caller's trap is
+  # for. Found by review of `M4.57`.
   local saved_traps
   saved_traps="$(trap -p INT TERM)"
   trap '_run_bounded_stop "$pid"; _run_bounded_restore "$saved_traps"; trap - INT; kill -INT $$' INT
@@ -460,7 +471,18 @@ _run_bounded_stop() {
     sleep 1
     waited=$((waited + 1))
   done
-  kill -KILL "$pid" 2>/dev/null || true
+  # ⚠️ **Only if it is still there.** The loop above exits for one of two
+  # reasons and they are not the same: the grace ran out, or `kill -0`
+  # failed because the child is gone. Sending `SIGKILL` in the second case
+  # signals a pid this shell has already reaped — the pid-reuse hazard the
+  # second bullet of this file's own header records, in code whose loop
+  # condition already distinguishes the cases. Not a regression (the
+  # `sleep 2; kill -KILL` this replaced was unconditional too) and newly
+  # trivial to avoid. Found by review of `M4.57`; `M4.61` is where it
+  # landed.
+  if kill -0 "$pid" 2>/dev/null; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
 }
 
 # Puts back whatever `INT`/`TERM` disposition the caller had, given the

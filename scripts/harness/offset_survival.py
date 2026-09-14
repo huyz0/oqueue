@@ -30,6 +30,16 @@ import sys
 import threading
 import time
 
+import os.path
+import sys
+
+# ⚠️ **`reap` before anything that starts a broker.** Importing it installs
+# a `SIGTERM` handler and an `atexit` reaper, so a `run_bounded` ceiling
+# stops this leg's own `oqueue serve` instead of orphaning it — `M4.61`, and
+# `reap.py`'s own doc for what that does and does not cover.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import reap  # noqa: E402  -- must follow the sys.path line above
+
 from confluent_kafka import Consumer, Producer, TopicPartition
 
 TOPIC = "offset-survival"
@@ -47,13 +57,13 @@ def start_broker() -> tuple[subprocess.Popen, str]:
     gates that invoke the harness. The deadline has to be enforced by
     something the read cannot block. Found by review.
     """
-    proc = subprocess.Popen(
+    proc = reap.track(subprocess.Popen(
         ["target/debug/oqueue", "serve", "127.0.0.1:0"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
-    )
+    ))
     lines: queue.Queue = queue.Queue()
 
     def pump() -> None:

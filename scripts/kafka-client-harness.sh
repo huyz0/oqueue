@@ -198,12 +198,24 @@ else
     ok "librdkafka idempotent-producer conformance (a lost ack is deduplicated, not doubled)"
     echo "idempotent-conformance" >> "$ROSTER"
   elif (( idempotent_rc == 124 )); then
-    # ⚠️ **This leg starts its own broker**, so a ceiling here leaves that
-    # process behind — `run_bounded` signals the direct child only, and this
-    # script's EXIT trap covers only the broker *it* started. ⚠️ Its
-    # frame-dropping proxy is an `asyncio.start_server` inside the same
-    # interpreter, so that one dies with the child; review corrected a first
-    # version of this comment that named it too. `M4.61`.
+    # ⚠️ **This leg starts its own broker, and `M4.61` is what stops a
+    # ceiling orphaning it.** `run_bounded` signals the direct child only,
+    # and this script's EXIT trap covers only the broker *it* started, so
+    # the leg reaps its own: `scripts/harness/reap.py` kills what it tracked
+    # from the `SIGTERM` handler, before unwinding, because the escalation
+    # to `SIGKILL` is two seconds away and the unwind can outlast it.
+    # ⚠️ **In *this* leg the delay is not a `finally`**, which a first
+    # version of this note claimed and review disproved: its
+    # `producer.flush` and `consumer.close` run inside `asyncio.to_thread`
+    # workers, which a signal never unwinds, and its only main-thread
+    # `finally` is the proxy's `w.close()`. What holds the unwind here is
+    # `asyncio.run`'s shutdown joining the default executor, so a worker
+    # parked in librdkafka delays it just as well. `offset_survival.py` and
+    # `tls_sasl.py` are where the `finally` version of the story holds.
+    # ⚠️ Its frame-dropping proxy
+    # is an `asyncio.start_server` inside the same interpreter, so that one
+    # dies with the child; review corrected a first version of this comment
+    # that named it too.
     fail "idempotent-producer conformance did not finish in ${CLIENT_LEG_CEILING_S}s"
     note "a client that hung rather than a duplicate that was not deduplicated"
     note "$(tail -10 "$HARNESS_DIR/idempotent.log" 2>/dev/null || true)"
@@ -239,8 +251,8 @@ else
       ok "librdkafka over TLS with SASL/PLAIN (and refused without a credential)"
       echo "tls-sasl" >> "$ROSTER"
     elif (( tls_rc == 124 )); then
-      # ⚠️ **Its own broker too**, for the certificate's sake — so the same
-      # leak as the leg above when this ceiling fires.
+      # ⚠️ **Its own broker too**, for the certificate's sake — and reaped
+      # the same way as the leg above when this ceiling fires (`M4.61`).
       fail "TLS + SASL/PLAIN round trip did not finish in ${CLIENT_LEG_CEILING_S}s"
       note "a client that hung rather than a credential that was wrongly accepted"
       note "$(tail -10 "$HARNESS_DIR/tls-sasl.log" 2>/dev/null || true)"
@@ -275,7 +287,7 @@ else
     # reads as the leg answering ambiguously rather than as it never
     # finishing.
     fail "offset-survival leg did not finish in ${SURVIVAL_LEG_CEILING_S}s"
-    note "it starts and restarts a broker of its own; a ceiling here leaves that behind"
+    note "it starts and restarts a broker of its own; reap.py stops that outliving the ceiling"
     note "$(tail -10 "$HARNESS_DIR/offset-survival.log" 2>/dev/null || true)"
   elif (( survival_rc == 0 )); then
     if grep -q '^OFFSETS SURVIVED$' "$HARNESS_DIR/offset-survival.log"; then

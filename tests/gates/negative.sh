@@ -4510,6 +4510,107 @@ RS
 run_case "check-fencing-seam.sh (a group handler with no source file)" \
   setup_fencing_missing_handler invoke_fencing_missing_handler \
   "no source file for handler(s): leave_group"
+# ── a harness leg's own broker outliving its ceiling (M4.61) ───────────────
+#
+# ⚠️ **`run_bounded` signals the direct child only**, and three harness legs
+# start an `oqueue serve` of their own, so a ceiling that fires sends
+# `SIGTERM` to python and leaves the broker reparented.
+# `scripts/harness/reap.py` installs the handler that stops that, and this
+# drives its own self-test. It uses a `sleep` rather than a broker because
+# the property is the signal path, and `oqueue serve` would need a built
+# workspace the negative suite does not have.
+#
+# ⚠️ **Both arms**, because "the child did not outlive us" proves nothing on
+# its own: a child that was never started does not outlive anything either.
+# The untracked arm is what shows the leak is real and that `track` closes
+# it.
+#
+# ⚠️ **An earlier version dropped the untracked arm on a false reading.** It
+# failed with `left the child alive=no, wanted yes`, which was recorded as
+# "the untracked `sleep` dies with its parent anyway in this environment".
+# It does not: the child inherited python's stdout, so the command
+# substitution never returned and the case never sampled liveness at all.
+# `reap.py`'s self-test passes `stdout=subprocess.DEVNULL` now and both arms
+# report in about a second each. Found by review of `M4.61` — a measurement
+# that looked like evidence for removing a test was an artefact of the test
+# harness.
+#
+# ⚠️ **The handler's own marker is pinned**, not just liveness. `reap.py`
+# prints `HANDLER DID NOT FIRE` when `SIGTERM` was noted and never
+# delivered, and with `atexit` still registered the child is reaped on that
+# path too — so a change that kept the reaper and lost the unwinding handler
+# left `alive=no` and the case green, while the legs' `finally` blocks
+# stopped running and the leg's exit status moved from 143 to 1, which
+# `kafka-client-harness.sh`'s own `124` branches do not expect.
+_reap_case() {
+  local track="$1" expect="$2" out pid alive
+  TOTAL=$((TOTAL + 1))
+  out="$(REAP_SELFTEST_TRACK="$track" python3 "$REPO_ROOT/scripts/harness/reap.py" 2>/dev/null || true)"
+  pid="$(head -1 <<<"$out")"
+  sleep 1
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    fail "reap.py's self-test printed no child pid (track=$track): '$pid'"
+    FAILED_CASES=$((FAILED_CASES + 1))
+    return 0
+  fi
+  if kill -0 "$pid" 2>/dev/null; then alive=yes; else alive=no; fi
+  kill -9 "$pid" 2>/dev/null || true
+  if grep -q "HANDLER DID NOT FIRE" <<<"$out"; then
+    fail "reap.py's SIGTERM handler did not raise (track=$track)"
+    note "the child may still be reaped by atexit, so liveness alone cannot see this"
+    note "each leg's own finally blocks stop running, and the exit status is 1, not 143"
+    FAILED_CASES=$((FAILED_CASES + 1))
+  elif [[ "$alive" == "$expect" ]]; then
+    if [[ "$track" == 1 ]]; then
+      ok "a tracked broker does not outlive its leg's SIGTERM"
+    else
+      ok "an untracked one does -- the leak M4.61 closes reproduces"
+    fi
+  else
+    fail "reap.py self-test track=$track left the child alive=$alive, wanted $expect"
+    note "track=1 failing means a ceiling would orphan the leg's own broker"
+    note "track=0 failing means this pair proves nothing -- the leak must reproduce"
+    FAILED_CASES=$((FAILED_CASES + 1))
+  fi
+}
+
+_reap_case 1 no
+_reap_case 0 yes
+
+# ⚠️ **The ordering inside the handler, which the two arms above cannot
+# see.** Their child is a `sleep` with nothing to unwind, so a reaper that
+# fires from `atexit` after the unwind looks identical to one that kills
+# before raising — and the kill-first ordering *is* round one's blocking
+# finding. This arm puts a ten-second `finally` in the way and kills the leg two
+# seconds in, the way `_run_bounded_stop` escalates, so only a handler that
+# reaps before it raises can save the child. Found by review of `M4.61`,
+# which is the third test in this row that could not fail.
+TOTAL=$((TOTAL + 1))
+_reap_slow_pidfile="$(new_scratch reap-slow)/pid"
+REAP_SELFTEST_SLOW=1 python3 "$REPO_ROOT/scripts/harness/reap.py" \
+  > "$_reap_slow_pidfile" 2>/dev/null &
+_reap_slow_leg=$!
+sleep 1
+# ⚠️ `_run_bounded_stop`'s own escalation, spelled out rather than sourced,
+# so this case keeps testing the ordering if that function is rewritten.
+kill -TERM "$_reap_slow_leg" 2>/dev/null || true
+sleep 2
+kill -KILL "$_reap_slow_leg" 2>/dev/null || true
+wait "$_reap_slow_leg" 2>/dev/null || true
+_reap_slow_pid="$(head -1 "$_reap_slow_pidfile" 2>/dev/null)"
+if [[ ! "$_reap_slow_pid" =~ ^[0-9]+$ ]]; then
+  fail "reap.py's slow-unwind self-test printed no child pid: '$_reap_slow_pid'"
+  FAILED_CASES=$((FAILED_CASES + 1))
+elif kill -0 "$_reap_slow_pid" 2>/dev/null; then
+  kill -9 "$_reap_slow_pid" 2>/dev/null || true
+  fail "a slow unwind orphaned the tracked child -- the handler reaps too late"
+  note "_kill_tracked must run before the raise: an atexit-only reaper is"
+  note "overtaken by _run_bounded_stop's escalation to SIGKILL two seconds in"
+  FAILED_CASES=$((FAILED_CASES + 1))
+else
+  ok "a tracked broker survives no longer than the handler, even with a slow unwind"
+fi
+
 # ── the FR-40 tripwire's pattern (M4.59) ────────────────────────────────────
 #
 # ⚠️ **`m4-complete.sh` cannot carry a `negative.sh` case**, for the reason
