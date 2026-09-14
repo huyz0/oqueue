@@ -1,0 +1,133 @@
+{
+  "commits": [
+    "454e23b9cf2f004cbb4667a0d676f2eb9a2941d5",
+    "6ad13c88909e19c17525751079abc68d7a49e75b",
+    "e245118189a9bd01f8479c25ae2cc8dc8b708b61",
+    "a4296fa95f7e0a5f527fd8c29c29bf19e94d20d7",
+    "2b46c419ee26d0a199f5caffdb7083460150ca22",
+    "724a158f0f420d40e17ed25ba3f140fdc41a36e9",
+    "59a94e016b707bc84f529c7004e0d8f64c2af1d1",
+    "fa582abc738d7c292e7475eb886b8b9d9d851563",
+    "988c98822fec5ff2ab4c77941e30019bbcddf31d",
+    "91eb4cf5d4497f434e15676772b02ae7133ceabb",
+    "491fcac8ae0a9b9d1cf43fae86f2ce8174b6ff32",
+    "ad8186f226ff27e9850f5db0c90a2f5d139d93fc",
+    "c88476a48401445b64468d6cd4c5f59a34b75c3e",
+    "981eb9cc06a7a71d2334178c287da7e42639af82",
+    "d7672e28ee8cbe2b51dd0d4b76b94a3ea6484923",
+    "8d746f8b5306dc814bc4cf8bf578f51531ab1d64",
+    "7ee9ffae3c5b0d6fbb24d630507d8c58895fd5a4"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-broker/src/sync_group.rs:267-269 computes `synced` from the record `append_durably` returned and never re-reads it; crates/oqueue-broker/src/sync_group/barrier.rs `submit` guards on `a.generation > generation`, while `refuse` (barrier.rs:246-273) guards on `a.generation > generation || (a.generation == generation && a.map.is_some())`. Compare the two guards. Interleaving: `SyncComplete` -> `Stable@N`; a `LeaveGroup` fires `MemberLeft`, legal from `Stable` per group_state.rs, taking the group to `PreparingRebalance@N` and calling `refuse(g, N)` which publishes `{N, None}`; the leader's task resumes with a stale `synced == true` and `submit(g, N, map)` overwrites it. Followers then read `Known::Mine` and are answered `NONE` with a gen-N slice instead of `REBALANCE_IN_PROGRESS` -- the revoke-before-reassign harm M4.42/M4.45 exist to prevent, through the writer M4.47 added.",
+      "id": "3edebb5e30f7",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "The sync barrier's two writers have mirror-image guards and only one of them is symmetric: `submit` permits a same-generation write while `refuse` refuses one, so a member lost between the transition and the leader's submission has its refusal overwritten by an assignment for a generation the group has already left.",
+      "task_id": "M4.65"
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/join_group/deadline.rs:21-23 clamps the client's `rebalance_timeout_ms` into `barrier_ms`, so a member asking 60_000 waits 60_000. crates/oqueue-broker/src/sync_group/deadline.rs:16 is a flat `MAX_SYNC_WAIT_MS = 3_000_000` derived from no client value, and its doc at :9-15 says it is 'Chosen equal to `join_group::deadline::MAX_BARRIER_MS` -- the same order of magnitude a real client's own `rebalance.timeout.ms` already bounds the whole join-then-sync round trip to, so this alone is never the tighter limit'. The reference consumer's `rebalance.timeout.ms` default is 300_000, so the sync ceiling is ten times looser than what the join half honours; `waited_ms=3000000` is the exact stranding M4.47's commit body proved. Compare the two files.",
+      "id": "ac90d5800611",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "Nothing bounds the sync phase by the number the join phase is bounded by, and `MAX_SYNC_WAIT_MS`'s own doc argues the opposite of what the two modules do.",
+      "task_id": "M4.66"
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/fencing.rs:1-9 says it is 'the one seam every M4.7-M4.10 handler's own fencing decision routes through' and that a handler 'never constructs one of the wire codes that decision can produce by any other path'. Sites: offset_fetch.rs:107, sync_group.rs:127, :263, :288, :307, join_group/mod.rs:52, :54, :132, plus heartbeat.rs:477 matching on a variant. Only leave_group.rs:69, heartbeat.rs:458, offset_commit.rs:387, sync_group.rs:88 and join_group/mod.rs:164 call `fence`. `grep -rn 'error_codes::(UNKNOWN_MEMBER_ID|ILLEGAL_GENERATION|REBALANCE_IN_PROGRESS|FENCED_INSTANCE_ID|NOT_COORDINATOR|COORDINATOR_NOT_AVAILABLE|COORDINATOR_LOAD_IN_PROGRESS)' crates/oqueue-broker/src` outside fencing.rs returns nothing, which is what makes the gate green: the narrow property holds and the stated one does not.",
+      "id": "fd33efa572e1",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "The fencing seam's stated property is not the one that holds: eight handler sites decide a refusal themselves and reach `Refusal::X.error_code()` without calling `fence`, and `check-fencing-seam.sh` cannot see them because it greps for the `error_codes::` constants those sites do not name.",
+      "task_id": "M4.67"
+    },
+    {
+      "evidence": "scripts/gates/m4-complete.sh:237 is `if group_names_a_principal \"$path\"; then`, and scripts/lib.sh:305-307's helper is a bare `grep -qE`, so rc 2 and rc 127 both take the else branch. Compare scripts/check-fencing-seam.sh:171-184, which takes `awk`'s status explicitly and fails with 'the UNKNOWN_SERVER_ERROR scan could not read the group handlers'. tests/gates/negative.sh:4818-4820 asserts 'rc 2 is a bad pattern or an unreadable file; 127 is a missing helper' -- the property the gate does not have. Recorded as a minor by M4.50 and routed by name to M4.59, which hardened the test's reading and left the gate's: the milestone's own instance-not-class pattern, on the leg that is M12.md task 3a's promotion signal.",
+      "id": "20992f453d3e",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "The FR-40 tripwire reads `grep`'s exit status as a boolean, so an unreadable handler file or a renamed helper reads as 'no principal check' and the leg still prints `ok ... across 14 file(s)` -- while `check-fencing-seam.sh`, walking the same list, refuses the identical input and `negative.sh` already asserts the distinction the gate lacks.",
+      "task_id": "M4.68"
+    },
+    {
+      "evidence": "scripts/check-mutants.sh's `--shard` block `finish`es before the `if (( FULL )) && [[ -z \"$CRATE\" ]]` loop, and .github/workflows/mutants.yml runs every nightly sharded, so only scripts/check-mutants-baseline.sh judges the union. Delete check-mutants-baseline.sh:94-104 and all three of the suite's fixtures stay green while the mutated script answers `ok every argued baseline entry still argues a live survivor` on a baseline the run just disproved -- verbatim M4.32's defect, and the reason the other copy carries tests/gates/negative.sh:5005. Divergences: check-mutants.sh:212-225 refuses a malformed baseline entry and check-mutants-baseline.sh has no such guard; check-mutants-baseline.sh:83 falls back to the worktree while check-mutants.sh:227 reads the index only, under a comment at :75-77 claiming the two reads match; the stale-entry `note` wording differs. build.md rule 22 is quoted at check-mutants.sh:130-131 as the reason that script delegates rather than duplicates. testing.md rule 20a would be the mechanism that catches this and reaches four gates by design (m0-complete.sh:97-102's `M0_GATES`); check-idempotence-enabled.sh, check-secrets.sh and check-topic-list-scope.sh appear in negative.sh not at all.",
+      "id": "d1598e7ce2b3",
+      "kind": "abstraction",
+      "severity": "major",
+      "summary": "The converse loop exists twice after M4.60 split it, the copy the workspace actually reaches has no negative case for its `unviable:`-disproof branch, and the two have already diverged three ways in the single commit that created the second.",
+      "task_id": "M4.69"
+    },
+    {
+      "evidence": "docs/internal/standards/testing.md:284 against :291-296. The code sides with the tail: scripts/mutants.sh parses and forwards `--shard k/n`, scripts/check-mutants.sh:28-29 says 'sharded eight ways since M4.60', and .github/workflows/mutants.yml runs `matrix.shard [1..8]`. M4.60's own backlog row cites the lead sentence as its justification for the work, so an agent reading rule 16 top-down re-files the row or concludes the rule is unreadable. Same one-file-asserts-both shape M4.63(b) was filed for, in a standard rather than a test doc.",
+      "id": "f95c3cced997",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "`testing.md` rule 16 asserts and denies that `scripts/mutants.sh` shards, within one rule: its bolded lead says 'Sharded describes an intent, not scripts/mutants.sh' and four lines below it says M4.60 sharded it eight ways and 'Both halves of this rule are implemented.'",
+      "task_id": "M4.70"
+    },
+    {
+      "evidence": "scripts/gates/m4-complete.sh:76-79 against scripts/lib/fencing_seam.py:53-56, whose `VARIANT_RE` now admits `Name = 9,`, and :43-52, which records the fix. M4.56 (491fcac) landed six commits after M4.49 (2b46c41). A reader auditing the seam against the gate is told the false-pass hole is open and pointed at a closed row -- the exact route M4.36's row says the original violation was found by.",
+      "id": "a05c5ad00e70",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "`m4-complete.sh`'s header teaches a `fencing_seam.py` parser gap that M4.56 closed, and calls M4.56 'the open row' when the row is `done` -- inside the paragraph M4.49 rewrote so the gate would stop teaching the belief that produced the bug.",
+      "task_id": "M4.70"
+    },
+    {
+      "evidence": "AGENTS.md:63-75 claims 'a standard naming a script that is absent fails, and so does this paragraph saying some are missing on a day they are all present.' scripts/check-portability.sh:137-142 implements only the second: the existence loop iterates `skill_named`, and the comment at :129-136 states the opposite of AGENTS.md in terms -- 'A *standard* may name a script nobody has written -- that is what roadmap.md's deferral table is for -- but a **skill** naming one cannot run'. AGENTS.md then says that itself two sentences later. An agent adding a standard rule that names a not-yet-written script believes a gate will notice when it never arrives. Pre-M4 (139a48d, M9.14); surfaced because it is one of the two paragraphs this round was asked to test.",
+      "id": "c9b50961713c",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "`AGENTS.md`'s 'checked in both directions' names a direction `check-portability.sh` deliberately does not check, and contradicts its own next sentence.",
+      "task_id": "M4.71"
+    },
+    {
+      "evidence": "docs/internal/product/backlog.md's M4 section notes: the header said '63 rows' and the five buckets summed 21+21+14+3+4=63 against 68 rows (65 done, 3 dissolved). The orphans were M4.59, M4.60, M4.61, M4.62, M4.63. The paragraph was last re-argued by e245118 (M4.48); five commits added a row after it (M4.50, M4.51, M4.53, M4.55, M4.59), each leaving the count alone. check-backlog-rows.sh passes and checks only cell shape and commit-id resolution. NO TASK: fixed in the commit that records this verdict, because M0.32's rule makes the re-argument owed by any commit that adds a row and this one adds eight -- and M4.64, the row for that commit, is `done`, which record refuses as a task_id. Argued in baselines/review.txt.",
+      "id": "0391bb840fa7",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "The `sdd.md` cap argument in this section's notes accounted for 63 of the table's 68 rows, and the five in no bucket were exactly the last five -- the fifth occurrence of the defect the paragraph itself enumerates four previous instances of, and states the rule against."
+    },
+    {
+      "evidence": "docs/internal/product/backlog.md's M4 section notes against the Notes cells themselves: the median of M4.31-M4.63 is 406 words -- the 442 the sentence calls drift -- and the nine rows before M4.64 average 908 (M4.55 985, M4.56 944, M4.57 646, M4.58 514, M4.59 733, M4.60 1549, M4.61 1190, M4.62 970, M4.63 642). baselines/review.txt's 35f264857aa6 argues ADR-0016 rule 2 to a successor ADR on the measurement that it has not held for four consecutive milestones; a reader of the backlog was told M4 had responded to that finding. NO TASK: deleted in the commit that records this verdict -- M4.63's rule that a self-description nothing checks goes rather than gets another edition -- and M4.64 is `done`. Argued in baselines/review.txt.",
+      "id": "161d39ad936f",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "The section's 'Rows below M4.30 are deliberately terse' claim was false by measurement, in the paragraph that cites the measurement it was answering."
+    },
+    {
+      "evidence": "Commit bodies: M4.47 'Four rounds ... Rounds 3 and 4 were both prose I had broken'; M4.50 'raised in round three'; M4.51 'round four'; M4.52 'Four rounds on one sentence'; M4.54 'Four rounds'; M4.56 'Four review rounds'; M4.58 'not by five rounds of review'; M4.60 'Four rounds, and three of them found my corrections wrong rather than my code'. No change was withdrawn and re-cut, which review.md:145-163 says is what a reviewer finding new blocking defects past round two is describing. ADR-0016's measured argument for the cap is 'M1's prose-heavy rows took three to nine review rounds each, while both real defects that milestone shipped were found by the milestone review, not those rounds' -- and M4 reproduces it exactly: the two protocol defects a real consumer hits (M4.47, M4.48) came from the boundary review while the extra rounds went to wording. check-reviewed.sh binds a hash, not a count. NO TASK: the outcome is a decision about ADR-0016, not a repair -- baselines/review.txt's 35f264857aa6 routes the sibling rule (rule 2) the same way.",
+      "id": "f70cd81b6d4e",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "`review.md` rule 15a's two-round cap was exceeded in eight of these seventeen commits, every time on prose that rule 9a makes `minor` and rule 15 says to record rather than fix, and nothing can read a round count."
+    },
+    {
+      "evidence": "docs/internal/product/backlog.md's M4.70 row enumerates all sixteen with their files and line numbers. Recorded as a minor because ADR-0016 rule 4 makes the harvest the boundary round's job and the row is the harvest.",
+      "id": "de24b76c7f3e",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Unharvested rule-15 minors from these seventeen commits, plus four claims this round added, are swept into M4.70 rather than listed individually here."
+    },
+    {
+      "evidence": ".github/workflows/mutants.yml installs the tool per shard with no cache (argued, for target-cache reasons), and `if-no-files-found: error` plus check-mutants-baseline.sh's exact-count refusal means one registry hiccup makes both that shard and the baseline job red with a message about a missing shard. Correct by design; it is the 'red for a reason that is not a defect' path.",
+      "id": "74823aa72fda",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "The nightly's union verdict is hostage to eight independent uncached `cargo install cargo-mutants` runs, and no comment in either file names that path."
+    },
+    {
+      "evidence": "docs/internal/product/roadmap.md:257 against scripts/check-secrets.sh, security.md:52 and AGENTS.md:64, which all say it exists. The row is not marked discharged and names no residue, unlike its neighbours. Pre-M4; swept into M4.70.",
+      "id": "3bdc8ca728d3",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "`roadmap.md`'s deferred-table row for `security.md` rules 6-7 says rule 7 'is held by review alone' until the script exists, and `scripts/check-secrets.sh` has existed since M9.14."
+    }
+  ],
+  "milestone": "M4",
+  "recorded_at": "2026-09-14T17:37:18Z",
+  "reviewer": "claude-opus-5 (M4 third boundary round, three fresh milestone-reviewer lenses: group protocol; gates and harness; documents, backlog and self-claims -- none drove M4)",
+  "verdict": "changes-requested"
+}

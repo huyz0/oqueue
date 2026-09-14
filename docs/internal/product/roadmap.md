@@ -216,6 +216,22 @@ rejected"). ⚠️ All three are here rather than in the table below for the sam
 reason FR-15 and FR-22 are: none has a receiving milestone, and inventing one
 to satisfy the rule would be the decision rather than a record of it.
 
+⚠️ **A fourth joins them, from M4's third boundary round** (`M4.64`, argued as
+`f70cd81b6d4e`). **`review.md` rule 15a's two-round cap**: M4 exceeded it in
+eight of the seventeen commits that round read, every time on prose which rule
+9a itself makes `minor` and rule 15 says to record rather than fix, and no
+change was withdrawn and re-cut the way the rule says a reviewer still finding
+defects past round two is describing. `ADR-0016`'s measured argument for the
+cap was that M1's prose-heavy rows took three to nine rounds each while both
+real defects that milestone shipped were found by its boundary review — which
+M4 reproduced exactly, the two protocol defects a real consumer hits
+(`M4.47`, `M4.48`) coming from a boundary round rather than from any of those
+extra rounds. Either the cap is wrong for repair-and-sweep commits and should
+say so, or M4 broke it eight times with nothing able to notice: `check-reviewed.sh`
+binds a hash, not a round count. ⚠️ **It belongs beside the successor to
+`ADR-0016` above** — same ADR, sibling rules — and it is here rather than in
+the table for the same reason the other three are.
+
 ## Deferred into a later milestone
 
 ⚠️ Recorded here because a deferral that exists in nobody's plan is indistinguishable
