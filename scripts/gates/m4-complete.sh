@@ -50,11 +50,33 @@
 #     reachable in a test" while naming a test that reaches none of them.
 #     Both found by review. It now greps each variant out of the enum and
 #     requires `fencing/tests.rs` to name it.
-#   - ⚠️ **`check-fencing-seam.sh` is *not* what makes `error_code` the only
-#     constructor**, which an earlier draft of this header claimed: that gate
-#     lists five codes, and `sync_group.rs` constructs
-#     `REBALANCE_IN_PROGRESS` directly. The seam is a convention this gate
-#     neither enforces nor pretends to.
+#   - ⚠️ **`check-fencing-seam.sh` *is* what makes `error_code` the only
+#     constructor**, and this paragraph said the opposite until `M4.49`. It
+#     claimed that gate "lists five codes", that `sync_group.rs` constructs
+#     `REBALANCE_IN_PROGRESS` directly, and that the seam is "a convention
+#     this gate neither enforces nor pretends to". `M4.36` made all three
+#     false in one commit: the list is derived from the `Refusal` enum by
+#     `scripts/lib/fencing_seam.py` rather than frozen in the script, that
+#     construction was routed through the seam, and the hook is named
+#     `no handler constructs any Refusal code outside crate::fencing`.
+#     ⚠️ **Worse than stale for as long as it stood** — `M4.36`'s own row
+#     records that the violation it fixed was found by reading this file
+#     against that gate, so the paragraph was handing the next reader the
+#     belief that produced the bug. Today the seam answers six codes across
+#     six variants, and `M4.48` added a second leg refusing
+#     `UNKNOWN_SERVER_ERROR` anywhere in the five group handlers' module
+#     trees. ⚠️ **What that gate does *not* reach, so this paragraph does not
+#     become the next over-trust**: the derivation matches the literal
+#     `error_codes::NAME` spelling under `crates/oqueue-broker/src/`, so any
+#     handler that keeps that spelling off every line passes — a grouped
+#     import (`error_codes::{self, REBALANCE_IN_PROGRESS}`), a module alias
+#     (`use oqueue_codec::error_codes as ec;`), or the bare numeric literal.
+#     ⚠️ The *ordinary* import is caught, because
+#     `use oqueue_codec::error_codes::REBALANCE_IN_PROGRESS;` carries the
+#     spelling itself; and `fencing_seam.py`'s `VARIANT_RE` requires
+#     the variant name be followed by `[({,]` or end of line, so a variant
+#     given an explicit discriminant (`FencedInstance = 9,`) never enters the
+#     derived list at all. `M4.56` is the open row for the parser's gaps.
 #   - **FR-40 is re-asserted for M4's own APIs, and that is not M9's job.**
 #     `m9-complete.sh` asserts FR-40 over every API implemented *as of M9*,
 #     which predates all seven of these. `OffsetCommit` and `OffsetFetch`
