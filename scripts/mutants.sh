@@ -4,6 +4,7 @@
 #   scripts/mutants.sh                 every crate, mutants in the staged diff
 #   scripts/mutants.sh oqueue-core     one crate, mutants in the staged diff
 #   scripts/mutants.sh --full          the whole workspace, unnarrowed (nightly)
+#   scripts/mutants.sh --full --shard 3/8   one eighth of it (M4.60)
 #
 # ## Why narrowed
 #
@@ -134,12 +135,43 @@ cd "$REPO_ROOT"
 
 MODE="narrowed"
 CRATE=""
-case "${1:-}" in
-  --full) MODE="full" ;;
-  "") ;;
-  -*) fail "unknown argument: $1"; note "usage: scripts/mutants.sh [<crate>|--full]"; finish ;;
-  *) CRATE="$1" ;;
-esac
+SHARD=""
+# ⚠️ **`--shard k/n` only alongside `--full`**, and `M4.60` is why it exists:
+# the unnarrowed workspace pass is `M4.32`'s 2294 mutants over roughly six
+# hours, past the 330-minute bound `mutants.yml` declares, and
+# `testing.md` rule 16's word for the answer is "sharded". `cargo mutants`
+# takes `--shard k/n` itself; this only forwards it.
+#
+# ⚠️ **Refused with a narrowed run rather than ignored.** Sharding a diff's
+# worth of mutants divides a handful of them across eight jobs, which is
+# slower and answers a question nobody asked — and a flag silently dropped
+# is how a caller comes to believe it ran something it did not.
+while (( $# > 0 )); do
+  case "$1" in
+    --full) MODE="full" ;;
+    --shard)
+      shift
+      SHARD="${1:-}"
+      if [[ ! "$SHARD" =~ ^[0-9]+/[0-9]+$ ]]; then
+        fail "--shard takes k/n, not '${SHARD}'"
+        finish
+      fi
+      ;;
+    "") ;;
+    -*)
+      fail "unknown argument: $1"
+      note "usage: scripts/mutants.sh [<crate>|--full [--shard k/n]]"
+      finish
+      ;;
+    *) CRATE="$1" ;;
+  esac
+  shift
+done
+if [[ -n "$SHARD" && "$MODE" != "full" ]]; then
+  fail "--shard is only meaningful with --full"
+  note "a narrowed run's mutants are a diff's worth; dividing them answers nothing"
+  finish
+fi
 
 if ! has_rust; then
   skip "mutation testing (no Cargo.toml yet)"
@@ -179,6 +211,7 @@ fi
 # revisit this; until then the default is the sized cap the rule asks for.
 args=(--colors=never --no-times)
 [[ -n "$CRATE" ]] && args+=(-p "$CRATE")
+[[ -n "$SHARD" ]] && args+=(--shard "$SHARD")
 
 # ⚠️ **`M4.19`: the one change that actually moved this gate — 102 s to 33 s,
 # 3.1x, on the identical diff.** `[profile.mutants]` in the root manifest is
@@ -262,7 +295,7 @@ if [[ "$MODE" == "narrowed" ]]; then
   args+=(--in-diff "$diff_file")
 fi
 
-ok "running cargo mutants (${MODE}${CRATE:+, $CRATE})"
+ok "running cargo mutants (${MODE}${CRATE:+, $CRATE}${SHARD:+, shard $SHARD})"
 # ⚠️ `|| rc=$?`, not a bare call: a surviving mutant makes `cargo mutants` exit
 # non-zero, and under `lib.sh`'s `-e` a bare call would skip both the cleanup
 # below and the exit code this script exists to propagate.

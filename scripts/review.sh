@@ -67,7 +67,24 @@ BACKLOG="docs/internal/product/backlog.md"
 # harness: it narrows to `git diff --cached`, and the staged tree this script
 # plants has no usable index, so the gate skips — which rendered as "passed" in
 # every packet and told the reviewer a gate had run when it had not. `M0.17`.
-GATES_EXCLUDED=(check-commit-msg.sh check-reviewed.sh check-milestone-review.sh check-mutants.sh)
+#
+# ⚠️ **`check-mutants-baseline.sh` is excluded because it takes arguments.**
+# `M4.60` split the baseline's staleness check out of `check-mutants.sh` so
+# it can run once over a sharded run's union, which means it needs a
+# survivors directory and a shard count — and the discovery below runs every
+# `check-*.sh` bare. Run with none it prints its usage and exits 1, so every
+# packet from here on would carry a permanently red row, in a list the
+# reviewer is told not to re-check. That is worse than a missing row: it
+# trains the next reviewer to ignore the one place a genuinely broken gate
+# would show. The nightly is where it runs; `tests/gates/negative.sh` is
+# where it is watched failing.
+GATES_EXCLUDED=(
+  check-commit-msg.sh
+  check-reviewed.sh
+  check-milestone-review.sh
+  check-mutants.sh
+  check-mutants-baseline.sh
+)
 
 staged_hash() {
   # --diff-filter is deliberately absent: a deletion is part of what is being

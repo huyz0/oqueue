@@ -288,9 +288,12 @@ claim as a seed exploring every interleaving that run could take.
     ⚠️ **`M4.51` moved it to nightly** — `.github/workflows/mutants.yml`, a
     `schedule:` with a declared `timeout-minutes` — after `M4.32` measured the
     workspace pass at 2294 mutants over roughly six hours against the 23 s
-    figure the per-push placement had been argued from. Still unsharded;
-    `M4.60` is that row. Read the rule as the target and
-    `check-mutants.sh`'s header as what runs.
+    figure the per-push placement had been argued from. ⚠️ **`M4.60` sharded
+    it**, eight ways, with the baseline's own staleness judged once over the
+    union by `scripts/check-mutants-baseline.sh` — a shard sees an eighth of
+    the mutants, so the converse loop cannot run inside one. Both halves of
+    this rule are implemented. Read `check-mutants.sh`'s header for what
+    runs.
     **Diff-narrowed mutation runs on every commit; the full sharded run is
     nightly.** Cost becomes proportional to the change rather than to the
     codebase. → `scripts/mutants.sh`

@@ -4510,6 +4510,158 @@ RS
 run_case "check-fencing-seam.sh (a group handler with no source file)" \
   setup_fencing_missing_handler invoke_fencing_missing_handler \
   "no source file for handler(s): leave_group"
+# ── the baseline judged over a sharded union (M4.60) ───────────────────────
+#
+# ⚠️ **The converse loop moved out of `check-mutants.sh` when the nightly was
+# sharded**, because a shard sees 1/k of the mutants and every baseline entry
+# arguing a survivor in another shard looks dead to it. These drive
+# `check-mutants-baseline.sh` directly: it needs no cargo and no workspace,
+# only a survivors directory and a baseline.
+#
+# ⚠️ **Two directions, and the second is the one sharding created.** An entry
+# that argues nothing must still fail — that is `M4.32`'s property, which
+# must survive the move. And a *missing* shard must be refused rather than
+# treated as an empty one, because judging the baseline against a partial
+# union reports every entry about the absent shard as dead: the same false
+# report, arriving through absence instead of through logic.
+# ⚠️ **A fresh name per call, not one shared directory.** `new_scratch`
+# does `mkdir -p`, so calling it three times with the same name hands back
+# the same directory three times; this helper resets the two files it
+# writes and nothing else, so a later case writing a third shard file would
+# leave it there and inflate the count the must-pass block below checks —
+# failing working code. Found by review of `M4.60`.
+_baseline_union_seq=0
+_baseline_union_dir() {
+  _baseline_union_seq=$((_baseline_union_seq + 1))
+  local dir; dir="$(new_scratch "mutants-union-$_baseline_union_seq")"
+  mkdir -p "$dir/scripts" "$dir/baselines" "$dir/surv"
+  cp "$REPO_ROOT/scripts/check-mutants-baseline.sh" "$REPO_ROOT/scripts/lib.sh" \
+    "$dir/scripts/"
+  cat > "$dir/baselines/mutants.txt" <<'BASE'
+crates/k/src/lib.rs:2:5: replace classify  argued, and it does survive
+crates/k/src/lib.rs:9:9: replace nothing  argues a mutant no shard reported
+BASE
+  printf 'crates/k/src/lib.rs:2:5: replace classify
+' > "$dir/surv/1-of-2.txt"
+  : > "$dir/surv/2-of-2.txt"
+  # ⚠️ **No `git init` or commit here.** `new_scratch` already makes the
+  # directory a repository, and `check-mutants-baseline.sh` falls back to
+  # reading the baseline from the worktree when `git show :` finds nothing
+  # staged — so the fixture needs neither. ⚠️ An earlier version ran
+  # `( cd ... && git init && git add && git commit )`, and that subshell
+  # returning non-zero aborted this function under `set -e` *before* its
+  # final `printf`, so it produced the empty string: `run_case` then ran the
+  # gate in the suite's own directory and the case reported `ok` for a
+  # reason with nothing to do with its fixture. Found with `bash -x` after
+  # the sibling case below aborted the whole suite.
+  printf '%s\n' "$dir"
+}
+
+setup_baseline_argues_nothing() {
+  _baseline_union_dir
+}
+invoke_baseline_argues_nothing() {
+  ( cd "$1" && bash scripts/check-mutants-baseline.sh surv 2 )
+}
+
+# ⚠️ **A shard that never reported.** The directory holds one file where the
+# caller launched two, so the union is incomplete and the entry arguing the
+# absent shard's survivor would read as dead.
+setup_baseline_missing_shard() {
+  local dir; dir="$(_baseline_union_dir)"
+  rm "$dir/surv/2-of-2.txt"
+  printf '%s\n' "$dir"
+}
+invoke_baseline_missing_shard() {
+  ( cd "$1" && bash scripts/check-mutants-baseline.sh surv 2 )
+}
+
+# ⚠️ **The shard branches themselves, which nothing guarded.** The three
+# cases below drive `check-mutants-baseline.sh`; these drive the two
+# branches that decide a shard's behaviour in the nightly, and review found
+# both deletable with the suite staying green.
+#
+# ⚠️ **Only `mutants.sh`'s two refusals live here**, because its argument
+# parsing precedes `has_rust` and `require_tool`, so they genuinely need no
+# cargo. The two that drive `check-mutants.sh` are inside the
+# `_have_mutants` guard further down: a stub stands in for the *runner*, but
+# `check-mutants.sh` checks for `cargo mutants` itself before ever invoking
+# it. A first version of this comment claimed otherwise and put them here.
+# ⚠️ **A fresh name per call**, for `_baseline_union_dir`'s reason twelve
+# lines up: `new_scratch` does `mkdir -p`, this helper rewrites three paths
+# and removes nothing, so call 1's `target/mutants-survivors/1-of-8.txt`
+# would survive into call 2. Harmless only until the obvious next case — an
+# unsharded run recording *no* survivors file — which would read the
+# leftover and fail working code. Review caught this reintroduced in the
+# helper written beside the one that had just been fixed.
+_shard_fixture_seq=0
+_shard_fixture() {
+  _shard_fixture_seq=$((_shard_fixture_seq + 1))
+  local dir; dir="$(new_scratch "mutants-shard-$_shard_fixture_seq")"
+  mkdir -p "$dir/scripts" "$dir/baselines"
+  cp "$REPO_ROOT/scripts/check-mutants.sh" "$REPO_ROOT/scripts/lib.sh" "$dir/scripts/"
+  # ⚠️ An entry arguing a mutant no shard reports. Under `--full` this is a
+  # stale-baseline failure; under `--shard` it must be *silent*, because a
+  # shard sees an eighth of the mutants and cannot tell stale from elsewhere.
+  printf 'crates/k/src/lib.rs:9:9: replace nothing  argues a mutant nobody reported\n' \
+    > "$dir/baselines/mutants.txt"
+  printf '[workspace]\nmembers = []\nresolver = "2"\n' > "$dir/Cargo.toml"
+  cat > "$dir/scripts/mutants.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "2 mutants tested: 2 caught"
+exit 0
+STUB
+  chmod +x "$dir/scripts/mutants.sh"
+  ( cd "$dir" && git add -A ) >/dev/null 2>&1 || true
+  printf '%s\n' "$dir"
+}
+
+# ⚠️ **`mutants.sh`'s own refusals**, which decide whether a flag was heard.
+setup_shard_without_full() {
+  local dir; dir="$(new_scratch mutants-shard-arg)"
+  mkdir -p "$dir/scripts"
+  cp "$REPO_ROOT/scripts/mutants.sh" "$REPO_ROOT/scripts/lib.sh" "$dir/scripts/"
+  printf '[workspace]\nmembers = []\nresolver = "2"\n' > "$dir/Cargo.toml"
+  printf '%s\n' "$dir"
+}
+invoke_shard_without_full() {
+  ( cd "$1" && bash scripts/mutants.sh --shard 1/8 )
+}
+run_case "mutants.sh (--shard without --full)" \
+  setup_shard_without_full invoke_shard_without_full \
+  "only meaningful with --full"
+
+setup_shard_malformed() {
+  setup_shard_without_full
+}
+invoke_shard_malformed() {
+  ( cd "$1" && bash scripts/mutants.sh --full --shard three-eighths )
+}
+run_case "mutants.sh (a --shard that is not k/n)" \
+  setup_shard_malformed invoke_shard_malformed \
+  "takes k/n"
+
+run_case "check-mutants-baseline.sh (an entry that argues nothing)" \
+  setup_baseline_argues_nothing invoke_baseline_argues_nothing \
+  "argues no surviving mutant"
+run_case "check-mutants-baseline.sh (a shard that never reported)" \
+  setup_baseline_missing_shard invoke_baseline_missing_shard \
+  "shard file(s) in surv, expected 2"
+
+# ⚠️ **And the union must *pass* on a complete one**, which `run_case` cannot
+# express — it asserts a non-zero exit. Without this, a script that refused
+# every input would satisfy both cases above.
+TOTAL=$((TOTAL + 1))
+_baseline_ok_dir="$(_baseline_union_dir)"
+printf 'crates/k/src/lib.rs:9:9: replace nothing\n' > "$_baseline_ok_dir/surv/2-of-2.txt"
+if ( cd "$_baseline_ok_dir" && bash scripts/check-mutants-baseline.sh surv 2 ) >/dev/null 2>&1; then
+  ok "check-mutants-baseline.sh passes when every entry argues a live survivor"
+else
+  fail "check-mutants-baseline.sh refused a complete, honest union"
+  note "$( ( cd "$_baseline_ok_dir" && bash scripts/check-mutants-baseline.sh surv 2 ) 2>&1 | sed 's/^/     /')"
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
 # ── a harness leg's own broker outliving its ceiling (M4.61) ───────────────
 #
 # ⚠️ **`run_bounded` signals the direct child only**, and three harness legs
@@ -4863,6 +5015,57 @@ if _have_mutants; then
   run_case "check-mutants.sh (the skip phrase inside a tool error)" \
     setup_mutants_skip_phrase_in_an_error invoke_mutants_skip_phrase_in_an_error \
     "surviving mutant, not killed and not argued"
+  # ⚠️ **Inside `_have_mutants`, and the comment above these two used to say
+  # the opposite.** Their stub stands in for `mutants.sh`, but
+  # `check-mutants.sh` runs `require_tool cargo` and `cargo mutants
+  # --version` itself long before invoking it — so on a host without the
+  # tool the gate exits 0, the must-pass block takes its else arm and the
+  # `run_case` below reports a working gate green on a broken artifact.
+  # Two red cases accusing a working gate, which is what this guard exists
+  # to prevent. `M4.62`'s review found the identical defect forty lines
+  # below; `M4.60` reintroduced it one round later. ⚠️ The two `mutants.sh`
+  # cases stay outside: its refusals precede `has_rust`, so they genuinely
+  # need no cargo.
+  # ⚠️ **Must *pass*, so `run_case` cannot express it.** The property is that a
+  # shard stays quiet about the baseline: delete the `if [[ -n "$SHARD" ]]`
+  # block in `check-mutants.sh` and this fixture reports the entry stale,
+  # which is the nightly failing a correct baseline on seven runs in eight.
+  # ⚠️ **`|| _shard_rc=$?`, because an unguarded `$( )` aborts the suite.**
+  # `lib.sh` sets `-e` with `inherit_errexit`, so a failing substitution ends
+  # the run at this line rather than failing this case — and this case exists
+  # for the state in which that gate *does* fail. A first version omitted it
+  # and the probe that should have shown the case working showed the suite
+  # stopping instead. Second time in this task; the first was `M4.61`'s label
+  # case.
+  TOTAL=$((TOTAL + 1))
+  _shard_dir="$(_shard_fixture)"
+  _shard_rc=0
+  _shard_out="$( ( cd "$_shard_dir" && bash scripts/check-mutants.sh --full --shard 1/8 ) 2>&1 )" \
+    || _shard_rc=$?
+  if (( _shard_rc == 0 )) \
+    && ! grep -q "argues no surviving mutant" <<<"$_shard_out" \
+    && [[ -f "$_shard_dir/target/mutants-survivors/1-of-8.txt" ]]; then
+    ok "a shard stays silent about the baseline and records its survivors for the union"
+  else
+    fail "a shard judged the baseline, or recorded no survivors (rc=$_shard_rc)"
+    note "the converse loop must not run per-shard: it sees an eighth of the mutants,"
+    note "so every entry arguing a survivor elsewhere reads as dead"
+    note "$(sed 's/^/     /' <<<"$_shard_out")"
+    FAILED_CASES=$((FAILED_CASES + 1))
+  fi
+
+  # ⚠️ **And the same fixture *without* `--shard` must report it**, or the case
+  # above passes on a gate that never judges the baseline at all.
+  setup_shard_full_still_judges() {
+    _shard_fixture
+  }
+  invoke_shard_full_still_judges() {
+    ( cd "$1" && bash scripts/check-mutants.sh --full )
+  }
+  run_case "check-mutants.sh (unsharded, an entry that argues nothing)" \
+    setup_shard_full_still_judges invoke_shard_full_still_judges \
+    "argues no surviving mutant"
+
   # ⚠️ **The one case that must *pass*, so `run_case` cannot express it** —
   # that helper asserts a non-zero exit, which is the whole of what it checks.
   # A gate that refuses a legitimate `unviable:` entry is as broken as one that
@@ -4883,7 +5086,7 @@ if _have_mutants; then
   fi
 else
   skip_case check-mutants.sh "cargo-mutants not installed" \
-    "install: cargo install cargo-mutants" 6
+    "install: cargo install cargo-mutants" 8
 fi
 
 # --- the harness checks itself ----------------------------------------------

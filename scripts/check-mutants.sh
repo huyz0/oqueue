@@ -25,8 +25,8 @@
 #
 # **Narrowed in pre-commit, full in the nightly tier.** `testing.md` rule 16
 # asks for "diff-narrowed on every commit; the full sharded run is nightly" —
-# ⚠️ this gets the first half exactly and the second **partly**: nightly since
-# `M4.51` (`.github/workflows/mutants.yml`), still unsharded.
+# ⚠️ this gets both halves as of `M4.60`: nightly since `M4.51`
+# (`.github/workflows/mutants.yml`), sharded eight ways since `M4.60`.
 #
 # ⚠️ **It was per-push until `M4.51`, argued from a number that described
 # something else.** This paragraph said "At 23 s that is affordable; the day it
@@ -44,13 +44,19 @@
 # suite and the seed-corpus replay were serialised behind it despite
 # `if: always()`.
 #
-# ⚠️ **The nightly job declares `timeout-minutes: 330`, and that bound is
-# expected to fire until sharding lands.** It does not make a six-hour run
-# fit; it makes the failure *say* the run did not fit, which the platform's
-# own cancellation does not. `cargo mutants --shard k/n` is what makes it fit
-# and `M4.60` is the row — sharding interacts with the converse loop below,
-# because a shard tests 1/k of the mutants and every baseline entry arguing a
-# survivor in another shard looks dead to it.
+# ⚠️ **The nightly runs eight shards, each bounded at 320 minutes inside a
+# 330-minute job.** Before `M4.60` it was one step that could not finish, and
+# this paragraph said the bound was expected to fire; it is now an exception
+# worth investigating. `cargo mutants --list` gives 2303 mutants and 288 in
+# shard 1/8.
+#
+# ⚠️ **Sharding is not a flag, which is why it was its own row.** The
+# converse loop below cannot run per-shard: a shard tests 1/k of the mutants,
+# so every baseline entry arguing a survivor in another shard looks dead to
+# it, and the loop would fail a correct baseline seven runs in eight. It runs
+# once over the union, in `scripts/check-mutants-baseline.sh`. The survivor
+# loop is unaffected — an unargued survivor in a shard is a failure whatever
+# the others found.
 #
 # ⚠️ **The placement was argued twice from bad numbers before it was argued from
 # good ones.** First against 23 s, which is the *unnarrowed* run; then against
@@ -83,6 +89,40 @@ if ! cargo mutants --version >/dev/null 2>&1; then
   note "⚠️ a missing tool is a skip, never a pass — this gate did not run"
   finish
 fi
+
+# ⚠️ **Parsed here as well as in `mutants.sh`, because this script decides
+# something that one does not**: whether the converse loop may run. The
+# forwarding is still `"$@"`, so the two cannot disagree about what was
+# asked for — only about what each does with it. `M4.60`.
+# ⚠️ **The same walk `mutants.sh` does, over every argument.** This script
+# decides something that one does not — whether the converse loop may run —
+# and that decision turns on the *whole* argument list: the loop is correct
+# only for an unnarrowed, unsharded, whole-workspace run. ⚠️ **Reading `$1`
+# alone was wrong from the moment `M4.60` gave `mutants.sh` a `while` loop**,
+# and review caught it: `--full oqueue-core` then meant `-p oqueue-core` to
+# the runner while `$1 == --full` still let the converse loop run, so the
+# gate reported every entry outside that crate stale and told a maintainer
+# to delete two correct ones. Mirroring the parse is the only way the two
+# cannot disagree — `build.md` rule 22's reason for this script delegating
+# to that one at all.
+FULL=0
+CRATE=""
+SHARD=""
+_args=("$@")
+for _i in "${!_args[@]}"; do
+  case "${_args[$_i]}" in
+    --full) FULL=1 ;;
+    --shard) SHARD="${_args[$((_i + 1))]:-}" ;;
+    -*) ;;
+    *)
+      # The value of a `--shard` is not a crate name.
+      if (( _i > 0 )) && [[ "${_args[$((_i - 1))]}" == "--shard" ]]; then
+        continue
+      fi
+      CRATE="${_args[$_i]}"
+      ;;
+  esac
+done
 
 out="$REPO_ROOT/target/tmp/mutants-run.$$"
 mkdir -p "$REPO_ROOT/target/tmp"
@@ -265,13 +305,41 @@ stale=0
 # indistinguishable here from one that was killed. An entry whose reason
 # begins `unviable:` says that is what happened and why, which is a claim a
 # reader can check — where silence is not.
-# ⚠️ **`$1`, exactly as `mutants.sh` reads it.** That script's own `case`
-# matches on `${1:-}` alone, so `check-mutants.sh oqueue-core --full` takes
-# `oqueue-core` as the crate and stays *narrowed* — and a `$*` substring test
-# called it full and reported every entry outside that crate stale. Mirroring
-# the parse is the only way the two cannot disagree, which is `build.md` rule
-# 22's reason for this script delegating to that one in the first place.
-if [[ "${1:-}" == "--full" ]]; then
+# ⚠️ **Only for a run that saw the whole workspace**, which is what `FULL`
+# and an empty `CRATE` together mean — see the parse above, and why reading
+# `$1` alone stopped being enough.
+# ⚠️ **And never on a *shard*, which is `M4.60`'s whole reason for being its
+# own row.** A shard tests 1/k of the mutants, so every baseline entry
+# arguing a survivor in another shard has no match here and reads as dead —
+# the loop below would fail a correct baseline on seven runs out of eight.
+# The judging half has to see the union, which is
+# `scripts/check-mutants-baseline.sh` running once after every shard has
+# reported. The survivor loop above is *not* affected: an unargued survivor
+# in this shard is a failure whatever the other shards found, so it stays
+# here where it fails fast and names the shard that found it.
+if [[ -n "$SHARD" ]]; then
+  survivors_out="$REPO_ROOT/target/mutants-survivors"
+  mkdir -p "$survivors_out"
+  # ⚠️ **Written even when empty**, and `check-mutants-baseline.sh` counts
+  # the files: a shard that found nothing is a real answer, and a shard that
+  # never ran must not be indistinguishable from it.
+  #
+  # ⚠️ **And written even when this shard has already failed**, which is why
+  # it sits after the survivor loop's notes rather than inside an early
+  # exit. A failing shard still knows which mutants survived in it, and the
+  # union needs them: drop a red shard's survivors and every baseline entry
+  # arguing one of them reads as dead to the union check, turning one real
+  # failure into a second, false one. `finish` below still exits non-zero,
+  # because the `fail` calls above already counted.
+  printf '%s\n' "${survivors[@]}" | grep -v '^$' \
+    > "$survivors_out/${SHARD%%/*}-of-${SHARD##*/}.txt" || true
+  ok "shard $SHARD: ${#survivors[@]} survivor(s) recorded for the union check"
+  note "the baseline's own staleness is judged once, by check-mutants-baseline.sh"
+  rm -f "$out"
+  finish
+fi
+
+if (( FULL )) && [[ -z "$CRATE" ]]; then
   for a in "${argued[@]}"; do
     loc="${a%%  *}"
     reason="${a#*  }"

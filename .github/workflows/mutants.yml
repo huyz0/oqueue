@@ -20,26 +20,34 @@
 # the negative suite, the seed-corpus replay — were serialised behind six
 # hours despite `if: always()`.
 #
-# ⚠️ **What this job is expected to do tonight: hit the bound and report no
-# verdict at all.** `timeout-minutes: 330` does not make a six-hour run fit —
-# and a hosted runner has 4 cores against the 12 the container `M4.32`
-# measured on, so it is longer here, not shorter. The bound does not buy a
-# result; it buys a failure that *says* the run did not fit, where the
-# platform's own 360-minute cancellation says nothing. ⚠️ **Do not read a
-# timeout here as the workflow being broken, and do not re-dispatch it**:
-# until `M4.60` lands there is no run short enough to finish.
+# ⚠️ **A timeout here is a real failure, and must be investigated.** Until
+# `M4.60` this ran the whole pass in one step and was *expected* to hit its
+# bound — `M4.32` measured 2294 mutants over roughly six hours against a
+# 330-minute job — so this header told the reader not to re-dispatch it.
+# That instruction is retired with the condition that produced it. A shard
+# is an eighth of the workspace; one hitting 320 minutes means a stalled
+# runner, a mis-sized shard count, or a build that ran away.
 #
-# ⚠️ **The step log will be empty on that timeout**, which is why the
-# `if: always()` upload below exists: `check-mutants.sh` redirects the whole
-# `mutants.sh` run into `target/tmp/mutants-run.$$` and prints nothing until
-# it returns, so a killed step has printed nothing. The artifact is the only
-# place the partial run survives.
+# ⚠️ **What no number here is measured on the machine that runs it**, and
+# that matters most to whoever next changes the shard count. `M4.32`'s six
+# hours were taken in a container with 12 CPUs; a hosted runner has 4, so
+# the same work is *longer* here, not shorter. What is measured is the
+# count — `cargo mutants --list` gives 2303 mutants and 288 in shard 1/8 —
+# and 288 would have to average ~66 s each to breach 320 minutes. Halving
+# the shard count puts ~576 under the same bound, and the margin for that
+# is not something this repository can currently look up. The first nightly
+# is what settles it (`review.md` rule 12a, `M1.34`'s precedent).
 #
-# ⚠️ **Rule 16's word is "sharded", and `M4.60` is that row** —
-# `cargo mutants --shard k/n` is how, and it is a row rather than a flag
-# because sharding breaks `check-mutants.sh`'s converse loop: a shard sees
-# 1/k of the mutants, so every baseline entry arguing a survivor in another
-# shard looks dead to it.
+# ⚠️ **The step log is empty on a timeout**, which is why the `if: always()`
+# uploads below exist: `check-mutants.sh` redirects the whole `mutants.sh`
+# run into `target/tmp/mutants-run.$$` and prints nothing until it returns,
+# so a killed step has printed nothing. The artifacts are where a partial
+# run survives.
+#
+# ⚠️ **Sharding was a task rather than a flag** because it splits the gate:
+# a shard sees 1/k of the mutants, so every baseline entry arguing a
+# survivor in another shard looks dead to it, and the converse loop cannot
+# run inside one. It runs once over the union, in the `baseline` job below.
 #
 # ⚠️ **And when a run does finish, it is red on its own merits**: `M4.32`'s
 # run left 55 unargued survivors, 42 of them in `oqueue-codec`. That is M5's,
@@ -59,11 +67,12 @@ name: mutants
     # delays on-the-hour crons under load. ⚠️ **The minute is not a stagger,
     # and no small offset from it could be.** This is the repository's *third*
     # nightly: `fuzz.yml` runs 03:17-04:02 and `seeds.yml` 04:23-05:08 under
-    # their 45-minute bounds, while this one runs 02:11 to its 330-minute
-    # bound — so it contains both, and shifting it by minutes changes
-    # nothing. (A start after ~05:10 would clear them, at the cost of the
-    # off-peak window; that trade is not worth making for a job `M4.60` is
-    # about to shorten.) ⚠️ **`seeds.yml:14` is the comment this makes
+    # their 45-minute bounds. ⚠️ **How long this one runs is no longer a
+    # single number**: since `M4.60` eight shards start together, each
+    # bounded at 320 minutes, so the window is as wide as the slowest of
+    # them and the overlap with the other two nightlies is a question about
+    # runner capacity rather than about start times. Shifting this by
+    # minutes changes nothing either way. ⚠️ **`seeds.yml:14` is the comment this makes
     # false** — "not the same minute as fuzz.yml, so a slow night does not
     # queue the two against each other" — and it is the only one: `fuzz.yml`
     # argues its own minute and names no other workflow. Correcting
@@ -77,6 +86,19 @@ permissions:
 jobs:
   mutants:
     runs-on: ubuntu-latest
+    # ⚠️ **Eight shards, because one pass does not fit.** `M4.32` measured
+    # the workspace at 2294 mutants over roughly six hours; an eighth of it
+    # is comfortably inside the step bound below, where the whole was not.
+    # `testing.md` rule 16 asked for "the full sharded run" and `M4.51` could
+    # deliver only the schedule. `M4.60` is the sharding.
+    #
+    # ⚠️ **`fail-fast: false`**, or the first red shard cancels the other
+    # seven and the union job has nothing to judge — turning one unargued
+    # survivor into a refusal to answer about the baseline at all.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     # ⚠️ **Job-level, and `build.md` rule 21 is why it has to be.** Incremental
     # compilation is pure overhead where every build starts clean, and it is
     # worse than overhead here: this job is a per-mutant rebuild loop whose
@@ -117,7 +139,7 @@ jobs:
       # ⚠️ Through `check-mutants.sh`, never `cargo mutants` directly: the
       # gate is the comparison against `baselines/mutants.txt`, and
       # `mutants.sh` owns `TMPDIR`, the profile and the target directory.
-      - name: mutation testing (full)
+      - name: mutation testing (shard ${{ matrix.shard }} of 8)
         # ⚠️ **A step bound below the job's, and that ordering is the whole
         # mechanism.** A step killed by its own `timeout-minutes` is marked
         # *failed*, and the job carries on to the next step — so the upload
@@ -127,19 +149,37 @@ jobs:
         # minutes for the upload and keeps the job bound as the backstop it
         # should be rather than the path taken every night.
         timeout-minutes: 320
-        run: scripts/check-mutants.sh --full
+        run: scripts/check-mutants.sh --full --shard ${{ matrix.shard }}/8
 
-      # ⚠️ **The timeout is the case this exists for** — the step above prints
-      # nothing until `check-mutants.sh` returns, and it is not expected to
-      # return, so the artifact is the only place tonight's partial run
-      # survives. `seeds.yml`'s "Upload any failing seed" is the same shape
-      # for the same reason, and this borrows it rather than inventing one.
+      # ⚠️ **A timeout is the case this exists for, and it is now the
+      # exception rather than every night.** The step above prints nothing
+      # until `check-mutants.sh` returns, so a shard killed at its bound has
+      # printed nothing and this artifact is the only place its partial run
+      # survives. ⚠️ Before `M4.60` the step was the whole workspace and was
+      # *not expected to return at all*; this sentence said so, and survived
+      # three rounds of that change being made around it. `seeds.yml`'s
+      # "Upload any failing seed" is the same shape for the same reason, and
+      # this borrows it rather than inventing one.
       #
-      # ⚠️ **`always()` is the backstop, not the mechanism**, and the
-      # difference matters because the mechanism is checkable and the
-      # backstop is not. The step bound above is what makes this run on the
-      # expected path: the mutation step fails at 320 minutes and the job
-      # continues here normally. `always()` covers what is left — a job-level
+      # ⚠️ **`always()` is load-bearing on *every* path, including the one
+      # the step bound produces**, and an earlier version of this note called
+      # it a backstop for the job bound alone. A failed step — including one
+      # killed by its own `timeout-minutes` — skips every subsequent step
+      # carrying no condition, so without `always()` the upload is silently
+      # skipped on exactly the timed-out nightly this artifact exists for.
+      # `if: failure()` or `!cancelled()` would also preserve that path; what
+      # is not available is deleting the condition as dead weight, which the
+      # old wording invited. `M4.51`'s round four recorded it, `M4.60` fixed
+      # it. ⚠️ **Sharding does not remove the need for it either**: a
+      # finished run still exits non-zero while `M4.32`'s 55 survivors
+      # stand, and a shard killed by a mis-set bound or a stalled runner is
+      # exactly what the artifact is for.
+      #
+      # ⚠️ **What the step bound buys is different**: the mutation step fails
+      # at 320 minutes rather than the job being cancelled at 330, and a
+      # failed step still runs conditioned steps where a cancelled job's
+      # behaviour is the one thing this file cannot verify. `always()` covers
+      # what is left — a job-level
       # cancellation at 330, or an interrupted run — and **whether an
       # `always()` step survives a job-level `timeout-minutes` cancellation is
       # not verified by running it**, because nothing in this checkout can.
@@ -156,7 +196,65 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: mutants-run-log
+          name: mutants-run-log-${{ matrix.shard }}
           path: target/tmp/mutants-run.*
           if-no-files-found: ignore
           retention-days: 14
+
+      # ⚠️ **The survivors this shard found, for the union job below.** Each
+      # shard answers "is every survivor of *mine* argued?" on its own; only
+      # the union can answer "does every argued entry still argue
+      # something?", because a shard sees 1/8 of the mutants and every entry
+      # about the other seven eighths looks dead to it.
+      #
+      # ⚠️ **`if: always()`, because a red shard's survivors are still part
+      # of the union.** Dropping them makes every entry arguing one of them
+      # read as dead, turning one real failure into a second, false one.
+      # ⚠️ **`if-no-files-found: error` rather than `ignore`, and what its
+      # absence means is narrower than it looks.** The file is written once
+      # a shard reaches the survivor loop — including when that loop already
+      # failed, because a red shard's survivors are still part of the union.
+      # It is *not* written on the exits above that loop: a tool failure, a
+      # run that generated no mutants, a malformed baseline entry. Those end
+      # the shard before it has anything to record, so `error` here reports
+      # the upload rather than letting the union job infer "a shard with no
+      # survivors" from silence. ⚠️ **A malformed baseline is the case to
+      # know about**: every shard fails it identically, so every upload
+      # errors and the union job adds `no survivors directory` on top —
+      # noisy, and correct, since judging the baseline against nothing is
+      # the one thing that must not happen. A first version of this comment
+      # claimed the file is written on every path; review found three where
+      # it is not.
+      - name: this shard's survivors
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-survivors-${{ matrix.shard }}
+          path: target/mutants-survivors/
+          if-no-files-found: error
+          retention-days: 14
+
+  # ⚠️ **The baseline's own staleness, judged once over the union.**
+  # `M4.32`'s converse loop is what stops a suppression for a mutant that
+  # moved or was killed from sitting in `baselines/mutants.txt` unnoticed,
+  # and it is the half of `check-mutants.sh` that a shard cannot run.
+  #
+  # ⚠️ **`if: always()` and `needs: mutants`**: the union is judged whether
+  # or not a shard went red, because an unargued survivor and a stale
+  # baseline entry are different failures and a reader wants both. The
+  # script itself refuses if fewer than eight shard files arrived.
+  baseline:
+    needs: mutants
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: mutants-survivors-*
+          path: target/mutants-survivors-by-shard
+          merge-multiple: true
+      - name: every argued entry still argues a live survivor
+        run: |
+          scripts/check-mutants-baseline.sh target/mutants-survivors-by-shard 8
