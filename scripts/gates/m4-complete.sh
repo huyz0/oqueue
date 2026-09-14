@@ -164,10 +164,47 @@ run_counted "FR-40: OffsetFetch's all-topics form hides another principal's topi
 # signal to promote this to an assertion — FR-21's leg below works the same
 # way, and it is the only thing that stops a recorded deferral being
 # discharged without anyone noticing.
+# ⚠️ **Every file of the five handlers, not five named files** — `M4.50`.
+# This loop opened `join_group/mod.rs` and called it the `JoinGroup`
+# handler; `code-structure.md` rule 16 has split the five across fourteen
+# modules, and `sync_group/barrier.rs` was created by `M4.43` *after* this
+# leg was written. Measured before the fix: a `group_authorized(..)` taking
+# an `AuthzContext` appended to `barrier.rs` left this leg printing "unmet
+# and reported". M12 task 3a can land its check in `round/plan.rs`, where
+# the roster is built, and a closed milestone's gate would go on reporting
+# the deferral open forever. `group_handler_files` is the shared walk, and
+# it refuses to answer at all if a handler has no source file.
+handler_list="$(group_handler_files 2>&1)" || {
+  fail "a group-protocol handler has no source file -- FR-40's tripwire cannot run"
+  while IFS= read -r line; do note "$line"; done <<<"$handler_list"
+  finish
+}
+# ⚠️ **A floor on what was actually opened, which `M4.23`'s own review asked
+# for on this leg and nobody applied** — its words were "the missing floor
+# is `(( read < 5 ))`", and the leg shipped without it through four more
+# reviews. Without it the glue is unguarded and the leg reports `ok ...
+# across 14 file(s)` having read none: measured with an unresolvable
+# `$path`, where every file silently fails to be opened and `scoped` stays
+# empty. ⚠️ **Dropping the `$REPO_ROOT/` prefix is *not* that failure** — the
+# gate `cd`s to `$REPO_ROOT` at the top and the walk returns repo-relative
+# paths, so the bare form still resolves and this leg still fires. Counting
+# what the loop opened, and comparing it to what the walk returned, is what
+# no glue mistake between the two can survive.
+# ⚠️ `tr -d ' '` because BSD `wc` pads its count, and this number is printed
+# in a failure line an operator reads (`portability.md` rule 2).
+expected="$(wc -l <<<"$handler_list" | tr -d ' ')"
 scoped=""
-for handler in find_coordinator.rs join_group/mod.rs sync_group.rs heartbeat.rs leave_group.rs; do
-  path="$REPO_ROOT/crates/oqueue-broker/src/$handler"
-  [[ -f "$path" ]] || continue
+read_files=0
+while IFS= read -r handler; do
+  path="$REPO_ROOT/$handler"
+  if [[ ! -f "$path" ]]; then
+    # ⚠️ `continue`, not `finish`: naming every unreadable path is worth more
+    # than the first one, and the floor below is what actually stops the leg
+    # reaching `ok`. A `finish` here would make that floor unreachable.
+    fail "FR-40 tripwire could not read $handler"
+    continue
+  fi
+  read_files=$((read_files + 1))
   # ⚠️ **Several spellings, because one identifier is not the property.** A
   # `GroupGrants` check written in this repo's own idiom —
   # `group_authorized(&request.group_id, authz)` taking an `AuthzContext` —
@@ -176,15 +213,19 @@ for handler in find_coordinator.rs join_group/mod.rs sync_group.rs heartbeat.rs 
   # *failure*, the safe direction for a tripwire whose job is to notice that
   # a deferral became dischargeable. Found by review.
   if grep -qE '(principal|Principal|AuthzContext|authz::|_authorized\()' "$path"; then
-    scoped="$scoped ${handler%%.rs}"
+    scoped="$scoped ${handler#crates/oqueue-broker/src/}"
   fi
-done
+done <<<"$handler_list"
+if (( read_files != expected )); then
+  fail "FR-40 tripwire read ${read_files} file(s) of ${expected} -- it proved nothing"
+  finish
+fi
 if [[ -n "$scoped" ]]; then
   fail "group API(s) now reference a principal:$scoped -- FR-40 may be satisfiable for them"
   note "promote this leg to an assertion, and close roadmap.md's GroupGrants"
   note "deferral (M12.md task 3a) if all five are covered"
 else
-  ok "FR-40 on the five group APIs: unmet and reported (GroupGrants, M12.md task 3a)"
+  ok "FR-40 on the five group APIs: unmet and reported across ${read_files} file(s) (GroupGrants, M12.md task 3a)"
   note "GroupId carries no principal, so JoinGroup/SyncGroup/Heartbeat/LeaveGroup/"
   note "FindCoordinator cannot refuse a cross-principal caller; deferred, not waived"
 fi

@@ -4234,23 +4234,56 @@ invoke_fencing_comment_arrow() {
   bash "$1/scripts/check-fencing-seam.sh"
 }
 
+# ⚠️ **A group handler with no source file at all.** `group_handler_files` is
+# the walk two gates now share — `check-fencing-seam.sh`'s fatal-code leg and
+# `m4-complete.sh`'s FR-40 tripwire — and a handler that vanished takes its
+# whole module tree out of both while every remaining file still reads clean.
+# ⚠️ **This replaced a count.** `M4.48` floored the total at fourteen and
+# review pointed out a file count can lawfully shrink: folding a small module
+# back into its parent is legal under `code-structure.md` rule 16, and the
+# floor then leaves only exits non-negotiable 2 forbids. A handler going
+# missing is never legitimate while the API exists, so that is the invariant.
+setup_fencing_missing_handler() {
+  local dir; dir="$(new_scratch fencing-missing-handler)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  local root="$dir/crates/oqueue-broker/src"
+  mkdir -p "$root/join_group/round" "$root/sync_group" "$root/heartbeat"
+  local f
+  for f in find_coordinator.rs sync_group.rs heartbeat.rs \
+           join_group/mod.rs join_group/deadline.rs \
+           join_group/round/mod.rs join_group/round/state.rs \
+           join_group/round/slot.rs join_group/round/plan.rs \
+           join_group/round/close.rs \
+           sync_group/deadline.rs sync_group/barrier.rs heartbeat/deadline.rs; do
+    printf '// a handler module\n' > "$root/$f"
+  done
+  # Thirteen files, five handlers minus one: `leave_group` has nothing.
+  printf '%s\n' "$dir"
+}
+invoke_fencing_missing_handler() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+
 # ⚠️ **A fatal code answered by a group handler, planted in a submodule the
 # gate's predecessor never opened.** `M4.48`'s leg walks the five handlers'
 # whole module trees rather than five named files, because
 # `code-structure.md` rule 16 has split them into fourteen — so this fixture
 # plants the code in `sync_group/barrier.rs`, which `M4.43` created after
-# the FR-40 tripwire beside it was written and which that tripwire still
-# cannot see (`M4.50`).
+# the FR-40 tripwire beside it was written, and which that tripwire could
+# not see until `M4.50` pointed it at the same walk.
 setup_fencing_fatal_giveup() {
   local dir; dir="$(new_scratch fencing-fatal)"
   copy_gate "$dir" check-fencing-seam.sh
   _fencing_fixture "$dir"
-  # ⚠️ **All fourteen, because the leg has a floor.** `MIN_HANDLER_FILES`
-  # refuses a handler set that has shrunk — a list that derives itself can
-  # go quiet when a file moves, which is what review caught this leg doing
-  # with `0 file(s) read`. A fixture with two files would trip that floor
+  # ⚠️ **Every one of the five handlers, because the walk refuses to answer
+  # otherwise.** `group_handler_files` returns 1 and prints nothing when a
+  # handler contributes no file — a list that derives itself can go quiet
+  # when a file moves, which is what review caught this leg doing with
+  # `0 file(s) read`. A fixture naming two handlers would trip *that* refusal
   # instead of the defect it plants, which is `run_case`'s own "failed, but
-  # not for the reason the fixture plants".
+  # not for the reason the fixture plants". The count of files per handler is
+  # free; the set of handlers is not.
   local root="$dir/crates/oqueue-broker/src"
   mkdir -p "$root/join_group/round" "$root/sync_group" "$root/heartbeat"
   local f
@@ -4315,6 +4348,9 @@ run_case "check-fencing-seam.sh (a variant and its arm deleted together)" \
 run_case "check-fencing-seam.sh (a group handler answering a fatal code)" \
   setup_fencing_fatal_giveup invoke_fencing_fatal_giveup \
   "answers UNKNOWN_SERVER_ERROR"
+run_case "check-fencing-seam.sh (a group handler with no source file)" \
+  setup_fencing_missing_handler invoke_fencing_missing_handler \
+  "no source file for handler(s): leave_group"
 
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \

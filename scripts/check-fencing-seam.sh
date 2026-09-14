@@ -136,26 +136,23 @@ fi
 # ⚠️ **`offset_commit.rs` is out of scope and argued**: its own module doc
 # records that a durable-log failure answers this code on purpose, per
 # `behavior.md`, and that is a per-partition result rather than a give-up.
-mapfile -t handler_files < <(group_handler_files)
-
-# ⚠️ **A floor, for the reason `MIN_VARIANTS` twenty lines above has one** —
-# and the first version of this leg had none, which review caught by moving
-# the five handler roots under a new parent (the rule-16 reshuffle
-# `group_handler_files`' own doc cites as why the old list went stale). It
-# reported `0 file(s) read` and exited 0 with a fatal code planted. ⚠️ **And
-# an empty list is worse than a false pass**: `grep PATTERN $(...)` with no
-# file operands reads *stdin*, so the gate blocked forever on a terminal —
-# measured at exit 124 under `timeout`. Deriving a list creates failure
-# modes a hardcoded one did not have, which is the argument that paragraph
-# already makes; this leg did not inherit it.
-# ⚠️ Non-negotiable 2: a floor only ever goes up.
-MIN_HANDLER_FILES=14
-if (( ${#handler_files[@]} < MIN_HANDLER_FILES )); then
-  fail "found ${#handler_files[@]} group handler file(s); this protocol has had at least ${MIN_HANDLER_FILES} since M4.43"
-  note "a handler renamed or moved makes this list shrink silently, and a shrunk"
-  note "list reads every remaining file and reports the rest clean"
+# ⚠️ **The helper's own status, not a count of what it returned** —
+# `M4.50`. `M4.48` floored the total at fourteen, and review pointed out
+# that a file count can lawfully shrink: folding a small module back into
+# its parent is legal under `code-structure.md` rule 16, and the floor then
+# leaves two exits, one of which non-negotiable 2 forbids. A *handler* with
+# no source file is never legitimate while the API exists, so the helper
+# refuses to answer at all in that case and this reads its status. That also
+# closes the stdin hazard the floor was added for: an empty list cannot
+# reach the `awk` below.
+handler_list="$(group_handler_files 2>&1)" || {
+  fail "a group-protocol handler has no source file"
+  while IFS= read -r line; do note "$line"; done <<<"$handler_list"
+  note "a handler that vanished takes its whole module tree out of every leg that"
+  note "walks it, and each remaining file still reads clean"
   finish
-fi
+}
+mapfile -t handler_files <<<"$handler_list"
 
 # ⚠️ **The comment is deleted before the line is looked at**, which is the
 # lesson `scripts/lib/fencing_seam.py` records at length: four versions of
@@ -163,7 +160,15 @@ fi
 # first of them. A trailing `// ... UNKNOWN_SERVER_ERROR ...` is prose about
 # the rule, not an answer to a client, and failing a commit for writing one
 # is a gate nobody keeps.
-mapfile -t fatal < <(
+# ⚠️ **`awk`'s status is taken**, because a process substitution's failure
+# escapes both `set -e` and `pipefail` — `mapfile < <(awk ...)` sees an empty
+# list and this leg prints `ok` whatever went wrong. Review of `M4.50`
+# measured it: one unreadable path among the operands aborted the scan
+# having read no file, and the leg reported `ok ... file(s) read` with a
+# fatal code planted. `group_handler_files` now refuses a tree it cannot
+# walk, which closes that at the source; this is the floor beside it, in the
+# leg, for every other reason `awk` can die.
+if ! fatal_scan="$(
   awk '{
     line = $0
     sub(/\/\*.*\*\//, "", line)
@@ -172,7 +177,15 @@ mapfile -t fatal < <(
       printf "%s:%d: %s\n", FILENAME, FNR, line
     }
   }' "${handler_files[@]}"
-)
+)"; then
+  fail "the UNKNOWN_SERVER_ERROR scan could not read the group handlers"
+  note "it proved nothing about the ${#handler_files[@]} file(s) the walk returned"
+  finish
+fi
+fatal=()
+while IFS= read -r site; do
+  [[ -n "$site" ]] && fatal+=("$site")
+done <<<"$fatal_scan"
 if (( ${#fatal[@]} > 0 )); then
   fail "a group handler answers UNKNOWN_SERVER_ERROR, which a client cannot retry"
   for site in "${fatal[@]}"; do

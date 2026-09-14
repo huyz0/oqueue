@@ -211,14 +211,74 @@ sha256_stdin() {
 # repair is to move it to a `tests.rs` beside the module, which
 # `code-structure.md` rule 8 already prefers.
 group_handler_files() {
-  local root="crates/oqueue-broker/src"
-  local handler
+  # ⚠️ **`$REPO_ROOT`, not a cwd-relative path.** The helpers either side of
+  # this one anchor there; sourced from anywhere else the relative form
+  # returned nothing and exited 0, which is a silent empty answer to a
+  # question about coverage. Found by review of `M4.48`.
+  local root="$REPO_ROOT/crates/oqueue-broker/src"
+  local handler found listing out="" missing="" unwalkable=""
   for handler in find_coordinator join_group sync_group heartbeat leave_group; do
-    [[ -f "$root/$handler.rs" ]] && printf '%s\n' "$root/$handler.rs"
-    [[ -d "$root/$handler" ]] || continue
-    find "$root/$handler" -name '*.rs' -type f \
-      -not -name 'tests.rs' -not -path '*/tests/*' | sort
+    found=0
+    if [[ -f "$root/$handler.rs" ]]; then
+      out+="crates/oqueue-broker/src/$handler.rs"$'\n'
+      found=1
+    fi
+    if [[ -d "$root/$handler" ]]; then
+      # ⚠️ **`find`'s status is taken and its stderr goes nowhere**, which is
+      # what makes the contract below ("silent unless it returns non-zero")
+      # true rather than merely intended. Both callers capture this helper
+      # with `2>&1`, so a diagnostic escaping on the *success* path becomes
+      # a file operand in their list. Measured by review of `M4.50`:
+      # `chmod 000` on a subdirectory made `find` print one permission error,
+      # which sorted ahead of the real paths, and `check-fencing-seam.sh`'s
+      # `awk` then died on it having scanned no files — a process-substitution
+      # failure escapes `set -e` and `pipefail` both, so that leg printed
+      # `ok ... (15 file(s) read)` with a fatal code planted. A directory the
+      # walk cannot read is a refusal, not a shorter answer.
+      if listing="$(find "$root/$handler" -name '*.rs' -type f \
+          -not -name 'tests.rs' -not -path '*/tests/*' 2>/dev/null)"; then
+        while IFS= read -r file; do
+          [[ -n "$file" ]] || continue
+          out+="crates/oqueue-broker/src/${file#"$root/"}"$'\n'
+          found=1
+        done < <(printf '%s\n' "$listing" | sort)
+      else
+        unwalkable+=" $handler"
+      fi
+    fi
+    (( found == 0 )) && missing+=" $handler"
   done
+
+  # ⚠️ **Nothing is printed until every handler has answered**, so a failure
+  # emits *no* list rather than a partial one. Review of `M4.50` found the
+  # first version printing the handlers it had found and then returning 1 —
+  # and `mapfile -t f < <(group_handler_files)` cannot see a status, so a
+  # caller written against the documented contract would have taken a
+  # thirteen-file list as complete. Four places said "refuses to answer at
+  # all"; now it does. ⚠️ **And nothing is written to stderr unless this
+  # returns non-zero**, which is the half the callers' `2>&1` rests on.
+  if [[ -n "$missing" || -n "$unwalkable" ]]; then
+    if [[ -n "$missing" ]]; then
+      printf 'group_handler_files: no source file for handler(s):%s\n' "$missing" >&2
+    fi
+    if [[ -n "$unwalkable" ]]; then
+      printf 'group_handler_files: could not walk handler(s):%s\n' "$unwalkable" >&2
+    fi
+    return 1
+  fi
+
+  # ⚠️ **Each handler contributing a file is the invariant, replacing a count
+  # of the total.** `M4.48` floored the total at fourteen; a file count can
+  # lawfully shrink — folding a small module into its parent is legal under
+  # `code-structure.md` rule 16 — and the floor then left only exits
+  # non-negotiable 2 forbids. ⚠️ **It is not strictly stronger, and review
+  # measured the residue**: moving a whole subtree out (`join_group/round/`
+  # to `src/group/round/`) leaves `join_group` still contributing `mod.rs`,
+  # so this passes at nine files where the count failed. Catching that needs
+  # the module graph rather than the directory tree, which is what a caller
+  # should reach for if it ever matters; recorded here rather than implied
+  # away.
+  printf '%s' "$out"
 }
 
 # Runs a command with a wall-clock ceiling, and returns 124 if it hit one.
