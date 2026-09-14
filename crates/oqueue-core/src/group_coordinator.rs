@@ -286,19 +286,9 @@ mod tests {
             GroupEvent::JoinBarrierComplete,
             GroupEvent::SyncComplete,
             GroupEvent::MemberJoinedDuringSync,
-            // ⚠️ **Included for completeness, and this loop does not reach
-            // what it was added for.** `MemberLeft` names the table's only
-            // state-preserving arm — `(PreparingRebalance, MemberLeft) =>
-            // PreparingRebalance` — and the argument written here was that a
-            // fake skipping its own `insert` when the successor equals the
-            // current state would answer `None` where the real coordinator
-            // answers `Some(PreparingRebalance)`. True of that arm, and
-            // unreachable from this test: every event below is applied to a
-            // *fresh* coordinator, so both sides start from `Empty`,
-            // `(Empty, MemberLeft)` is in no arm, and the pair lands in the
-            // `(Err(_), Err(_))` case having compared nothing. `M4.34` wrote
-            // the claim, `M4.55` measured it, and `M4.62` is the row for
-            // reaching the arm.
+            // ⚠️ **`MemberLeft` is illegal from `Empty`, so this loop only
+            // ever checks that both sides refuse it.** The block after the
+            // loop reaches its legal arm.
             GroupEvent::MemberLeft,
             GroupEvent::AllMembersGone,
             GroupEvent::Expire,
@@ -329,6 +319,66 @@ mod tests {
                     "the coordinator and the state machine disagree for {event:?}: {direct:?} vs {via_coordinator:?}"
                 ),
             }
+        }
+    }
+
+    /// ⚠️ **Its own test because the loop above cannot reach this arm**, and
+    /// because folding it in took that function past
+    /// `clippy::too_many_lines`.
+    #[test]
+    fn the_fake_agrees_with_the_table_on_the_one_state_preserving_arm() {
+        // ⚠️ **The state-preserving arm, which the loop above cannot reach**
+        // — every event there is applied to a *fresh* coordinator, so both
+        // sides start from `Empty` and `(Empty, MemberLeft)` lands in the
+        // `(Err(_), Err(_))` case having compared nothing. This drives the
+        // group to `PreparingRebalance` first and compares the one arm
+        // nothing else exercises.
+        //
+        // ⚠️ **It does not catch the divergence `M4.34`'s own comment named,
+        // and nothing can.** That comment said a fake skipping its `insert`
+        // when the successor equals the current state "would answer `None`
+        // where the real coordinator answers `Some(PreparingRebalance)`".
+        // Measured by planting exactly that skip in `FakeGroupCoordinator`:
+        // the suite still passes. The arm preserves the generation and the
+        // assignment epoch as well as the state, and the group already has
+        // an entry by the time it is reached, so the write that is skipped
+        // is byte-identical to the record already there — there is no
+        // observer. The claim was not merely untested; it describes an
+        // unobservable difference. ⚠️ What this block *does* buy is
+        // agreement on an arm the loop cannot reach at all. `M4.34` wrote
+        // the claim, `M4.55` found nothing tested it, and `M4.62` reached
+        // the arm and measured why the original argument cannot be tested.
+        let coordinator = FakeGroupCoordinator::new();
+        let g = group("orders");
+        coordinator
+            .transition(&g, GroupEvent::Join)
+            .expect("Empty -> Join is legal");
+        let before = coordinator.record(&g).expect("the group exists now");
+        assert_eq!(
+            before.state,
+            GroupState::PreparingRebalance,
+            "the fixture must reach the state whose MemberLeft arm preserves it"
+        );
+        let direct = before.state.transition(
+            GroupEvent::MemberLeft,
+            before.generation,
+            before.assignment_epoch,
+        );
+        let via_coordinator = coordinator.transition(&g, GroupEvent::MemberLeft);
+        match (direct, via_coordinator) {
+            (Ok((state, generation, assignment_epoch)), Ok(record)) => assert_eq!(
+                record,
+                GroupRecord {
+                    state,
+                    generation,
+                    assignment_epoch,
+                },
+                "the fake and the table must agree on the one arm the loop above cannot reach"
+            ),
+            (direct, via_coordinator) => panic!(
+                "the coordinator and the state machine disagree for MemberLeft from \
+             PreparingRebalance: {direct:?} vs {via_coordinator:?}"
+            ),
         }
     }
 }

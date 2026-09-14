@@ -134,16 +134,31 @@ if [[ -z "$n_tested" ]] || (( n_tested == 0 )); then
 fi
 
 
-# ⚠️ **This is a substring match, and calling it anchored was wrong.**
-# `.*skip` is what makes the alternation reach a line's interior: only the
-# *phrase* after `skip` is pinned, so `error: could not skip mutation
-# testing (no Rust staged)` inside a rustc error matches and turns a failure
-# into a propagated skip. The intent was to match the line `mutants.sh`
-# itself emits and nothing else; the pattern does not achieve it. Narrowing
-# it is `M4.62`'s, because the two skips `mutants.sh` emits begin a line and
-# the leading-junk alternative exists for a reason nobody wrote down.
-# `M4.55` corrected the claim rather than the regex.
-if grep -qE '^(skip|.*skip) (mutation testing \((cargo-mutants not installed|no Rust staged))' "$out"; then
+# ⚠️ **Anchored to the start of the line, and it was not until `M4.62`.**
+# The pattern was `^(skip|.*skip) ...`, and `.*skip` reaches a line's
+# interior: only the *phrase* after `skip` was pinned, so a rustc error
+# reading `error: could not skip mutation testing (no Rust staged)` matched
+# and turned a tool failure into a propagated skip — the vacuous-green shape
+# this gate exists to refuse, in the branch that decides whether it ran at
+# all. `M4.55` corrected the comment's claim; this is the regex.
+#
+# ⚠️ **No colour escape is admitted, because none can occur.** `lib.sh` sets
+# `_DIM`/`_OFF` from `[[ -t 1 ]]` alone and has no force-colour switch, and
+# this script always redirects `mutants.sh` to `$out`, so `skip` prints the
+# bare word. A first version of this pattern carried two optional
+# `.\[[0-9;]*m` groups for a caller that could force colour on; review
+# measured that such a caller cannot exist, and an unreachable alternative is
+# how the old one got there.
+#
+# ⚠️ **And this branch cannot fire on a real skip at all**, which is worth
+# knowing before anyone widens it again: a skipping run prints no
+# `N mutants tested` line, so the `n_tested` guard above returns first with
+# its own (differently worded) skip. The only way here is the *false*
+# positive this commit removed — output that is not a skip but contains the
+# phrase. The branch is kept rather than deleted because deleting it would
+# make `n_tested`'s wording the sole report of a skipped run, and that is a
+# behaviour change beyond `M4.62`. `M4.63` if it is worth one.
+if grep -qE '^skip (mutation testing \((cargo-mutants not installed|no Rust staged))' "$out"; then
   # mutants.sh already reported the skip; propagate it rather than inventing a
   # verdict of our own.
   sed -n '1,4p' "$out"

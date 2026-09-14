@@ -42,9 +42,24 @@ use crate::testing::fixture;
 ///
 /// ⚠️ **The window is opened deterministically rather than waited for.**
 /// `handle` reads the group's record under `fence`, then awaits the
-/// transitions actor; polling it once stops it at that await, before its
-/// own event is sent, and the newer generation's submission lands in the
-/// window that opens. This is
+/// transitions actor; polling it once stops it at that await, **with its
+/// own event enqueued but not yet applied**, and the newer generation's
+/// move lands in the window that opens. ⚠️ **Whatever moves the group must
+/// bypass the transitions queue, and every test in this file does.** This
+/// one publishes generation 2's assignment through
+/// `sync_groups().submit(..)`; its three siblings move the coordinator with
+/// `group_coordinator().transition(..)`. Neither goes near the actor, and
+/// that is the point: `enqueue` is an unbounded mpsc send that never awaits,
+/// so the parked handler's own event is already *ahead* of anything sent
+/// afterwards — firing the competing one through
+/// `group_transitions().transition(..)` would let the actor drain
+/// `SyncComplete` first, the window would never open, and the test would
+/// assert `REBALANCE_IN_PROGRESS` against a `NONE`. ⚠️ A first version of
+/// this paragraph said the competing event here goes through
+/// `group_coordinator()`, which is true of the siblings and not of this
+/// test; repairing the test to match would have deleted the only coverage
+/// of `M4.35`'s cell guard. `M4.62`, and the third wording of this
+/// sentence. This is
 /// `join_group`'s own refusal-test idiom (`crate::testing::poll_once`),
 /// which `M4.15d` made necessary by putting an `.await` between the
 /// decision and its application.

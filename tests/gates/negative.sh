@@ -4327,9 +4327,19 @@ invoke_fencing_block_bodied_arm() {
   bash "$1/scripts/check-fencing-seam.sh"
 }
 
+# ⚠️ **Each of these three pins the *code*, not the bare phrase.**
+# `constructed outside` is a substring of `check-fencing-seam.sh`'s own
+# success line — `none of the seam's N fencing codes are constructed outside
+# ...` — and every fixture here exits non-zero for a second reason as well,
+# because `_fencing_fixture` writes one handler file and the walk refuses.
+# So all three reported `ok` with the grep loop deleted: `violations` stays
+# 0, the ok line carries the pin, and `run_case` takes its `elif rc != 0`
+# branch. `M4.56` found the shape in a case it was adding; `M4.62` is the
+# three that predate it. Rule 20a's clause is about telling one *outcome*
+# from another, not one gate from another.
 run_case "check-fencing-seam.sh (a raw constant outside the seam)" \
   setup_fencing_constructed_outside invoke_fencing_constructed_outside \
-  "constructed outside"
+  "error_codes::REBALANCE_IN_PROGRESS constructed outside"
 run_case "check-fencing-seam.sh (a variant named in no error_code arm)" \
   setup_fencing_variant_without_arm invoke_fencing_variant_without_arm \
   "answers no error_codes:: path"
@@ -4338,10 +4348,10 @@ run_case "check-fencing-seam.sh (a wildcard arm defeating the derivation)" \
   "catch-all arm"
 run_case "check-fencing-seam.sh (a trailing comment's arrow hiding a violation)" \
   setup_fencing_comment_arrow invoke_fencing_comment_arrow \
-  "constructed outside"
+  "error_codes::REBALANCE_IN_PROGRESS constructed outside"
 run_case "check-fencing-seam.sh (a block-bodied arm hiding a violation)" \
   setup_fencing_block_bodied_arm invoke_fencing_block_bodied_arm \
-  "constructed outside"
+  "error_codes::REBALANCE_IN_PROGRESS constructed outside"
 run_case "check-fencing-seam.sh (a variant and its arm deleted together)" \
   setup_fencing_shrunk_seam invoke_fencing_shrunk_seam \
   "has had at least"
@@ -4531,6 +4541,43 @@ fi
 run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
 run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \
   "over the 10000 ms budget"
+# ⚠️ **A tool failure whose output contains the skip phrase.** The propagate
+# -a-skip branch matched `^(skip|.*skip) ...` until `M4.62`, and `.*skip`
+# reaches a line's interior — so a rustc error reading `error: could not skip
+# mutation testing (no Rust staged)` turned a failed run into a reported
+# skip, which `m0-complete.sh` and CI both read as "nothing to do". The
+# stub stands in for `mutants.sh` because reproducing that exact rustc
+# diagnostic from a real crate is incidental to the property.
+setup_mutants_skip_phrase_in_an_error() {
+  local dir; dir="$(new_scratch mutants-skip-phrase)"
+  copy_gate "$dir" check-mutants.sh
+  mkdir -p "$dir/baselines" "$dir/scripts"
+  printf '# fixture: nothing argued\n' > "$dir/baselines/mutants.txt"
+  printf '[workspace]\nmembers = []\nresolver = "2"\n' > "$dir/Cargo.toml"
+  # ⚠️ **It must reach the propagate-a-skip branch, and three earlier checks
+  # stand in front of it.** A stub that merely fails is caught by the
+  # tool-failure branch (non-zero with no `MISSED`), and one that merely
+  # succeeds is indistinguishable from a pass whichever way the regex goes.
+  # The shape that isolates the regex is the one the reviewer's scenario
+  # names: a *real* unargued survivor, reported with a non-zero exit, whose
+  # output also carries the phrase. Under the old pattern the skip wins and
+  # the survivor is never compared against the baseline; under the anchored
+  # one the gate reports it. The first version of this fixture stopped at
+  # the tool-failure branch and passed either way — measured.
+  cat > "$dir/scripts/mutants.sh" <<'STUB'
+#!/usr/bin/env bash
+echo "error: could not skip mutation testing (no Rust staged) -- rustc said so"
+echo "1 mutants tested: 0 caught"
+echo "MISSED crates/k/src/lib.rs:2:5: replace classify with \"\""
+exit 2
+STUB
+  chmod +x "$dir/scripts/mutants.sh"
+  printf '%s\n' "$dir"
+}
+invoke_mutants_skip_phrase_in_an_error() {
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
 _have_mutants() { cargo mutants --version >/dev/null 2>&1; }
 if _have_mutants; then
   # ⚠️ **Both pin the survivor message, and `M4.32` is why.** These two were
@@ -4572,6 +4619,16 @@ if _have_mutants; then
   run_case "check-mutants.sh (an 'unviable:' claim the run disproves)" \
     setup_mutants_false_unviable invoke_mutants_false_unviable \
     "claims 'unviable:' for a mutant that survived"
+  # ⚠️ **Inside `_have_mutants`, and it has to be.** The stub stands in for
+  # `mutants.sh`, but `check-mutants.sh` runs `cargo mutants --version`
+  # itself before invoking it and skips when that fails — so on a host
+  # without the tool this case's gate exits 0 and `run_case` would report
+  # `reported ok on a broken artifact`, a red suite accusing a working gate.
+  # A first version of this comment said the opposite, and acting on it is
+  # what would have produced that. Found by review of `M4.62`.
+  run_case "check-mutants.sh (the skip phrase inside a tool error)" \
+    setup_mutants_skip_phrase_in_an_error invoke_mutants_skip_phrase_in_an_error \
+    "surviving mutant, not killed and not argued"
   # ⚠️ **The one case that must *pass*, so `run_case` cannot express it** —
   # that helper asserts a non-zero exit, which is the whole of what it checks.
   # A gate that refuses a legitimate `unviable:` entry is as broken as one that
@@ -4592,7 +4649,7 @@ if _have_mutants; then
   fi
 else
   skip_case check-mutants.sh "cargo-mutants not installed" \
-    "install: cargo install cargo-mutants" 5
+    "install: cargo install cargo-mutants" 6
 fi
 
 # --- the harness checks itself ----------------------------------------------
