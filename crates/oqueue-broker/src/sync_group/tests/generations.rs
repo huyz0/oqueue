@@ -10,7 +10,7 @@
 
 #![allow(clippy::expect_used)]
 
-use super::{follower_body_at, leader_body_at, seat, sync};
+use super::{follower_body_at, leader_body_at, seat, still_current, sync};
 use crate::testing::fixture;
 
 /// Drives a `Stable` group through one more round, to the next generation.
@@ -216,10 +216,20 @@ async fn a_late_submission_does_not_replace_a_newer_generations_assignment() {
     let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
     let sync_groups = fixture.cluster.sync_groups();
 
-    let second = sync_groups.submit(&g, 2, [("m1".to_owned(), b"gen2".to_vec())].into());
+    let second = sync_groups.submit(
+        &g,
+        2,
+        [("m1".to_owned(), b"gen2".to_vec())].into(),
+        still_current,
+    );
     assert!(second.is_some(), "the current generation's leader submits");
 
-    let late = sync_groups.submit(&g, 1, [("m1".to_owned(), b"gen1".to_vec())].into());
+    let late = sync_groups.submit(
+        &g,
+        1,
+        [("m1".to_owned(), b"gen1".to_vec())].into(),
+        still_current,
+    );
     assert!(
         late.is_none(),
         "a submission for a generation the group has already left is refused, not applied"
@@ -246,10 +256,20 @@ async fn the_same_generation_may_still_resubmit() {
 
     assert!(
         sync_groups
-            .submit(&g, 2, [("m1".to_owned(), b"first".to_vec())].into())
+            .submit(
+                &g,
+                2,
+                [("m1".to_owned(), b"first".to_vec())].into(),
+                still_current
+            )
             .is_some()
     );
-    let again = sync_groups.submit(&g, 2, [("m1".to_owned(), b"second".to_vec())].into());
+    let again = sync_groups.submit(
+        &g,
+        2,
+        [("m1".to_owned(), b"second".to_vec())].into(),
+        still_current,
+    );
     assert!(
         again.is_some_and(|map| map.get("m1").map(Vec::as_slice) == Some(b"second".as_slice())),
         "a leader resubmitting its own generation replaces its own map"

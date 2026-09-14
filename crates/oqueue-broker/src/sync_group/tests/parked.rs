@@ -35,7 +35,7 @@
 
 #![allow(clippy::expect_used)]
 
-use super::{leader_body_at, seat, sync};
+use super::{leader_body_at, seat, still_current, sync};
 use crate::testing::fixture;
 
 /// ⚠️ **The client-visible half, which review found nothing executed.**
@@ -101,7 +101,12 @@ async fn a_leader_whose_generation_moved_on_while_it_was_parked_is_told_to_rejoi
         fixture
             .cluster
             .sync_groups()
-            .submit(&g, 2, [("m1".to_owned(), b"gen2-m1".to_vec())].into())
+            .submit(
+                &g,
+                2,
+                [("m1".to_owned(), b"gen2-m1".to_vec())].into(),
+                still_current
+            )
             .is_some()
     );
 

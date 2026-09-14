@@ -296,3 +296,203 @@ async fn a_parked_follower_is_woken_when_a_newcomer_reopens_the_barrier() {
         "a refusal carries no assignment"
     );
 }
+
+/// What [`a_leader_resuming_after_a_member_was_lost`] observed, so the two
+/// harms it produces can be asserted by tests named for one each.
+struct Resumed {
+    leader: kafka_protocol::messages::SyncGroupResponse,
+    follower: kafka_protocol::messages::SyncGroupResponse,
+    cell_refused: bool,
+    group_state_on_resume: Option<GroupState>,
+}
+
+/// Drives the interleaving `M4.65` is about, deterministically.
+///
+/// A follower parks on the barrier; the leader's submission then stops on
+/// the transitions actor's oneshot, which is where the record it will judge
+/// `synced` from is still in flight — it arrives *with* the oneshot, and is
+/// the state at the moment the actor applied `SyncComplete` rather than the
+/// state when this task is next polled. A third member is then lost, which
+/// is legal from `Stable` and takes the group off the generation the leader
+/// is still submitting for, publishing a refusal for it. Only then does the
+/// leader resume, with a record describing a generation the group has left.
+///
+/// ⚠️ **Nothing here is timing.** The two futures are polled by hand and
+/// never spawned, so neither can advance while `leave` is awaited — the
+/// order above is the order the runtime must produce, not one it happens to.
+async fn a_leader_resuming_after_a_member_was_lost(fixture: &crate::testing::Fixture) -> Resumed {
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2", "m3"]);
+
+    let waiting = sync(
+        &fixture.cluster,
+        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
+    );
+    tokio::pin!(waiting);
+    assert!(
+        crate::testing::poll_once(&mut waiting).is_none(),
+        "the follower must park on the barrier rather than answer at once"
+    );
+
+    let submitting = sync(
+        &fixture.cluster,
+        super::super::tests::leader_body_at(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"slice-for-m1"), ("m2", b"slice-for-m2")],
+            1,
+        ),
+    );
+    tokio::pin!(submitting);
+    assert!(
+        crate::testing::poll_once(&mut submitting).is_none(),
+        "the leader must park on the durable append, or this proves nothing about the race"
+    );
+
+    fixture
+        .cluster
+        .heartbeats()
+        .leave(&g, &["m3"], crate::heartbeat::Removal::of(&fixture.cluster))
+        .await;
+    let group_state_on_resume = fixture
+        .cluster
+        .group_coordinator()
+        .record(&g)
+        .map(|r| r.state);
+
+    let leader = submitting.await;
+    let (assignments, _) = fixture.cluster.sync_groups().entry_for(&g);
+    let cell_refused = matches!(
+        super::super::assignment_for(&assignments, 1),
+        super::super::Known::Refused
+    );
+    drop(assignments);
+
+    Resumed {
+        leader,
+        follower: waiting.await,
+        cell_refused,
+        group_state_on_resume,
+    }
+}
+
+/// ⚠️ **The route through the writer `M4.47` added**, and the one the three
+/// tests above do not cover: the group leaves the generation while the
+/// leader's *own* submission is in flight, and the leader then overwrites
+/// the refusal that was published for it.
+///
+/// `submit_assignment` judged `synced` from the record the transition
+/// returned and never re-read it, so it arrived at `barrier::submit` with a
+/// question already answered stale — and `submit` had nothing to check it
+/// against, its own guard seeing only generations it could compare. `M4.65`
+/// gives it the question instead, asked under the cell's own lock, which is
+/// the only side of that lock a second task cannot interleave across.
+///
+/// ⚠️ **Not the mirror of `refuse`'s guard**, which was the obvious repair
+/// and is wrong: `{generation, None}` also means this same generation's
+/// leader was refused by a transient append failure and is retrying, which
+/// `durability::the_same_leader_succeeds_once_the_log_heals` pins.
+#[tokio::test(start_paused = true)]
+async fn a_leader_that_resumes_after_the_group_left_does_not_overwrite_the_refusal() {
+    let fixture = fixture(&[]).await;
+    let resumed = a_leader_resuming_after_a_member_was_lost(&fixture).await;
+
+    assert_eq!(
+        resumed.group_state_on_resume,
+        Some(GroupState::PreparingRebalance),
+        "the group must have left generation 1 before the leader resumed"
+    );
+    assert_eq!(
+        resumed.leader.error_code,
+        error_codes::REBALANCE_IN_PROGRESS,
+        "a leader whose group left the generation mid-submission is told to rejoin"
+    );
+    assert!(
+        resumed.cell_refused,
+        "the refusal published for generation 1 must survive the leader's own submission"
+    );
+}
+
+/// ⚠️ **And the harm that reaches a real consumer**, which is the reason
+/// this is protocol correctness rather than bookkeeping: the followers
+/// overwritten here are the ones the same removal has just told to rejoin.
+/// Answering them `NONE` with a slice for the generation they were told to
+/// leave is the revoke-before-reassign harm `M4.42` and `M4.45` exist to
+/// prevent, arriving through the writer `M4.47` added to prevent the
+/// opposite one.
+#[tokio::test(start_paused = true)]
+async fn a_follower_told_to_rejoin_is_not_then_handed_that_generations_slice() {
+    let fixture = fixture(&[]).await;
+    let resumed = a_leader_resuming_after_a_member_was_lost(&fixture).await;
+
+    assert_eq!(
+        resumed.follower.error_code,
+        error_codes::REBALANCE_IN_PROGRESS,
+        "a follower told to rejoin must not then be handed a slice for the generation it left"
+    );
+    assert!(
+        resumed.follower.assignment.is_empty(),
+        "a refusal carries no assignment"
+    );
+}
+
+/// ⚠️ **The route that has no refusal of its own**, and the one the fix for
+/// `M4.65` would have opened had review not measured it.
+///
+/// `submit` now returns `None` for two reasons, not one. The older reason —
+/// the cell already holds a *newer* generation — leaves every follower on
+/// this one reading `Known::Superseded`, woken by the submission that put it
+/// there, so the arm answering it needed no refusal. The newer reason does
+/// not: a newcomer joining a group that has reached `Stable` plans
+/// `GroupEvent::Join`, not `MemberJoinedDuringSync`, so `join_group::round`
+/// publishes nothing, and the cell holds nothing for the generation the
+/// leader was still submitting for.
+///
+/// ⚠️ **Measured before the arm was given its `refuse` call**: the follower
+/// is answered `NONE` with a twelve-byte slice if the closure is stubbed
+/// true, and parks out `MAX_SYNC_WAIT_MS` for `REBALANCE_IN_PROGRESS` if it
+/// is not — `waited_ms=3000000`, the stranding `M4.43` and `M4.47` exist to
+/// end, arriving through the repair for a different one.
+#[tokio::test(start_paused = true)]
+async fn a_follower_is_woken_when_the_leader_is_refused_by_a_route_that_published_nothing() {
+    let fixture = fixture(&[]).await;
+    seat(&fixture.cluster, "orders-consumers", &["m1", "m2"]);
+
+    let waiting = sync(
+        &fixture.cluster,
+        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
+    );
+    tokio::pin!(waiting);
+    assert!(crate::testing::poll_once(&mut waiting).is_none());
+
+    let submitting = sync(
+        &fixture.cluster,
+        super::super::tests::leader_body_at(
+            "orders-consumers",
+            "m1",
+            &[("m1", b"slice-for-m1"), ("m2", b"slice-for-m2")],
+            1,
+        ),
+    );
+    tokio::pin!(submitting);
+    assert!(crate::testing::poll_once(&mut submitting).is_none());
+
+    // A newcomer arrives *after* `SyncComplete` has landed, so the group is
+    // `Stable` and this plans `Join` -- the route that refuses nothing.
+    join_as_a_newcomer(&fixture.cluster, "orders-consumers").await;
+
+    let leader = submitting.await;
+    assert_eq!(leader.error_code, error_codes::REBALANCE_IN_PROGRESS);
+
+    let follower = crate::testing::poll_once(&mut waiting)
+        .expect("the follower must be answerable at once, not after MAX_SYNC_WAIT_MS");
+    assert_eq!(
+        follower.error_code,
+        error_codes::REBALANCE_IN_PROGRESS,
+        "a refused submission must wake the followers parked on it, whatever refused it"
+    );
+    assert!(
+        follower.assignment.is_empty(),
+        "a refusal carries no assignment"
+    );
+}

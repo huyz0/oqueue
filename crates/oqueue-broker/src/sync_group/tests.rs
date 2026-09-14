@@ -101,6 +101,23 @@ fn leader_body_at(
     out
 }
 
+/// What [`super::barrier::SyncGroups::submit`]'s fourth argument is in a test
+/// that drives the cell directly.
+///
+/// ⚠️ **`true`, and not vacuous.** The closure exists so a submission can be
+/// refused when the *coordinator* has left the generation (`M4.65`); these
+/// call sites reach the cell directly rather than through a handler, so no
+/// coordinator was consulted to reach them and there is no record for the
+/// closure to read. What they pin is the generation ordering beside it, the
+/// `>` guard. ⚠️ Not "hold no coordinator", which an earlier wording of this
+/// said and `parked.rs`'s fixture disproves: holding one is not consulting
+/// one. `sync_group.rs`'s real call site is where the record is read, and
+/// `reopened::a_leader_that_resumes_after_the_group_left_does_not_overwrite_the_refusal`
+/// is what constrains it.
+fn still_current() -> bool {
+    true
+}
+
 fn decode_response(bytes: &[u8]) -> KpResponse {
     // SyncGroup goes flexible (tagged response header) at v4; VERSION is 3.
     let mut rest = &bytes[4..];

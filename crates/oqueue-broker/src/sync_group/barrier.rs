@@ -193,6 +193,49 @@ impl SyncGroups {
     /// refused and burn a generation. `>=` is the mutation that matters and
     /// turns all three red.
     ///
+    /// ⚠️ **`still_at_this_generation` is asked under the cell's own lock,
+    /// and `M4.65` is why it is a closure rather than a `bool`.** The guard
+    /// above cannot see the case it needs to: `submit_assignment` judged
+    /// `synced` from the record its `SyncComplete` transition returned and
+    /// never re-read it, so a member lost between that transition landing
+    /// and the leader's task resuming took the group off this generation,
+    /// published `{generation, None}` for it through [`Self::refuse`] — and
+    /// the leader arrived here anyway and overwrote the refusal. Followers
+    /// that had just been told to rejoin read [`Known::Mine`] instead and
+    /// were answered `NONE` with a slice for a generation the group had
+    /// left: the revoke-before-reassign harm `M4.42` and `M4.45` exist to
+    /// prevent, through the writer `M4.47` added to prevent the opposite
+    /// one.
+    ///
+    /// ⚠️ **A re-read *before* the call would not have closed it.** The two
+    /// statements are synchronous, so nothing on this runtime thread can
+    /// interleave — but the transitions actor is its own task and may be
+    /// running on another. Asking the question here puts it on the same side
+    /// of the lock as the write it authorises, and on the same side as
+    /// `refuse`'s: whichever writer takes the lock first settles the
+    /// generation, which is the semantics `heartbeat.rs`'s own note already
+    /// claims when it calls `refuse` on every removal.
+    ///
+    /// ⚠️ **The cell alone cannot answer it**, which is the reason this is
+    /// not simply the mirror of `refuse`'s guard: `{generation, None}` also
+    /// means *this* generation's leader was refused by a transient append
+    /// failure and is retrying, with the group still on it —
+    /// `durability::the_same_leader_succeeds_once_the_log_heals`. Only the
+    /// coordinator's record distinguishes the two.
+    ///
+    /// ⚠️ **Lock order is this cell, then whatever the closure takes**, and
+    /// `async-concurrency.md` rule 9 wants that stated rather than assumed.
+    /// The only closure passed today reads a [`GroupCoordinator`] record, and
+    /// no path in the crate takes a coordinator's lock and then this one:
+    /// the coordinator is reached through the transitions actor, which holds
+    /// nothing of its own across the reply, and every `refuse` caller has
+    /// released what it held before calling (`heartbeat.rs` after its
+    /// `await`, `join_group::round` after `drop(entries)`). ⚠️ **The
+    /// signature does not enforce it**, and a closure that reached back into
+    /// `SyncGroups` would deadlock on `self.lock()` here — non-reentrant, and
+    /// held. The argument is narrow by construction, so keep it that way: a
+    /// question about state this cell does not hold, and nothing else.
+    ///
     /// ⚠️ **`M4.35`: this was an unconditional write, and it was the one
     /// blind post-`await` write M4 left.** `handle`'s fence reads the
     /// group's record synchronously and the submission then awaits a full
@@ -210,12 +253,14 @@ impl SyncGroups {
         group: &GroupId,
         generation: i32,
         map: HashMap<String, Vec<u8>>,
+        still_at_this_generation: impl FnOnce() -> bool,
     ) -> Option<Arc<HashMap<String, Vec<u8>>>> {
         let mut entries = self.lock();
         let entry = entries.entry(group.clone()).or_default();
         let map = Arc::new(map);
         let mut guard = entry.assignments.guard();
-        if guard.as_ref().is_some_and(|a| a.generation > generation) {
+        let superseded = guard.as_ref().is_some_and(|a| a.generation > generation);
+        if superseded || !still_at_this_generation() {
             drop(guard);
             drop(entries);
             return None;

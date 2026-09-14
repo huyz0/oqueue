@@ -141,6 +141,22 @@ pub(crate) async fn handle(
 /// the moment the transition stopped being one discarded statement.** The
 /// split is along the branch `handle` already had, so the follower path
 /// below is unchanged.
+/// Whether `group` is `Stable` at `generation` as of right now.
+///
+/// ⚠️ **Asked twice of one submission, and that is the point of `M4.65`.**
+/// Once of the record `SyncComplete` produced, which is the state at the
+/// moment the actor applied it; and again inside `barrier::submit`, under
+/// the cell's own lock, because the group can leave the generation between
+/// those two moments and the second reading is the one that authorises the
+/// write. See that function's doc for why the question cannot be asked from
+/// the other side of the lock.
+fn is_stable_at(cluster: &Cluster, group: &GroupId, generation: i32) -> bool {
+    cluster
+        .group_coordinator()
+        .record(group)
+        .is_some_and(|r| r.state == GroupState::Stable && r.generation.get() == generation)
+}
+
 async fn submit_assignment(
     cluster: &Cluster,
     prelude: RequestPrelude,
@@ -225,10 +241,16 @@ async fn submit_assignment(
     // the one question of both outcomes is what ends the series, rather
     // than a third arm-specific check.
     //
-    // ⚠️ **`Ok` carries the record it produced**, so that half needs no
-    // second read and no second race; only the illegal arm re-reads, and it
-    // has to, because the error carries nothing but `Debug`-formatted
-    // strings.
+    // ⚠️ **`Ok` carries the record it produced**, and the illegal arm has to
+    // re-read because the error carries nothing but `Debug`-formatted
+    // strings. ⚠️ **What this paragraph used to add — that the `Ok` half
+    // "needs no second read and no second race" — was false, and `M4.65` is
+    // the race it named as absent.** The record `Ok` carries is the state at
+    // the moment the actor applied `SyncComplete`, not the state when this
+    // task is next polled, and `MemberLeft` is legal from `Stable`. The
+    // question is therefore asked a second time below, under the barrier's
+    // own lock, where `barrier::submit`'s doc argues why that is the only
+    // side of the lock it can be asked from.
     let record = match cluster
         .group_transitions()
         .transition(group.clone(), GroupEvent::SyncComplete)
@@ -288,20 +310,44 @@ async fn submit_assignment(
             &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),
         );
     }
-    let Some(map) = cluster
-        .sync_groups()
-        .submit(group, request.generation_id, map)
-    else {
+    let Some(map) = cluster.sync_groups().submit(
+        group,
+        request.generation_id,
+        map,
+        // ⚠️ **The same question, asked again under the cell's lock**, which
+        // `M4.65` added and `barrier::submit`'s own doc argues. The record
+        // above is the one `SyncComplete` produced, and the group can leave
+        // this generation between that transition landing and this task
+        // being polled again -- a `MemberLeft` is legal from `Stable` and
+        // publishes a refusal for exactly this generation.
+        || is_stable_at(cluster, group, request.generation_id),
+    ) else {
         // The group left this generation while the transition was in
         // flight. Retriable, and the same answer its own followers get
         // from `Known::Superseded`.
         //
-        // ⚠️ **No `refuse` call here, unlike the two arms above.** `submit`
-        // returned `None` precisely because the cell already holds a
-        // *newer* generation, so every follower parked on this one already
-        // reads `Known::Superseded` and was woken by the submission that
-        // put it there. Publishing a refusal would overwrite that newer
-        // map, which is the thing `M4.35` exists to prevent.
+        // ⚠️ **`refuse` here too, and this arm used to say the opposite.**
+        // Until `M4.65` `submit` returned `None` for one reason only — the
+        // cell already holds a *newer* generation — so every follower
+        // parked on this one already read `Known::Superseded` and had been
+        // woken by the submission that put it there, and this arm said so.
+        // The closure above is a second reason, and on that path the cell
+        // may hold nothing for this generation and nobody was woken: the
+        // group left it by a route that published no refusal, which a
+        // newcomer's `JoinGroup` on a `Stable` group is
+        // (`join_group::round` refuses the barrier only for
+        // `MemberJoinedDuringSync`). Without this call the followers park
+        // out `MAX_SYNC_WAIT_MS` — the `waited_ms=3000000` stranding
+        // `M4.43` and `M4.47` exist to end, through a route this row would
+        // have opened. Found by review of the fix.
+        //
+        // ⚠️ **Unconditional, and it does not overwrite the newer map** —
+        // that was the old comment's stated reason for having no call and
+        // it was wrong about `refuse`, whose own guard declines a cell
+        // holding a later generation. The old case is a no-op; only the new
+        // one writes. It is also what the `!synced` arm above already does
+        // for the identical condition.
+        cluster.sync_groups().refuse(group, request.generation_id);
         return reply(
             prelude,
             &refusal(crate::fencing::Refusal::RebalanceInProgress.error_code()),

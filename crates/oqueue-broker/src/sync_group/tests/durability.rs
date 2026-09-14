@@ -30,7 +30,7 @@
 
 #![allow(clippy::expect_used)]
 
-use super::{leader_body_at, seat, sync};
+use super::{leader_body_at, seat, still_current, sync};
 use crate::testing::fixture;
 use oqueue_codec::error_codes;
 use oqueue_core::GroupState;
@@ -235,7 +235,12 @@ async fn a_refusal_overwrites_an_older_generations_assignment() {
     let sync_groups = fixture.cluster.sync_groups();
     assert!(
         sync_groups
-            .submit(&g, 1, [("m1".to_owned(), b"gen1".to_vec())].into())
+            .submit(
+                &g,
+                1,
+                [("m1".to_owned(), b"gen1".to_vec())].into(),
+                still_current
+            )
             .is_some(),
         "the group synced once before"
     );
@@ -266,7 +271,12 @@ async fn a_refusal_does_not_overwrite_a_later_generations_assignment() {
     let sync_groups = fixture.cluster.sync_groups();
     assert!(
         sync_groups
-            .submit(&g, 2, [("m1".to_owned(), b"gen2".to_vec())].into())
+            .submit(
+                &g,
+                2,
+                [("m1".to_owned(), b"gen2".to_vec())].into(),
+                still_current
+            )
             .is_some()
     );
 
@@ -292,7 +302,12 @@ async fn a_refusal_does_not_unpublish_this_generations_own_assignment() {
     let sync_groups = fixture.cluster.sync_groups();
     assert!(
         sync_groups
-            .submit(&g, 2, [("m1".to_owned(), b"gen2".to_vec())].into())
+            .submit(
+                &g,
+                2,
+                [("m1".to_owned(), b"gen2".to_vec())].into(),
+                still_current
+            )
             .is_some()
     );
 
