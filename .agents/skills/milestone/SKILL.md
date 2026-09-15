@@ -62,6 +62,17 @@ this from being a phase somebody has to remember.
 ⚠️ **Checkpoint rather than saving it for the end.** Nothing enforces the
 cadence — reviewing thirty commits in one pass satisfies the gate and wastes it.
 
+⚠️ **The outer loop terminates by disposition, not by an empty backlog**, and
+the `until` above is already written that way: the condition is a command, and
+it does not read the backlog. A boundary round can always add rows to the
+milestone it is measuring, so "keep going until nothing is `todo`" is a loop
+with no exit — M4 ran three rounds that opened 8, 10 and 7 rows before this
+was written down. Findings that do not reopen the milestone are **handed to the
+next one** and the milestone closes over them; see
+[`milestone-review`](../milestone-review/SKILL.md)'s disposition rule for which
+is which, and `scripts/check-milestone-handoff.sh` for what checks that the
+handoff was actually recorded.
+
 ## ⚠️ Stop conditions
 
 Stop and report. Do not work around, and do not pick a different task to avoid
@@ -77,6 +88,9 @@ the problem.
   not planned. See [`adr`](../adr/SKILL.md) and the contract rule.
 - **The completion condition passes but the milestone is obviously not done.**
   That is a bug in the condition and it is a finding, not a victory.
+  ⚠️ **Open rows are not that signal.** Rows a boundary round opened and handed
+  on are the milestone ending correctly, not evidence it is unfinished — the
+  test is whether the *condition* is wrong, which is a claim about the gate.
 - **Anything destructive or outward-facing** — force push, deleting data,
   publishing. Never push unless asked.
 

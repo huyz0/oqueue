@@ -78,6 +78,20 @@ new_scratch() {
   printf '%s\n' "$dir"
 }
 
+# _next_scratch <prefix>: a scratch repo whose name no earlier call has used.
+#
+# ⚠️ **Counted from the filesystem, not from a shell variable**, and review
+# measured why: every caller is `dir="$(_fixture ..)"`, so a `seq=$((seq + 1))`
+# inside runs in a subshell and never reaches the parent. Three helpers here
+# carried that counter and all three always returned 1; nothing had been
+# corrupted yet only because each fixture rewrites its own files with `>`,
+# which is luck rather than the guarantee those comments claimed.
+_next_scratch() {
+  local prefix="$1" n
+  n="$(find "$SCRATCH_ROOT" -maxdepth 1 -name "$prefix-*" 2>/dev/null | wc -l)"
+  new_scratch "$prefix-$((n + 1))"
+}
+
 # copy_gate <dir> <script-name>: brings one real gate script into a scratch
 # repo, unmodified, so this suite tests the actual file rather than a copy
 # of its logic.
@@ -4530,10 +4544,8 @@ run_case "check-fencing-seam.sh (a group handler with no source file)" \
 # writes and nothing else, so a later case writing a third shard file would
 # leave it there and inflate the count the must-pass block below checks —
 # failing working code. Found by review of `M4.60`.
-_baseline_union_seq=0
 _baseline_union_dir() {
-  _baseline_union_seq=$((_baseline_union_seq + 1))
-  local dir; dir="$(new_scratch "mutants-union-$_baseline_union_seq")"
+  local dir; dir="$(_next_scratch mutants-union)"
   mkdir -p "$dir/scripts" "$dir/baselines" "$dir/surv"
   cp "$REPO_ROOT/scripts/check-mutants-baseline.sh" "$REPO_ROOT/scripts/lib.sh" \
     "$dir/scripts/"
@@ -4594,10 +4606,8 @@ invoke_baseline_missing_shard() {
 # unsharded run recording *no* survivors file — which would read the
 # leftover and fail working code. Review caught this reintroduced in the
 # helper written beside the one that had just been fixed.
-_shard_fixture_seq=0
 _shard_fixture() {
-  _shard_fixture_seq=$((_shard_fixture_seq + 1))
-  local dir; dir="$(new_scratch "mutants-shard-$_shard_fixture_seq")"
+  local dir; dir="$(_next_scratch mutants-shard)"
   mkdir -p "$dir/scripts" "$dir/baselines"
   cp "$REPO_ROOT/scripts/check-mutants.sh" "$REPO_ROOT/scripts/lib.sh" "$dir/scripts/"
   # ⚠️ An entry arguing a mutant no shard reports. Under `--full` this is a
@@ -4647,6 +4657,182 @@ run_case "check-mutants-baseline.sh (an entry that argues nothing)" \
 run_case "check-mutants-baseline.sh (a shard that never reported)" \
   setup_baseline_missing_shard invoke_baseline_missing_shard \
   "shard file(s) in surv, expected 2"
+
+# --- check-milestone-handoff.sh: a milestone that closed over its own rows ---
+#
+# The gate `M4.73` added, and the loop it ends: `milestone-review` turns every
+# major finding into a backlog row, `sdd.md` decomposes only the *current*
+# milestone, so every finding lands in the milestone under review and reading
+# the commits that close them is the next round's job. The way out — close with
+# the rows open, hand them on in one `roadmap.md` deferral row, let the next
+# milestone's opening commit absorb them — is what `M1`→`M2.0` and `M3`→`M10.0`
+# each did by hand. This is what makes the handoff checkable rather than a
+# promise.
+# ⚠️ **A fresh name per call**, `_baseline_union_dir`'s own reason: two cases
+# sharing a scratch directory let the second one pass on the first one's files.
+_handoff_fixture() {
+  local deferred="$1"
+  local dir; dir="$(_next_scratch milestone-handoff)"
+  copy_gate "$dir" check-milestone-handoff.sh
+  mkdir -p "$dir/docs/internal/product" "$dir/docs/internal/standards"
+  cat > "$dir/docs/internal/standards/sdd.md" <<'SDD'
+<!-- states:start -->
+- `todo` — not started.
+- `done` — landed.
+- `dissolved` — never to be worked.
+<!-- states:end -->
+
+<!-- states:open:start -->
+- `todo`
+<!-- states:open:end -->
+SDD
+  cat > "$dir/docs/internal/product/backlog.md" <<'BL'
+## M-1: the milestone under test
+
+| Task | Title | Notes | State |
+|---|---|---|---|
+| M-1.1 | a row that landed | some criterion | done |
+| M-1.7 | a row the boundary round opened and nobody worked | some criterion | todo |
+BL
+  {
+    printf '## Milestones\n\n'
+    printf '| # | Milestone | What | Kind | Depends | Tasks | Gate | State |\n'
+    printf '|---|---|---|---|---|---|---|---|\n'
+    printf '| 1 | [M-1](milestones/M-1.md) | the milestone under test | functional | - | 2 | `scripts/gates/m-1-complete.sh` | complete |\n'
+    printf '\n## Deferred into a later milestone\n\n'
+    printf '| Deferred | Into | Why, and what it shapes |\n|---|---|---|\n'
+    printf '%s\n' "$deferred"
+  } > "$dir/docs/internal/product/roadmap.md"
+  (cd "$dir" && git add -A && git commit -qm "M-1.1: seed the fixture")
+  printf '%s\n' "$dir"
+}
+
+setup_handoff_unnamed() {
+  _handoff_fixture '| Something else entirely | M0 (from M-1) | not the row that is open |'
+}
+invoke_handoff_unnamed() {
+  bash "$1/scripts/check-milestone-handoff.sh"
+}
+run_case "check-milestone-handoff.sh (a complete milestone whose open row is named nowhere)" \
+  setup_handoff_unnamed invoke_handoff_unnamed \
+  "open row(s) no deferral row names"
+
+# ⚠️ **A range whose ends are different milestones is not expanded**, and
+# saying so beats silently expanding it to one of them: `M1`'s real row writes
+# `M1.47`-`M1.51`, so ranges are the shape a reader actually uses and a typo in
+# one is the shape a reader actually makes. ⚠️ Its *endpoints* are still
+# discharged, by the unconditional scan of the same cell — they are written
+# down, so they are named; what is lost is everything between them, and that is
+# what the complaint is about.
+setup_handoff_crossed_range() {
+  _handoff_fixture '| Rows `M-1.7`-`M0.9` | M0 (from M-1) | a range across two milestones |'
+}
+invoke_handoff_crossed_range() {
+  bash "$1/scripts/check-milestone-handoff.sh"
+}
+run_case "check-milestone-handoff.sh (a deferral range spanning two milestones)" \
+  setup_handoff_crossed_range invoke_handoff_crossed_range \
+  "whose ends are different milestones"
+
+# ⚠️ **An id in the row's *prose* hands nothing on**, and review measured the
+# first version of this gate discharging three real ids that way: `roadmap.md`
+# has a row whose Why column says "none became a row until `M0.27`-`M0.29`
+# harvested them by hand", which is an aside about history, not a handoff.
+# Measured against that roadmap: a whole-row scan treats **112** ids as handed
+# and the first-cell scan treats **17**.
+setup_handoff_named_only_in_prose() {
+  _handoff_fixture '| Something else entirely | M0 (from M-1) | an aside mentioning `M-1.7`, which hands it to nobody |'
+}
+invoke_handoff_named_only_in_prose() {
+  bash "$1/scripts/check-milestone-handoff.sh"
+}
+run_case "check-milestone-handoff.sh (an open row named only in a deferral row's prose)" \
+  setup_handoff_named_only_in_prose invoke_handoff_named_only_in_prose \
+  "open row(s) no deferral row names"
+
+# ⚠️ **The id form is `lib.sh`'s, not a narrower transcription**, which is the
+# hazard `lib.sh`'s own note names: a copy accepting only `a`-`d` made a row
+# like `M-1.9z` unsatisfiable — no deferral row could ever discharge it.
+TOTAL=$((TOTAL + 1))
+_handoff_letter_dir="$(_handoff_fixture '| Rows `M-1.7` and `M-1.9z` | M0 (from M-1) | a lettered id past the fourth letter |')"
+cat >> "$_handoff_letter_dir/docs/internal/product/backlog.md" <<'BL'
+| M-1.9z | a row whose id carries a late letter | some criterion | todo |
+BL
+(cd "$_handoff_letter_dir" && git add -A && git commit -qm "M-1.1: a lettered row")
+if ( cd "$_handoff_letter_dir" && bash scripts/check-milestone-handoff.sh ) >/dev/null 2>&1; then
+  ok "check-milestone-handoff.sh reads the same id form open_task_ids emits"
+else
+  fail "check-milestone-handoff.sh cannot discharge an id lib.sh considers valid"
+  ( cd "$_handoff_letter_dir" && bash scripts/check-milestone-handoff.sh ) 2>&1 | sed 's/^/     /' >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
+# ⚠️ **Three more positive cases, because three round-1 repairs had none** and
+# review measured each: deleting the en-dash class, collapsing the lettered
+# expansion to its endpoints, or turning the backwards-range check into `if
+# False` each left all 139 cases green. A repair with no case is a repair the
+# next edit undoes silently, which is `testing.md` rule 20a's whole subject.
+TOTAL=$((TOTAL + 1))
+_handoff_endash_dir="$(_handoff_fixture '| Rows `M-1.5`–`M-1.9` | M0 (from M-1) | an en-dash range, which is how this prose writes them |')"
+if ( cd "$_handoff_endash_dir" && bash scripts/check-milestone-handoff.sh ) >/dev/null 2>&1; then
+  ok "check-milestone-handoff.sh reads an en-dash as a range separator"
+else
+  fail "check-milestone-handoff.sh stranded a row named inside an en-dash range"
+  ( cd "$_handoff_endash_dir" && bash scripts/check-milestone-handoff.sh ) 2>&1 | sed 's/^/     /' >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
+TOTAL=$((TOTAL + 1))
+_handoff_lettered_dir="$(_handoff_fixture '| Rows `M-1.7` and `M-1.9a`-`M-1.9c` | M0 (from M-1) | a lettered range |')"
+cat >> "$_handoff_lettered_dir/docs/internal/product/backlog.md" <<'BL'
+| M-1.9b | a row inside a lettered range | some criterion | todo |
+BL
+(cd "$_handoff_lettered_dir" && git add -A && git commit -qm "M-1.1: a lettered interior row")
+if ( cd "$_handoff_lettered_dir" && bash scripts/check-milestone-handoff.sh ) >/dev/null 2>&1; then
+  ok "check-milestone-handoff.sh expands a lettered range over its interior"
+else
+  fail "check-milestone-handoff.sh stranded M-1.9b inside M-1.9a-M-1.9c"
+  ( cd "$_handoff_lettered_dir" && bash scripts/check-milestone-handoff.sh ) 2>&1 | sed 's/^/     /' >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
+# ⚠️ **A backwards range is reported, not silently expanded to nothing.**
+# `range(9, 5 + 1)` is empty, so without the check the row reads as naming its
+# two endpoints and the ids between them vanish with no complaint.
+setup_handoff_backwards_range() {
+  _handoff_fixture '| Rows `M-1.9`-`M-1.5` | M0 (from M-1) | a range written backwards |'
+}
+invoke_handoff_backwards_range() {
+  bash "$1/scripts/check-milestone-handoff.sh"
+}
+run_case "check-milestone-handoff.sh (a deferral range written backwards)" \
+  setup_handoff_backwards_range invoke_handoff_backwards_range \
+  "backwards"
+
+# ⚠️ **And it must *pass* on an honest handoff**, which `run_case` cannot
+# express — it asserts a non-zero exit. Without these two, a gate that refused
+# every complete milestone would satisfy both cases above, and the rule it
+# enforces would be "never close a milestone", which is the loop rather than
+# the fix for it.
+TOTAL=$((TOTAL + 1))
+_handoff_named_dir="$(_handoff_fixture '| Rows `M-1.7` | M0 (from M-1) | handed on by name |')"
+if ( cd "$_handoff_named_dir" && bash scripts/check-milestone-handoff.sh ) >/dev/null 2>&1; then
+  ok "check-milestone-handoff.sh passes when the open row is named"
+else
+  fail "check-milestone-handoff.sh refused a milestone that handed its open row on"
+  ( cd "$_handoff_named_dir" && bash scripts/check-milestone-handoff.sh ) 2>&1 | sed 's/^/     /' >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
+TOTAL=$((TOTAL + 1))
+_handoff_range_dir="$(_handoff_fixture '| Rows `M-1.5`-`M-1.9` | M0 (from M-1) | handed on as a range |')"
+if ( cd "$_handoff_range_dir" && bash scripts/check-milestone-handoff.sh ) >/dev/null 2>&1; then
+  ok "check-milestone-handoff.sh expands a range rather than demanding each id"
+else
+  fail "check-milestone-handoff.sh refused a row named inside a deferral range"
+  ( cd "$_handoff_range_dir" && bash scripts/check-milestone-handoff.sh ) 2>&1 | sed 's/^/     /' >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
 
 # ⚠️ **And the union must *pass* on a complete one**, which `run_case` cannot
 # express — it asserts a non-zero exit. Without this, a script that refused

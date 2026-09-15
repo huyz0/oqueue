@@ -93,6 +93,63 @@ Every **blocking** or **major** finding names a `task_id` that the backlog
 already lists: write the row first, then cite it. The gate checks the row
 exists. A finding you judge non-actionable is `minor` and needs no task.
 
+## ⚠️ Which findings reopen the milestone, and which are handed on
+
+**This is the step that decides whether the milestone can end**, and until
+`M4.73` it was not here. Every major became a row, `sdd.md` decomposes only the
+*current* milestone, so every row landed in the milestone under review — and
+reading the commits that closed those rows was the next round's job. Findings
+beget rows beget commits beget findings. M4's three rounds read **32**, **13**
+and **17** commits, recorded **12**, **8** and **11** findings at blocking or
+major, and opened **8**, **10** and **7** rows. The series converged only
+because rows-per-commit happened to be under one.
+
+A finding has exactly one of three dispositions, and the choice is yours to
+make and to say out loud.
+
+1. **It reopens this milestone.** Write the row here and work it before the
+   milestone closes. ⚠️ **The test is what acting on it changes, not how
+   serious it sounds**: something a Kafka client, an operator, or another
+   tenant observes; or a gate that cannot fail where a standard says it must.
+   Nothing else qualifies, and `review.md` rule 9a is the same floor one layer
+   down.
+2. **It is handed to the next milestone.** Every other blocking or major
+   finding. Write the row here anyway — `next-task` reads the backlog and
+   nothing reads `reviews/` — leave it `todo`, and add it to
+   [`roadmap.md`](../../../docs/internal/product/roadmap.md)'s **"Deferred into
+   a later milestone"** table, plus that milestone's plan, which `AGENTS.md`
+   requires for every deferral. ⚠️ **The task ids go in the row's *first* cell
+   — the one that says what is Deferred — and each is written in backticks.**
+   `M1`'s own row is the shape:
+
+   ```
+   | **Eleven rows M1 opened after its own decomposition** — `M1.40`, `M1.41`, `M1.47`-`M1.51`, `M1.53`-`M1.56` | M2 (from M1) | … |
+   ```
+
+   The receiving milestone goes in the second cell. Neither the cell nor the
+   backticks is a formatting preference: the gate reads the first cell only,
+   because an id in the third cell is prose — `roadmap.md` has a row whose
+   rationale mentions `M0.27`-`M0.29` in passing, and reading the whole row let
+   that aside discharge three real rows of a closed milestone. Ranges are fine
+   and are expanded, including lettered ones. The opening
+   commit of that milestone re-derives them as its own rows and marks each
+   `dissolved` with a pointer. ⚠️ **This is not new**: it is what `M2.0` did
+   for the eleven rows `M1` closed over, and `M10.0` for `M3.41`-`M3.46`. What
+   `M4.73` added is that it is now a rule with a gate rather than something a
+   milestone does when somebody notices. ⚠️ Those rows carried `deferred`, a
+   row state `M1.52` defined and `M2.0` retired, so the gate would have seen
+   nothing on either precedent — they are evidence that the handoff is the
+   established answer, not that the gate has caught anything yet.
+   → `scripts/check-milestone-handoff.sh`
+3. **It is argued** in `baselines/review.txt`, below — for a finding that is
+   not a defect, or whose outcome is a decision rather than work.
+
+⚠️ **A milestone closes when its completion condition passes and every finding
+has a disposition — not when its backlog is empty.** Those are different
+sentences and only the second is unreachable, because this round can always add
+to the backlog it is being measured against. The completion condition is a
+command; an empty backlog is not.
+
 ⚠️ **Harvest rule 15's minors** (ADR-0016, closing `bcf5d6f697f2`): sweep the
 commit bodies since the last checkpoint for minors recorded there, and turn
 the ones worth work into **sweep rows** (`sdd.md`). This is the step `M0.27`-

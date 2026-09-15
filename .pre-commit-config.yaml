@@ -98,6 +98,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-milestone-handoff
+        name: "M4.73: a milestone marked complete has handed on the rows it left open"
+        entry: scripts/check-milestone-handoff.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-file-size
         name: "code-structure.md rules 16, 17, 24: a file is at most 500 lines, and no module is a dumping ground"
         entry: scripts/check-file-size.sh
