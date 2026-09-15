@@ -130,7 +130,54 @@ impl GroupJoins {
             };
 
             match step {
-                Step::Done(outcome) => return outcome,
+                Step::Done(outcome) => {
+                    // ⚠️ **The sync half is bounded by the same number, and
+                    // until `M4.66` it was bounded by a constant ten times
+                    // it.** A follower parking on the assignment barrier
+                    // cannot read this off its own `SyncGroupRequest` — the
+                    // wire carries no timeout field there — so the members
+                    // that join are what record it, folded to the maximum
+                    // (`SyncGroups::note_rebalance_timeout`'s own doc).
+                    //
+                    // ⚠️ **Only a member that was actually enrolled**, and
+                    // review measured why: the first version recorded every
+                    // attempt, so one request refused for an unusable
+                    // protocol while asking `rebalance_timeout_ms=3_000_000`
+                    // left the group at the ceiling for the rest of the
+                    // process — `waited_ms=3000000`, the `M4.47` stranding
+                    // this row exists to end, set by a member that never
+                    // joined. The comment there argued that an unadmitted
+                    // member "cannot shorten anyone's wait, only lengthen
+                    // it, so nothing is bought" by the check; lengthening to
+                    // the ceiling is the defect, so it was wrong in the
+                    // load-bearing direction.
+                    //
+                    // ⚠️ **`Ready` *and* `Pending`, which is the enrolment
+                    // test rather than the answered one.** `Refused`'s own
+                    // doc is "this member was never enrolled" and
+                    // `Unavailable` is a transition that did not land;
+                    // everything else is in the round, and a first join with
+                    // an empty `member_id` is `Pending` rather than `Ready`,
+                    // so gating on `Ready` alone recorded nothing for the
+                    // common case.
+                    //
+                    // ⚠️ **Here rather than in `apply_open`.** There it
+                    // would be the *opening* member's number rather than the
+                    // group's, and a member joining a round somebody else
+                    // opened would never reach it —
+                    // `deadline::a_member_joining_an_open_round_raises_the_groups_number`
+                    // is the case, and review measured that moving the call
+                    // back leaves the suite green without it. Outside the
+                    // rounds lock because the only order in the crate is
+                    // rounds-then-barrier, and holding neither across the
+                    // other is cheaper than defending a nesting
+                    // (`async-concurrency.md` rule 9).
+                    if matches!(outcome, JoinOutcome::Ready(_) | JoinOutcome::Pending { .. }) {
+                        co.sync_groups
+                            .note_rebalance_timeout(group, rebalance_timeout);
+                    }
+                    return outcome;
+                }
                 Step::Wait(_) => {
                     if let Some(notified) = waiting {
                         // ⚠️ **Bounded, and a mutation test is why.** Mutating

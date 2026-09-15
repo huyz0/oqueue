@@ -326,6 +326,11 @@ declare -A RUST_BOUNDS=(
   # follower's connection open that much longer against a leader that
   # never submits.
   ["crates/oqueue-broker/src/sync_group/deadline.rs|MAX_SYNC_WAIT_MS"]="3_000_000"
+  # ⚠️ A floor, so lowering is the weakening direction -- it is what stops a
+  # member asking for nothing from answering every other member's follower at
+  # once (`M4.66`). Its value is `heartbeat::deadline::MIN_SESSION_TIMEOUT_MS`
+  # below, and the two must move together or not at all.
+  ["crates/oqueue-broker/src/sync_group/deadline.rs|MIN_SYNC_WAIT_MS"]="6_000"
   # How short/long a session timeout this broker honours from a Heartbeat
   # member, whatever it asks for -- real Kafka's own
   # group.min/max.session.timeout.ms defaults. Lowering the minimum lets a
@@ -535,6 +540,11 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/join_group/tests.rs|V7"]="a test's own advertised-version literal, same shape as VERSION above"
   ["crates/oqueue-broker/src/sync_group/tests.rs|VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/sync_group/tests.rs|V5"]="a test's own advertised-version literal, same shape as VERSION above"
+  # ⚠️ Visible to this gate only since `M4.66`, which moved the `JoinGroup`
+  # helpers up out of `sync_group/tests/reopened.rs`: the skip below is for a
+  # path containing `/tests/`, and `tests.rs` is not one. A wire version a
+  # test encodes at, not a threshold this project chose.
+  ["crates/oqueue-broker/src/sync_group/tests.rs|JOIN_VERSION"]="a test's own advertised-version literal, same shape as VERSION above"
   ["crates/oqueue-broker/src/heartbeat/tests.rs|JOIN_VERSION"]="a test's own advertised-version literal, same shape as sasl_handshake/tests.rs's own entry above"
   ["crates/oqueue-broker/src/heartbeat/tests.rs|SYNC_VERSION"]="a test's own advertised-version literal, same shape as JOIN_VERSION above"
   ["crates/oqueue-broker/src/heartbeat/tests.rs|HEARTBEAT_VERSION"]="a test's own advertised-version literal, same shape as JOIN_VERSION above"

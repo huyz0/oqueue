@@ -27,7 +27,7 @@
 
 #![allow(clippy::expect_used)]
 
-use super::{seat, sync};
+use super::{join_as_a_newcomer, seat, sync};
 use crate::testing::fixture;
 use oqueue_codec::error_codes;
 use oqueue_core::GroupState;
@@ -181,46 +181,6 @@ async fn a_follower_that_waits_out_the_deadline_is_told_to_rejoin_not_given_a_fa
         follower.assignment.is_empty(),
         "a refusal carries no assignment"
     );
-}
-
-/// One newcomer's own `JoinGroup` through the real handler, so the round is
-/// opened by the path `apply_open` actually takes rather than by a
-/// coordinator transition this file fired itself.
-///
-/// ⚠️ **Its own copy rather than `heartbeat/tests.rs`'s `join`**, which is
-/// `pub(super)` to that module. Three lines of encoding against a helper
-/// visible from here is the cheaper of the two, and `code-structure.md`
-/// rule 8 keeps a test helper beside the tests that use it.
-async fn join_as_a_newcomer(cluster: &crate::cluster::Cluster, group: &str) {
-    use kafka_protocol::messages::JoinGroupRequest as KpJoinRequest;
-    use kafka_protocol::messages::join_group_request::JoinGroupRequestProtocol as KpProtocol;
-    use kafka_protocol::protocol::{Encodable, StrBytes};
-
-    const JOIN_VERSION: i16 = 5;
-    let mut protocol = KpProtocol::default();
-    protocol.name = StrBytes::from_static_str("range");
-    protocol.metadata = bytes::Bytes::from_static(b"m");
-    let request = KpJoinRequest::default()
-        .with_group_id(kafka_protocol::messages::GroupId(StrBytes::from_string(
-            group.to_owned(),
-        )))
-        .with_session_timeout_ms(30_000)
-        .with_rebalance_timeout_ms(30_000)
-        .with_member_id(StrBytes::from_static_str(""))
-        .with_protocol_type(StrBytes::from_static_str("consumer"))
-        .with_protocols(vec![protocol]);
-    let mut body = Vec::new();
-    request.encode(&mut body, JOIN_VERSION).expect("encodes");
-    let _ = crate::join_group::handle(
-        cluster,
-        oqueue_codec::frame::RequestPrelude {
-            api_key: 11,
-            api_version: JOIN_VERSION,
-            correlation_id: 1,
-        },
-        &body,
-    )
-    .await;
 }
 
 /// ⚠️ **`M4.58`'s own acceptance criterion, and the last route out of

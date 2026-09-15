@@ -11,6 +11,7 @@
 use oqueue_core::GroupId;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 use tokio::sync::Notify;
 
 /// Every member's own slice of the leader's submitted assignment, by member
@@ -103,6 +104,13 @@ pub(crate) struct SyncGroups {
 struct Entry {
     assignments: Assignments,
     notify: Arc<Notify>,
+    /// The largest `rebalance_timeout_ms` any member this group has admitted
+    /// asked for — `M4.66`, the value a follower's own wait is derived from,
+    /// and [`SyncGroups::note_rebalance_timeout`] for why the largest and
+    /// why only admitted members. `None` until a member has joined through
+    /// `join_group::round`, which is every test that drives the coordinator
+    /// directly and nothing a real client produces.
+    rebalance_timeout: Option<Duration>,
 }
 
 /// What the group's cell currently says about `generation`.
@@ -171,6 +179,60 @@ impl SyncGroups {
         let handles = (entry.assignments.clone(), Arc::clone(&entry.notify));
         drop(entries);
         handles
+    }
+
+    /// Records what `rebalance_timeout_ms` `group`'s round was opened with,
+    /// so a follower parking on the barrier can be bounded by the same value
+    /// the join barrier was — `M4.66`, and `sync_group::deadline`'s own doc
+    /// for why nothing else bounds this phase.
+    ///
+    /// ⚠️ **The maximum over every member that has asked, not the last one
+    /// to ask**, and the first version of this was the latter. Both
+    /// reference clients seed `rebalance_timeout_ms` from
+    /// `max.poll.interval.ms`, which an application may legitimately set to
+    /// a second — and last-writer-wins let whichever member happened to open
+    /// the round truncate the phase for everyone, refusing followers before
+    /// a leader's `SyncComplete` append could land and re-opening the round
+    /// they were refused into. Real Kafka folds `max` over the members'
+    /// `rebalanceTimeoutMs` for exactly this. Found by review.
+    ///
+    /// ⚠️ **Only for a member that was admitted**, which the first version
+    /// got wrong and review measured: it recorded every attempt, so one
+    /// request refused for an unusable protocol while asking
+    /// `rebalance_timeout_ms=3_000_000` left the group at the ceiling for
+    /// the rest of the process. `join_group::round`'s `Step::Done` arm is
+    /// where the outcome is known and is why the call is there.
+    ///
+    /// ⚠️ **Monotonic over the group's whole life**, and that is a real
+    /// limitation rather than a design: a member that legitimately asked for
+    /// fifty minutes and has since left still holds the group at what it
+    /// asked for, where real Kafka recomputes the fold over the round's
+    /// current members. The bound is [`super::deadline::MAX_SYNC_WAIT_MS`]
+    /// either way, so the worst case is the flat ceiling this value
+    /// replaced — a resettable fold needs the barrier's lock taken inside
+    /// the rounds lock, which is a nesting `async-concurrency.md` rule 9
+    /// asks to be defended rather than assumed, and no member asking for the
+    /// ceiling has been observed.
+    pub(crate) fn note_rebalance_timeout(&self, group: &GroupId, rebalance_timeout: Duration) {
+        let mut entries = self.lock();
+        let slot = &mut entries.entry(group.clone()).or_default().rebalance_timeout;
+        *slot = Some(slot.map_or(rebalance_timeout, |noted| noted.max(rebalance_timeout)));
+        drop(entries);
+    }
+
+    /// The largest value [`Self::note_rebalance_timeout`] has recorded for
+    /// `group`.
+    ///
+    /// ⚠️ **A read, and it takes no entry.** The first version used
+    /// `entry(..).or_default()`, which clones the `GroupId` and inserts on
+    /// every follower's request; that it did no harm rested on `entry_for`
+    /// having inserted one line earlier in `handle`, which is not a property
+    /// of this function. Found by review.
+    pub(crate) fn rebalance_timeout(&self, group: &GroupId) -> Option<Duration> {
+        let entries = self.lock();
+        let noted = entries.get(group).and_then(|e| e.rebalance_timeout);
+        drop(entries);
+        noted
     }
 
     /// Submits `group`'s own assignment map for `generation` — the leader's

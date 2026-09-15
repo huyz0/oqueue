@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+mod deadline;
 mod durability;
 mod generations;
 mod parked;
@@ -116,6 +117,69 @@ fn leader_body_at(
 /// is what constrains it.
 fn still_current() -> bool {
     true
+}
+
+/// One newcomer's own `JoinGroup` through the real handler, so the round is
+/// opened by the path `apply_open` actually takes rather than by a
+/// coordinator transition this file fired itself.
+///
+/// ⚠️ **Its own copy rather than `heartbeat/tests.rs`'s `join`**, which is
+/// `pub(super)` to that module. Three lines of encoding against a helper
+/// visible from here is the cheaper of the two, and `code-structure.md`
+/// rule 8 keeps a test helper beside the tests that use it.
+///
+/// ⚠️ **Here rather than in `reopened.rs`, where `M4.58` first wrote it.**
+/// `M4.66` gave it a second caller in `deadline.rs`, and a helper a
+/// sibling file reaches for through `super::reopened::` belongs beside
+/// `seat` and `sync` — which is also what took `reopened.rs` back under
+/// `code-structure.md` rule 16's 500 lines.
+pub(super) async fn join_as_a_newcomer(cluster: &crate::cluster::Cluster, group: &str) {
+    join_asking(cluster, group, "range", 30_000).await;
+}
+
+/// [`join_as_a_newcomer`] with the two fields `M4.66` is about spelled out:
+/// which protocol the member advertises, and what `rebalance_timeout_ms` it
+/// asks for.
+///
+/// ⚠️ **The protocol is a parameter because refusing a join needs one.**
+/// `JoinOutcome::Refused` is "shares no protocol with the round's own running
+/// candidate set", so a second member naming a different one is the only way
+/// to reach that arm without reaching into the coordinator.
+pub(super) async fn join_asking(
+    cluster: &crate::cluster::Cluster,
+    group: &str,
+    protocol_name: &'static str,
+    rebalance_timeout_ms: i32,
+) {
+    use kafka_protocol::messages::JoinGroupRequest as KpJoinRequest;
+    use kafka_protocol::messages::join_group_request::JoinGroupRequestProtocol as KpProtocol;
+    use kafka_protocol::protocol::{Encodable, StrBytes};
+
+    const JOIN_VERSION: i16 = 5;
+    let mut protocol = KpProtocol::default();
+    protocol.name = StrBytes::from_static_str(protocol_name);
+    protocol.metadata = bytes::Bytes::from_static(b"m");
+    let request = KpJoinRequest::default()
+        .with_group_id(kafka_protocol::messages::GroupId(StrBytes::from_string(
+            group.to_owned(),
+        )))
+        .with_session_timeout_ms(30_000)
+        .with_rebalance_timeout_ms(rebalance_timeout_ms)
+        .with_member_id(StrBytes::from_static_str(""))
+        .with_protocol_type(StrBytes::from_static_str("consumer"))
+        .with_protocols(vec![protocol]);
+    let mut body = Vec::new();
+    request.encode(&mut body, JOIN_VERSION).expect("encodes");
+    let _ = crate::join_group::handle(
+        cluster,
+        RequestPrelude {
+            api_key: 11,
+            api_version: JOIN_VERSION,
+            correlation_id: 1,
+        },
+        &body,
+    )
+    .await;
 }
 
 fn decode_response(bytes: &[u8]) -> KpResponse {

@@ -43,7 +43,7 @@ use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 pub(crate) use barrier::SyncGroups;
 use barrier::{Assignments, Known, assignment_for};
-use deadline::MAX_SYNC_WAIT_MS;
+use deadline::sync_wait_ms;
 use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
@@ -96,7 +96,9 @@ pub(crate) async fn handle(
     // A follower: answer at once if the assignment is already known,
     // otherwise wait for it (or this call's own deadline).
     let (assignments, notify) = cluster.sync_groups().entry_for(&group);
-    let map = match wait_for_assignment(&assignments, &notify, request.generation_id).await {
+    let wait_ms = sync_wait_ms(cluster.sync_groups().rebalance_timeout(&group));
+    let map = match wait_for_assignment(&assignments, &notify, request.generation_id, wait_ms).await
+    {
         Known::Mine(map) => map,
         // ⚠️ **Every way of not having this generation's assignment is
         // answered the same, and `M4.48` is what made that true.** The
@@ -356,16 +358,27 @@ async fn submit_assignment(
     reply(prelude, &response_for(&map, request, version))
 }
 
-/// Waits for `assignments` to become known, or gives up after
-/// [`MAX_SYNC_WAIT_MS`] — `join_group::mod::wait_for_close`'s own
-/// bounded-wait shape, `security.md` rule 3's instinct against an
-/// unbounded hold. ⚠️ **Not derived from any client-supplied value**:
-/// unlike `JoinGroup`'s `rebalance_timeout_ms`, `SyncGroupRequest` carries
-/// no timeout field on the wire, so this is a fixed ceiling rather than the
-/// group's own configured rebalance timeout — a provisional answer until a
-/// later task (`M4.9`/`M4.11`) tracks that value across the two phases.
-async fn wait_for_assignment(assignments: &Assignments, notify: &Notify, generation: i32) -> Known {
-    let deadline = Instant::now() + Duration::from_millis(MAX_SYNC_WAIT_MS);
+/// Waits for `assignments` to become known, or gives up after `wait_ms` —
+/// `join_group::mod::wait_for_close`'s own bounded-wait shape,
+/// `security.md` rule 3's instinct against an unbounded hold.
+///
+/// ⚠️ **`wait_ms` is the group's own `rebalance_timeout_ms`, clamped** —
+/// [`deadline::sync_wait_ms`]. `SyncGroupRequest` carries no timeout field
+/// on the wire, so it cannot be read off this request the way `JoinGroup`'s
+/// is; it comes from the round that assembled the generation instead.
+/// ⚠️ **This doc used to say the opposite** — "a fixed ceiling rather than
+/// the group's own configured rebalance timeout — a provisional answer until
+/// a later task (`M4.9`/`M4.11`) tracks that value across the two phases".
+/// Neither of those rows did, both closed, and nothing was owed to anyone:
+/// `M4.66` is the row that found the deferral had no receiver and the fixed
+/// ceiling was ten times a real client's own number.
+async fn wait_for_assignment(
+    assignments: &Assignments,
+    notify: &Notify,
+    generation: i32,
+    wait_ms: u64,
+) -> Known {
+    let deadline = Instant::now() + Duration::from_millis(wait_ms);
     loop {
         // ⚠️ **Register for the wakeup *before* looking, not after.**
         // `Notify::notified()` only registers the waiter when the future is

@@ -90,7 +90,7 @@
 
 #![allow(clippy::redundant_pub_crate)]
 
-mod deadline;
+pub(crate) mod deadline;
 
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
