@@ -5036,6 +5036,50 @@ _fr40_pattern_case "this repo's own _authorized( idiom" \
 _fr40_pattern_case "a handler that checks nothing" \
   'fn handle(request: &JoinGroupRequest) -> i16 { error_codes::NONE }' "does not match"
 
+# ⚠️ **And an unreadable handler is neither answer**, which is the input
+# `M4.68` is about: `grep` exits 2, and `m4-complete.sh`'s leg read the status
+# as a boolean, so `chmod 000` on one handler printed `ok ... across 14
+# file(s)` having scanned thirteen while `check-fencing-seam.sh`, walking the
+# same `group_handler_files`, refused it. This pins the half that is testable
+# here — that the helper reports it rather than answering "no check".
+# ⚠️ **The leg's own branch has no case and cannot have one**: `m4-complete.sh`
+# `finish`es at `has_rust` and again at `cargo test --workspace` before leg 2b
+# runs, so a scratch tree never reaches it (`M4.50`'s row states this, and it
+# is why the pattern moved into `lib.sh` at all). `testing.md` rule 20a's
+# stated-reason escape, said here rather than implied by an absent case.
+_fr40_unreadable_dir="$(_fr40_pattern_dir)"
+printf 'fn handle(p: &Principal) -> i16 { 0 }\n' > "$_fr40_unreadable_dir/handler.rs"
+chmod 000 "$_fr40_unreadable_dir/handler.rs"
+_fr40_unreadable_rc=0
+bash -c '
+  OQUEUE_SUPPRESS_TIMING=1 source "$1/scripts/lib.sh" 2>/dev/null
+  group_names_a_principal "$1/handler.rs"
+' _ "$_fr40_unreadable_dir" >/dev/null 2>&1 || _fr40_unreadable_rc=$?
+chmod 644 "$_fr40_unreadable_dir/handler.rs"
+# ⚠️ Skipped when the suite runs as root, which can read a 000 file: the case
+# would then report `matches` and accuse a helper that is behaving. A skip
+# that says so beats a failure that does not.
+# ⚠️ **`lib.sh`'s plain `skip`, never `skip_case`.** `skip_case` takes a
+# *script name* and refuses anything outside `SKIPPABLE_GATES`, so calling it
+# with a prose label fails the whole suite and prints that label in the
+# `SKIPPED_CASES` line `m0-complete.sh` reads — the exact call shape this
+# file's own `harness_check "an unknown gate name is refused"` exists to
+# catch. Found by review; latent, since the host runs as uid 1000 and
+# `docker-test.sh` passes `--user "$HOST_UID:$HOST_GID"`.
+# ⚠️ `TOTAL` is incremented only where a case actually ran, so a skipped run
+# does not inflate the count `m0-complete.sh` reads.
+if [[ "$(id -u)" == 0 ]]; then
+  skip "the FR-40 tripwire's pattern on an unreadable handler: running as root, which can read mode 000"
+elif (( _fr40_unreadable_rc == 2 )); then
+  TOTAL=$((TOTAL + 1))
+  ok "the FR-40 tripwire's pattern reports an unreadable handler rather than calling it clean"
+else
+  TOTAL=$((TOTAL + 1))
+  fail "the FR-40 tripwire's pattern answered $_fr40_unreadable_rc for an unreadable handler, not 2"
+  note "1 would mean 'no principal check', which is what m4-complete.sh's leg used to conclude"
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
 # ⚠️ **The other half of the leg that turns on a literal.** `M4.59`'s row
 # names "the pattern and the strip", and the module layout under these
 # handlers has already moved once beneath this leg (`M4.50`). When it moves

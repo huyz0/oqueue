@@ -73,10 +73,12 @@
 #     (`use oqueue_codec::error_codes as ec;`), or the bare numeric literal.
 #     ⚠️ The *ordinary* import is caught, because
 #     `use oqueue_codec::error_codes::REBALANCE_IN_PROGRESS;` carries the
-#     spelling itself; and `fencing_seam.py`'s `VARIANT_RE` requires
-#     the variant name be followed by `[({,]` or end of line, so a variant
-#     given an explicit discriminant (`FencedInstance = 9,`) never enters the
-#     derived list at all. `M4.56` is the open row for the parser's gaps.
+#     spelling itself. ⚠️ `fencing_seam.py`'s `VARIANT_RE` gap — a variant given
+#     an explicit discriminant (`FencedInstance = 9,`) never entering the
+#     derived list — was `M4.56`, and is closed: the pattern admits it and a
+#     negative case plants `FENCED_INSTANCE_ID`. This paragraph named `M4.56`
+#     as "the open row" for eleven commits after it landed, which is the belief
+#     this header exists not to teach.
 #   - **FR-40 is re-asserted for M4's own APIs, and that is not M9's job.**
 #     `m9-complete.sh` asserts FR-40 over every API implemented *as of M9*,
 #     which predates all seven of these. `OffsetCommit` and `OffsetFetch`
@@ -216,6 +218,7 @@ handler_list="$(group_handler_files 2>&1)" || {
 # in a failure line an operator reads (`portability.md` rule 2).
 expected="$(wc -l <<<"$handler_list" | tr -d ' ')"
 scoped=""
+unusable=""
 read_files=0
 while IFS= read -r handler; do
   path="$REPO_ROOT/$handler"
@@ -234,10 +237,34 @@ while IFS= read -r handler; do
   # regex, or the idiom `M12` actually writes, would leave the tripwire
   # printing "unmet and reported" forever. It has its own negative cases
   # now, which need no built workspace.
-  if group_names_a_principal "$path"; then
+  # ⚠️ **`grep`'s status is three-valued and this used to read it as two**,
+  # which `M4.50` recorded and `M4.59` hardened the *test's* reading of while
+  # leaving the gate's — `M4.68`, the milestone's own instance-not-class shape
+  # landing on the one leg that is `M12.md` task 3a's promotion signal. rc 2 is
+  # a bad pattern or an unreadable file and rc 127 is a renamed helper; an `if`
+  # takes both for "no principal check" and the leg prints `ok ... across 14
+  # file(s)` having scanned thirteen. `check-fencing-seam.sh`, walking the same
+  # `group_handler_files`, refuses the identical input, and
+  # `tests/gates/negative.sh` already asserted exactly this distinction — of the
+  # test, against itself. Same shape as that script's own `awk` status check.
+  principal_rc=0
+  group_names_a_principal "$path" || principal_rc=$?
+  if (( principal_rc == 0 )); then
     scoped="$scoped $(group_handler_label "$handler")"
+  elif (( principal_rc != 1 )); then
+    # ⚠️ Collected, not `finish`ed — the loop's own rule four lines up: every
+    # bad handler is named in one run, because reaching this leg costs a whole
+    # `cargo test --workspace` and learning about the second one afterwards
+    # costs another.
+    unusable="$unusable $(group_handler_label "$handler") (rc=$principal_rc)"
   fi
 done <<<"$handler_list"
+if [[ -n "$unusable" ]]; then
+  fail "the FR-40 tripwire's pattern could not be run against:$unusable"
+  note "rc 2 is a bad pattern or an unreadable file; 127 is a missing helper"
+  note "it proved nothing about whether those handlers name a principal"
+  finish
+fi
 if (( read_files != expected )); then
   fail "FR-40 tripwire read ${read_files} file(s) of ${expected} -- it proved nothing"
   finish
