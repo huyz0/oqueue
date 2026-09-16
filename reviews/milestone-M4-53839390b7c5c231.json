@@ -1,0 +1,56 @@
+{
+  "commits": [
+    "8a5515fa5cc1fd65be86d2465a3909bc85fb5e0f",
+    "7004b9615abe6bd9579bacc5930567f761b33b5f",
+    "995b64cd96431c8fc11602a373342789e806e3e3",
+    "1e6fedd34bf5f9fd9b7082e889f5d62e8ae14122",
+    "5c2610f081a43675ecff4c6e2d6aa61cb40e7e1d"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-broker/src/sync_group/barrier.rs folds max over every member that reached Pending and nothing removes an Entry -- `grep -n '\\.remove(' crates/oqueue-broker/src/sync_group/barrier.rs` returns nothing. A member that reaches Pending asking rebalance_timeout_ms = 1_800_000 and then disconnecting holds the group at thirty minutes permanently: withdraw takes it off the roster and nothing un-notes it. Cross-principal, since roadmap.md records GroupGrants as deferred. Every later follower parks thirty minutes on the dead-leader backstop route instead of its group's real timeout. backlog.md's M4.76 row says in terms 'Recomputing per round is the repair and it is recorded here for the next boundary round to harvest rather than pointed at another row' -- this is that round. The only other row naming it is M4.70, whose subject is prose claims and whose acceptance is 'each is true, deleted, or dated', so it cannot produce the code; and roadmap.md's deferral row claims of its six ids that 'None changes what a client, an operator or another tenant observes', which is true of the six and leaves the residue out. Compare sync_group/deadline.rs ('it does need a field: RoundMember carries no timeout today') against backlog.md's M4.70 and M4.76 rows, which both still prescribe snapshotting round.members under the rounds lock -- the recipe deadline.rs says in the same commit cannot work. DISPOSITION (1) reopens: a Kafka client observes it, and M4 reopened one commit ago for the fifty-minute form of the same defect.",
+      "id": "58afa4c7b78d",
+      "kind": "contradiction",
+      "severity": "blocking",
+      "summary": "M4.76 bounded the value and not its permanence, and the residue it recorded for this round to harvest is scheduled nowhere: one member's ask still pins a group's sync wait at thirty minutes for the life of the process.",
+      "task_id": "M4.83"
+    },
+    {
+      "evidence": ".agents/skills/milestone-review/SKILL.md reads '-> scripts/check-milestone-handoff.sh'. That script's header states that the bare invocation's window is zero commits wide and that no commit in this repository's history has ever been in the state it inspects. `grep -ln check-milestone-review.sh scripts/gates/*.sh` returns all nine completion gates; `grep -ln check-milestone-handoff.sh scripts/gates/*.sh` returns one, m4-complete.sh, leg 0b. Leg 0 propagated to every gate as a convention; leg 0b exists once and the convention is written nowhere -- not in SKILL.md, not in sdd.md, not in the roadmap. If m5-complete.sh does not copy it, M6.0 flips M5's cell and dissolves its rows in the same commit and M5 closes with rows stranded, which M4.79's zero-width window means no gate can catch. Recorded as a rule-15 minor in 5c2610f's body and filed here as the row that body said the next commit would open. DISPOSITION (2) hands it to M5: m4-complete.sh carries the leg today, so no gate of M4's is unable to fail.",
+      "id": "0ec639a93ebb",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "The milestone-review procedure still points at the bare check-milestone-handoff.sh, which its own header documents as unable to fail, and nothing records that a completion gate must carry the --milestone leg.",
+      "task_id": "M4.84"
+    },
+    {
+      "evidence": "scripts/lib.sh's milestone_commits excludes a commit only when every changed path matches '^reviews/milestone-.*\\.json$'. milestone-review/SKILL.md requires the backlog row to exist before a finding cites it, and record validates task_id against open_task_ids, so the closing round's commit necessarily carries backlog.md and is enumerated, uncovered, and fails check-milestone-review.sh --milestone -- which is leg 0 of every completion gate. Measured across history: the last review artifact of every completed milestone was added by a commit touching exactly one file -- M-1 1256598, M0 fdd5bae, M1 bd5d134, M2 7002926, M3 5849ecc, M9 c7edb35, M10 6bf1602, M11 0cddf67, and M4's own d2db096 ('M4.41: record the terminating round's verdict', 1 file changed). Nine instances of a move no skill names: `grep -rni 'addendum|verdict-only' .agents/skills/` returns only the line stating the mechanic, which never says the closing round must be recorded alone, nor that it must therefore produce zero blocking or major findings. M4.73's disposition rule tightened this and did not mention it. DISPOSITION (2) hands it to M5: no gate is unable to fail -- the gate fails correctly, and it is the documented procedure that has no reachable terminating state.",
+      "id": "43ea4fd0a5a7",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "A boundary round that files rows can never be the last one: milestone_commits enumerates any commit touching more than reviews/, so every one of the nine closings so far needed an undocumented verdict-only commit, and no skill names the move or its precondition.",
+      "task_id": "M4.85"
+    },
+    {
+      "evidence": "check-milestone-handoff.sh's round-1 paragraph claims the marker test suppresses the remedy for '--milestone's two refusals'; the when refusal exits 3 twenty lines above and never reaches that block, and the paragraph three lines below states the opposite rule. The same file's 'this gate's exit code flipping 0 to non-zero' points at m4-complete.sh's legs. backlog.md's M4.78 title and its 'Three of the four questions' contradict the five-question ledger now in check-mutants.sh and the round-1 note in the same cell. barrier.rs still says 'never enrolled at all', which sync_group/deadline.rs corrects to 'never enrolled beyond Pending' in the same commit. backlog.md's M4.76 row carries both the corrected and the superseded residue framing, and M4.70 and M4.76 both keep the round.members snapshot recipe (see the blocking finding). requirements.md's 'yq over every hook, which answers 25' sits inside the sentence whose point is that that total is deliberately not written there, with m0-complete.sh's 'a raw - id: count is 18 against a suite of 16' as a third stale copy. M5.md says 'M4.70, M4.71 and M4.72 were filed by M4.64's round', false for M4.72, whose own row says M4.65's round-two minor written up by M4.66 -- and task 22 tells M5.0 to dissolve each row with a pointer to its origin. All fold into M4.70, which is todo and handed to M5; the requirements.md/m0-complete.sh pair also under-covers M4.82.",
+      "id": "180f0994e70d",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Eight rule-15 minors recorded in these five commit bodies are all still true at HEAD, and the sweep row cited for them (M4.70) names none of them.",
+      "task_id": ""
+    },
+    {
+      "evidence": "backlog.md's M4.81 row lists negative.sh 5922 (now 6084), roadmap.md 558 (now 559), backlog.md 4417 (now 4418), check-drift.sh 728 (now 735) -- wc -l on each. It is the shape M4.70's own acceptance forbids: a commit stating a count of a file it is changing. Separately, .agents/skills/milestone-review/SKILL.md and scripts/check-milestone-handoff.sh carry the same statistic word for word, and `ls reviews/milestone-M4-*.json` is seven artifacts covering 32, 13, 17, 8, 1, 1 and 1 commits -- so the three-point series the convergence argument rests on is a seven-point one, duplicated in exactly the way AGENTS.md's and .agents/skills/README.md's own 'do not look for the list here' sections each forbid. Route the census to M4.81 and the statistic to M4.70; both are todo and already handed to M5.",
+      "id": "2aec2b683bf2",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "M4.81's thirteen-file census is stale in four entries at HEAD, and the 'M4's three rounds read 32, 13 and 17' statistic exists verbatim in two files while M4 has seven review artifacts.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M4",
+  "notes": "Read against the current state of the files. Verified rather than assumed: check-milestone-handoff.sh --milestone M4 exits 0 and the bare walk exits 0; check-milestone-review.sh --milestone M4 fails naming exactly these five commits and no others; requirements.md and roadmap.md both read 23 and `grep -c 'stages: [pre-commit]' .pre-commit-config.yaml` is 23, so M4.77's repair holds; MAX_MEMBER_SYNC_WAIT_MS is pinned in check-drift.sh, RUST_BOUNDS holds 29 entries, and the const assert ties it to MAX_SESSION_TIMEOUT_MS; check-mutants.sh's parity ledger lists five questions and both copies have five cases each, so M4.78's repair holds; the five handoff cases exist including the hand-driven exit-3 one. One candidate finding was investigated and dropped: join_group/round/plan.rs sets the round deadline from the opening member's rebalance_timeout clamped only at MAX_BARRIER_MS, which looked like the join-side twin of finding 1, but heartbeat.rs's latest_deadline and close.rs's reprune_awaiting close such a round at the latest session deadline once the awaited members die, and a first round closes at INITIAL_REBALANCE_DELAY -- the fifty minutes is only reachable while an awaited member is live and has not rejoined, which is what the field is for. Dispositions, said out loud: finding 1 reopens M4, against the reviewer's instinct, which was to hand it on for its size; the rule's test is what acting on it changes, M4 reopened one commit ago for the fifty-minute form, and baselines/review.txt 3ab2f215707b already argues this rule under-inclusive, so under-applying it as well would be incoherent. Findings 2 and 3 go to M5 by disposition (2): a todo row each, a deferral row in roadmap.md whose first cell names M4.84 and M4.85 in backticks, and a line in M5.md task 22, widened from six ids to eight. Findings 4 and 5 are minors needing no row; they fold into M4.70 and M4.81, both already todo and already handed on. Nothing here is argued in baselines/review.txt: finding 3 is kind spec-wrong but its outcome is work with an owner, not a decision, so it takes a row rather than an argued line.",
+  "recorded_at": "2026-09-16T14:03:17Z",
+  "reviewer": "claude-opus-5 (M4 closing boundary round, seventh artifact; fresh reviewer, did not drive M4)",
+  "verdict": "changes-requested"
+}
