@@ -1,0 +1,109 @@
+{
+  "commits": [
+    "88a5e866c1d0386c54e1b406df37031d84960f93",
+    "38ad3dffecc76770eaeb2c3d1a5831feb376920b",
+    "f3a6a5c1782c1bafa06fcd36afd8f435b0cf6fe4",
+    "b6d1ea5a277f2fb6d3c6c4ceca91264189f96508",
+    "1cf503893508323648ab300d353493d48d75bbd5",
+    "a31fd1d41066963616287f36c17f9a53de8e1372",
+    "0f4d522b83d0df860374cb0be429392295cd5f22",
+    "da3a786626075d4bac48f70c7af00d3dada8e8c8"
+  ],
+  "findings": [
+    {
+      "evidence": "scripts/check-milestone-handoff.sh inspects only milestones whose roadmap.md cell reads `complete`, and only their rows still in an open state. The opening commit of the next milestone flips that cell AND dissolves the handed rows together -- 7fb9738 (M4.0) did both for M9 and M9.21; M10.0 for M3.41-M3.46; .agents/skills/milestone-review/SKILL.md instructs exactly that. Reproduced by the gates lens in a clone: an M5.0-shaped commit (roadmap.md M4 -> complete, M4.70/M4.71/M4.72 -> dissolved, no deferral row naming them anywhere) gives `ok every milestone marked complete has handed on the rows it left open`, rc 0. Only the artificial intermediate state (complete AND still todo) fails, and no commit in this repository's history has ever been in it. Compare with m4-complete.sh's leg 0, which invokes check-milestone-review.sh --milestone M4 at the one moment the milestone under measurement is still `in progress`; the handoff gate is wired only into .pre-commit-config.yaml, where that moment never occurs. Both lenses found this independently. DISPOSITION (1) reopens: a gate that cannot fail where a standard says it must.",
+      "id": "3ca29e1b4ca6",
+      "kind": "gate-wrong",
+      "severity": "blocking",
+      "summary": "check-milestone-handoff.sh cannot fail on the sequence it was written for: its window is zero commits wide, because the opening commit that flips the state cell also dissolves the handed rows, so open_task_ids sees nothing.",
+      "task_id": "M4.79"
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/sync_group/barrier.rs's note_rebalance_timeout folds max and nothing resets it or removes an Entry. crates/oqueue-broker/src/join_group/mod.rs builds the value from effective_timeout_ms(request.rebalance_timeout_ms, request.session_timeout_ms), which falls back to session_timeout_ms RAW, and barrier_ms clamps only at MAX_BARRIER_MS = 3_000_000. So one JoinGroup with rebalance_timeout_ms = 3_000_000, or 0 with a large session_timeout_ms, notes the ceiling; the member need only reach Pending (plan_join enrols before returning it) and may then disconnect, since withdraw removes it from the roster and nothing un-notes it. Every later follower parks 50 minutes on the route sync_group/deadline.rs names as the one the backstop exists for. Cross-principal, since roadmap.md's GroupGrants deferral records that a principal may join another's group. Compare heartbeat/deadline.rs, which clamps the same wire field at MAX_SESSION_TIMEOUT_MS = 1_800_000 one module over. DISPOSITION (1) reopens: a Kafka client observes it.",
+      "id": "d35cb21b7717",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "One JoinGroup pins a group's sync wait at MAX_SYNC_WAIT_MS for the life of the process, restoring the waited_ms=3000000 stranding six rows were written to end.",
+      "task_id": "M4.76"
+    },
+    {
+      "evidence": "`grep -c 'stages: \\[pre-commit\\]' .pre-commit-config.yaml` is 23; docs/internal/product/requirements.md's NFR-56 row and docs/internal/product/roadmap.md both read `**22 today**`. Watched failing: scripts/docker-test.sh scripts/gates/m0-complete.sh -> `FAIL docs/internal/product/requirements.md says 22 hooks, .pre-commit-config.yaml has 23` and the same for roadmap.md, 2 of 41 checks failed. The requirements.md cell itself records M4.11 doing this for check-fencing-seam and names M9.19 as the precedent before it. Nothing on the commit path or in CI runs m0-complete.sh. DISPOSITION (1) reopens: the tree is broken, which AGENTS.md forbids committing, and the repair is two numbers.",
+      "id": "d2b4750c593c",
+      "kind": "drift",
+      "severity": "major",
+      "summary": "m0-complete.sh is red at HEAD: M4.73 registered a 23rd pre-commit hook and left both recorded counts at 22 -- the third time this number has gone stale, and both cells record the first two.",
+      "task_id": "M4.77"
+    },
+    {
+      "evidence": "scripts/check-mutants.sh states its baseline read is of the index with no worktree fallback `since M4.69`. The gates lens reintroduced the fallback and ran the whole suite in the container: 151 gate(s) exercised, 0 failed to fail as expected, exit 0. The must-pass unstaged fixture (tests/gates/negative.sh's setup_baseline_unstaged) exists against check-mutants-baseline.sh alone. The other three questions are pinned on both copies, each verified by deletion. Compare 0f4d522's own body: `each question now has a run_case against each copy, so a change to one that is not made to the other fails the suite`. DISPOSITION (1) reopens, against the lens's recommendation of (2): the missing case is one the commit claims exists, and `evidence that does not constrain` is the class this milestone hit most -- see the argued finding below, which is that the reopen test omits it.",
+      "id": "d2bb7b96ef12",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "M4.69 left one of its four questions pinned on one copy of two, which is verbatim the class it was filed to end, surviving inside the commit that closed it.",
+      "task_id": "M4.78"
+    },
+    {
+      "evidence": "scripts/check-fencing-seam.sh says of its new census ceiling that raising it is the weakening direction (non-negotiable 2). It is in neither pin map: check-drift.sh's THRESHOLD_RE matches none of its spellings, and its .sh scan only refuses a threshold made settable from the environment rather than one that moves; scripts/gates/m0-complete.sh's NFR_CONSTANTS is seven entries and, unlike the Rust path's `every numeric constant in the tree is a candidate`, there is no completeness scan for shell constants. m0-complete.sh's own header states this failure mode verbatim. MIN_VARIANTS in the same file has had it since M4.36. DISPOSITION (2) handed to M5: a class rather than an M4.67 regression, and pinning one constant would leave the class open while creating the belief that shell-gate thresholds are covered.",
+      "id": "3d67ad0339ad",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "MAX_BORROWERS declares a weakening direction nothing enforces, and no shell constant in this repository is covered by a completeness scan at all.",
+      "task_id": "M4.80"
+    },
+    {
+      "evidence": "Rule 16 is `a file is at most 500 lines, tests included`; scripts/check-file-size.sh walks `git ls-files -- '*.rs'` only, with an empty ALLOWLIST. Tracked non-Rust files over the limit: tests/gates/negative.sh 5922, scripts/lib.sh 750, scripts/gates/m0-complete.sh 748, scripts/check-drift.sh 728, scripts/check-unsafe.sh 589, scripts/review.sh 509. M4 added 473 lines to negative.sh across M4.67, M4.68, M4.69 and M4.73. Rule 17 exists so that every exception carries a reason in the script `so adding to it is a diff someone reviews`; these six carry none, and the gate's argument for its .rs scope lives in the script rather than in the rule it narrows. DISPOSITION (2) handed to M5, and the outcome is a decision rather than a sweep.",
+      "id": "bb3ee6f86576",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "code-structure.md rule 16's 500-line limit has six unrecorded exceptions, all non-Rust, and M4 grew the largest of them by 9%.",
+      "task_id": "M4.81"
+    },
+    {
+      "evidence": "ADR-0016 rule 4 makes the harvest the boundary round's job. The gates lens grepped the backlog for each locator these commits recorded and found zero: sync_group/tests.rs's still_current doc, sync_group/tests/reopened.rs's newcomer comment, M4.70's own de-numbered count claim and its ~227-line-stale locator, M4.68's row saying both `six commits` and `eleven` for one fact, negative.sh's TOTAL comment, M4.73's `the suite is 142`, negative.sh's `both cases above`, and sync_group/tests/deadline.rs:176-177 -- which still points at join's Step::Done arm that M4.74 removed in the same commit that fixed the identical pointer in barrier.rs. DISPOSITION: harvested into M4.70 by the commit recording this verdict, which is the boundary round's own job; M4.70 grows from sixteen claims to twenty-four and is handed to M5.",
+      "id": "8b81b7a37a33",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "Eight rule-15 minors recorded in this batch's commit bodies reached no backlog row, and M4.68's body claims three of them belong to M4.70's sweep when that row named none of them.",
+      "task_id": "M4.70"
+    },
+    {
+      "evidence": ".agents/skills/milestone-review/SKILL.md's reopen test is `something a Kafka client, an operator, or another tenant observes; or a gate that cannot fail where a standard says it must. Nothing else qualifies.` M4's own record of the omitted class: M4.52 (two check-mutants cases green on `profile 'mutants' is not defined` from M4.19 to M4.32, counted green while proving nothing), M4.32, M4.60/M4.69, and the M4.78 finding above -- which the gates lens had to reason around the rule's wording to disposition at all. That is the property non-negotiable 3 exists for, one layer out. The candidate amendment is one clause: `or the milestone's own evidence does not constrain what it is cited for`. NO TASK: the skill's own `Then re-plan` says a wrong rule is a decision to report, not to quietly re-specify -- and re-specifying it three commits after writing it, inside the round it would change the answers of, is exactly the quiet path that section forbids. Argued in baselines/review.txt and recorded in roadmap.md's `Deferred, with nothing scheduled`.",
+      "id": "3ab2f215707b",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "The disposition rule M4.73 wrote omits the defect class this milestone hit most: evidence that does not constrain what it is cited for is neither a client-visible change nor a gate that cannot fail, so under the rule as written a test that would pass with its feature deleted is handed on and the milestone closes citing it."
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/sync_group/deadline.rs (M4.66) says a parked follower is not heartbeating because both reference clients disable the thread for the duration of a rebalance; crates/oqueue-broker/src/heartbeat.rs says a rebalance that outlives session_timeout_ms `expires every member still faithfully heartbeating through it`, and rests is_live's soundness on that. deadline.rs is the correct one -- the Java client disables the thread while state != STABLE and librdkafka heartbeats only in STEADY. The code survives, because the population is_live judges is members still in `awaiting` which have not yet rejoined; heartbeat.rs's sentence is the one to narrow. Swept by M4.70.",
+      "id": "efbe06121aa2",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Two documents in this milestone disagree about whether the reference clients heartbeat through a rebalance."
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/join_group/round/mod.rs says `the only order in the crate is rounds-then-barrier`; no site holds the rounds lock across a barrier call, so the sentence names a nesting that does not exist. barrier.rs's `Lock order is this cell, then whatever the closure takes` omits that submit also holds SyncGroups::entries across the closure. And barrier.rs's `a resettable fold needs the barrier's lock taken inside the rounds lock` is overstated: snapshotting round.members under the rounds lock and writing after releasing it needs no nesting -- which matters, because M4.76's larger fix is that recomputation. Swept by M4.70.",
+      "id": "cc8062bbf700",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Stated lock orders that name nestings nothing takes, and one that omits a lock the function does hold."
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/fencing.rs explains the eight shortcuts as the four fence callers plus join_group's outcome mapping. offset_fetch.rs is a sixth handler making a genuine fencing decision -- COORDINATOR_LOAD_IN_PROGRESS from an ad hoc `if cluster.replay_in_progress()` -- and the census counts it. Defensible in place, its own comment argues it; but `the eight shortcuts are named rather than implied` is true of the count, not of the narrative. Also: the census greps all of crates/oqueue-broker/src while the leg below it walks group_handler_files, one file with two scopes and no note. Swept by M4.70.",
+      "id": "058dfed585fb",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "fencing.rs's honest summary does not account for one of the eight sites it counts."
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/sync_group.rs computes wait_ms before wait_for_assignment and never re-reads it. Related to M4.76 but not the same defect -- that one is about the value being pinnable, this is about when it is read. Swept by M4.70.",
+      "id": "5420253d19ff",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "sync_group.rs reads wait_ms once before parking, so a member joining mid-sync with a larger timeout does not extend an already-parked follower's deadline; real Kafka re-arms, and no doc states the difference."
+    }
+  ],
+  "milestone": "M4",
+  "recorded_at": "2026-09-16T11:19:07Z",
+  "reviewer": "claude-opus-5 (M4 fourth boundary round, two fresh milestone-reviewer lenses: group protocol; gates and process machinery -- neither drove M4)",
+  "verdict": "changes-requested"
+}
