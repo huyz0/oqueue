@@ -117,6 +117,90 @@ if (( violations == 0 )); then
   ok "none of the seam's ${#CODES[@]} fencing codes are constructed outside $SEAM"
 fi
 
+# ── And the shortcut that satisfies the check above ─────────────────────────
+#
+# ⚠️ **`M4.67`: the property this file held was narrower than the one it and
+# the seam both claimed.** `fencing.rs`'s module doc says it is "the one seam
+# every `M4.7`-`M4.10` handler's own fencing decision routes through", and that
+# a handler "never constructs one of the wire codes that decision can produce
+# by any other path". What the scan above proves is only that nothing names an
+# `error_codes::` constant outside the seam. A site reaching for
+# `Refusal::RebalanceInProgress.error_code()` names no constant, so it passed —
+# while making the *decision* itself, which is the ad hoc `if` the seam exists
+# to remove. M4's third boundary review found eight such sites; the scan above
+# saw none of them.
+#
+# ⚠️ **`Refusal::<Variant>.error_code()` only, which is the shortcut itself
+# rather than any mention of the type.** Two shapes name a variant and are the
+# *correct* pattern, because they handle what `fence` just returned:
+# `leave_group`'s `fence(&ctx).map_or_else(Refusal::error_code, ..)`, whose
+# path carries no variant at all, and `heartbeat`'s `matches!(refusal,
+# Refusal::RebalanceInProgress)` inside its own `if let Err(refusal) =
+# fence(..)`, which reads a refusal rather than picking one. Counting mentions
+# swept both in, and review measured both consequences: an eleventh site
+# written in `leave_group`'s own endorsed shape failed the gate and was told to
+# route through `fence()`, which is what it had done; and routing a real
+# shortcut through `fence` in that shape left the number unmoved, so the
+# documented way down did not work. The pattern below matches the eight that
+# pick a variant and take its code with no `fence` at the decision point.
+#
+# ⚠️ **Not all eight are wrong, which is why this is a census rather than a
+# refusal.** `join_group::mod`'s `JoinOutcome` arms map a *round outcome* to a
+# wire code — `Busy` is contention and `Unavailable` is a broken dependency,
+# neither of which is a fencing question — so they borrow a code whose name
+# happens to fit. What matters is that the set does not grow unnoticed: a ninth
+# is a handler deciding a fencing question for itself, and it should have to
+# say so in this file rather than appear silently.
+#
+# ⚠️ **A count, not a path list.** Paths move — `M4.50` watched this handler
+# layout move once already — and a list of them is a second thing to update for
+# every rename. The number is what carries the property, and the FAIL prints
+# every site so the new one is obvious against this comment's eight.
+#
+# ⚠️ **The comment is deleted before the line is looked at**, the lesson the
+# `UNKNOWN_SERVER_ERROR` leg below records and this one did not inherit: the
+# tree sits exactly at the ceiling, so a prose commit writing
+# `// ... Refusal::IllegalGeneration ...` failed the gate and was told a
+# handler had started deciding for itself. Measured by review.
+#
+# ⚠️ **Two shapes it still cannot see, and saying so beats implying a parser.**
+# A `/* */` comment naming the shortcut is counted — the `UNKNOWN_SERVER_ERROR`
+# leg below *does* strip those, which makes the omission here easy to infer the
+# wrong way round — and a `//` inside a string literal (`"s3://bucket/key"`)
+# truncates the line and hides a real site after it. Both measured. This leg is
+# a tripwire on *growth*, not a Rust parser; `scripts/lib/fencing_seam.py` is
+# the parser, and the four versions of it a comment defeated are why the
+# distinction is drawn here rather than discovered again.
+#
+# ⚠️ **A ceiling, not an equality, for the reason `MIN_VARIANTS` above is a
+# floor**: a hardcoded equality fails the day somebody *removes* a shortcut,
+# which is the improvement this leg wants, and it fails every scratch fixture
+# in `tests/gates/negative.sh` for a reason those fixtures did not plant.
+# Growth is the defect. ⚠️ **Raising it is the weakening direction**
+# (non-negotiable 2): this number may only come down, and it comes down by
+# routing a site through `fence()`.
+MAX_BORROWERS=8
+mapfile -t borrowers < <(
+  grep -rn 'Refusal::[A-Z][A-Za-z]*\.error_code()' \
+    --include='*.rs' \
+    crates/oqueue-broker/src/ 2>/dev/null |
+    sed 's|//.*$||' |
+    grep 'Refusal::[A-Z][A-Za-z]*\.error_code()' |
+    grep -v '/tests\.rs:' |
+    grep -v '/tests/' |
+    grep -v "^${SEAM}:" || true
+)
+if (( ${#borrowers[@]} > MAX_BORROWERS )); then
+  fail "${#borrowers[@]} site(s) name a Refusal variant outside $SEAM; the ceiling is ${MAX_BORROWERS}"
+  for site in "${borrowers[@]}"; do
+    note "$site"
+  done
+  note "a new one is a handler making a fencing decision for itself -- route it"
+  note "through fence(), or raise this ceiling here with why it is outcome mapping"
+else
+  ok "${#borrowers[@]} site(s) name a Refusal outside $SEAM, within the ceiling of ${MAX_BORROWERS}"
+fi
+
 # ── No group handler answers a code its client cannot retry ────────────────
 #
 # ⚠️ **`M4.48`, and the rule was written down four times before it was

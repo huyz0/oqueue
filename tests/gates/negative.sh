@@ -4201,6 +4201,88 @@ invoke_fencing_constructed_outside() {
   bash "$1/scripts/check-fencing-seam.sh"
 }
 
+# ⚠️ **A ninth site borrowing a refusal's code without calling `fence`** —
+# `M4.67`. The scan above sees only `error_codes::` constants, so a handler
+# reaching for `Refusal::RebalanceInProgress.error_code()` names none and
+# passed it: it answers the right code for a decision it made itself, which is
+# the ad hoc `if` the seam exists to remove. M4's third boundary round found
+# eight such sites and this gate had seen none of them. ⚠️ The gate's own
+# header records the two shapes this pattern still cannot see; the census is a
+# tripwire on growth, not a parser.
+setup_fencing_eleventh_borrower() {
+  local dir; dir="$(new_scratch fencing-borrower)"
+  copy_gate "$dir" check-fencing-seam.sh
+  _fencing_fixture "$dir"
+  # The fixture's handler already borrows once; the ceiling is 8, so plant
+  # enough to cross it rather than relying on the fixture's own count.
+  local i
+  for i in $(seq 1 10); do
+    printf 'fn shortcut%s() -> i16 { Refusal::RebalanceInProgress.error_code() }\n' "$i" \
+      >> "$dir/crates/oqueue-broker/src/sync_group.rs"
+  done
+  printf '%s\n' "$dir"
+}
+invoke_fencing_eleventh_borrower() {
+  bash "$1/scripts/check-fencing-seam.sh"
+}
+run_case "check-fencing-seam.sh (a handler borrowing a Refusal's code past the ceiling)" \
+  setup_fencing_eleventh_borrower invoke_fencing_eleventh_borrower \
+  "name a Refusal variant outside"
+
+# ⚠️ **And prose about the shortcut is not the shortcut**, which `run_case`
+# cannot express and which had no case at all until review asked: the tree sits
+# exactly on the ceiling, so deleting the comment strip put the leg back to
+# failing a commit that changed no code — and every other fencing fixture plants
+# comment-free lines, so the whole suite stayed green without it. The sibling
+# `UNKNOWN_SERVER_ERROR` leg records this lesson at length and this one had not
+# inherited it.
+TOTAL=$((TOTAL + 1))
+_fencing_prose_dir="$(new_scratch fencing-prose)"
+copy_gate "$_fencing_prose_dir" check-fencing-seam.sh
+_fencing_fixture "$_fencing_prose_dir"
+# ⚠️ **The fixture must sit *on* the ceiling, which is the real condition.**
+# A first version planted the prose against the fixture's single borrower, so
+# the count went 1 → 3, stayed under 8, and the case passed with the strip
+# deleted — a must-pass case that asserted headroom rather than the repair.
+# Seven more real shortcuts put it at exactly 8; the two comment lines then
+# decide between `ok` and `FAIL`.
+for _i in $(seq 1 7); do
+  printf 'fn real%s() -> i16 { Refusal::RebalanceInProgress.error_code() }\n' "$_i" \
+    >> "$_fencing_prose_dir/crates/oqueue-broker/src/sync_group.rs"
+done
+# ⚠️ **The pre-prose count is asserted, so the case pins itself.** It reaches
+# the ceiling by arithmetic over `_fencing_fixture`, which it does not own: if
+# that helper's handler ever stops borrowing, the case slides under the ceiling
+# and passes with the strip deleted — the exact vacuity round 2 caught in its
+# first version, re-enterable from another function with no signal.
+_fencing_prose_pre="$( ( cd "$_fencing_prose_dir" && bash scripts/check-fencing-seam.sh ) 2>&1 || true )"
+if ! grep -qF "8 site(s) name a Refusal outside" <<< "$_fencing_prose_pre"; then
+  fail "the prose fixture does not sit on the ceiling, so it pins nothing"
+  note "it plants 7 shortcuts and relies on _fencing_fixture planting exactly 1"
+  sed 's/^/     /' <<< "$_fencing_prose_pre" >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+{
+  printf '// Prose naming Refusal::IllegalGeneration.error_code() as the shape.\n'
+  printf '//! And a module line naming Refusal::UnknownMember.error_code() too.\n'
+} >> "$_fencing_prose_dir/crates/oqueue-broker/src/sync_group.rs"
+# ⚠️ **This asserts the census leg's own line, not the gate's exit status.**
+# `_fencing_fixture` builds two files, so the handler walk further down fails
+# for its own good reason and the gate exits non-zero whatever this leg says —
+# a must-pass case keyed on the exit would be asserting that other leg.
+_fencing_prose_out="$( ( cd "$_fencing_prose_dir" && bash scripts/check-fencing-seam.sh ) 2>&1 || true )"
+if grep -qF 'name a Refusal variant outside' <<< "$_fencing_prose_out"; then
+  fail "check-fencing-seam.sh counted prose as a handler deciding for itself"
+  sed 's/^/     /' <<< "$_fencing_prose_out" >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+elif grep -qF 'within the ceiling of' <<< "$_fencing_prose_out"; then
+  ok "check-fencing-seam.sh does not count a Refusal named in a comment"
+else
+  fail "check-fencing-seam.sh's census leg did not run at all against the prose fixture"
+  sed 's/^/     /' <<< "$_fencing_prose_out" >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
 # A variant named in no arm. rustc would refuse this particular file, but the
 # property the leg pins is reachable in compiling code through the wildcard
 # case below -- this is the direct statement of it.

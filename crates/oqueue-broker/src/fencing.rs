@@ -8,6 +8,35 @@
 //! produce by any other path — `check-fencing-seam.sh` is this module's own
 //! `check-topic-list-scope.sh`.
 //!
+//! ⚠️ **That is the aspiration; the property actually held is narrower, and
+//! `M4.67` is where the difference was measured.** What the gate proves is
+//! that no `error_codes::` constant for one of [`Refusal`]'s six codes is
+//! named outside this file. Eight sites answer one of those codes anyway, by
+//! reaching for `Refusal::<Variant>.error_code()` — which names no constant,
+//! so the scan never saw them, while the *decision* was made in the handler.
+//! Some of those are outcome mapping rather than fencing: `join_group`'s
+//! `JoinOutcome` arms turn a *round outcome* into a wire code, and `Busy`
+//! (contention) and `Unavailable` (a broken dependency) are not fencing
+//! questions at all — they borrow a code whose name happens to fit. ⚠️ **Not
+//! "the round has already fenced"**, which an earlier wording of this said and
+//! review disproved: `join_group::mod`'s `fence_rejoin` is guarded on a
+//! non-empty `member_id`, so a *first* join is not fenced on any path.
+//!
+//! The honest summary is that this module owns the *mapping* from a refusal to
+//! a code always, and owns the *decision* for the four handlers that call
+//! [`fence`] — `leave_group`, `heartbeat`, `offset_commit` and `sync_group` —
+//! plus `join_group::mod`'s rejoin path, and that the eight shortcuts are
+//! named rather than implied. ⚠️ **The set is now counted**:
+//! `check-fencing-seam.sh` fails when a ninth site spells
+//! `Refusal::<Variant>.error_code()` outside here, so a handler taking a
+//! refusal's code for a decision it made itself has to say so in that file
+//! instead of arriving unseen. ⚠️ **That is the spelling, not the concept**: a
+//! handler that binds a variant to a local and calls `.error_code()` on the
+//! binding is the same ad hoc `if` and the pattern does not see it. Widening it
+//! to any `.error_code()` would re-sweep the four sites that legitimately map
+//! what [`fence`] returned, which is the defect review measured in the first
+//! version of that leg.
+//!
 //! ⚠️ **Two of the six codes are unreachable in this milestone's own v1
 //! architecture, on purpose, not by oversight.** `ADR-0033`: every group
 //! resolves to this one node, unconditionally, so nothing in this
