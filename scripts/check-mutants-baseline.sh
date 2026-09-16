@@ -72,15 +72,48 @@ for f in "${files[@]}"; do
   done < "$f"
 done
 
-# The argued list, comments and blanks stripped -- the staged copy, matching
-# `check-mutants.sh`'s own read so the two cannot disagree about which
-# baseline they judged.
+# The argued list, comments and blanks stripped -- the staged copy. ⚠️ **The
+# two reads are now the same question asked the same way**, which is what this
+# comment claimed while they differed twice over: this one fell back to the
+# worktree and that one guarded on `[[ -f ]]`. `M4.69` removed both.
+#
+# ⚠️ **The index only, and `M4.69` is why that sentence is now true.** It had a
+# `|| cat "$BASELINE"` fallback while `check-mutants.sh` read the index alone,
+# so the comment claiming the two reads matched was false in the direction that
+# matters: an *unstaged* baseline line argued away a survivor here and was
+# ignored there. `lib.sh`'s own note gives the rule — a line that counts while
+# unstaged rewards the path that leaves no trace in history. ⚠️ Both copies also
+# guarded the read on `[[ -f "$BASELINE" ]]`, a worktree test in front of an
+# index read; that was a shared bug rather than a divergence, and both are gone.
+#
+# ⚠️ **And the two format guards, which this copy did not have at all.** They
+# are `check-mutants.sh`'s, for its reasons: an entry with no reason suppresses
+# a survivor while recording nothing about why, and an entry whose location is
+# not `<file>.rs:<line>:<col>:` argues by prefix — review demonstrated a
+# baseline of the single character `c` marking five unargued survivors as
+# argued, and this script matched with `[[ "$s" == "$loc"* ]]` exactly as that
+# one did.
 declare -a argued=()
-if [[ -f "$BASELINE" ]]; then
-  while IFS= read -r line; do
-    [[ -z "$line" || "$line" == \#* ]] && continue
-    argued+=("$line")
-  done < <(git show ":$BASELINE" 2>/dev/null || cat "$BASELINE")
+malformed=0
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" == \#* ]] && continue
+  if [[ ! "$line" =~ ^([^[:space:]]+([[:space:]][^[:space:]]+)*)[[:space:]][[:space:]]+[^[:space:]] ]]; then
+    fail "baseline entry has no reason: $line"
+    note "format: <file>:<line>:<col>: <mutation>  <why this survivor is acceptable>"
+    malformed=1
+    continue
+  fi
+  if [[ ! "${line%%  *}" =~ ^[^[:space:]]+\.rs:[0-9]+:[0-9]+: ]]; then
+    fail "baseline entry does not start with a <file>.rs:<line>:<col>: location: $line"
+    malformed=1
+    continue
+  fi
+  argued+=("$line")
+done < <(git show ":$BASELINE" 2>/dev/null || true)
+
+if (( malformed > 0 )); then
+  note "the same two guards check-mutants.sh applies, and for its reasons"
+  finish
 fi
 
 stale=0
@@ -109,7 +142,14 @@ for a in "${argued[@]}"; do
 done
 
 if (( stale > 0 )); then
-  note "re-key it against the run, or delete it -- testing.md rule 17"
+  # ⚠️ The same four lines `check-mutants.sh` prints for the same condition.
+  # An operator who hits this on a nightly and then again locally must not be
+  # told two different things about one defect — `M4.69`, which found the two
+  # copies' wordings had already drifted. ⚠️ The `--list` line was only here and
+  # the other three only there; both print all four now.
+  note "the mutant was killed, moved, or stopped being generated -- delete the"
+  note "entry, re-key it, or say 'unviable: <why it no longer compiles>'"
+  note "⚠️ a suppression for something that is not there is one nobody can see"
   note "⚠️ cargo mutants --list re-derives a key in seconds, without running a test"
   finish
 fi

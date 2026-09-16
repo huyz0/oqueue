@@ -200,10 +200,17 @@ fi
 # The argued list, comments and blanks stripped.
 declare -a argued=()
 malformed=0
-if [[ -f "$BASELINE" ]]; then
-  # ⚠️ Read from the **index**, not the working tree — the same rule
-  # `baselines/review.txt` follows. An unstaged argument suppresses a survivor
-  # while leaving nothing in the commit to show for it.
+# ⚠️ **No `[[ -f "$BASELINE" ]]` guard, since `M4.69`.** The read is of the
+# *index*, so a worktree test asks the wrong question and answered it wrongly: a
+# baseline deleted from the worktree without staging the deletion left five
+# entries in the index, and this gate then reported every survivor as unargued.
+# ⚠️ **Both copies carried it** — this was a shared bug, not a divergence; the
+# `|| cat` fallback in `check-mutants-baseline.sh` was the divergence, and both
+# are gone.
+# ⚠️ Read from the **index**, not the working tree — the same rule
+# `baselines/review.txt` follows. An unstaged argument suppresses a survivor
+# while leaving nothing in the commit to show for it.
+{
   while IFS= read -r line; do
     [[ -z "$line" || "$line" == \#* ]] && continue
     # ⚠️ **A location alone is refused**, the same rule `check-reviewed.sh` and
@@ -225,7 +232,7 @@ if [[ -f "$BASELINE" ]]; then
     fi
     argued+=("$line")
   done < <(git show ":$BASELINE" 2>/dev/null || true)
-fi
+}
 
 if (( malformed > 0 )); then
   rm -f "$out"
@@ -269,6 +276,29 @@ stale=0
 # quiet instead, and the baseline would carry a suppression for something no
 # longer there — `testing.md` rule 17's "a list nobody grows quietly" read
 # from the shrinking side.
+#
+# ⚠️ **This loop exists twice, and the divergence is deliberate rather than
+# drift — `M4.69`.** `M4.60` split the sharded case into
+# `scripts/check-mutants-baseline.sh`, because a shard sees an eighth of the
+# mutants and the converse question can only be asked of the union. What is
+# left here is not dead: the `--shard` block `finish`es before it, so this copy
+# answers a *whole-workspace* `--full` run, which is what a developer gets
+# locally and what nothing else covers. The nightly is sharded, so the union
+# script is the copy CI exercises.
+#
+# ⚠️ **`build.md` rule 22 still applies and the answer is the cases, not a
+# shared function.** The two now ask the same questions — an entry that argues
+# nothing, an `unviable:` claim the run disproves, an entry with no reason, and
+# an entry whose location is not one — and each question has a `run_case`
+# against *each* copy, so a change to one that is not made to the other fails
+# the suite rather than passing quietly. ⚠️ **That was false when first
+# written**: these two format guards had no case at all, and review measured
+# both deletable with the whole suite green, which is the same defect one file
+# over that `M4.69` was filed for. Sharing the loop would mean threading a survivor source and
+# a shard count through it for no reader's benefit; sharing the *cases* is
+# what "the version that matters is whichever one was not run" actually asks
+# for. `M4.60` copied a branch across without its case, which is the failure
+# this arrangement is built to make loud.
 #
 # ⚠️ **`cargo mutants --list` re-derives a key in seconds, and nothing said
 # so until `M4.55`.** It enumerates every mutant's file, line and column
@@ -368,6 +398,11 @@ if (( FULL )) && [[ -z "$CRATE" ]]; then
     note "the mutant was killed, moved, or stopped being generated -- delete the"
     note "entry, re-key it, or say 'unviable: <why it no longer compiles>'"
     note "⚠️ a suppression for something that is not there is one nobody can see"
+    # ⚠️ The fourth line is `check-mutants-baseline.sh`'s, added here by `M4.69`
+    # so one defect gets one explanation whichever copy the operator hit. It is
+    # equally true of this one — this file's own header says so at length — and
+    # only this block did not print it.
+    note "⚠️ cargo mutants --list re-derives a key in seconds, without running a test"
   fi
   (( stale == 0 )) && ok "every baseline entry still argues a surviving mutant"
 fi

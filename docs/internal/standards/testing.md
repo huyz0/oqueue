@@ -335,6 +335,20 @@ claim as a seed exploring every interleaving that run could take.
     acceptance rows and one script header while every gate in `scripts/` was
     built against it.
 
+    ⚠️ **Nothing checks the rule itself for more than four gates, and `M4.69`
+    is why that is written here rather than assumed.** `m0-complete.sh` asserts
+    "named by pre-commit or CI *and* has a `run_case`" against its own
+    `M0_GATES`, which is four entries by design — the four gates `M0` added.
+    Nothing extends it, so `scripts/check-idempotence-enabled.sh`,
+    `scripts/check-secrets.sh` and `scripts/check-topic-list-scope.sh` appear
+    in `tests/gates/negative.sh` not at all, and a branch copied from one gate
+    into another arrives without the case that guarded it — which is what
+    `M4.60` did with the `unviable:` exemption and what `M4.69` found by
+    deleting it and watching every fixture stay green. ⚠️ **The rule binds
+    regardless**: a gate with no case is a preference whether or not a script
+    says so, and the reach of the check is a separate obligation from the rule
+    it checks.
+
 21. **Every `unsafe` block has a differential property test against a naive safe
     reference, kept forever** as the oracle. → `security.md` rule 19
 

@@ -3764,6 +3764,32 @@ invoke_mutants_false_unviable() {
   bash "$1/scripts/check-mutants.sh" --full
 }
 
+# ⚠️ **`check-mutants.sh`'s own two format guards had no case either** —
+# `M4.69`. The task was filed because `M4.60` copied the `unviable:` branch into
+# the union script without its case; the same audit found the guards *here*
+# equally unguarded, and deleting both left the whole suite green. That is what
+# makes "each copy has its own cases" the answer to `build.md` rule 22 rather
+# than a claim about one of them.
+setup_mutants_no_reason() {
+  local dir; dir="$(setup_mutants_stale_baseline)"
+  printf 'crates/k/src/lib.rs:2:5: replace classify\n' > "$dir/baselines/mutants.txt"
+  (cd "$dir" && git add -A && git commit -q --amend --no-edit)
+  printf '%s\n' "$dir"
+}
+invoke_mutants_no_reason() {
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
+setup_mutants_prefix_entry() {
+  local dir; dir="$(setup_mutants_stale_baseline)"
+  printf 'c  argues every survivor whose line starts with it\n' > "$dir/baselines/mutants.txt"
+  (cd "$dir" && git add -A && git commit -q --amend --no-edit)
+  printf '%s\n' "$dir"
+}
+invoke_mutants_prefix_entry() {
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
 setup_mutants_narrowed() {
   local dir; dir="$(setup_mutants_weakened)"
   # ⚠️ The **narrowed** mode, which is the one pre-commit runs and the one both
@@ -4556,16 +4582,18 @@ BASE
   printf 'crates/k/src/lib.rs:2:5: replace classify
 ' > "$dir/surv/1-of-2.txt"
   : > "$dir/surv/2-of-2.txt"
-  # ⚠️ **No `git init` or commit here.** `new_scratch` already makes the
-  # directory a repository, and `check-mutants-baseline.sh` falls back to
-  # reading the baseline from the worktree when `git show :` finds nothing
-  # staged — so the fixture needs neither. ⚠️ An earlier version ran
-  # `( cd ... && git init && git add && git commit )`, and that subshell
-  # returning non-zero aborted this function under `set -e` *before* its
-  # final `printf`, so it produced the empty string: `run_case` then ran the
-  # gate in the suite's own directory and the case reported `ok` for a
-  # reason with nothing to do with its fixture. Found with `bash -x` after
-  # the sibling case below aborted the whole suite.
+  # ⚠️ **Staged, since `M4.69`.** `new_scratch` already makes the directory a
+  # repository; what changed is that `check-mutants-baseline.sh` now reads the
+  # baseline from the index alone, as `check-mutants.sh` always did and as its
+  # own comment always claimed. A fixture that only writes the file therefore
+  # judges an empty baseline and passes for a reason with nothing to do with
+  # what it planted. ⚠️ **`git add` only, no commit, and the `|| true` matters**:
+  # an earlier version ran `( cd ... && git init && git add && git commit )`,
+  # and that subshell returning non-zero aborted this function under `set -e`
+  # *before* its final `printf`, so it produced the empty string — `run_case`
+  # then ran the gate in the suite's own directory and reported `ok`. Found
+  # with `bash -x` after the sibling case below aborted the whole suite.
+  ( cd "$dir" && git add -A ) || true
   printf '%s\n' "$dir"
 }
 
@@ -4650,6 +4678,84 @@ invoke_shard_malformed() {
 run_case "mutants.sh (a --shard that is not k/n)" \
   setup_shard_malformed invoke_shard_malformed \
   "takes k/n"
+
+# ⚠️ **The `unviable:` branch, which had no case at all** — `M4.69`. `M4.60`
+# moved this loop out of `check-mutants.sh` and copied that branch across
+# without the case guarding it, so deleting the branch left all three fixtures
+# green while the mutated script answered `ok every argued baseline entry still
+# argues a live survivor` on a baseline whose `unviable:` claim the run had just
+# disproved. That is verbatim the defect `M4.32` committed on
+# `baselines/mutants.txt`, and the reason `check-mutants.sh`'s own copy carries
+# a dedicated case.
+_baseline_false_unviable_dir() {
+  local dir; dir="$(_baseline_union_dir)"
+  cat > "$dir/baselines/mutants.txt" <<'BASE'
+crates/k/src/lib.rs:2:5: replace classify  unviable: cargo mutants no longer generates this one
+BASE
+  ( cd "$dir" && git add -A ) || true
+  printf '%s\n' "$dir"
+}
+setup_baseline_false_unviable() {
+  _baseline_false_unviable_dir
+}
+invoke_baseline_false_unviable() {
+  ( cd "$1" && bash scripts/check-mutants-baseline.sh surv 2 )
+}
+run_case "check-mutants-baseline.sh (an 'unviable:' claim the union disproves)" \
+  setup_baseline_false_unviable invoke_baseline_false_unviable \
+  "claims 'unviable:' for a mutant that survived"
+
+# ⚠️ **And the two format guards this copy did not have** (`M4.69`). Both are
+# `check-mutants.sh`'s, and the second is the one with a measured consequence:
+# this script matches a survivor with `[[ "$s" == "$loc"* ]]`, so a one-character
+# entry argues every survivor whose line starts with it.
+setup_baseline_no_reason() {
+  local dir; dir="$(_baseline_union_dir)"
+  printf 'crates/k/src/lib.rs:2:5: replace classify\n' > "$dir/baselines/mutants.txt"
+  ( cd "$dir" && git add -A ) || true
+  printf '%s\n' "$dir"
+}
+invoke_baseline_no_reason() {
+  ( cd "$1" && bash scripts/check-mutants-baseline.sh surv 2 )
+}
+run_case "check-mutants-baseline.sh (an entry with no reason)" \
+  setup_baseline_no_reason invoke_baseline_no_reason \
+  "baseline entry has no reason"
+
+setup_baseline_prefix_entry() {
+  local dir; dir="$(_baseline_union_dir)"
+  printf 'c  argues every survivor whose line starts with it\n' > "$dir/baselines/mutants.txt"
+  ( cd "$dir" && git add -A ) || true
+  printf '%s\n' "$dir"
+}
+invoke_baseline_prefix_entry() {
+  ( cd "$1" && bash scripts/check-mutants-baseline.sh surv 2 )
+}
+run_case "check-mutants-baseline.sh (an entry whose location is not a location)" \
+  setup_baseline_prefix_entry invoke_baseline_prefix_entry \
+  "does not start with a <file>.rs:<line>:<col>: location"
+
+# ⚠️ **And an unstaged baseline argues nothing** (`M4.69`). The read is the
+# index alone, as `check-mutants.sh`'s always was and as this script's own
+# comment always claimed; while it fell back to the worktree, a line nobody
+# staged suppressed a survivor here and was invisible there.
+setup_baseline_unstaged() {
+  local dir; dir="$(_baseline_union_dir)"
+  # ⚠️ **Nothing about the baseline is staged, and staging an *empty* one
+  # instead is what review measured pinning nothing**: `git show :` then
+  # succeeds with empty output, the `|| cat` arm is unreachable, and restoring
+  # the fallback left this case green. The index must have no entry for the
+  # path at all, so a script that falls back to the worktree reads the line
+  # below and a script that does not reads nothing.
+  ( cd "$dir" && git rm -q --cached baselines/mutants.txt ) >/dev/null 2>&1 || true
+  cat > "$dir/baselines/mutants.txt" <<'BASE'
+crates/k/src/lib.rs:9:9: replace nothing  unstaged, and it argues a mutant no shard reported
+BASE
+  printf '%s\n' "$dir"
+}
+invoke_baseline_unstaged() {
+  ( cd "$1" && bash scripts/check-mutants-baseline.sh surv 2 )
+}
 
 run_case "check-mutants-baseline.sh (an entry that argues nothing)" \
   setup_baseline_argues_nothing invoke_baseline_argues_nothing \
@@ -4847,6 +4953,21 @@ else
   note "$( ( cd "$_baseline_ok_dir" && bash scripts/check-mutants-baseline.sh surv 2 ) 2>&1 | sed 's/^/     /')"
   FAILED_CASES=$((FAILED_CASES + 1))
 fi
+
+# ⚠️ **And the union judges the *staged* baseline**, which is a different
+# property from the two above and needs its own must-pass case: a script that
+# refused every input would satisfy the red cases, and one that read the
+# worktree would satisfy this file's other green ones. `M4.69`.
+TOTAL=$((TOTAL + 1))
+_baseline_unstaged_dir="$(setup_baseline_unstaged)"
+if invoke_baseline_unstaged "$_baseline_unstaged_dir" >/dev/null 2>&1; then
+  ok "check-mutants-baseline.sh judges the staged baseline, not the worktree"
+else
+  fail "check-mutants-baseline.sh read an unstaged baseline line"
+  invoke_baseline_unstaged "$_baseline_unstaged_dir" 2>&1 | sed 's/^/     /' >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
 
 # ── a harness leg's own broker outliving its ceiling (M4.61) ───────────────
 #
@@ -5235,6 +5356,12 @@ if _have_mutants; then
   run_case "check-mutants.sh (an 'unviable:' claim the run disproves)" \
     setup_mutants_false_unviable invoke_mutants_false_unviable \
     "claims 'unviable:' for a mutant that survived"
+  run_case "check-mutants.sh (an entry with no reason)" \
+    setup_mutants_no_reason invoke_mutants_no_reason \
+    "baseline entry has no reason"
+  run_case "check-mutants.sh (an entry whose location is not a location)" \
+    setup_mutants_prefix_entry invoke_mutants_prefix_entry \
+    "does not start with a <file>.rs:<line>:<col>: location"
   # ⚠️ **Inside `_have_mutants`, and it has to be.** The stub stands in for
   # `mutants.sh`, but `check-mutants.sh` runs `cargo mutants --version`
   # itself before invoking it and skips when that fails — so on a host
@@ -5316,7 +5443,7 @@ if _have_mutants; then
   fi
 else
   skip_case check-mutants.sh "cargo-mutants not installed" \
-    "install: cargo install cargo-mutants" 8
+    "install: cargo install cargo-mutants" 10
 fi
 
 # --- the harness checks itself ----------------------------------------------
