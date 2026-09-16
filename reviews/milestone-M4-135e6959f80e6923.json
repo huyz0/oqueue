@@ -1,0 +1,44 @@
+{
+  "commits": [
+    "b81d21dd05e43e88ec445af9f106a1f03f49a8cd"
+  ],
+  "findings": [
+    {
+      "evidence": "scripts/check-fencing-seam.sh:97-110 and :183-192 both end `grep ... 2>/dev/null | ... || true`; the header at :36-39 argues that from grep's rc 1 for 'no match' and never mentions rc 2. Compare the same file's two hardened legs: `if ! fatal_scan=\"$(awk ...)\"` at :255-268 and `handler_list=\"$(group_handler_files 2>&1)\" || { fail ... }` at :232, both added after M4.50. Measured in a scratch copy (crates/ + scripts/lib.sh + the gate): a 9th `Refusal::IllegalGeneration.error_code()` appended to crates/oqueue-broker/src/offset_fetch.rs gives `FAIL 9 site(s) ... the ceiling is 8`, rc 1; `chmod 000` on that same file gives `ok 7 site(s) ... within the ceiling of 8` and rc 0, all five legs green. Same result for a planted `error_codes::REBALANCE_IN_PROGRESS`: `FAIL ... constructed outside ...` readable, all-ok unreadable. offset_fetch.rs is outside group_handler_files' walk, so the leg that refuses an unwalkable tree never sees it. Compare M4.68's own summary -- an unreadable handler file reads as no principal check and the leg still prints ok -- identical precondition, graded major and worked. DISPOSITION (2) hands it to M5: the legs fail correctly on real growth in any tree whose files are readable, so this is not a gate that cannot fail. Filed against the reviewer's first instinct, which was minor on reachability, because M4.68's accepted major had the identical precondition and under-grading here is the specific failure this round was warned about.",
+      "id": "c244c3a72c71",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "check-fencing-seam.sh's two grep legs read grep's three-valued status as two, so a planted violation in an unreadable file takes the gate from FAIL to rc 0 -- the class M4.50 and M4.68 each filed as a major and M4.88 repaired a third time, still live in two legs of the file whose other two legs were hardened for it.",
+      "task_id": "M4.89"
+    },
+    {
+      "evidence": "scripts/lib.sh and scripts/check-fencing-seam.sh (line comments only), check-fencing-seam.sh's awk leg (also single-line block comments, with a greedy .* already recorded in M4.70's cell), scripts/lib/fencing_seam.py's strip_comments, and scripts/check-core-contract.sh's strip_comments -- the last being string-aware and block-comment-aware in one pass, which is exactly the two shapes lib.sh names as its blind spots, with a docstring reasoning about the same dangerous direction. check-unsafe.sh says it was 'Ported from check-core-contract.sh's strip_comments(), adapted', so porting it a third time is established precedent. Minor rather than major, and stepped down from the reviewer's instinct, because both sed headers argue their tripwire-not-parser scope explicitly and the blind shapes are measured absent from the fifteen files -- a pointer gap, not a live hole. Destination M4.70.",
+      "id": "52961d93b4d5",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "Comment stripping is implemented five times across five files in three capability tiers, and lib.sh's new 'the answer is to parse rather than to widen sed' names none of the two string-aware parsers this repository already has and has already ported once.",
+      "task_id": ""
+    },
+    {
+      "evidence": "scripts/lib.sh and backlog.md's M4.88 cell say that census 'matched raw text including comments and swept in two sites that were correct', against M4.67's own backlog row and check-fencing-seam.sh, which attribute leave_group's fence(&ctx).map_or_else(Refusal::error_code, ..) and heartbeat's match to the narrowing major and give the comment major's symptom as a prose commit appending a Refusal::IllegalGeneration mention. Stays minor under review.md rule 9a because both texts forbid narrowing three lines later. Destination M4.70 -- whose cell must name it, or this repeats the major M4.75 filed about sweep rows that name none of what is swept into them.",
+      "id": "3da2fd17ea91",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "The rule-15 minor recorded in b81d21d's own body is still true at HEAD in both files it names: lib.sh and backlog.md attach the swept-in-correct-sites symptom to M4.67's comment half, when those two sites were code removed by narrowing the pattern.",
+      "task_id": ""
+    },
+    {
+      "evidence": "scripts/gates/m4-complete.sh's leg 0 checks coverage of every M4 commit including the one being written; measured at HEAD the gate is `1 of 13 checks failed` with `unreviewed b81d21d` the only failure. backlog.md's M4.88 row is done with that clause unmet at commit time and met only by an artifact that does not exist yet. M4.85 scopes the terminating-round problem to the rows route and round 7's minor added the baselines/review.txt argue route; an acceptance clause naming the completion gate is the third. Destination M4.85.",
+      "id": "69caf0de94a0",
+      "kind": "spec-wrong",
+      "severity": "minor",
+      "summary": "M4.88's acceptance clause 'and m4-complete.sh is green' cannot be true at the commit that satisfies it, because leg 0 covers that commit -- a third instance of M4.85's class, on a route M4.85 does not name.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M4",
+  "notes": "What was checked and found clean. The strip cannot hide a real check in the fifteen group_handler_files: `grep -F '/*'` across them returns nothing and no line holds a `//` after a quote, so lib.sh's claim is true and stronger than stated -- the shapes are absent, not merely harmless. The three-valued contract survives, including mode-000, because `stripped=\"$(sed ...)\" || return 2` is on its own line rather than a `local x=\"$(...)\"` that would mask the status. All ten cases of that leg are load-bearing, by mutation against a copied lib.sh: sed->cat kills the two comment cases only; sed->`grep -v '//'` kills the trailing-comment case only; restoring the pipeline kills the unreadable case only; dropping each of the five pattern alternatives kills exactly its own case. m4-complete.sh in the container is `1 of 13 checks failed`, the one being leg 0 on `unreviewed b81d21d`, with `ok FR-40 on the five group APIs: unmet and reported across 15 file(s)`. tests/gates/negative.sh is `160 gate(s) exercised, 0 failed`, SKIPPED_COUNT 0. The eight rows already handed on appear in backlog.md, roadmap.md and M5.md task 22, and the 93-row cap argument partitions all 93 ids exactly with every bucket count correct -- the class two earlier rounds filed majors about is now right. Dispositions, said out loud: finding 1 is handed to M5 as M4.89 with a deferral row and a line in M5.md task 22; findings 2-4 are minors needing no row, and are enumerated in M4.70's and M4.85's own cells rather than pointed at them -- M4.70's stated rule, which M4.75 broke and had to be told twice about, and which the per-commit review of this artifact's own commit filed as a major when the first version declared the routing and wrote neither cell.",
+  "recorded_at": "2026-09-16T17:56:33Z",
+  "reviewer": "claude-opus-5 (M4 terminating boundary round, eleventh artifact; fresh reviewer, did not drive M4)",
+  "verdict": "changes-requested"
+}
