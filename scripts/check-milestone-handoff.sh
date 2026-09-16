@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # A milestone declared complete has handed on every row it left open. `M4.73`.
 #
-#   scripts/check-milestone-handoff.sh
+#   scripts/check-milestone-handoff.sh [--milestone M4]
 #
 # ## The loop this ends
 #
@@ -72,6 +72,43 @@
 # says an id-form widening has to visit every hand-written transcription of it;
 # this is one of them.
 #
+# ## `--milestone`, and the window that was zero commits wide
+#
+# ⚠️ **Without it this gate could not fail, and `M4.79` measured that.** The walk
+# above inspects milestones whose cell reads `complete` and rows that are still
+# open — but the *opening commit of the next milestone* flips that cell and
+# dissolves the handed rows together, in one commit, because that is what the
+# `milestone-review` skill instructs and what `7fb9738` (M9/`M9.21`) and `M10.0`
+# (`M3.41`-`M3.46`) each did. No commit in this repository's history has ever
+# been in the intermediate state, so an M5.0-shaped commit with **no deferral
+# row naming anything** printed `ok ... has handed on the rows it left open`,
+# rc 0. `m4-complete.sh` could therefore report green with the disposition
+# question entirely unanswered, which is what `M4.73` was written to prevent.
+#
+# `--milestone M4` asks the question at the one time the answer still exists:
+# the closing milestone's own boundary, before the next milestone's opening
+# commit. It is `check-milestone-review.sh --milestone M4`'s shape, and
+# `m4-complete.sh` runs the two side by side as legs 0 and 0b.
+#
+# It refuses three ways rather than one, because two of them are how a
+# milestone-scoped check goes vacuous:
+#
+#   1. **The named milestone's cell already reads `complete`** — the M5.0-shaped
+#      state. The rows have been dissolved and the evidence is gone, so the only
+#      honest answer is that the question was asked too late. ⚠️ This is what
+#      stops a completion gate going green *after* the next milestone opens,
+#      which is the whole of the defect: reporting `ok` there is exactly the
+#      vacuous pass, and it is the state the walk above cannot see either.
+#   2. **The backlog holds no row of that milestone at all** — `backlog.md` is
+#      the current milestone's list, so a typo'd or already-archived id names
+#      nothing and would otherwise pass having checked nothing.
+#   3. Otherwise the same test as the walk: every open row named in a deferral
+#      row's first cell.
+#
+# ⚠️ **The bare invocation is unchanged, and has to be.** Pre-commit runs it, and
+# the current milestone always has open rows — applying the milestone-scoped test
+# there would make every commit of every milestone red.
+#
 # ## What it cannot check
 #
 # ⚠️ **That the handoff was honest.** The table row says which milestone
@@ -92,6 +129,29 @@ cd "$REPO_ROOT"
 ROADMAP="docs/internal/product/roadmap.md"
 BACKLOG="docs/internal/product/backlog.md"
 
+# `check-milestone-review.sh`'s own parsing, same shape and same exit 2 for an
+# argument this gate does not know.
+MS=""
+MS_GIVEN=0
+while (( $# > 0 )); do
+  case "$1" in
+    --milestone) MS="${2:-}"; MS_GIVEN=1; shift; shift || true ;;
+    -h|--help) sed -n '2,4p' "${BASH_SOURCE[0]}" >&2; exit 0 ;;
+    *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+# ⚠️ **A malformed id is refused by shape, and what that buys is the message.**
+# `--milestone` with nothing after it leaves `MS` empty and `--milestone M4.79`
+# names a *task*; review measured both already refused one step later, by the
+# "holds no row of" branch, so this guard closes no vacuous pass that was open.
+# What it closes is a misdirection: without it, `--milestone M4.79` fails with
+# "backlog.md holds no row of M4.79", and the reader goes and writes one.
+if (( MS_GIVEN )) && [[ ! "$MS" =~ ^M-?[0-9]+$ ]]; then
+  fail "--milestone takes a milestone id like M4, not '$MS'"
+  finish
+fi
+
 require_python || finish
 
 for f in "$ROADMAP" "$BACKLOG"; do
@@ -107,7 +167,8 @@ done
 open_ids="$(open_task_ids)"
 
 problems="$(
-  ROADMAP="$ROADMAP" OPEN_IDS="$open_ids" python3 - <<'PY'
+  ROADMAP="$ROADMAP" BACKLOG="$BACKLOG" OPEN_IDS="$open_ids" \
+  ONLY="$MS" ONLY_GIVEN="$MS_GIVEN" python3 - <<'PY'
 import os
 import re
 import subprocess
@@ -128,6 +189,18 @@ roadmap = from_index(roadmap_path)
 if not roadmap:
     # Same silence `lib.sh` keeps for an unstaged backlog: a missing index entry
     # is a fresh checkout, not this gate's failure to report.
+    # ⚠️ **Except under `--milestone`, which review measured as a fourth vacuous
+    # route**: the existence check above reads the *worktree*, so a roadmap
+    # removed from the index with the file still on disk reached this line and
+    # printed `ok <MS> has handed on every row it leaves open`, rc 0 — a named
+    # claim about a milestone, made from nothing. Silence is the right answer
+    # for a walk over every milestone and the wrong one for a question about a
+    # named one.
+    if os.environ.get("ONLY_GIVEN") == "1":
+        print(
+            f"NO_ROWS\t{roadmap_path} has no entry in the index, so nothing can "
+            f"be said about what {os.environ.get('ONLY', '')} handed on"
+        )
     sys.exit(0)
 
 problems: list[str] = []
@@ -150,6 +223,33 @@ for line in roadmap.splitlines():
     cells = [c.strip() for c in line.strip().strip("|").split("|")]
     if cells and cells[-1] == "complete":
         complete.append(m.group(1))
+
+# --- or the one milestone the caller named, checked before its cell flips -----
+only = os.environ.get("ONLY", "")
+if os.environ.get("ONLY_GIVEN") == "1":
+    if only in complete:
+        # The M5.0-shaped state: the header's case 1. Asking now is asking
+        # after the rows were dissolved, so a green answer means nothing.
+        # ⚠️ Marked rather than reported as a problem, because the caller turns
+        # this one into a `skip` — see the shell below for why it must not be a
+        # failure.
+        print(
+            f"TOO_LATE\t{only} already reads `complete` in {roadmap_path}, so its "
+            f"open rows have been dissolved and this check can no longer see "
+            f"them -- it must run at {only}'s own boundary, before the next "
+            f"milestone's opening commit"
+        )
+        sys.exit(0)
+    backlog = from_index(os.environ["BACKLOG"])
+    if not re.search(rf"^\|\s*{re.escape(only)}\.", backlog, re.M):
+        # The header's case 2: a milestone with no rows would pass having
+        # inspected nothing.
+        print(
+            f"NO_ROWS\t{os.environ['BACKLOG']} holds no row of {only}, so there "
+            f"is nothing to say about what it handed on"
+        )
+        sys.exit(0)
+    complete = [only]
 
 # --- which ids the deferral table names --------------------------------------
 # The table is everything between its own heading and the next one.
@@ -210,8 +310,17 @@ for milestone in sorted(complete):
         i for i in open_ids if i.startswith(prefix) and i not in handed
     )
     if stranded:
+        # ⚠️ The clause differs by mode, because the claim differs: the walk
+        # reports a milestone that *says* it is complete, and `--milestone`
+        # reports one that is *about to*. Writing "is `complete`" in the second
+        # case would name a cell a reader would then go and fail to find.
+        claim = (
+            "is about to be declared complete"
+            if os.environ.get("ONLY_GIVEN") == "1"
+            else f"is `complete` in {roadmap_path}"
+        )
         problems.append(
-            f"{milestone} is `complete` in {roadmap_path} and leaves "
+            f"{milestone} {claim} and leaves "
             f"{len(stranded)} open row(s) no deferral row names: "
             + ", ".join(stranded)
         )
@@ -220,18 +329,56 @@ print("\n".join(problems))
 PY
 )"
 
+# ⚠️ **`TOO_LATE` is a skip, not a failure, and `M4.79`'s review is why.** The
+# condition it names — the milestone's cell reads `complete` — is permanent, so
+# failing on it would make `m4-complete.sh` exit non-zero from `M5.0` onward
+# with no edit that restores it. `M4.77` exists because `m0-complete.sh` was red
+# four milestones after M0 closed, and `M0.30`'s own body rejects the shape in
+# terms: a gate red by design most of the time makes a real failure
+# indistinguishable from work in progress. Worse, two deferrals are *discharged*
+# by this gate's exit code flipping 0 to non-zero later — FR-21's durable
+# offsets (`roadmap.md`, M6 task 7c) and FR-40's `GroupGrants` (M12 task 3a) —
+# and a permanently red gate pre-empts both signals.
+# ⚠️ **Exit 3, not `finish`.** The caller has to tell "proved nothing" from
+# "proved it" and an exit code is the only channel it has; `finish` speaks only
+# 0 and 1. A skip that exits 0 would let `m4-complete.sh` report leg 0b green
+# having inspected nothing, which is the vacuous pass this whole task closes.
+if [[ "$problems" == TOO_LATE$'\t'* ]]; then
+  skip "${problems#*$'\t'}"
+  note "this check proves nothing once the next milestone's opening commit has landed"
+  exit 3
+fi
+
 if [[ -n "$problems" ]]; then
   while IFS= read -r p; do
     [[ -n "$p" ]] || continue
-    fail "$p"
+    fail "${p#*$'\t'}"
   done <<< "$problems"
-  note "a milestone closes by dispositioning what it found, not by emptying its backlog"
-  note "add a row to $ROADMAP's \"Deferred into a later milestone\" table whose"
-  note "first cell names them, each in backticks -- the second cell is the"
-  note "receiving milestone, and an id anywhere else in the row reads as prose"
-  note "and the receiving milestone's plan, which AGENTS.md requires and this cannot read"
+  # ⚠️ **The remedy is only printed for the problem it answers.** `--milestone`'s
+  # two refusals are about *when* and *what* the question was asked of; telling
+  # their caller to add a deferral row would send them to edit a table that is
+  # not what refused them.
+  # ⚠️ **The remedy is printed unless it is the wrong remedy**, and the test is
+  # on the marker rather than on the complaint's wording: `--milestone`'s
+  # `NO_ROWS` refusal is about *what* was asked, so telling its caller to add a
+  # deferral row sends them to edit a table that is not what refused them.
+  # ⚠️ Anything else keeps the notes, including every complaint the bare walk
+  # makes — an earlier version tested for one complaint's text and silently
+  # dropped the notes from the crossed-range and backwards-range failures,
+  # whose fix is the very sentence about first cells and backticks.
+  if [[ "$problems" != NO_ROWS$'\t'* ]]; then
+    note "a milestone closes by dispositioning what it found, not by emptying its backlog"
+    note "add a row to $ROADMAP's \"Deferred into a later milestone\" table whose"
+    note "first cell names them, each in backticks -- the second cell is the"
+    note "receiving milestone, and an id anywhere else in the row reads as prose"
+    note "and the receiving milestone's plan, which AGENTS.md requires and this cannot read"
+  fi
   finish
 fi
 
-ok "every milestone marked complete has handed on the rows it left open"
+if (( MS_GIVEN )); then
+  ok "$MS has handed on every row it leaves open"
+else
+  ok "every milestone marked complete has handed on the rows it left open"
+fi
 finish

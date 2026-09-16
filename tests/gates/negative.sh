@@ -4901,8 +4901,14 @@ run_case "check-mutants-baseline.sh (a shard that never reported)" \
 # promise.
 # ⚠️ **A fresh name per call**, `_baseline_union_dir`'s own reason: two cases
 # sharing a scratch directory let the second one pass on the first one's files.
+# ⚠️ **The roadmap state cell and the open row's state are parameters since
+# `M4.79`**, because the case that matters most is the one where the cell has
+# *not* flipped yet — the closing milestone's own boundary. Both default to what
+# the three `M4.73` callers below pass, so those are unchanged.
 _handoff_fixture() {
   local deferred="$1"
+  local state="${2:-complete}"
+  local row_state="${3:-todo}"
   local dir; dir="$(_next_scratch milestone-handoff)"
   copy_gate "$dir" check-milestone-handoff.sh
   mkdir -p "$dir/docs/internal/product" "$dir/docs/internal/standards"
@@ -4923,13 +4929,18 @@ SDD
 | Task | Title | Notes | State |
 |---|---|---|---|
 | M-1.1 | a row that landed | some criterion | done |
-| M-1.7 | a row the boundary round opened and nobody worked | some criterion | todo |
+| M-1.7 | a row the boundary round opened and nobody worked | some criterion | ROW_STATE |
 BL
+  # `rewrite_line` is for a known line number; this substitution is for a
+  # placeholder, which survives the heredoc growing a line.
+  awk -v st="$row_state" '{ sub(/ROW_STATE/, st); print }' \
+    "$dir/docs/internal/product/backlog.md" > "$dir/docs/internal/product/backlog.md.tmp"
+  mv "$dir/docs/internal/product/backlog.md.tmp" "$dir/docs/internal/product/backlog.md"
   {
     printf '## Milestones\n\n'
     printf '| # | Milestone | What | Kind | Depends | Tasks | Gate | State |\n'
     printf '|---|---|---|---|---|---|---|---|\n'
-    printf '| 1 | [M-1](milestones/M-1.md) | the milestone under test | functional | - | 2 | `scripts/gates/m-1-complete.sh` | complete |\n'
+    printf '| 1 | [M-1](milestones/M-1.md) | the milestone under test | functional | - | 2 | `scripts/gates/m-1-complete.sh` | %s |\n' "$state"
     printf '\n## Deferred into a later milestone\n\n'
     printf '| Deferred | Into | Why, and what it shapes |\n|---|---|---|\n'
     printf '%s\n' "$deferred"
@@ -5062,6 +5073,111 @@ if ( cd "$_handoff_range_dir" && bash scripts/check-milestone-handoff.sh ) >/dev
 else
   fail "check-milestone-handoff.sh refused a row named inside a deferral range"
   ( cd "$_handoff_range_dir" && bash scripts/check-milestone-handoff.sh ) 2>&1 | sed 's/^/     /' >&2
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
+# --- check-milestone-handoff.sh --milestone: the window that was zero wide ---
+#
+# ⚠️ **Every case above runs the bare invocation, and the bare invocation could
+# not fail on any commit this repository has ever contained** — `M4.79`. It
+# inspects milestones whose `roadmap.md` cell reads `complete` and rows still
+# open, and the *opening commit of the next milestone* flips that cell and
+# dissolves the handed rows together, because that is what the
+# `milestone-review` skill instructs and what `7fb9738` (M9/`M9.21`) and
+# `M10.0` (`M3.41`-`M3.46`) each did. The fixtures above are the artificial
+# intermediate state; no commit is ever in it. `--milestone M4` asks at the one
+# moment the answer exists, and `m4-complete.sh` runs it as leg 0b.
+
+# ⚠️ **The M5.0-shaped commit, which is the defect in its own terms**: the cell
+# flipped, the rows dissolved, and *nothing named anywhere* in the deferral
+# table. The bare invocation reports `ok` on it, having inspected nothing —
+# which is what `M4.75`'s gates lens reproduced. Scoped, it must refuse on
+# *when* rather than pretend to an answer it cannot have.
+#
+# ⚠️ **Exit 3, which is neither of the two outcomes `run_case` can express**,
+# so this is hand-driven. `run_case` asserts non-zero, and a plain non-zero is
+# precisely what this must not be: the milestone's cell reads `complete`
+# forever, so failing here would make `m4-complete.sh` red from `M5.0` onward
+# with no edit that restores it, and would pre-empt two deferrals whose
+# promotion signal *is* that gate's exit code flipping later (FR-21's durable
+# offsets, FR-40's `GroupGrants`). Exit 0 is equally wrong — that is the
+# vacuous `ok` the flag exists to close. So the case asserts the third code and
+# the word the caller keys on.
+TOTAL=$((TOTAL + 1))
+_handoff_late_dir="$(_handoff_fixture \
+  '| Something else entirely | M0 (from M-1) | hands nothing on |' complete dissolved)"
+_handoff_late_rc=0
+_handoff_late_out="$( ( cd "$_handoff_late_dir" \
+  && bash scripts/check-milestone-handoff.sh --milestone M-1 ) 2>&1 )" || _handoff_late_rc=$?
+if (( _handoff_late_rc == 3 )) \
+  && grep -q "already reads .complete." <<<"$_handoff_late_out" \
+  && grep -q "skip" <<<"$_handoff_late_out"; then
+  ok "check-milestone-handoff.sh --milestone skips with exit 3 once the cell has flipped"
+else
+  fail "check-milestone-handoff.sh --milestone answered a question it cannot answer (rc=$_handoff_late_rc)"
+  note "exit 0 is the vacuous pass this flag closes; exit 1 is permanent from M5.0 onward"
+  note "$(sed 's/^/     /' <<<"$_handoff_late_out")"
+  FAILED_CASES=$((FAILED_CASES + 1))
+fi
+
+# ⚠️ **And the boundary state, which is what the closing gate actually sees**:
+# the cell still says the milestone is in progress, the row is still `todo`, and
+# no deferral row names it. The bare invocation passes here too — the milestone
+# is not `complete`, so it is not looked at — so this case is the whole of what
+# the flag buys.
+setup_handoff_boundary_unnamed() {
+  _handoff_fixture '| Something else entirely | M0 (from M-1) | not the row that is open |' \
+    'in progress' todo
+}
+invoke_handoff_boundary_unnamed() {
+  ( cd "$1" && bash scripts/check-milestone-handoff.sh --milestone M-1 )
+}
+run_case "check-milestone-handoff.sh (--milestone at the boundary, row handed to nobody)" \
+  setup_handoff_boundary_unnamed invoke_handoff_boundary_unnamed \
+  "open row(s) no deferral row names"
+
+# ⚠️ **A milestone with no rows at all would otherwise pass having inspected
+# nothing** — `backlog.md` holds the current milestone's list, so a typo'd id,
+# or one whose rows have been archived, scopes the walk to the empty set. That
+# is the vacuous pass this flag exists to close, arriving by another door.
+setup_handoff_milestone_without_rows() {
+  _handoff_fixture '| Something else entirely | M0 (from M-1) | hands nothing on |' \
+    'in progress' todo
+}
+invoke_handoff_milestone_without_rows() {
+  ( cd "$1" && bash scripts/check-milestone-handoff.sh --milestone M7 )
+}
+run_case "check-milestone-handoff.sh (--milestone names a milestone with no rows)" \
+  setup_handoff_milestone_without_rows invoke_handoff_milestone_without_rows \
+  "holds no row of M7"
+
+# ⚠️ **And a task id is not a milestone id.** `--milestone M-1.7` would scope to
+# the prefix `M-1.7.`, which matches nothing — the same vacuous pass, wearing
+# the flag that was added to prevent it.
+setup_handoff_task_id() {
+  setup_handoff_milestone_without_rows
+}
+invoke_handoff_task_id() {
+  ( cd "$1" && bash scripts/check-milestone-handoff.sh --milestone M-1.7 )
+}
+run_case "check-milestone-handoff.sh (--milestone given a task id)" \
+  setup_handoff_task_id invoke_handoff_task_id \
+  "takes a milestone id"
+
+# ⚠️ **And it must *pass* at the boundary once the row is handed on**, which
+# `run_case` cannot express: without this, a `--milestone` implementation that
+# refused every input would satisfy all four cases above.
+TOTAL=$((TOTAL + 1))
+_handoff_scoped_ok_dir="$(_handoff_fixture \
+  '| Rows `M-1.7` | M0 (from M-1) | handed on by name, at the boundary |' \
+  'in progress' todo)"
+if ( cd "$_handoff_scoped_ok_dir" && bash scripts/check-milestone-handoff.sh --milestone M-1 ) \
+  >/dev/null 2>&1; then
+  ok "check-milestone-handoff.sh --milestone passes at the boundary on a handed-on row"
+else
+  fail "check-milestone-handoff.sh --milestone refused a milestone that handed its open row on"
+  ( cd "$_handoff_scoped_ok_dir" && bash scripts/check-milestone-handoff.sh --milestone M-1 ) \
+    2>&1 | sed 's/^/     /' >&2
   FAILED_CASES=$((FAILED_CASES + 1))
 fi
 

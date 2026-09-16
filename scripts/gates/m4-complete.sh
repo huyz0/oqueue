@@ -126,6 +126,44 @@ else
   note "run: scripts/milestone-review.sh context --milestone M4 to build the packet"
 fi
 
+# ── 0b. And every row M4 leaves open has been handed on ─────────────────────
+# ⚠️ **Scoped to M4 rather than left to the pre-commit walk, and `M4.79` is
+# why.** `check-milestone-handoff.sh`'s bare invocation inspects milestones
+# whose `roadmap.md` cell reads `complete` and rows that are still open — and
+# the opening commit of the next milestone flips that cell and dissolves the
+# handed rows in one commit, so no commit is ever in the state it inspects. An
+# M5.0-shaped commit naming nothing in the deferral table measured `ok`, rc 0.
+# This leg asks at the one moment the answer exists: M4's own boundary, which
+# is now. Beside leg 0 and for its reason — it needs no cargo, so nothing below
+# may gate it.
+#
+# ⚠️ **Exit 3 is a skip here, not a pass and not a failure**, and it is what
+# keeps this leg honest in both directions once `M5.0` lands. `--milestone M4`
+# refuses to answer at all once M4's cell reads `complete`, because the rows it
+# handed on have been dissolved by then — so a green answer would be the vacuous
+# pass this leg exists to close, and a red one would be permanent, which is
+# `m1-complete.sh`'s MinIO leg in reverse and `M4.77`'s whole subject. The leg
+# says it proved nothing instead, which is the same thing FR-21's restart leg
+# says below.
+ho_rc=0
+bash "$REPO_ROOT/scripts/check-milestone-handoff.sh" --milestone M4 || ho_rc=$?
+if (( ho_rc == 0 )); then
+  ok "every row M4 leaves open is handed on by a roadmap.md deferral row"
+elif (( ho_rc == 3 )); then
+  skip "M4's handoff (asked after M4's roadmap cell flipped to \`complete\`)"
+  note "the rows M4 handed on have been dissolved, so this leg proves nothing now;"
+  note "it is the boundary run, before the next milestone's opening commit, that counts"
+elif (( ho_rc == 127 )); then
+  fail "scripts/check-milestone-handoff.sh could not be run (exit 127)"
+  note "the gate is absent, not the handoff -- M4's dispositions are unknown, not failing"
+else
+  # ⚠️ **Deliberately not "M4 leaves rows open"**, which review measured as a
+  # statement this branch cannot make: it also fires for `--milestone`'s
+  # "no rows" refusal, for a missing python3, and for the exit 2 an unknown
+  # argument produces. The gate has already said which; this names the leg.
+  fail "M4's handoff check refused (exit $ho_rc) -- its output above says why"
+fi
+
 if ! has_rust; then
   skip "everything below (no Rust workspace here)"
   finish
