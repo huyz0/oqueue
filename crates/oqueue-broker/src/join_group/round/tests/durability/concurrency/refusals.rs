@@ -11,7 +11,8 @@
 
 #![allow(clippy::expect_used)]
 
-use super::super::super::{Harness, group, member};
+use super::super::super::{Harness, group, member, member_asking};
+
 use crate::group_transitions::GroupTransitions;
 use crate::join_group::round::{Coordination, GroupJoins, JoinOutcome};
 use oqueue_core::{
@@ -20,6 +21,14 @@ use oqueue_core::{
 };
 use std::sync::Arc;
 use std::time::Duration;
+
+/// Every case here asks for the same second, and naming it keeps each `join`
+/// call on one line — `clippy::too_many_lines` measured the spelled-out form
+/// pushing `a_transient_append_failure_keeps_the_rounds_known_roster` over its
+/// limit.
+fn asking_a_second(id: &str, protocols: &[&str]) -> crate::join_group::round::RoundMember {
+    member_asking(id, protocols, Duration::from_secs(1))
+}
 
 /// The bundles [`Coordination`] borrows, owned so the borrow outlives the
 /// statement that builds it.
@@ -123,9 +132,7 @@ async fn a_failing_log_makes_a_join_unavailable_not_refused() {
     let co = borrowed.coordination(&transitions, coordinator.as_ref());
     log.refuse_append();
 
-    let outcome = joins
-        .join(co, &g, member("m1", &["range"]), Duration::from_secs(1))
-        .await;
+    let outcome = joins.join(co, &g, asking_a_second("m1", &["range"])).await;
 
     assert!(
         matches!(outcome, JoinOutcome::Unavailable),
@@ -134,9 +141,7 @@ async fn a_failing_log_makes_a_join_unavailable_not_refused() {
 
     // It recovers: the same joiner succeeds once the log heals.
     log.heal();
-    let outcome = joins
-        .join(co, &g, member("m1", &["range"]), Duration::from_secs(1))
-        .await;
+    let outcome = joins.join(co, &g, asking_a_second("m1", &["range"])).await;
     assert!(
         !matches!(outcome, JoinOutcome::Unavailable | JoinOutcome::Refused),
         "the group is joinable again once its log is"
@@ -201,15 +206,12 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
     let co = borrowed.coordination(&transitions, coordinator.as_ref());
 
     // Establish a round size of 2.
-    let JoinOutcome::Pending { outcome, .. } = joins
-        .join(co, &g, member("a", &["range"]), Duration::from_secs(1))
-        .await
+    let JoinOutcome::Pending { outcome, .. } =
+        joins.join(co, &g, asking_a_second("a", &["range"])).await
     else {
         panic!("first round is pending");
     };
-    let _ = joins
-        .join(co, &g, member("b", &["range"]), Duration::from_secs(1))
-        .await;
+    let _ = joins.join(co, &g, asking_a_second("b", &["range"])).await;
     borrowed.heartbeats.register(&g, "b", 30_000);
     joins.close_on_deadline(co, &g, &outcome).await;
     coordinator
@@ -217,14 +219,10 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
         .expect("CompletingRebalance -> Stable");
 
     // The next round opens cleanly, then its barrier's append fails.
-    let _ = joins
-        .join(co, &g, member("a", &["range"]), Duration::from_secs(1))
-        .await;
+    let _ = joins.join(co, &g, asking_a_second("a", &["range"])).await;
     borrowed.heartbeats.register(&g, "a", 30_000);
     log.refuse_append();
-    let _ = joins
-        .join(co, &g, member("b", &["range"]), Duration::from_secs(1))
-        .await;
+    let _ = joins.join(co, &g, asking_a_second("b", &["range"])).await;
     borrowed.heartbeats.register(&g, "b", 30_000);
     log.heal();
 
@@ -232,9 +230,7 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
     // there, so it is `a` arriving that fills it. With the size forgotten that
     // round's `expected` is `None` and `a` would park until the deadline
     // instead.
-    let outcome = joins
-        .join(co, &g, member("a", &["range"]), Duration::from_secs(1))
-        .await;
+    let outcome = joins.join(co, &g, asking_a_second("a", &["range"])).await;
     borrowed.heartbeats.register(&g, "a", 30_000);
     assert!(
         matches!(outcome, JoinOutcome::Ready(_)),
@@ -254,13 +250,17 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
 /// enrolment, and a `Step::Close` returning `None` means `abandon_round` took
 /// `entry.open` with the enrolment inside it.
 ///
-/// ⚠️ **The harm is not the one request.** `note_rebalance_timeout` folds the
-/// maximum and never resets, so a single exhausted join asking for fifty
-/// minutes holds the whole group at `MAX_SYNC_WAIT_MS` for the life of the
-/// process: every later follower whose leader dies between
-/// `JoinBarrierComplete` and its own `SyncGroup` parks fifty minutes instead
-/// of its group's own number — `waited_ms=3000000`, the exact `M4.47`
-/// stranding `M4.66` exists to end, set by a member that never joined.
+/// ⚠️ **The harm was not the one request, and `M4.83` shrank it without
+/// removing it.** The writer folded a maximum that never reset, so a single
+/// exhausted join asking for fifty minutes held the whole group at
+/// `MAX_SYNC_WAIT_MS` for the life of the process: every later follower whose
+/// leader dies between `JoinBarrierComplete` and its own `SyncGroup` parked
+/// fifty minutes instead of its group's own number — `waited_ms=3000000`, the
+/// exact `M4.47` stranding `M4.66` exists to end, set by a member that never
+/// joined. The group's number is derived from the open round's roster now, so
+/// the same mistake would cost one round rather than the process; this case
+/// still asks what it always asked, which is that a member which never
+/// enrolled is not in that roster at all.
 #[tokio::test(start_paused = true)]
 async fn an_exhausted_join_does_not_set_the_groups_rebalance_timeout() {
     let h = Harness::new();

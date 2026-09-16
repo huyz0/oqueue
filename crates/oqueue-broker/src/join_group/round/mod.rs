@@ -96,8 +96,8 @@ impl GroupJoins {
     /// bounded by a constant ten times it.** A follower parking on the
     /// assignment barrier cannot read `rebalance_timeout_ms` off its own
     /// `SyncGroupRequest` — the wire carries no timeout field there — so the
-    /// members that join are what record it, folded to the maximum
-    /// (`SyncGroups::note_rebalance_timeout`'s own doc).
+    /// members of the round are what record it, folded to the maximum
+    /// (`SyncGroups::set_rebalance_timeout`'s own doc).
     ///
     /// ⚠️ **Only a member that was actually enrolled**, and review measured
     /// why: the first version recorded every attempt, so one request refused
@@ -130,28 +130,62 @@ impl GroupJoins {
     /// asking 300 s closed the round and left the group at 6 s. Asking the
     /// question once, where the outcome is whatever the loop produced, is what
     /// no further arm can be added around.
+    ///
+    /// ⚠️ **What it records changed in `M4.83`, and with it the guard.** It
+    /// used to fold this member's own ask into a maximum `SyncGroups` never
+    /// lowered, which meant the outcome had to be inspected: a refused member
+    /// was never enrolled and must not contribute. The group's number is now
+    /// *derived* from the open round's roster, so a refused member cannot
+    /// contribute whatever this wrapper does — it is not in `round.members` —
+    /// and the guard is gone rather than kept as a second, weaker statement of
+    /// the same fact. ⚠️ What that buys over the fold is that a member which
+    /// *leaves* stops counting; see [`Self::withdraw`].
     pub(crate) async fn join(
         &self,
         co: Coordination<'_>,
         group: &GroupId,
         member: RoundMember,
-        rebalance_timeout: Duration,
     ) -> JoinOutcome {
-        let outcome = self
-            .plan_and_join(co, group, member, rebalance_timeout)
-            .await;
-        if !matches!(
-            outcome,
-            JoinOutcome::Refused | JoinOutcome::Unavailable | JoinOutcome::Busy
-        ) {
-            // ⚠️ Outside any lock this module holds: the only order in the
-            // crate is rounds-then-barrier, and holding neither across the
-            // other is cheaper than defending a nesting
-            // (`async-concurrency.md` rule 9).
-            co.sync_groups
-                .note_rebalance_timeout(group, rebalance_timeout);
-        }
+        let outcome = self.plan_and_join(co, group, member).await;
+        // ⚠️ **`Ready` folds over the close, not over the open round, and
+        // that is `M4.74`'s finding arriving in a new shape.** This member's
+        // join *closed* the round, so by the time control gets here
+        // `entry.open` is `None` and asking for the open round's roster
+        // answers "nothing to say" — the group would keep the previous
+        // round's number and the closing member would never be counted, which
+        // is exactly the 6 s-then-300 s case `M4.74` filed. Measured: the test
+        // for it failed at `Some(6s)` against a first version that had only
+        // the second arm.
+        //
+        // ⚠️ **Under this module's own lock, held across the barrier's**, and
+        // a publisher added later must do the same — review measured the
+        // alternative. Reading the fold under the rounds lock and writing
+        // after releasing it lets two tasks invert: a third member's `join`
+        // folds `[greedy, b, c]` and blocks on the barrier's mutex, the greedy
+        // member's `withdraw` folds `[b, c]` and wins it, and the join writes
+        // the larger value last — a departed member re-pinning the group,
+        // which across a `close_on_deadline` is a whole generation of
+        // followers. The order is rounds-then-barrier, the only one in this
+        // crate, so the nesting is legal (`async-concurrency.md` rule 9) and
+        // `SyncGroups::submit`'s own closure-under-the-lock is its precedent.
+        // ⚠️ **An earlier version of this paragraph said the opposite** —
+        // "holding neither across the other is cheaper than defending a
+        // nesting" — which is what the repair had to stop being true.
+        self.publish_sync_wait(co.sync_groups, group, sync_wait::ready_close(&outcome));
         outcome
+    }
+
+    /// Writes `group`'s sync backstop from whichever roster is authoritative
+    /// now — [`sync_wait::publish`] has the whole of the reasoning.
+    fn publish_sync_wait(
+        &self,
+        sync_groups: &crate::sync_group::SyncGroups,
+        group: &GroupId,
+        closed: Option<&RoundClose>,
+    ) {
+        let entries = self.lock();
+        sync_wait::publish(&entries, sync_groups, group, closed);
+        drop(entries);
     }
 
     /// The re-planning loop itself: read the group's state, choose a step,
@@ -168,8 +202,11 @@ impl GroupJoins {
         co: Coordination<'_>,
         group: &GroupId,
         member: RoundMember,
-        rebalance_timeout: Duration,
     ) -> JoinOutcome {
+        // The round's own deadline and the group's sync backstop are one
+        // number with two consumers, and since `M4.83` it travels on the
+        // member rather than beside it.
+        let rebalance_timeout = member.rebalance_timeout;
         // ⚠️ **One budget for all the waiting, not one per pass.** Each
         // `Step::Wait` used to absorb a fresh `SLOT_WAIT`, so eight passes
         // could hold a connection's own in-flight permit for 40 s — and
@@ -369,19 +406,34 @@ impl GroupJoins {
     /// handler reads the same close, answers `NONE`, and registers for
     /// heartbeats. A tracked, unfenced member with no assignment, consuming
     /// nothing and evicted by nothing. Found by review.
+    /// ⚠️ **It republishes the group's sync backstop — `M4.83`.** That value
+    /// is the fold over the open round's roster, and this is the one place a
+    /// member leaves it: without this, a member told to rejoin went on holding
+    /// the group at whatever it had asked for until the next join, and across
+    /// a `close_on_deadline` that is a whole generation of followers parked on
+    /// a departed member's number. Written here, under the lock the removal
+    /// already holds, so no third member's fold can interleave between the two
+    /// — see [`Self::publish_sync_wait`], which carries the measurement.
+    /// Nothing is written when this call removed nothing, or when the open
+    /// round is not the one `own_outcome` names.
     pub(crate) fn withdraw(
         &self,
+        sync_groups: &crate::sync_group::SyncGroups,
         group: &GroupId,
         member_id: &str,
         own_outcome: &Arc<OnceLock<RoundOutcome>>,
     ) {
         let mut entries = self.lock();
-        if let Some(entry) = entries.get_mut(group)
+        let remaining = if let Some(entry) = entries.get_mut(group)
             && let Some(round) = entry.open.as_mut()
             && plan::is_own_open_round(round, own_outcome)
         {
             round.members.retain(|m| m.member_id != member_id);
-        }
+            sync_wait::fold_timeouts(&round.members)
+        } else {
+            None
+        };
+        sync_groups.set_rebalance_timeout(group, remaining);
         drop(entries);
     }
 
@@ -412,6 +464,7 @@ mod close;
 mod plan;
 mod slot;
 mod state;
+mod sync_wait;
 
 /// What one attempt to apply a round-opening transition did.
 enum Applied {

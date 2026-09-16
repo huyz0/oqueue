@@ -96,15 +96,15 @@ pub(crate) async fn handle(
     {
         return reply(prelude, &refusal(refused.error_code()));
     }
-    let member = round_member(&request, member_id.as_str());
     let rebalance_timeout = tokio::time::Duration::from_millis(barrier_ms(effective_timeout_ms(
         request.rebalance_timeout_ms,
         request.session_timeout_ms,
     )));
+    let member = round_member(&request, member_id.as_str(), rebalance_timeout);
 
     let close = match cluster
         .group_joins()
-        .join(coordination(cluster), &group, member, rebalance_timeout)
+        .join(coordination(cluster), &group, member)
         .await
     {
         // ⚠️ Two refusals, two codes, and only one of them is the client's
@@ -167,7 +167,18 @@ fn fence_rejoin(
 /// This member's own contribution to the round it is about to join —
 /// pulled out of `handle` purely for `code-structure.md`'s own fifty-line
 /// limit.
-fn round_member(request: &JoinGroupRequest<'_>, member_id: &str) -> RoundMember {
+///
+/// ⚠️ **`rebalance_timeout` is passed in rather than derived here, and
+/// `GroupJoins::join` no longer takes it separately** — `M4.83`. It is one
+/// number with two consumers, the round's own deadline and the group's sync
+/// backstop, and while the round carried it as an argument beside the member
+/// it described, nothing tied the two together. It travels on the member now,
+/// because the sync backstop is recomputed from the round's roster.
+fn round_member(
+    request: &JoinGroupRequest<'_>,
+    member_id: &str,
+    rebalance_timeout: tokio::time::Duration,
+) -> RoundMember {
     RoundMember {
         member_id: member_id.to_owned(),
         protocol_type: request.protocol_type.to_owned(),
@@ -176,6 +187,7 @@ fn round_member(request: &JoinGroupRequest<'_>, member_id: &str) -> RoundMember 
             .iter()
             .map(|p| (p.name.to_owned(), p.metadata.to_owned()))
             .collect(),
+        rebalance_timeout,
     }
 }
 
@@ -290,7 +302,22 @@ async fn wait_for_close(
                     // withdrawal belongs to the function that decides to give
                     // up, and it needs `outcome` to prove which round the
                     // enrolment is in. See `GroupJoins::withdraw`.
-                    cluster.group_joins().withdraw(group, member_id, &outcome);
+                    // ⚠️ **The withdrawal recomputes the group's sync
+                    // backstop, and that is the whole of `M4.83`.** Until it
+                    // did, `SyncGroups` held `max` over every member that had
+                    // ever enrolled and nothing lowered it — so this member,
+                    // which is being told to rejoin and is leaving the roster,
+                    // went on holding the group at whatever it asked for until
+                    // the process ended. `withdraw` republishes it under the
+                    // rounds lock it already holds, because reading there and
+                    // writing afterwards lets a third member's own fold
+                    // interleave and win — review measured the inversion.
+                    cluster.group_joins().withdraw(
+                        cluster.sync_groups(),
+                        group,
+                        member_id,
+                        &outcome,
+                    );
                     return None;
                 }
                 deadline_tried = true;

@@ -20,6 +20,12 @@ pub(super) fn member(id: &str, protocols: &[&str]) -> RoundMember {
     member_with_type(id, "consumer", protocols)
 }
 
+/// ⚠️ **`rebalance_timeout` is a placeholder here.** `GroupJoins::join` takes
+/// the timeout on the member since `M4.83`, so every test that reaches
+/// `plan_join` goes through [`Harness::join`] or [`member_asking`], which
+/// stamp it — what this sets is never the value a round folds over. It is
+/// `ZERO` rather than something plausible so that a test which somehow used it
+/// fails visibly on a zero wait instead of passing on a coincidence.
 fn member_with_type(id: &str, protocol_type: &str, protocols: &[&str]) -> RoundMember {
     RoundMember {
         member_id: id.to_owned(),
@@ -28,7 +34,23 @@ fn member_with_type(id: &str, protocol_type: &str, protocols: &[&str]) -> RoundM
             .iter()
             .map(|&p| (p.to_owned(), Vec::new()))
             .collect(),
+        rebalance_timeout: Duration::ZERO,
     }
+}
+
+/// The member as the request that carried it would have built it — `M4.83`
+/// moved `rebalance_timeout` onto [`RoundMember`], and the tests' own helpers
+/// take it as an argument, so this is where the two meet.
+pub(super) fn asking(mut m: RoundMember, timeout: Duration) -> RoundMember {
+    m.rebalance_timeout = timeout;
+    m
+}
+
+/// [`member`] and [`asking`] in one call, so a call site stays on one line —
+/// `clippy::too_many_lines` measured the nested form pushing
+/// `a_transient_append_failure_keeps_the_rounds_known_roster` over its limit.
+pub(super) fn member_asking(id: &str, protocols: &[&str], timeout: Duration) -> RoundMember {
+    asking(member(id, protocols), timeout)
 }
 
 /// A live [`GroupTransitions`] actor over a fresh coordinator and log.
@@ -90,7 +112,10 @@ impl Harness {
     /// member does not transfer. Found by review.
     pub(super) async fn join(&self, g: &GroupId, m: RoundMember, timeout: Duration) -> JoinOutcome {
         let member_id = m.member_id.clone();
-        let outcome = self.joins.join(self.coordination(), g, m, timeout).await;
+        let outcome = self
+            .joins
+            .join(self.coordination(), g, asking(m, timeout))
+            .await;
         self.heartbeats.register(g, &member_id, 30_000);
         outcome
     }

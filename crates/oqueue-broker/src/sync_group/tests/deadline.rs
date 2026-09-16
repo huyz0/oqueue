@@ -60,7 +60,7 @@ async fn a_followers_wait_is_its_groups_own_number_not_the_ceiling() {
     fixture
         .cluster
         .sync_groups()
-        .note_rebalance_timeout(&g, Duration::from_secs(45));
+        .set_rebalance_timeout(&g, Some(Duration::from_secs(45)));
 
     // Nobody submits and nobody leaves: the deadline is the only thing that
     // can answer, which is what makes the elapsed time the measurement.
@@ -89,20 +89,30 @@ async fn a_followers_wait_is_its_groups_own_number_not_the_ceiling() {
 /// member's follower ran under. Both reference clients seed
 /// `rebalance_timeout_ms` from `max.poll.interval.ms`, which an application
 /// may legitimately set to a second.
+///
+/// ⚠️ **Driven through the real handler since `M4.83`, and it has to be.**
+/// The writer is no longer a fold the caller can invoke twice — the group's
+/// number is derived from the open round's roster, so the only way to ask this
+/// question is to put two members in one round. Calling the setter twice by
+/// hand would now assert last-writer-wins and pass, which is the property this
+/// test exists to refuse.
 #[tokio::test(start_paused = true)]
 async fn a_members_short_number_does_not_truncate_its_groups() {
     let fixture = fixture(&[]).await;
     let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
-    let groups = fixture.cluster.sync_groups();
 
-    groups.note_rebalance_timeout(&g, Duration::from_secs(45));
-    groups.note_rebalance_timeout(&g, Duration::from_secs(1));
+    let long = spawn_join(&fixture, "range", 45_000);
+    settle().await;
+    let short = spawn_join(&fixture, "range", 1_000);
+    settle().await;
 
     assert_eq!(
-        groups.rebalance_timeout(&g),
+        fixture.cluster.sync_groups().rebalance_timeout(&g),
         Some(Duration::from_secs(45)),
-        "the fold is the maximum over every member that asked, not the last one to ask"
+        "the fold is the maximum over the round's members, not the last one to ask"
     );
+    long.abort();
+    short.abort();
 }
 
 /// ⚠️ **And a member asking for nothing must not answer somebody else's
@@ -121,7 +131,7 @@ async fn a_member_asking_for_nothing_does_not_answer_another_members_follower_at
     fixture
         .cluster
         .sync_groups()
-        .note_rebalance_timeout(&g, Duration::ZERO);
+        .set_rebalance_timeout(&g, Some(Duration::ZERO));
 
     let started = tokio::time::Instant::now();
     let follower = sync(
@@ -336,4 +346,83 @@ async fn one_member_asking_for_the_ceiling_does_not_pin_the_group_at_it() {
         waited < Duration::from_millis(super::super::deadline::MAX_SYNC_WAIT_MS),
         "a later follower must not inherit the ceiling from one member's ask: {waited:?}"
     );
+}
+
+/// ⚠️ **A member that has left the round stops counting — `M4.83`, and this
+/// is the half `M4.76` did not close.** That row clamped what one member may
+/// contribute; the fold itself was still a maximum over every member that had
+/// ever enrolled, and nothing removed it. So a member reaching `Pending`
+/// asking the ceiling and then disconnecting held its group's sync backstop at
+/// thirty minutes for the life of the process, and every later follower parked
+/// there instead of on the number its own round asked for. Cross-principal,
+/// since `GroupGrants` is deferred.
+///
+/// The group's number is derived from the *open round's* roster now, which is
+/// what makes this observable: the greedy member closes one round and is gone
+/// from the next, so the second member's own 45 s is the whole of the fold.
+///
+/// ⚠️ **Two assertions, and neither alone is enough.** The recorded value
+/// fires on the fold itself; the elapsed time of a follower in the second
+/// round is what a client actually experiences, and it would still be thirty
+/// minutes against a broker that recorded the right number and read a stale
+/// one. Reverting the derivation to the old fold fails the first at
+/// `Some(1800s)`.
+#[tokio::test(start_paused = true)]
+async fn a_member_that_left_stops_holding_its_groups_sync_wait() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+
+    // One member, asking for the ceiling, closing a round of its own.
+    super::join_asking_as(&fixture.cluster, "orders-consumers", "", "range", 3_000_000).await;
+    assert_eq!(
+        fixture.cluster.sync_groups().rebalance_timeout(&g),
+        Some(Duration::from_mins(30)),
+        "the greedy member's own round is bounded by what M4.76 lets it ask"
+    );
+
+    // It never comes back. A second member opens the next round and is the
+    // only one in it; the first is awaited, not enrolled.
+    let second = spawn_join(&fixture, "range", 45_000);
+    settle().await;
+    assert_eq!(
+        fixture.cluster.sync_groups().rebalance_timeout(&g),
+        Some(Duration::from_secs(45)),
+        "a member absent from this round must not still be holding the group"
+    );
+
+    // And what that is worth to a follower of the second round.
+    for id in ["m1", "m2"] {
+        fixture.cluster.heartbeats().register(&g, id, 30_000);
+    }
+    fixture
+        .cluster
+        .group_coordinator()
+        .transition(&g, oqueue_core::GroupEvent::JoinBarrierComplete)
+        .expect("PreparingRebalance -> CompletingRebalance is legal");
+    // ⚠️ Read, not written as a literal: the greedy member closed a round of
+    // its own, so this group is a generation ahead of every other test in this
+    // module and a hardcoded `1` is answered `ILLEGAL_GENERATION` before the
+    // wait ever starts — measured, and it would have made the elapsed-time
+    // assertion pass on a request that was refused instantly.
+    let generation = fixture
+        .cluster
+        .group_coordinator()
+        .record(&g)
+        .expect("the group exists")
+        .generation
+        .get();
+    let started = tokio::time::Instant::now();
+    let follower = sync(
+        &fixture.cluster,
+        super::super::tests::follower_body_at("orders-consumers", "m2", generation),
+    )
+    .await;
+    let waited = tokio::time::Instant::now() - started;
+
+    assert_eq!(follower.error_code, error_codes::REBALANCE_IN_PROGRESS);
+    assert!(
+        waited < Duration::from_mins(1),
+        "a follower must not inherit thirty minutes from a member that has left: {waited:?}"
+    );
+    second.abort();
 }

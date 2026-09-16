@@ -24,12 +24,26 @@ use tokio::sync::Notify;
 use tokio::time::{Duration, Instant};
 
 /// One member's own contribution to a round: what a response echoes back
-/// for it, and what `elect` needs from it.
+/// for it, what `elect` needs from it, and what it asked the sync barrier to
+/// wait for.
 #[derive(Debug, Clone)]
 pub(crate) struct RoundMember {
     pub(crate) member_id: String,
     pub(crate) protocol_type: String,
     pub(crate) protocols: Vec<(String, Vec<u8>)>,
+    /// This member's own `rebalance_timeout_ms`, already through
+    /// `super::super::deadline::barrier_ms`.
+    ///
+    /// ⚠️ **Here since `M4.83`, and the reason is that the fold had nowhere
+    /// to be recomputed from.** `SyncGroups` folded `max` over every member
+    /// that ever enrolled and nothing ever lowered it, so a member that
+    /// reached `Pending` asking the ceiling and then disconnected held its
+    /// group's sync backstop there for the life of the process. The repair is
+    /// to derive the group's number from the round's *current* roster, and
+    /// that needs each member to carry its own — `M4.70`'s and `M4.76`'s rows
+    /// each proposed snapshotting `members` and folding over it, which could
+    /// not work while there was nothing on a member to fold.
+    pub(crate) rebalance_timeout: Duration,
 }
 
 /// What a closed round answers every one of its own members with.

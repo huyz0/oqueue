@@ -104,13 +104,15 @@ pub(crate) struct SyncGroups {
 struct Entry {
     assignments: Assignments,
     notify: Arc<Notify>,
-    /// The largest per-member contribution any member this group has enrolled
-    /// has made — each one's `rebalance_timeout_ms` capped at
-    /// [`super::deadline::MAX_MEMBER_SYNC_WAIT_MS`] before it folds in — `M4.66`, the value a follower's own wait is derived from,
-    /// and [`SyncGroups::note_rebalance_timeout`] for why the largest and
-    /// why only admitted members. `None` until a member has joined through
-    /// `join_group::round`, which is every test that drives the coordinator
-    /// directly and nothing a real client produces.
+    /// The largest `rebalance_timeout_ms` among the members of this group's
+    /// open round, each capped at
+    /// [`super::deadline::MAX_MEMBER_SYNC_WAIT_MS`] — `M4.66` for why the
+    /// largest, `M4.83` for why the *round's* members rather than every member
+    /// that ever enrolled. It is the value a follower's own wait is derived
+    /// from. `None` until a member has joined through `join_group::round`,
+    /// which is every test that drives the coordinator directly and nothing a
+    /// real client produces; once set it is replaced by each round rather than
+    /// cleared — see [`SyncGroups::set_rebalance_timeout`].
     rebalance_timeout: Option<Duration>,
 }
 
@@ -182,58 +184,72 @@ impl SyncGroups {
         handles
     }
 
-    /// Records what `rebalance_timeout_ms` `group`'s round was opened with,
+    /// Records what `rebalance_timeout_ms` `group`'s current round asks for,
     /// so a follower parking on the barrier can be bounded by the same value
     /// the join barrier was — `M4.66`, and `sync_group::deadline`'s own doc
     /// for why nothing else bounds this phase.
     ///
-    /// ⚠️ **The maximum over every member that has asked, not the last one
-    /// to ask**, and the first version of this was the latter. Both
-    /// reference clients seed `rebalance_timeout_ms` from
-    /// `max.poll.interval.ms`, which an application may legitimately set to
-    /// a second — and last-writer-wins let whichever member happened to open
-    /// the round truncate the phase for everyone, refusing followers before
-    /// a leader's `SyncComplete` append could land and re-opening the round
-    /// they were refused into. Real Kafka folds `max` over the members'
-    /// `rebalanceTimeoutMs` for exactly this. Found by review.
+    /// ⚠️ **This function is last-writer-wins, and the *caller* is what makes
+    /// that safe.** `from_round` is already the maximum over a roster, folded
+    /// by `join_group::round` under the lock that owns it, and the two writers
+    /// — a join and a withdrawal — hold that lock across this call so they
+    /// cannot interleave. Review measured the version that read there and
+    /// wrote here: a third member's larger fold could win the race and re-pin
+    /// the group with a departed member's number. ⚠️ **The fold is a maximum,
+    /// not the newest member's ask**, which the first version of `M4.66` got
+    /// wrong: both reference clients seed `rebalance_timeout_ms` from
+    /// `max.poll.interval.ms`, which an application may legitimately set to a
+    /// second, and letting whichever member happened to open the round set the
+    /// group's number truncated the phase for everyone — refusing followers
+    /// before a leader's `SyncComplete` append could land, and re-opening the
+    /// round they were refused into. Real Kafka folds `max` over the members'
+    /// `rebalanceTimeoutMs` for exactly this.
     ///
-    /// ⚠️ **Only for a member that was admitted**, which the first version
-    /// got wrong and review measured: it recorded every attempt, so one
-    /// request refused for an unusable protocol while asking
-    /// `rebalance_timeout_ms=3_000_000` left the group at the ceiling for
-    /// the rest of the process. `join_group::round`'s `join` wrapper is where
-    /// the outcome is known and is why the call is there — `M4.74` moved it
-    /// out of the loop's `Step::Done` arm, which could not see the
-    /// round-closing member at all.
+    /// ⚠️ **A member that was refused cannot contribute, and no guard here
+    /// says so** — `M4.83` deleted the one that did. The fold is over
+    /// `round.members`, and a refused member was never pushed into it; stating
+    /// the same fact twice, once as a condition on the caller, is what went
+    /// stale in `M4.74`. `join_group::round`'s own `join` carries the reason.
     ///
-    /// ⚠️ **Monotonic over the group's whole life**, and that is a real
-    /// limitation rather than a design: a member that asked for thirty
-    /// minutes and has since left — or never enrolled at all — still holds
-    /// the group there, where real Kafka recomputes the fold over the round's
-    /// current members. ⚠️ **`M4.76` bounded the value, not its
-    /// permanence.** Until then the worst case was the flat
-    /// [`super::deadline::MAX_SYNC_WAIT_MS`] this value replaced, reachable
-    /// by one request; the `min` above caps a single member's contribution at
-    /// [`super::deadline::MAX_MEMBER_SYNC_WAIT_MS`], so the surviving route
-    /// is the same one at thirty minutes rather than fifty. The repair is
-    /// recomputation per round, which needs no lock nesting — see that
-    /// constant's own doc, and `M4.76`'s row, which records it as residue.
-    pub(crate) fn note_rebalance_timeout(&self, group: &GroupId, rebalance_timeout: Duration) {
-        // ⚠️ **Clamped per member before it enters the fold — `M4.76`.** The
-        // fold is a maximum that never resets, so without this one request
-        // asking for the ceiling pinned the whole group there for the life of
-        // the process. `super::deadline::MAX_MEMBER_SYNC_WAIT_MS`'s own doc
-        // has the measurement and why the bound is the session ceiling.
-        let contributed = rebalance_timeout.min(Duration::from_millis(
+    /// ⚠️ **Derived from the open round's roster, not accumulated — `M4.83`,
+    /// and until then this was monotonic over a group's whole life.** The old
+    /// `note_rebalance_timeout` folded `max` over every member that ever
+    /// enrolled and nothing removed an `Entry`, so a member that reached
+    /// `Pending` asking the ceiling and then disconnected held its group's
+    /// sync backstop there until the process ended: `withdraw` took it off the
+    /// roster and nothing un-noted it. Cross-principal, since `GroupGrants` is
+    /// deferred. ⚠️ **`M4.76` bounded the value and not its permanence** —
+    /// clamping a single member's contribution at
+    /// [`super::deadline::MAX_MEMBER_SYNC_WAIT_MS`] moved the surviving route
+    /// from fifty minutes to thirty and left the route itself intact. This is
+    /// the repair both rows recorded as residue, and real Kafka's own shape:
+    /// the fold is over the round's *current* members, so a member that leaves
+    /// stops counting.
+    ///
+    /// `caller` passes `None` when it has nothing to say — no open round, or a
+    /// withdrawal that removed nothing — and the stored value is **left
+    /// alone**, never cleared. A round that has closed still has followers
+    /// parked on the number it closed with, and
+    /// [`super::deadline::sync_wait_ms`] answers `None` with
+    /// [`super::deadline::MAX_SYNC_WAIT_MS`] — so clearing would put every one
+    /// of them back on the fifty minutes `M4.66` took them off.
+    pub(crate) fn set_rebalance_timeout(&self, group: &GroupId, from_round: Option<Duration>) {
+        let Some(fold) = from_round else {
+            return;
+        };
+        // ⚠️ **Still clamped per member — `M4.76`.** The value arriving here
+        // is a maximum over members, so clamping it is clamping each of them:
+        // `min` distributes over `max`. `super::deadline::MAX_MEMBER_SYNC_WAIT_MS`'s
+        // own doc has the measurement and why the bound is the session ceiling.
+        let contributed = fold.min(Duration::from_millis(
             super::deadline::MAX_MEMBER_SYNC_WAIT_MS,
         ));
         let mut entries = self.lock();
-        let slot = &mut entries.entry(group.clone()).or_default().rebalance_timeout;
-        *slot = Some(slot.map_or(contributed, |noted| noted.max(contributed)));
+        entries.entry(group.clone()).or_default().rebalance_timeout = Some(contributed);
         drop(entries);
     }
 
-    /// The largest value [`Self::note_rebalance_timeout`] has recorded for
+    /// The value [`Self::set_rebalance_timeout`] last recorded for
     /// `group`.
     ///
     /// ⚠️ **A read, and it takes no entry.** The first version used

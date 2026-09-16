@@ -182,7 +182,7 @@ async fn a_withdrawn_member_is_not_in_the_round_that_closes() {
         .join(&g, member("gives-up", &["range"]), Duration::from_secs(1))
         .await;
 
-    h.joins.withdraw(&g, "gives-up", &outcome);
+    h.joins.withdraw(&h.sync_groups, &g, "gives-up", &outcome);
     h.close_on_deadline(&g, &outcome).await;
 
     let close = outcome
@@ -196,6 +196,48 @@ async fn a_withdrawn_member_is_not_in_the_round_that_closes() {
         vec!["stays"],
         "a member that was told to rejoin must not be in the roster the leader \
          is handed"
+    );
+}
+
+/// **And the group's sync backstop goes with it — `M4.83`.** The value a
+/// follower's own wait is derived from is the fold over the open round's
+/// roster, so a member leaving that roster has to stop counting. Until it did,
+/// `SyncGroups` held a maximum over every member that had ever enrolled: a
+/// member asking thirty minutes, told to rejoin and gone, left every follower
+/// of that group parking thirty minutes on the dead-leader route for the life
+/// of the process.
+///
+/// ⚠️ **`close_on_deadline` is the path that makes it a whole generation.**
+/// It is the one close that publishes nothing itself, so whatever the last
+/// join or withdrawal wrote is what the round closes with — which is why the
+/// withdrawal has to write, and why review filed the absence of this case as
+/// major: replacing `withdraw`'s fold with `None` left the whole suite green.
+#[tokio::test(start_paused = true)]
+async fn a_withdrawn_members_number_stops_holding_the_groups_sync_wait() {
+    let h = Harness::new();
+    let g = group("orders");
+
+    let JoinOutcome::Pending { outcome, .. } = h
+        .join(&g, member("stays", &["range"]), Duration::from_secs(45))
+        .await
+    else {
+        panic!("first member is pending");
+    };
+    let _ = h
+        .join(&g, member("gives-up", &["range"]), Duration::from_mins(30))
+        .await;
+    assert_eq!(
+        h.sync_groups.rebalance_timeout(&g),
+        Some(Duration::from_mins(30)),
+        "both members are in the round, so the fold is the larger ask"
+    );
+
+    h.joins.withdraw(&h.sync_groups, &g, "gives-up", &outcome);
+
+    assert_eq!(
+        h.sync_groups.rebalance_timeout(&g),
+        Some(Duration::from_secs(45)),
+        "a member told to rejoin must not go on holding the group at its own ask"
     );
 }
 

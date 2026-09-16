@@ -53,14 +53,14 @@ pub(crate) const MIN_SYNC_WAIT_MS: u64 = 6_000;
 /// The most any **one** member may contribute to a group's fold.
 ///
 /// ⚠️ **`M4.76`: without this the fold is pinnable to its own ceiling by a
-/// single request, permanently.** `note_rebalance_timeout` takes the maximum
-/// over the group's life and nothing resets it, so one `JoinGroup` asking
+/// single request, permanently.** The writer took the maximum
+/// over the group's life and nothing reset it, so one `JoinGroup` asking
 /// `rebalance_timeout_ms = 3_000_000` — or `0` with a large
 /// `session_timeout_ms`, which `effective_timeout_ms` passes through unclamped
 /// — left every later follower of that group parking fifty minutes on the one
 /// route the derived wait exists for. The member need only reach `Pending`,
-/// which `plan_join` enrols before returning, and may then disconnect:
-/// `withdraw` takes it off the roster and nothing un-notes it. That is
+/// which `plan_join` enrols before returning, and could then disconnect:
+/// `withdraw` took it off the roster and nothing un-noted it. That is
 /// `waited_ms=3000000`, the stranding `M4.43`, `M4.47`, `M4.58`, `M4.65`,
 /// `M4.66` and `M4.74` were each written to end, restored by one request and
 /// not recoverable without a process restart — and cross-principal, since
@@ -74,16 +74,17 @@ pub(crate) const MIN_SYNC_WAIT_MS: u64 = 6_000;
 /// wait is then bounded by it, and [`MAX_SYNC_WAIT_MS`] stays what a group no
 /// round has opened falls back to.
 ///
-/// ⚠️ **This bounds the value, not its permanence.** The fold still never
-/// resets, so the surviving route is the same one: a member that never
-/// enrolled beyond `Pending`, possibly another principal's, holds the group at
-/// thirty minutes instead of fifty. Recomputing per round is the repair and is
-/// recorded as residue on `M4.76`'s own row. ⚠️ **It needs no lock nesting but
-/// it does need a field**: `RoundMember` carries no timeout today, so folding
-/// over the round's current members means recording each member's contribution
-/// as it joins and then reading that under the rounds lock, writing after
-/// releasing it — not a snapshot of what is there now, which holds nothing to
-/// fold.
+/// ⚠️ **This bounds the value and not its permanence, which is why `M4.83`
+/// followed.** While the fold never reset, the surviving route was the same
+/// one at thirty minutes instead of fifty: a member that never enrolled beyond
+/// `Pending`, possibly another principal's, held the group there for the life
+/// of the process. `M4.83` took the repair both rows recorded as residue —
+/// `SyncGroups`'s value is derived from the open round's roster now, so a
+/// member that leaves stops counting, and this constant is what bounds any one
+/// of them. ⚠️ **It needed a field, which is the half neither row's recipe
+/// had**: both said to snapshot `round.members` and fold over it, and
+/// `RoundMember` carried no timeout, so there was nothing to fold. It carries
+/// one since `M4.83`.
 pub(crate) const MAX_MEMBER_SYNC_WAIT_MS: u64 = 1_800_000;
 
 // ⚠️ The same literal-plus-assertion tie `MIN_SYNC_WAIT_MS` uses above, and
