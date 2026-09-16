@@ -101,6 +101,12 @@ impl Harness {
             .await;
     }
 
+    /// What `join` has recorded as this group's `rebalance_timeout` —
+    /// `M4.66`'s fold, and the thing `M4.74` had to pin per outcome.
+    pub(super) fn noted_rebalance_timeout(&self, g: &GroupId) -> Option<Duration> {
+        self.sync_groups.rebalance_timeout(g)
+    }
+
     pub(super) fn state(&self, g: &GroupId) -> Option<GroupState> {
         self.coordinator.record(g).map(|r| r.state)
     }

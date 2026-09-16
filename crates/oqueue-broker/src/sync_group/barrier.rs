@@ -104,7 +104,7 @@ pub(crate) struct SyncGroups {
 struct Entry {
     assignments: Assignments,
     notify: Arc<Notify>,
-    /// The largest `rebalance_timeout_ms` any member this group has admitted
+    /// The largest `rebalance_timeout_ms` any member this group has enrolled
     /// asked for — `M4.66`, the value a follower's own wait is derived from,
     /// and [`SyncGroups::note_rebalance_timeout`] for why the largest and
     /// why only admitted members. `None` until a member has joined through
@@ -200,8 +200,10 @@ impl SyncGroups {
     /// got wrong and review measured: it recorded every attempt, so one
     /// request refused for an unusable protocol while asking
     /// `rebalance_timeout_ms=3_000_000` left the group at the ceiling for
-    /// the rest of the process. `join_group::round`'s `Step::Done` arm is
-    /// where the outcome is known and is why the call is there.
+    /// the rest of the process. `join_group::round`'s `join` wrapper is where
+    /// the outcome is known and is why the call is there — `M4.74` moved it
+    /// out of the loop's `Step::Done` arm, which could not see the
+    /// round-closing member at all.
     ///
     /// ⚠️ **Monotonic over the group's whole life**, and that is a real
     /// limitation rather than a design: a member that legitimately asked for

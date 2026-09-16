@@ -243,3 +243,55 @@ async fn a_transient_append_failure_keeps_the_rounds_known_roster() {
          did not need"
     );
 }
+
+/// ⚠️ **An exhausted join was never enrolled, so its number is not the
+/// group's** — `M4.74`, found by review measuring the predicate `M4.66` had
+/// just widened.
+///
+/// `JoinOutcome::Busy` is reachable only after `MAX_JOIN_REPLANS` or a spent
+/// `SLOT_WAIT` budget, and every pass that can precede it leaves the member
+/// out of the round: `Step::Wait` and `Step::Open` never reach `plan_join`'s
+/// enrolment, and a `Step::Close` returning `None` means `abandon_round` took
+/// `entry.open` with the enrolment inside it.
+///
+/// ⚠️ **The harm is not the one request.** `note_rebalance_timeout` folds the
+/// maximum and never resets, so a single exhausted join asking for fifty
+/// minutes holds the whole group at `MAX_SYNC_WAIT_MS` for the life of the
+/// process: every later follower whose leader dies between
+/// `JoinBarrierComplete` and its own `SyncGroup` parks fifty minutes instead
+/// of its group's own number — `waited_ms=3000000`, the exact `M4.47`
+/// stranding `M4.66` exists to end, set by a member that never joined.
+#[tokio::test(start_paused = true)]
+async fn an_exhausted_join_does_not_set_the_groups_rebalance_timeout() {
+    let h = Harness::new();
+    let g = group("orders");
+
+    // One join parked on the actor, holding the group's in-flight slot.
+    let parked = h.join(&g, member("m1", &["range"]), Duration::from_secs(30));
+    tokio::pin!(parked);
+    assert!(
+        crate::testing::poll_once(&mut parked).is_none(),
+        "the first join must hold the slot, or the second never exhausts"
+    );
+    assert_eq!(
+        h.noted_rebalance_timeout(&g),
+        None,
+        "nothing is recorded until a join returns"
+    );
+
+    // A second join asking for the ceiling spends the whole shared slot-wait
+    // budget without the slot coming free, and is answered `Busy`.
+    let exhausted = h
+        .join(&g, member("m2", &["range"]), Duration::from_mins(50))
+        .await;
+    assert!(
+        matches!(exhausted, JoinOutcome::Busy),
+        "the fixture must actually exhaust, or this pins nothing"
+    );
+
+    assert_eq!(
+        h.noted_rebalance_timeout(&g),
+        None,
+        "a join that was never enrolled must not set the bound every follower of this group waits on"
+    );
+}

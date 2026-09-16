@@ -80,6 +80,9 @@ impl GroupJoins {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Joins `member` to `group`'s current round, and records what it asked
+    /// for so the *sync* half can be bounded by the same number.
+    ///
     /// ⚠️ **Since `M4.15d`, every transition this path fires goes through
     /// the actor**, so `Join`, `MemberJoinedDuringSync` and
     /// `JoinBarrierComplete` are durably logged in the order they are
@@ -88,7 +91,79 @@ impl GroupJoins {
     /// written down — which is why a restart rebuilt a group with no
     /// membership and why `GroupTransitionsTask::replay` had to poison
     /// essentially every real group it replayed.
+    ///
+    /// ⚠️ **The sync half is bounded by this number, and until `M4.66` it was
+    /// bounded by a constant ten times it.** A follower parking on the
+    /// assignment barrier cannot read `rebalance_timeout_ms` off its own
+    /// `SyncGroupRequest` — the wire carries no timeout field there — so the
+    /// members that join are what record it, folded to the maximum
+    /// (`SyncGroups::note_rebalance_timeout`'s own doc).
+    ///
+    /// ⚠️ **Only a member that was actually enrolled**, and review measured
+    /// why: the first version recorded every attempt, so one request refused
+    /// for an unusable protocol while asking `rebalance_timeout_ms=3_000_000`
+    /// left the group at the ceiling for the rest of the process —
+    /// `waited_ms=3000000`, the `M4.47` stranding `M4.66` exists to end, set
+    /// by a member that never joined.
+    ///
+    /// ⚠️ **Three outcomes are excluded, and the third is the one review had
+    /// to measure.** [`JoinOutcome::Refused`]'s own doc is "this member was
+    /// never enrolled" and [`JoinOutcome::Unavailable`] is a transition that
+    /// did not land — both obvious. [`JoinOutcome::Busy`] is exhaustion, and
+    /// every pass that can precede it leaves the member unenrolled:
+    /// `Step::Wait` and `Step::Open` never reach `plan_join`'s enrolment, and
+    /// a `Step::Close` that returns `None` means `apply_close` called
+    /// `abandon_round`, which takes `entry.open` — the enrolment dies with the
+    /// round. A first version of this predicate omitted it, and an exhausted
+    /// join asking for fifty minutes then held the whole group at the ceiling
+    /// for the life of the process, because the fold is monotonic. ⚠️ **The
+    /// sentence here said "everything else is in the round"**, which is the
+    /// same untrue-comment class this row was opened for.
+    ///
+    /// ⚠️ **One exit point, and `M4.74` is why it is a wrapper rather than a
+    /// line in the loop.** The recording sat in the `Step::Done` arm and
+    /// matched `Ready | Pending` — but every `Step::Done` in this module
+    /// carries `Refused` or `Pending`, and `Ready` comes back from the
+    /// `Step::Close` arm, which returned around it. So the arm matched a
+    /// variant it could never see while the round-*closing* member, which is
+    /// enrolled, was never folded in: a member asking 6 s then rejoining and
+    /// asking 300 s closed the round and left the group at 6 s. Asking the
+    /// question once, where the outcome is whatever the loop produced, is what
+    /// no further arm can be added around.
     pub(crate) async fn join(
+        &self,
+        co: Coordination<'_>,
+        group: &GroupId,
+        member: RoundMember,
+        rebalance_timeout: Duration,
+    ) -> JoinOutcome {
+        let outcome = self
+            .plan_and_join(co, group, member, rebalance_timeout)
+            .await;
+        if !matches!(
+            outcome,
+            JoinOutcome::Refused | JoinOutcome::Unavailable | JoinOutcome::Busy
+        ) {
+            // ⚠️ Outside any lock this module holds: the only order in the
+            // crate is rounds-then-barrier, and holding neither across the
+            // other is cheaper than defending a nesting
+            // (`async-concurrency.md` rule 9).
+            co.sync_groups
+                .note_rebalance_timeout(group, rebalance_timeout);
+        }
+        outcome
+    }
+
+    /// The re-planning loop itself: read the group's state, choose a step,
+    /// apply it, and start again if another task got there first —
+    /// [`MAX_JOIN_REPLANS`] times, inside one [`SLOT_WAIT`] budget.
+    ///
+    /// ⚠️ **Separated from [`Self::join`] by `M4.74`, and not for tidiness.**
+    /// The recording that wrapper does used to live in this loop's
+    /// `Step::Done` arm, where it could not see the outcome the `Step::Close`
+    /// arm returns around it. A loop with several exits cannot carry a
+    /// question that has to be asked of every exit; a wrapper can.
+    async fn plan_and_join(
         &self,
         co: Coordination<'_>,
         group: &GroupId,
@@ -130,54 +205,7 @@ impl GroupJoins {
             };
 
             match step {
-                Step::Done(outcome) => {
-                    // ⚠️ **The sync half is bounded by the same number, and
-                    // until `M4.66` it was bounded by a constant ten times
-                    // it.** A follower parking on the assignment barrier
-                    // cannot read this off its own `SyncGroupRequest` — the
-                    // wire carries no timeout field there — so the members
-                    // that join are what record it, folded to the maximum
-                    // (`SyncGroups::note_rebalance_timeout`'s own doc).
-                    //
-                    // ⚠️ **Only a member that was actually enrolled**, and
-                    // review measured why: the first version recorded every
-                    // attempt, so one request refused for an unusable
-                    // protocol while asking `rebalance_timeout_ms=3_000_000`
-                    // left the group at the ceiling for the rest of the
-                    // process — `waited_ms=3000000`, the `M4.47` stranding
-                    // this row exists to end, set by a member that never
-                    // joined. The comment there argued that an unadmitted
-                    // member "cannot shorten anyone's wait, only lengthen
-                    // it, so nothing is bought" by the check; lengthening to
-                    // the ceiling is the defect, so it was wrong in the
-                    // load-bearing direction.
-                    //
-                    // ⚠️ **`Ready` *and* `Pending`, which is the enrolment
-                    // test rather than the answered one.** `Refused`'s own
-                    // doc is "this member was never enrolled" and
-                    // `Unavailable` is a transition that did not land;
-                    // everything else is in the round, and a first join with
-                    // an empty `member_id` is `Pending` rather than `Ready`,
-                    // so gating on `Ready` alone recorded nothing for the
-                    // common case.
-                    //
-                    // ⚠️ **Here rather than in `apply_open`.** There it
-                    // would be the *opening* member's number rather than the
-                    // group's, and a member joining a round somebody else
-                    // opened would never reach it —
-                    // `deadline::a_member_joining_an_open_round_raises_the_groups_number`
-                    // is the case, and review measured that moving the call
-                    // back leaves the suite green without it. Outside the
-                    // rounds lock because the only order in the crate is
-                    // rounds-then-barrier, and holding neither across the
-                    // other is cheaper than defending a nesting
-                    // (`async-concurrency.md` rule 9).
-                    if matches!(outcome, JoinOutcome::Ready(_) | JoinOutcome::Pending { .. }) {
-                        co.sync_groups
-                            .note_rebalance_timeout(group, rebalance_timeout);
-                    }
-                    return outcome;
-                }
+                Step::Done(outcome) => return outcome,
                 Step::Wait(_) => {
                     if let Some(notified) = waiting {
                         // ⚠️ **Bounded, and a mutation test is why.** Mutating

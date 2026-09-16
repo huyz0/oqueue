@@ -233,3 +233,48 @@ async fn settle() {
         tokio::task::yield_now().await;
     }
 }
+
+/// ⚠️ **The round-*closing* member is enrolled and must be folded in**, which
+/// `M4.74` found and `M4.66` had missed: the recording sat in `join`'s
+/// `Step::Done` arm and matched `Ready | Pending`, but every `Step::Done` in
+/// that module carries `Refused` or `Pending` — `Ready` comes back from the
+/// `Step::Close` arm, which returned around it. The arm matched a variant it
+/// could never see, and the one member whose join closes a round never
+/// recorded what it asked for.
+///
+/// ⚠️ **A rejoin is the only single-member way to reach that arm.** The next
+/// round's `awaiting` is seeded from the last round's roster, so the one
+/// member coming back empties it and closes the round on the spot.
+#[tokio::test(start_paused = true)]
+async fn a_member_whose_rejoin_closes_the_round_is_folded_in() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+
+    let first =
+        super::join_asking_as(&fixture.cluster, "orders-consumers", "", "range", 6_000).await;
+    assert_eq!(
+        fixture.cluster.sync_groups().rebalance_timeout(&g),
+        Some(Duration::from_secs(6)),
+        "the opening join records its own number"
+    );
+    let member_id = first.member_id.to_string();
+    assert!(
+        !member_id.is_empty(),
+        "the broker mints an id to rejoin with"
+    );
+
+    super::join_asking_as(
+        &fixture.cluster,
+        "orders-consumers",
+        &member_id,
+        "range",
+        300_000,
+    )
+    .await;
+
+    assert_eq!(
+        fixture.cluster.sync_groups().rebalance_timeout(&g),
+        Some(Duration::from_mins(5)),
+        "a rejoin that closes the round is enrolled, and its number joins the fold"
+    );
+}

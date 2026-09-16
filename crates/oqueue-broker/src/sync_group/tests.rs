@@ -151,6 +151,23 @@ pub(super) async fn join_asking(
     protocol_name: &'static str,
     rebalance_timeout_ms: i32,
 ) {
+    join_asking_as(cluster, group, "", protocol_name, rebalance_timeout_ms).await;
+}
+
+/// [`join_asking`] for a member that already has an id — a *rejoin*, which is
+/// the only way to reach `join`'s `Step::Close` arm with a single member
+/// (`M4.74`): the next round's `awaiting` is seeded from the last round's
+/// roster, so the one member rejoining empties it.
+///
+/// Returns the decoded response, because the minted `member_id` is what the
+/// rejoin has to carry.
+pub(super) async fn join_asking_as(
+    cluster: &crate::cluster::Cluster,
+    group: &str,
+    member_id: &str,
+    protocol_name: &'static str,
+    rebalance_timeout_ms: i32,
+) -> kafka_protocol::messages::JoinGroupResponse {
     use kafka_protocol::messages::JoinGroupRequest as KpJoinRequest;
     use kafka_protocol::messages::join_group_request::JoinGroupRequestProtocol as KpProtocol;
     use kafka_protocol::protocol::{Encodable, StrBytes};
@@ -165,12 +182,12 @@ pub(super) async fn join_asking(
         )))
         .with_session_timeout_ms(30_000)
         .with_rebalance_timeout_ms(rebalance_timeout_ms)
-        .with_member_id(StrBytes::from_static_str(""))
+        .with_member_id(StrBytes::from_string(member_id.to_owned()))
         .with_protocol_type(StrBytes::from_static_str("consumer"))
         .with_protocols(vec![protocol]);
     let mut body = Vec::new();
     request.encode(&mut body, JOIN_VERSION).expect("encodes");
-    let _ = crate::join_group::handle(
+    let reply = crate::join_group::handle(
         cluster,
         RequestPrelude {
             api_key: 11,
@@ -180,6 +197,11 @@ pub(super) async fn join_asking(
         &body,
     )
     .await;
+    let HandlerResponse::Reply(out) = reply else {
+        panic!("a JoinGroup replies");
+    };
+    let mut rest = &out[4..];
+    kafka_protocol::messages::JoinGroupResponse::decode(&mut rest, JOIN_VERSION).expect("decodes")
 }
 
 fn decode_response(bytes: &[u8]) -> KpResponse {
