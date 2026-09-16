@@ -5397,6 +5397,26 @@ _fr40_pattern_case "this repo's own _authorized( idiom" \
 # every commit until someone deletes it — the other way a tripwire dies.
 _fr40_pattern_case "a handler that checks nothing" \
   'fn handle(request: &JoinGroupRequest) -> i16 { error_codes::NONE }' "does not match"
+# ⚠️ **Nor may prose about a principal, which is how this tripwire actually
+# died** — `M4.88`. `M4.83` and `M4.87` wrote "cross-principal, since
+# `GroupGrants` is deferred" into three files under `group_handler_files`, and
+# `m4-complete.sh` then named all three as having gained a check: a completion
+# gate turned red by a sentence explaining that the thing it looks for is
+# absent. Both comment shapes, because `//!` and `///` are what these files
+# actually use and a strip written for `//` alone would be tested by neither.
+_fr40_pattern_case "the word in a line comment" \
+  '// cross-principal, since GroupGrants is deferred
+fn handle(request: &JoinGroupRequest) -> i16 { error_codes::NONE }' "does not match"
+_fr40_pattern_case "the word in a doc comment" \
+  '//! Cross-principal access is refused by nothing here yet.
+/// Also names AuthzContext and authz:: and group_authorized( in prose.
+fn handle(request: &JoinGroupRequest) -> i16 { error_codes::NONE }' "does not match"
+# ⚠️ **And a check with a trailing comment must still match**, or the strip
+# has traded one direction of the tripwire for the other: dropping whole lines
+# rather than the comment on them would hide exactly the spelling `M12` is
+# most likely to write.
+_fr40_pattern_case "a check with a comment after it" \
+  'fn handle(req: &Req, principal: &str) -> i16 { 0 } // M12 GroupGrants' matches
 
 # ⚠️ **And an unreadable handler is neither answer**, which is the input
 # `M4.68` is about: `grep` exits 2, and `m4-complete.sh`'s leg read the status

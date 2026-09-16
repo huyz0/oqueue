@@ -303,7 +303,42 @@ group_handler_files() {
 # *failure*, the safe direction for a tripwire whose job is to notice that a
 # deferral became dischargeable.
 group_names_a_principal() {
-  grep -qE '(principal|Principal|AuthzContext|authz::|_authorized\()' "$1"
+  # ⚠️ **Comments are stripped first, since `M4.88`.** The pattern is looking
+  # for a principal *check*, and prose about one is not a check: `M4.83` and
+  # `M4.87` wrote "cross-principal, since `GroupGrants` is deferred" into three
+  # files under `group_handler_files`, and `m4-complete.sh`'s tripwire then
+  # named all three as having gained one — a completion gate turned red by a
+  # sentence explaining that the thing it looks for is absent.
+  # ⚠️ **`check-fencing-seam.sh`'s own repair, one gate over** — `M4.67`, whose
+  # census matched raw text including comments and swept in two sites that were
+  # correct. That is the half this inherits; `M4.67`'s *other* major was the
+  # census counting mentions rather than the shortcut, fixed by narrowing the
+  # pattern, and the two must not be confused here. ⚠️ **Narrowing this pattern
+  # is the weakening direction**: the leg is `M12.md` task 3a's promotion
+  # signal, so a pattern that stops matching a check leaves it green forever.
+  # ⚠️ **Two shapes it cannot see**, which `check-fencing-seam.sh`'s header
+  # names for its own copy of this `sed` and which this one inherits with it.
+  # A `//` inside a string literal truncates the line, so
+  # `let doc = "https://kafka.apache.org/protocol"; let p = principal(&req);`
+  # reads as clean and the tripwire stays quiet while a check is present. And a
+  # block comment `/* cross-principal ... */` is not stripped, so prose in one
+  # still turns the leg red. Neither is reachable in the fifteen files today —
+  # measured, every hit across them is in a line or doc comment and none holds
+  # a `//` inside a literal — and the answer if one arrives is to parse rather
+  # than to widen `sed`.
+  # ⚠️ `sed` before `grep`, not `grep -v`: a line whose code precedes a trailing
+  # comment must still be read, and dropping the whole line would hide
+  # `fn handle(principal: &str) { // the check`.
+  # ⚠️ **Not a pipeline, and the unreadable-handler case is why.** Under
+  # `pipefail` a pipeline reports the *rightmost* non-zero status, so `sed`'s
+  # failure on a mode-000 handler was overridden by `grep`'s "no match" and the
+  # helper answered 1 — "no principal check" — for a file it never read. That is
+  # the three-valued contract `M4.59` bought and `M4.68` hardened the gate's
+  # reading of, lost to a repair for something else; measured by
+  # `tests/gates/negative.sh`'s own unreadable-handler case, which caught it.
+  local stripped
+  stripped="$(sed 's|//.*$||' "$1")" || return 2
+  grep -qE '(principal|Principal|AuthzContext|authz::|_authorized\()' <<<"$stripped"
 }
 
 # How `m4-complete.sh`'s FR-40 leg names one of `group_handler_files`'
