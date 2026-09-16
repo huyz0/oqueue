@@ -3790,6 +3790,49 @@ invoke_mutants_prefix_entry() {
   bash "$1/scripts/check-mutants.sh" --full
 }
 
+# ⚠️ **An unstaged baseline argues nothing** — `M4.78`, and it is the property
+# `M4.69` left pinned on one copy of two inside the commit that closed it.
+# ⚠️ **Not one of that task's four questions**, which is what this comment first
+# said: `check-mutants.sh`'s own parity ledger enumerates those four — an entry
+# that argues nothing, an `unviable:` claim the run disproves, an entry with no
+# reason, and an entry whose location is not one — and every one of them already
+# had a case against each copy. The index read is a *fifth* divergence `M4.69`
+# collapsed while writing about the four, which is how it went unnoticed, and
+# that ledger now lists it.
+# This gate's own header states the index read as its reason ("an unstaged
+# argument suppresses a survivor while leaving nothing in the commit to show for
+# it"); `M4.69` wrote the mirrored case against `check-mutants-baseline.sh` and
+# stopped there, so restoring a `|| cat` worktree fallback *here* left the whole
+# suite green at 151 cases.
+#
+# ⚠️ **The direction is the opposite of that mirror, and it has to be.**
+# `check-mutants-baseline.sh` runs the converse loop only, where an unstaged
+# entry produces a *false staleness report* — so its case must pass. Here the
+# index read guards suppression, where an unstaged entry silences a live
+# survivor, so the case must fail and `run_case` expresses it. A must-pass
+# mirror would need a fixture crate that yields no survivors at all, which is
+# the one thing `_crate_scratch` cannot promise.
+setup_mutants_unstaged_baseline() {
+  local dir; dir="$(setup_mutants_stale_baseline)"
+  # ⚠️ **The index must hold no entry for the path at all**, which is why this
+  # is `git rm --cached` and not an empty staged file: `git show :` then
+  # succeeds with empty output, a `|| cat` fallback is unreachable, and the
+  # case pins nothing. Review measured exactly that on `M4.69`'s own version.
+  ( cd "$dir" && git rm -q --cached baselines/mutants.txt ) >/dev/null 2>&1 || true
+  # Every one of the fixture's five survivors argued, by the same two location
+  # prefixes `setup_mutants_stale_baseline` uses — but in the worktree only. A
+  # gate reading the worktree passes on this; a gate reading the index reports
+  # all five unargued.
+  cat > "$dir/baselines/mutants.txt" <<'BASE'
+crates/k/src/lib.rs:2:5: replace classify  unstaged, and it argues every survivor at this location
+crates/k/src/lib.rs:2:10: replace < with  unstaged, and it argues every survivor at this one
+BASE
+  printf '%s\n' "$dir"
+}
+invoke_mutants_unstaged_baseline() {
+  bash "$1/scripts/check-mutants.sh" --full
+}
+
 setup_mutants_narrowed() {
   local dir; dir="$(setup_mutants_weakened)"
   # ⚠️ The **narrowed** mode, which is the one pre-commit runs and the one both
@@ -5444,6 +5487,9 @@ if _have_mutants; then
   run_case "check-mutants.sh (an entry whose location is not a location)" \
     setup_mutants_prefix_entry invoke_mutants_prefix_entry \
     "does not start with a <file>.rs:<line>:<col>: location"
+  run_case "check-mutants.sh (an unstaged baseline argues nothing)" \
+    setup_mutants_unstaged_baseline invoke_mutants_unstaged_baseline \
+    "surviving mutant, not killed and not argued"
   # ⚠️ **Inside `_have_mutants`, and it has to be.** The stub stands in for
   # `mutants.sh`, but `check-mutants.sh` runs `cargo mutants --version`
   # itself before invoking it and skips when that fails — so on a host
@@ -5525,7 +5571,7 @@ if _have_mutants; then
   fi
 else
   skip_case check-mutants.sh "cargo-mutants not installed" \
-    "install: cargo install cargo-mutants" 10
+    "install: cargo install cargo-mutants" 11
 fi
 
 # --- the harness checks itself ----------------------------------------------

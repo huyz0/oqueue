@@ -210,6 +210,12 @@ malformed=0
 # ⚠️ Read from the **index**, not the working tree — the same rule
 # `baselines/review.txt` follows. An unstaged argument suppresses a survivor
 # while leaving nothing in the commit to show for it.
+# ⚠️ **Pinned since `M4.78`**, and it was not before: `M4.69` wrote the
+# mirrored case against `check-mutants-baseline.sh` alone, so a `|| cat`
+# fallback restored here left the whole negative suite green.
+# `tests/gates/negative.sh`'s "an unstaged baseline argues nothing" case now
+# stages no baseline at all and argues every survivor in the worktree, so the
+# fallback makes that case pass a gate that must refuse.
 {
   while IFS= read -r line; do
     [[ -z "$line" || "$line" == \#* ]] && continue
@@ -287,14 +293,20 @@ stale=0
 # script is the copy CI exercises.
 #
 # ⚠️ **`build.md` rule 22 still applies and the answer is the cases, not a
-# shared function.** The two now ask the same questions — an entry that argues
-# nothing, an `unviable:` claim the run disproves, an entry with no reason, and
-# an entry whose location is not one — and each question has a `run_case`
-# against *each* copy, so a change to one that is not made to the other fails
-# the suite rather than passing quietly. ⚠️ **That was false when first
-# written**: these two format guards had no case at all, and review measured
-# both deletable with the whole suite green, which is the same defect one file
-# over that `M4.69` was filed for. Sharing the loop would mean threading a survivor source and
+# shared function.** The two now ask the same **five** questions — an entry that
+# argues nothing, an `unviable:` claim the run disproves, an entry with no
+# reason, an entry whose location is not one, and **whether the baseline is read
+# from the index or the working tree** — and each question has a case against
+# *each* copy, so a change to one that is not made to the other fails the suite
+# rather than passing quietly. ⚠️ **That was false when first written**: these
+# two format guards had no case at all, and review measured both deletable with
+# the whole suite green, which is the same defect one file over that `M4.69` was
+# filed for. ⚠️ **And it stayed false for the fifth question until `M4.78`**,
+# because `M4.69` listed four here and collapsed the index read into the prose
+# around them: the union script's must-pass case covered it and this copy's did
+# not exist, which is verbatim the "the union already has one" reasoning this
+# ledger exists to refuse. It is the fifth item so that deleting either case is
+# a visible diff against a list, not an absence nobody is counting. Sharing the loop would mean threading a survivor source and
 # a shard count through it for no reader's benefit; sharing the *cases* is
 # what "the version that matters is whichever one was not run" actually asks
 # for. `M4.60` copied a branch across without its case, which is the failure
