@@ -1,0 +1,68 @@
+{
+  "commits": [
+    "18dada2e9ad7afd43c5b387d4f6942f561d6f371"
+  ],
+  "findings": [
+    {
+      "evidence": "Compare crates/oqueue-broker/src/join_group/round/close.rs's record of two liveness re-checks deleted because each could be deleted with the suite still green, against close_on_deadline's publish, which has exactly that property and is kept. Neither sentence names the distinction that reconciles them: the deleted branches were redundant in every execution, this one only in single-threaded ones. Separately, backlog.md's justifying clause -- 'only reachable under an interleaving a deterministic test cannot construct' -- is falsifiable: plan::plan_join is pub(super) in round and GroupJoins::lock is private to round, so round::tests can enrol under the lock, drop it without publishing, then call close_on_deadline; the assertion would be on SyncGroups::rebalance_timeout, which sync_group/tests/deadline.rs already asserts on throughout. NOT EXECUTED -- a reading of visibility, not a measurement. Graded minor against the reviewer's stated instinct: the shipped code is correct on every path traced, nothing client-observable changes by acting, and cargo-mutants emits no mutant for a deleted call statement, so no gate can fail here.",
+      "id": "3fd8de0c3f8d",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "close.rs states 'a branch nothing can pin is a branch nothing is checking, do not add them back' and adds one 130 lines later, and the row's reason for the exception is stronger than the code supports.",
+      "task_id": ""
+    },
+    {
+      "evidence": "sync_wait.rs says 'Two publishers, and the division is M4.87's'. sync_wait::publish has three call sites (round/mod.rs, and close.rs twice) and GroupJoins::withdraw writes the same SyncGroups field directly, bypassing the module that exists to own the write. Same off-by-one-inventory class as residue (3) -- 'the crate's only lock nesting' -- which this commit repaired in three places. A later change to publish (a clamp, a generation key) silently misses withdraw.",
+      "id": "2cc073564510",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "sync_wait.rs's 'Two publishers' inventory omits withdraw, the third writer of the same field and the only one that can lower it, in the file whose other inventory this same commit fixed for being short by one.",
+      "task_id": ""
+    },
+    {
+      "evidence": "Rule 9: 'document the fixed order beside the types, not in a comment nobody will find when adding the third lock.' The order GroupJoins::entries -> SyncGroups::entries -> Assignments is stated in join_group/round/mod.rs and twice in sync_wait.rs and nowhere else. The three type docs carry none of it: GroupJoins says 'Every group's own join-round state'; SyncGroups says 'Every group's own assignment barrier'; Assignments has twenty lines about visibility and nothing about ordering. Rule 9 has no gate. M4.87 is the commit that found the order was a chain rather than a pair and left the finding in the comments the rule tells you not to rely on.",
+      "id": "a6867babce22",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "The crate's lock order lives only in call-site comments, which is the failure async-concurrency.md rule 9 names verbatim, and the third lock is already present.",
+      "task_id": ""
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/join_group/round/mod.rs is 493 lines: 170 code, 306 comment, 17 blank. sync_wait.rs is 25 code to 72 comment; sync_group/barrier.rs 124 to 272. code-structure.md rule 18: 'Split by concept, never by line count.' M4.87's round 3 moved fourteen comment lines out of mod.rs into sync_wait.rs's header because the file hit 502 against check-file-size.sh's 500, leaving a four-line pointer; backlog.md records the sibling case one commit earlier ('Splitting sync_wait.rs out was forced by check-file-size.sh, not chosen'). Seven lines of headroom remain. Both relocations landed somewhere defensible, which is why this is minor; the signal rule 18 asks a reader to take from the number is false here.",
+      "id": "760adeff0a88",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "round/mod.rs's 500-line budget is now a prose budget, and two consecutive commits moved the module rather than the design to satisfy it.",
+      "task_id": ""
+    },
+    {
+      "evidence": "backlog.md: \"Not 'publish inside plan_and_join's final lock scope' ... the Step::Close arm returns out of the loop without re-entering it -- so the round-closing member ... would publish nothing.\" plan_join assigns round.members = trial before it decides Step::Close, and that assignment runs inside the scoped lock block in round/mod.rs. A publish at the end of that block therefore runs on the pass that returns Step::Close, with the round-closing member already in the roster, and would publish 300 s rather than nothing. The shipped three-site shape is not wrong; the recorded reason is, and it is what anyone simplifying later would have to overturn. Destination M4.70 (todo, handed to M5), whose own rule is that it enumerates what it sweeps -- which cannot happen inside M4 without an enumerated commit. That is M4.85's subject, already handed on.",
+      "id": "807f8eb51964",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "M4.87's row records a false reason for rejecting the one-site repair it was originally prescribed; harvested rule-15 minor, destination M4.70.",
+      "task_id": ""
+    },
+    {
+      "evidence": "M5.md reads '(from M4, roadmap.md's deferred table, M4.75, M4.77, M4.83 and M4.86)'. With M4.87 reopened into M4, no remaining row came from M4.83; M4.64, credited four lines later in the same paragraph with filing M4.70-M4.72, is absent from the list. Task 22 tells M5.0 to dissolve each row 'with a pointer to its origin', so the wrong pointer is what M5.0 copies. M4.70 sweep item (8) already owns the adjacent sentence of the same paragraph.",
+      "id": "0c2b7e67287b",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "M5.md task 22's provenance parenthetical names M4.83, which now contributes no row, and omits M4.64, which filed three; harvested rule-15 minor, destination M4.70.",
+      "task_id": ""
+    },
+    {
+      "evidence": "join_group/round/mod.rs explains an outcome-exclusion predicate M4.83 deleted ('because the fold is monotonic'), corrected two paragraphs later; and explains the post-loop publish as 'Asking the question once, where the outcome is whatever the loop produced', saying 'the round-closing member, which is enrolled, was never folded in' -- publish_sync_wait no longer takes an outcome and the closing member is folded by close.rs. The call-site comment three lines into the body says the opposite, so only a reader who stops at the header is misled. The first half is already filed as 5ba7f5828862 by the previous round; three reviews have now found this doc stale and none could act, because a minor needs no row. Destination M4.70.",
+      "id": "c1986bd80c4e",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "GroupJoins::join's doc header carries two paragraphs describing designs that no longer exist, each corrected only further down; the third review in a row to find this one comment stale.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M4",
+  "notes": "The terminating round, second attempt: the first was regraded after the per-commit review of its own artifact found it had graded a client-observable race minor. This one verified the repair rather than the prose. The race is closed on every path a round can close on: finalize_close has exactly two call sites and both publish under the guard that took the roster; close_generation is the only caller of JoinBarrierComplete and its Illegal/Unavailable arms advance no generation and correctly publish nothing. Neither new site can write a wrong value -- finalize_close's early already.clone() branch is unreachable while a slot is held, entry.open cannot be replaced across close_generation's await -- not because install_round has one caller, which the per-commit review of this artifact disproved (apply_open calls it too), but because the slot does it: open_holding_slot owns a SlotGuard across apply_open and both close paths hold the slot. \u26a0\ufe0f And NOT because neither write can lower the standing value, which the same review disproved: a group whose previous roster is {D}, with D rejoining at 6 s after a round that closed at 300 s, empties awaiting and returns Step::Close without reaching join's trailing publish, so apply_close writes fold({D(6s)}) = 6 s over a standing 300 s. M4.83's 'a parked follower is never shortened' property still holds, but it rests on sync_group.rs reading the value once at park time rather than on any monotonicity of the writes. close_on_deadline's publish is genuinely unreachable in any single-threaded sequence -- after plan_join enrols there is no await before publish_sync_wait, so the enrolled-but-unpublished window opens only when another thread takes the rounds mutex in the gap -- but finding 1 records that the row's claim about testability is stronger than the visibility rules support. The handoff undo is complete: roadmap.md and M5.md both read eight ids and record the ninth's removal, `grep -rn M4.87 docs/ scripts/ .agents/` finds no document still describing it as handed on, check-milestone-handoff.sh --milestone M4 exits 0, and the backlog's bucket counts still add up with M4.87 moved into the repairs bucket. m4-complete.sh: this tree can satisfy it -- leg 0 fails today only because this commit is unread, which this artifact clears, and the artifact commit touches only reviews/ so milestone_commits excludes it; leg 0b is green; cargo test -p oqueue-broker is 321 passed, 0 failed. All six legs were read for over-claiming and none was found: the FR-40 tripwire's read_files != expected floor, group_handler_files' refusal to answer, leg 3's count < 6 against six real Refusal variants, the roster-not-exit-code read in leg 4, and the -s test in leg 5 all assert what their comments say; and check-milestone-review.sh's rule 3 checking row existence rather than openness is deliberate and documented, so the previous round's blocking finding citing a now-done M4.87 passes for the right reason. Dispositions, said out loud: every finding is minor, so none takes a row or a baselines/review.txt line and no further enumerated commit is produced. The reopen test was applied literally to findings 1 and 3, the two the reviewer would have liked to escalate, and neither passes it. Findings 5-7 are prose and floored at minor by review.md rule 9a; all three belong in M4.70, which is todo and handed to M5, and which cannot enumerate them inside M4 without an enumerated commit -- M4.85's subject, arriving for the third time and already handed on.",
+  "recorded_at": "2026-09-16T17:04:41Z",
+  "reviewer": "claude-opus-5 (M4 terminating boundary round, second attempt at one; fresh reviewer, did not drive M4)",
+  "verdict": "pass"
+}
