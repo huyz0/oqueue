@@ -1,0 +1,62 @@
+{
+  "commits": [
+    "bab1c9085876380ee182b5e0cee59ec0a248a434",
+    "43b21a21f4201eea74a8700cebfeccc393ef9a52",
+    "39f1bc9f1b9fcbd8ddac1b591d5f54909916f678"
+  ],
+  "findings": [
+    {
+      "evidence": "A joins asking rebalance_timeout_ms=6000; the round opens, A is Pending, and join publishes fold([A]) = 6 s. B joins asking 300000; plan_and_join enrols B into round.members, returns Pending, and drops the rounds lock. close_on_deadline takes the lock in that window and runs finalize_close, whose std::mem::take(&mut round.members) empties the roster while leaving entry.open installed, and which publishes nothing itself. B's publish_sync_wait then takes the lock: ready_close is None because the outcome is Pending, sync_wait::publish folds the empty open roster to None, and set_rebalance_timeout returns early on None. The stored 6 s stays. The generation closes on a 6 s backstop, so B and every follower of that generation leave the assignment barrier at MIN_SYNC_WAIT_MS with REBALANCE_IN_PROGRESS instead of the 300 s asked for, and if the leader's SyncGroup exceeds 6 s the group rebalances again rather than completing. The pre-43b21a2 unconditional max fold could not produce this. DISPOSITION (1) reopens M4: 'something a Kafka client observes' is the test verbatim, roadmap.md says so in those words, and M4.83's own row was filed blocking on the same test one commit earlier. The row is M4.87, which already exists and is open, so this finding costs no new file and this artifact's commit stays reviews-only. \u26a0\ufe0f WHAT DISPOSITION 1 COSTS, said here because nothing else will say it and no gate can: dispositions 1 and 2 are exclusive, and M4.87 currently carries all of disposition 2's artefacts. Reopening means the commit that works it must also take M4.87 out of roadmap.md's 'Deferred into a later milestone' cell and out of M5.md task 22, and must rewrite backlog.md's opening clause, which says 'neither is a reopen' and is wrong at this finding's severity rather than at minor. No gate catches the half-done state: check-milestone-review.sh only checks the row exists and is open, check-milestone-handoff.sh is satisfied *because* the row sits in the Deferred cell, and m4-complete.sh reads no backlog rows -- so a next commit that flips M4's roadmap cell to complete with M4.87 still todo passes everything, M5.0 dissolves the row, and the race leaves M4 unrepaired. That is the outcome this regrade exists to prevent, reached by the route the regrade itself opened.",
+      "id": "3798b98c578b",
+      "kind": "contradiction",
+      "severity": "blocking",
+      "summary": "M4.83 introduced a client-observable race that closes a generation on an earlier member's smaller sync backstop, and this round first graded it minor. It is the reopen test in terms.",
+      "task_id": "M4.87"
+    },
+    {
+      "evidence": "backlog.md:195 opens 'handed to M5: neither is a reopen, because neither strands a client and neither is a gate that cannot fail' over a three-item row; roadmap.md:292 says 'M4.87 does meet it, and is handed on by a different route', and M5.md agrees with the roadmap. The clause also counts 'neither' over three items and paraphrases the reopen test as 'strands a client' where milestone-review/SKILL.md says 'observes'. Recorded as a rule-15 minor in 39f1bc9's body; M4.87's acceptance covers the three residues, not its own opening clause. \u26a0\ufe0f The disposition changed under it: the blocking finding above reopens M4 on M4.87, so this clause is not something M5.0 inherits but something the commit that works M4.87 has to correct, and at that finding's severity rather than at this one's.",
+      "id": "86c62613159a",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "M4.87's backlog row and roadmap.md's deferral row state opposite dispositions for the same row, and the backlog is the copy next-task reads.",
+      "task_id": ""
+    },
+    {
+      "evidence": "backlog.md:195, roadmap.md:292 and the bodies of 43b21a2 and 39f1bc9 all say withdraw's doc asserts the branch is unreachable. crates/oqueue-broker/src/join_group/round/mod.rs says only 'Nothing is written when this call removed nothing, or when the open round is not the one own_outcome names' -- accurate, and silent about the consequence. `grep -n unreachable` over round/mod.rs, sync_wait.rs and barrier.rs returns nothing of the kind, and `git show 43b21a2:` shows the doc identical when the claim was written. The residue is real; the rationale is not, and a repairer opening the doc to fix an assertion finds none. M4.87's acceptance clause -- 'withdraw's doc says what its None branch actually does' -- is the half that survives. A second clause of the same sentence is false in the other direction: 'Nothing is written when this call removed nothing' -- with the group's own open round present and the member simply absent from the roster, the arm runs, retain removes nothing, fold_timeouts returns Some(max), and set_rebalance_timeout writes and re-clamps it. Idempotent today, but it is a stated precondition a later author will reason from, and M4.87's acceptance clause does not reach it.",
+      "id": "fc8f1e674991",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "The stated reason M4.87 residue (1) is worth a row -- that withdraw's doc asserts the empty-roster branch is unreachable -- is not true of the code and never was.",
+      "task_id": ""
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/join_group/round/mod.rs reads 'Three outcomes are excluded, and the third is the one review had to measure ... A first version of this predicate omitted it ... because the fold is monotonic.' There is no predicate and the fold is not monotonic: join calls publish_sync_wait unconditionally on every outcome. The correction is two paragraphs below ('the guard is gone'), so a reader top-down learns a false thing first. Same class as M4.72, and in no row.",
+      "id": "5ba7f5828862",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "GroupJoins::join's doc keeps thirteen present-tense lines describing the outcome guard M4.83 deleted, corrected only two paragraphs later.",
+      "task_id": ""
+    },
+    {
+      "evidence": "scripts/lib.sh excludes a commit only when every changed path matches ^reviews/milestone-.*\\.json$. Disposition route 3 in .agents/skills/milestone-review/SKILL.md stages a line in baselines/review.txt, which is not that path, so arguing a blocking or major finding also produces an enumerated, uncovered commit and fails leg 0. M4.85's title and body name only 'a boundary round that files rows'. The true condition is that a terminating round must find nothing at blocking or major by any of the three dispositions. M4.85 is todo and handed to M5, and its acceptance -- 'what has to be true for it to be reachable' -- absorbs this without a new row.",
+      "id": "f4c7e7e836d2",
+      "kind": "spec-wrong",
+      "severity": "minor",
+      "summary": "M4.85 scopes the terminating-round problem to the rows route; the baselines/review.txt argue route has the identical property and nothing records it.",
+      "task_id": ""
+    },
+    {
+      "evidence": "M4.83's per-commit rounds 2 and 3 graded the race above minor, and this round first accepted that grade. review.md rule 9a floors *prose* findings at minor and does not license grading a code race minor; because it arrived at the boundary as a harvested rule-15 minor rather than as a round's finding, milestone-review/SKILL.md's disposition rule never bound on it. roadmap.md states the route rather than closing it. 39f1bc9's body records this and calls it a decision for a later commit. It stays minor because acting on it edits review.md and the milestone-review skill: nothing a client, an operator or another tenant observes, and no gate that cannot fail. What is no longer true is the cost argument this round first gave for not majoring the race itself -- that either alternative disposition would produce an enumerated uncovered commit. M4.87 already exists at HEAD and open_task_ids lists it, so a blocking finding citing it stages no new file. The minor grade bought nothing but an earlier close.",
+      "id": "917881aa81ae",
+      "kind": "spec-wrong",
+      "severity": "minor",
+      "summary": "The route that let a client-observable defect out of M4 -- a per-commit minor grade, which the boundary disposition rule never binds on -- is still open, and no row owns closing it.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M4",
+  "notes": "\u26a0\ufe0f **This round did not terminate M4, and its first version claimed it would.** It was recorded `pass` with five minors, the per-commit review of that very artifact found the race above understated, and this is the regraded artifact. The two things that made the first grade indefensible rather than debatable: the artifact stated the rule against itself -- 'rule 9a floors *prose* findings at minor and does not license grading a code race minor' -- and proceeded anyway; and its stated cost of the alternative was checkably false, since M4.87 already exists so a blocking finding citing it stages no new file. The terminating round, and the shape M4.85's row describes: it finds nothing at blocking or major, so its verdict can be recorded in a commit touching only reviews/, which milestone_commits excludes. Verified rather than assumed: cargo test -p oqueue-broker is 321 + 62 passed, 0 failed; check-milestone-handoff.sh --milestone M4 exits 0; check-backlog-rows.sh ok; the backlog holds 92 M4 rows and the cap buckets 21+29+22+16+4 partition them exactly, with no id in two buckets and none unclassified; M4.70's eight-artifact census (32, 13, 17, 8, 1, 1, 1, 5) totals 78 and is correct, +3 here = 81; d2db096 is M4.41 and the eight closing commits M4.85 names all exist with the subjects claimed; `grep -rni 'addendum|verdict-only' .agents/skills/` exits 1 with no output, which is what M4.85's row says at HEAD. Checked and not filed: the M4.83 repair itself -- both writers hold the rounds lock across the barrier write, min-over-max is the clamp the Entry doc claims, and there is no lock cycle from the new edge, the order being rounds -> SyncGroups::entries -> Assignments -> coordinator with the coordinator a sink; whether the derived wait can shorten a parked follower, which it cannot, because sync_group.rs reads wait_ms once before parking and every path that lowers the stored value is preceded by a refuse for that generation; and M4.86 spanning two commits, which is the same shape as M-1.37, M0.22, M1.58, M2.35, M3.17, M9.22, M10.16, M11.20 and M4.41. One note on M4.87's prescribed repair, corrected by the per-commit review of this artifact: publishing inside plan_and_join's final lock scope does NOT reinstate the shape M4.74 removed, which an earlier wording of this note claimed. plan_join writes round.members with the enrolling member included before it computes the full roster and returns Step::Close, so a publish in that scope folds a roster that already contains the round-closing member and a_member_whose_rejoin_closes_the_round_is_folded_in stays green. The earlier claim is true only of the Step::Done arm, which the row does not prescribe.",
+  "recorded_at": "2026-09-16T16:01:39Z",
+  "reviewer": "claude-opus-5 (M4 terminating boundary round, ninth artifact; fresh reviewer, did not drive M4) -- regraded after the per-commit review of this artifact's own commit",
+  "verdict": "changes-requested"
+}
