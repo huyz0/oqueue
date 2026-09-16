@@ -104,8 +104,9 @@ pub(crate) struct SyncGroups {
 struct Entry {
     assignments: Assignments,
     notify: Arc<Notify>,
-    /// The largest `rebalance_timeout_ms` any member this group has enrolled
-    /// asked for — `M4.66`, the value a follower's own wait is derived from,
+    /// The largest per-member contribution any member this group has enrolled
+    /// has made — each one's `rebalance_timeout_ms` capped at
+    /// [`super::deadline::MAX_MEMBER_SYNC_WAIT_MS`] before it folds in — `M4.66`, the value a follower's own wait is derived from,
     /// and [`SyncGroups::note_rebalance_timeout`] for why the largest and
     /// why only admitted members. `None` until a member has joined through
     /// `join_group::round`, which is every test that drives the coordinator
@@ -206,19 +207,29 @@ impl SyncGroups {
     /// round-closing member at all.
     ///
     /// ⚠️ **Monotonic over the group's whole life**, and that is a real
-    /// limitation rather than a design: a member that legitimately asked for
-    /// fifty minutes and has since left still holds the group at what it
-    /// asked for, where real Kafka recomputes the fold over the round's
-    /// current members. The bound is [`super::deadline::MAX_SYNC_WAIT_MS`]
-    /// either way, so the worst case is the flat ceiling this value
-    /// replaced — a resettable fold needs the barrier's lock taken inside
-    /// the rounds lock, which is a nesting `async-concurrency.md` rule 9
-    /// asks to be defended rather than assumed, and no member asking for the
-    /// ceiling has been observed.
+    /// limitation rather than a design: a member that asked for thirty
+    /// minutes and has since left — or never enrolled at all — still holds
+    /// the group there, where real Kafka recomputes the fold over the round's
+    /// current members. ⚠️ **`M4.76` bounded the value, not its
+    /// permanence.** Until then the worst case was the flat
+    /// [`super::deadline::MAX_SYNC_WAIT_MS`] this value replaced, reachable
+    /// by one request; the `min` above caps a single member's contribution at
+    /// [`super::deadline::MAX_MEMBER_SYNC_WAIT_MS`], so the surviving route
+    /// is the same one at thirty minutes rather than fifty. The repair is
+    /// recomputation per round, which needs no lock nesting — see that
+    /// constant's own doc, and `M4.76`'s row, which records it as residue.
     pub(crate) fn note_rebalance_timeout(&self, group: &GroupId, rebalance_timeout: Duration) {
+        // ⚠️ **Clamped per member before it enters the fold — `M4.76`.** The
+        // fold is a maximum that never resets, so without this one request
+        // asking for the ceiling pinned the whole group there for the life of
+        // the process. `super::deadline::MAX_MEMBER_SYNC_WAIT_MS`'s own doc
+        // has the measurement and why the bound is the session ceiling.
+        let contributed = rebalance_timeout.min(Duration::from_millis(
+            super::deadline::MAX_MEMBER_SYNC_WAIT_MS,
+        ));
         let mut entries = self.lock();
         let slot = &mut entries.entry(group.clone()).or_default().rebalance_timeout;
-        *slot = Some(slot.map_or(rebalance_timeout, |noted| noted.max(rebalance_timeout)));
+        *slot = Some(slot.map_or(contributed, |noted| noted.max(contributed)));
         drop(entries);
     }
 

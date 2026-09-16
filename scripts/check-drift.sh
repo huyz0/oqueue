@@ -331,6 +331,13 @@ declare -A RUST_BOUNDS=(
   # once (`M4.66`). Its value is `heartbeat::deadline::MIN_SESSION_TIMEOUT_MS`
   # below, and the two must move together or not at all.
   ["crates/oqueue-broker/src/sync_group/deadline.rs|MIN_SYNC_WAIT_MS"]="6_000"
+  # ⚠️ A ceiling on what one member contributes to a group's sync fold, so
+  # raising it is the weakening direction — it is what stops a single
+  # `JoinGroup` pinning every later follower of that group at
+  # `MAX_SYNC_WAIT_MS` for the life of the process (`M4.76`). Its value is
+  # `heartbeat::deadline::MAX_SESSION_TIMEOUT_MS` below, tied by a
+  # `const _: () = assert!(..)`, and the two must move together or not at all.
+  ["crates/oqueue-broker/src/sync_group/deadline.rs|MAX_MEMBER_SYNC_WAIT_MS"]="1_800_000"
   # How short/long a session timeout this broker honours from a Heartbeat
   # member, whatever it asks for -- real Kafka's own
   # group.min/max.session.timeout.ms defaults. Lowering the minimum lets a

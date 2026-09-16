@@ -50,6 +50,46 @@ pub(crate) fn sync_wait_ms(rebalance_timeout: Option<Duration>) -> u64 {
 /// for one decision is the second opinion nobody made.
 pub(crate) const MIN_SYNC_WAIT_MS: u64 = 6_000;
 
+/// The most any **one** member may contribute to a group's fold.
+///
+/// ⚠️ **`M4.76`: without this the fold is pinnable to its own ceiling by a
+/// single request, permanently.** `note_rebalance_timeout` takes the maximum
+/// over the group's life and nothing resets it, so one `JoinGroup` asking
+/// `rebalance_timeout_ms = 3_000_000` — or `0` with a large
+/// `session_timeout_ms`, which `effective_timeout_ms` passes through unclamped
+/// — left every later follower of that group parking fifty minutes on the one
+/// route the derived wait exists for. The member need only reach `Pending`,
+/// which `plan_join` enrols before returning, and may then disconnect:
+/// `withdraw` takes it off the roster and nothing un-notes it. That is
+/// `waited_ms=3000000`, the stranding `M4.43`, `M4.47`, `M4.58`, `M4.65`,
+/// `M4.66` and `M4.74` were each written to end, restored by one request and
+/// not recoverable without a process restart — and cross-principal, since
+/// `GroupGrants` is deferred and a principal may join another's group.
+///
+/// ⚠️ **`heartbeat::deadline::MAX_SESSION_TIMEOUT_MS`, not a number of this
+/// module's own**, for [`MIN_SYNC_WAIT_MS`]'s reason read the other way: this
+/// broker already refuses to honour a longer *session* for the member making
+/// the claim, so honouring a longer *rebalance* claim on every other member's
+/// behalf is strictly worse. A member asking for more gets this; the group's
+/// wait is then bounded by it, and [`MAX_SYNC_WAIT_MS`] stays what a group no
+/// round has opened falls back to.
+///
+/// ⚠️ **This bounds the value, not its permanence.** The fold still never
+/// resets, so the surviving route is the same one: a member that never
+/// enrolled beyond `Pending`, possibly another principal's, holds the group at
+/// thirty minutes instead of fifty. Recomputing per round is the repair and is
+/// recorded as residue on `M4.76`'s own row. ⚠️ **It needs no lock nesting but
+/// it does need a field**: `RoundMember` carries no timeout today, so folding
+/// over the round's current members means recording each member's contribution
+/// as it joins and then reading that under the rounds lock, writing after
+/// releasing it — not a snapshot of what is there now, which holds nothing to
+/// fold.
+pub(crate) const MAX_MEMBER_SYNC_WAIT_MS: u64 = 1_800_000;
+
+// ⚠️ The same literal-plus-assertion tie `MIN_SYNC_WAIT_MS` uses above, and
+// for the same reason: `check-drift.sh` pins a threshold by its literal value.
+const _: () = assert!(crate::heartbeat::deadline::MAX_SESSION_TIMEOUT_MS == 1_800_000);
+
 // ⚠️ **The tie is an assertion, not an expression, and `check-drift.sh` is
 // why.** Non-negotiable 2 pins a threshold by its literal value, so a constant
 // written as `MIN_SESSION_TIMEOUT_MS.unsigned_abs() as u64` reads as `''` to

@@ -278,3 +278,62 @@ async fn a_member_whose_rejoin_closes_the_round_is_folded_in() {
         "a rejoin that closes the round is enrolled, and its number joins the fold"
     );
 }
+
+/// ⚠️ **One member must not be able to pin the group at the ceiling** —
+/// `M4.76`, and the defect it closes is the stranding six rows were written to
+/// end, restored by a single request.
+///
+/// The fold is a maximum that never resets, so before this a `JoinGroup`
+/// asking `rebalance_timeout_ms = 3_000_000` left every later follower of that
+/// group parking `MAX_SYNC_WAIT_MS` on the one route the derived wait exists
+/// for — the leader dying between `JoinBarrierComplete` and its own
+/// `SyncGroup`. The member need only reach `Pending` and may then disconnect;
+/// nothing un-notes it, and nothing short of a restart recovers.
+///
+/// ⚠️ **Two assertions, and the second is the one that names the harm.** The
+/// fold is checked first and is what fires when the clamp is removed
+/// (`Some(3000s)`); the elapsed time of a *later* follower is checked after,
+/// and is independently constraining — review measured it failing at `3000s`
+/// with the fold assertion deleted. Both are here because the fold alone would
+/// pass against a broker that clamped on read and left the value poisoned,
+/// and the elapsed time alone would not say which member's ask caused it.
+#[tokio::test(start_paused = true)]
+async fn one_member_asking_for_the_ceiling_does_not_pin_the_group_at_it() {
+    let fixture = fixture(&[]).await;
+    let g = oqueue_core::GroupId::new("orders-consumers").expect("valid");
+
+    let greedy = spawn_join(&fixture, "range", 3_000_000);
+    settle().await;
+    let noted = fixture.cluster.sync_groups().rebalance_timeout(&g);
+    assert!(
+        noted.is_some_and(|d| d < Duration::from_millis(super::super::deadline::MAX_SYNC_WAIT_MS)),
+        "a single member's ask must not reach the ceiling: {noted:?}"
+    );
+    greedy.abort();
+
+    // A follower of that group, with nobody submitting and nobody leaving, so
+    // its own deadline is the only thing that can answer. ⚠️ Not `seat`: the
+    // greedy join has already taken the group to `PreparingRebalance`, where
+    // `Join` is illegal, so only the barrier-complete half applies here.
+    for id in ["m1", "m2"] {
+        fixture.cluster.heartbeats().register(&g, id, 30_000);
+    }
+    fixture
+        .cluster
+        .group_coordinator()
+        .transition(&g, oqueue_core::GroupEvent::JoinBarrierComplete)
+        .expect("PreparingRebalance -> CompletingRebalance is legal");
+    let started = tokio::time::Instant::now();
+    let follower = sync(
+        &fixture.cluster,
+        super::super::tests::follower_body_at("orders-consumers", "m2", 1),
+    )
+    .await;
+    let waited = tokio::time::Instant::now() - started;
+
+    assert_eq!(follower.error_code, error_codes::REBALANCE_IN_PROGRESS);
+    assert!(
+        waited < Duration::from_millis(super::super::deadline::MAX_SYNC_WAIT_MS),
+        "a later follower must not inherit the ceiling from one member's ask: {waited:?}"
+    );
+}
