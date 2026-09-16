@@ -9,7 +9,7 @@
 use super::{
     Barrier, Coordination, DeadlineClaim, GroupJoins, JoinOutcome, MAX_JOIN_REPLANS, Reprune,
     RoundOutcome, SLOT_WAIT, SlotGuard, abandon_round, close_generation, deadline_claim,
-    finalize_close, plan,
+    finalize_close, plan, sync_wait,
 };
 use oqueue_core::GroupId;
 use std::sync::{Arc, OnceLock};
@@ -66,6 +66,17 @@ impl GroupJoins {
                 None
             }
         };
+        // ⚠️ **The closer publishes, and `M4.87` is why.** `finalize_close`
+        // empties the roster with `mem::take`, so after this point the round
+        // is installed and holds nobody — and a join that enrolled a moment
+        // ago, dropped the rounds lock, and is on its way to publishing finds
+        // nothing left to fold and writes nothing. Its ask is lost and the
+        // generation closes on whatever an earlier, smaller member published.
+        // Publishing here, under the same guard that took the roster, is what
+        // makes that unreachable rather than unlikely.
+        if let Some(close) = &closed {
+            sync_wait::publish(&entries, co.sync_groups, group, Some(close));
+        }
         drop(entries);
         closed.map(JoinOutcome::Ready)
     }
@@ -215,7 +226,16 @@ impl GroupJoins {
         let mut entries = self.lock();
         match generation {
             Barrier::Closed(generation) => {
-                finalize_close(&mut entries, group, generation);
+                // ⚠️ **This path published nothing at all until `M4.87`**, and
+                // it is the one that makes the lost ask a whole generation's
+                // problem rather than one request's: the member whose deadline
+                // fires closes the round for everybody, and whatever the last
+                // join happened to write is what every follower of that
+                // generation then waits on. `apply_close`'s own call carries
+                // the reasoning.
+                if let Some(close) = finalize_close(&mut entries, group, generation) {
+                    sync_wait::publish(&entries, co.sync_groups, group, Some(&close));
+                }
             }
             Barrier::Illegal => abandon_round(&mut entries, group, true),
             Barrier::Unavailable => abandon_round(&mut entries, group, false),

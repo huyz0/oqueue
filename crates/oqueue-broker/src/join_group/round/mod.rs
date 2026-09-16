@@ -147,15 +147,10 @@ impl GroupJoins {
         member: RoundMember,
     ) -> JoinOutcome {
         let outcome = self.plan_and_join(co, group, member).await;
-        // ⚠️ **`Ready` folds over the close, not over the open round, and
-        // that is `M4.74`'s finding arriving in a new shape.** This member's
-        // join *closed* the round, so by the time control gets here
-        // `entry.open` is `None` and asking for the open round's roster
-        // answers "nothing to say" — the group would keep the previous
-        // round's number and the closing member would never be counted, which
-        // is exactly the 6 s-then-300 s case `M4.74` filed. Measured: the test
-        // for it failed at `Some(6s)` against a first version that had only
-        // the second arm.
+        // ⚠️ **The open round only, and the round-closing member is not this
+        // call's job — `M4.87`.** `sync_wait`'s own header says why, and why
+        // reinstating the `Ready` arm that used to be here is not a substitute
+        // for either of `close.rs`'s two publishes.
         //
         // ⚠️ **Under this module's own lock, held across the barrier's**, and
         // a publisher added later must do the same — review measured the
@@ -165,26 +160,26 @@ impl GroupJoins {
         // member's `withdraw` folds `[b, c]` and wins it, and the join writes
         // the larger value last — a departed member re-pinning the group,
         // which across a `close_on_deadline` is a whole generation of
-        // followers. The order is rounds-then-barrier, the only one in this
-        // crate, so the nesting is legal (`async-concurrency.md` rule 9) and
-        // `SyncGroups::submit`'s own closure-under-the-lock is its precedent.
+        // followers. The order is rounds-then-barrier, so the nesting is legal
+        // (`async-concurrency.md` rule 9) and `SyncGroups::submit`'s own
+        // closure-under-the-lock is its precedent. ⚠️ **Not "the only nesting
+        // in the crate"**, which this said until `M4.87`: `submit` and
+        // `refuse` each hold `SyncGroups`'s own `entries` while taking a
+        // group's separate `Assignments` mutex, an order `barrier.rs`
+        // documents in its own terms. Two orders, and an inventory that
+        // claimed one is how a later author reaches for the second.
         // ⚠️ **An earlier version of this paragraph said the opposite** —
         // "holding neither across the other is cheaper than defending a
         // nesting" — which is what the repair had to stop being true.
-        self.publish_sync_wait(co.sync_groups, group, sync_wait::ready_close(&outcome));
+        self.publish_sync_wait(co.sync_groups, group);
         outcome
     }
 
     /// Writes `group`'s sync backstop from whichever roster is authoritative
     /// now — [`sync_wait::publish`] has the whole of the reasoning.
-    fn publish_sync_wait(
-        &self,
-        sync_groups: &crate::sync_group::SyncGroups,
-        group: &GroupId,
-        closed: Option<&RoundClose>,
-    ) {
+    fn publish_sync_wait(&self, sync_groups: &crate::sync_group::SyncGroups, group: &GroupId) {
         let entries = self.lock();
-        sync_wait::publish(&entries, sync_groups, group, closed);
+        sync_wait::publish(&entries, sync_groups, group, None);
         drop(entries);
     }
 
@@ -414,8 +409,17 @@ impl GroupJoins {
     /// a departed member's number. Written here, under the lock the removal
     /// already holds, so no third member's fold can interleave between the two
     /// — see [`Self::publish_sync_wait`], which carries the measurement.
-    /// Nothing is written when this call removed nothing, or when the open
-    /// round is not the one `own_outcome` names.
+    /// ⚠️ **What the two branches actually do — `M4.87`, and the sentence
+    /// here was wrong in both directions.** When the open round *is* the one
+    /// `own_outcome` names, the fold is republished whether or not this member
+    /// was in the roster: removing nobody still writes, re-clamping the same
+    /// value, which is idempotent rather than skipped. When it is not that
+    /// round, or the group has none, nothing is written at all. ⚠️ **And an
+    /// emptied roster folds to `None`, which writes nothing** — so the last
+    /// member to leave a round leaves its own ask standing. That is bounded
+    /// rather than harmless: the group is in `PreparingRebalance`, where
+    /// `sync_group::handle` fences a follower before it reads the wait, and
+    /// the next round's first enrolment republishes over it.
     pub(crate) fn withdraw(
         &self,
         sync_groups: &crate::sync_group::SyncGroups,
