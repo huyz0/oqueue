@@ -11,9 +11,11 @@ mod layout;
 mod merge;
 mod plan;
 mod read_amp;
+mod sweep;
 
 pub use cost::{COMPACTION_PLAN_RECORDS_BUDGET, CostEstimate};
 pub use layout::{PlannedInputs, merge_round};
 pub use merge::{MergeOutcome, merge};
 pub use plan::{COMPACTION_READ_AMP_THRESHOLD, CompactionPlan, Planning, plan};
 pub use read_amp::{COMPACTED_OBJECT_RECORDS, ReadAmp, read_amp};
+pub use sweep::{COMPACTION_SWEEP_INTERVAL, Candidate, Sweep, sweep};
