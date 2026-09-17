@@ -32,12 +32,12 @@ re-derived rather than copied when a milestone opens. Read the plan's
 
 ## M5: Compaction and retention
 
-⚠️ **56 rows against `sdd.md`'s 20-task cap, argued here because the standard
+⚠️ **58 rows against `sdd.md`'s 20-task cap, argued here because the standard
 asks for the argument in this section's own notes.** The test the cap exists
 for is whether these rows are one milestone, and the honest answer is that
-**40 of them are M5's own work, 15 are debt this milestone received rather than
+**42 of them are M5's own work, 15 are debt this milestone received rather than
 generated, and 1 is the opening bookkeeping**. ⚠️ **It was 38 when `M5.0`
-wrote it and `M5.38`-`M5.55` are the rows that moved it.** ⚠️ **Each of those
+wrote it and `M5.38`-`M5.57` are the rows that moved it.** ⚠️ **Each of those
 says on its own row who opened it, and this paragraph deliberately does not
 list them** — it did, three times, and went stale three times: `M5.43` items
 (6) and (12) each corrected a count and a filer list here and each left the
@@ -58,7 +58,7 @@ Every id, classified, because a
 cap argument that accounts for only some of the rows is what `sdd.md` says the
 cap exists to catch:
 
-- **`M5.1`-`M5.5`, `M5.8`, `M5.12`-`M5.27`, `M5.38`-`M5.55` — forty
+- **`M5.1`-`M5.5`, `M5.8`, `M5.12`-`M5.27`, `M5.38`-`M5.57` — forty-two
   ids**: M5's own deliverable and its consequences, `M5.38` being a false
   invariant `M5.1` wrote and its own review caught, `M5.39` the gate
   `M5.38` left describing itself wrongly, `M5.40` the candidate sweep
@@ -68,8 +68,9 @@ cap exists to catch:
   round and of the sweep, and `M5.44` the compaction cursor `M5.40` could not derive, and `M5.45` the
   MinIO leg `M5.6`'s writers need and the container cannot run, and
   `M5.46`-`M5.50` the checkpoint round and its four findings, and
-  `M5.51`-`M5.53` the review loop's own measured cost, and `M5.54`-`M5.55`
-  two minors `M5.46`'s rounds recorded. Compaction (`M5.1`-`M5.5`, `M5.8`,
+  `M5.51`-`M5.53` the review loop's own measured cost, `M5.54`-`M5.55` two
+  minors `M5.46`'s rounds recorded, and `M5.56`-`M5.57` a weak fixture and a
+  gate `M5.47` broke for every tree but this one. Compaction (`M5.1`-`M5.5`, `M5.8`,
   `M5.12`-`M5.15`), retention (`M5.16`-`M5.19`), deletion safety
   (`M5.20`-`M5.23`), the log start offset a consumer can reset to once
   something deletes (`M5.24`), the 404-on-read metric (`M5.25`), the recorded
@@ -165,6 +166,8 @@ not arguing against.
 | M5.53 | Three rounds, and a round for a `minor` is forbidden rather than discouraged | Serves no FR/NFR — `review.md` rule 15a caps rounds at two and `M5.50` spent five, `M5.4` four, `M5.51` three. ⚠️ **This raises a cap and therefore owes non-negotiable 2 an argument, which is the same one `opensearch-bin-ingester`'s `M0.114` made and is checkable here**: the gate has never blocked on a `minor`, no round past the second in any case the tree records was opened by a blocking finding, and the raise is paired with rule 15 becoming a prohibition — so what is bought is the shape the overruns actually took (round one finds, round two fixes and finds in the fix, round three verifies) and what is given up is the escape that made the cap advisory. ⚠️ **A blocking finding in round three does not buy a round four; it says the commit is too big**, which is `M5.50` exactly. ⚠️ **And the escape becomes a diff**: `reviews/overrides.md`, one signed line per breach, replacing an escape nobody but the agent taking it could see — that repository's archive holds 25 such silent escapes and none of them ever caused a split. Acceptance: rule 15a reads three with the argument above; rule 15 says opening a round for a `minor` is forbidden and names the two places a minor may land instead; `reviews/overrides.md` exists with its format and the standing-authority rules for signing a line; and `M5.51`'s packet prints the new cap, because a cap nothing states at the deciding moment is the one this row is replacing. ⚠️ **Amended by `M5.53` itself: it also discharges `roadmap.md`'s fourth undeferred obligation**, `M4.64`'s `f70cd81b6d4e` — "either the cap is wrong for repair-and-sweep commits and should say so, or M4 broke it eight times with nothing able to notice". The answer is the first horn, and the second half is discharged only partly and says so: the count is a packet's input rather than a gate's, because a verdict arriving past the cap is still a verdict about the staged bytes and refusing it would delete review rather than bound it. `ADR-0016` carries the amendment as a dated status line, never a body rewrite, which is that ADR's own repair 5. | done |
 | M5.54 | An unreachable `else { continue }` in the walk, and the shape that removes it | Serves no FR/NFR — a `minor` from `M5.46`'s third round, written as a row here because `review.md` rule 15 puts it in the next commit rather than in the one that was reviewed. `Walk::finish` reads `self.extents.get(key)` inside a loop over `self.order`, and the two are written in one arm of `visit` with nothing removing from either — so the `else { continue }` is a branch no index can take, which `M5.43` closed on being worse than no branch. Acceptance: the branch is gone, by consuming `extents.remove(key)` over `order` or by whatever shape makes the absence structural rather than asserted; every `read_amp` and `end_to_end` test still green; and no `#[expect]` or comment stands in for the deletion. | todo |
 | M5.55 | The review packet reports a gate FAILED from an environment that cannot run it | Serves no FR/NFR — a `minor` from `M5.46`'s third round. `scripts/review.sh context` runs its own gate list, and `AGENTS.md` says reviewing stays on the host because `review.sh` "needs no toolchain" — but `check-coverage.sh` does, so the packet printed `check-coverage.sh: **FAILED**` for a gate that passes inside the container, and the loop stopped there, leaving the remaining gates unlisted. ⚠️ **A reviewer reading that has been told the tree is red when it is green**, and the converse shape — a gate list asserting a pass it never computed — is what `M0.17` closed. Acceptance: a gate the packet cannot run here is reported as *not run* with the reason and does not stop the list, or the list runs where the gates run; `tests/harness/review-packet.sh` gains the case; and the packet never prints a gate's verdict it did not obtain. | todo |
+| M5.56 | The list exemption's fixture does not discriminate the regression it was written for | Serves no FR/NFR — a `major` recorded on `M5.42`'s passing third round, written as a row here because `review.md` rule 14 lets a reviewer pass a change while recording one. `tests/gates/negative.sh`'s list-exemption case plants `impl<T> From<T> for Error {}` **and** `pub const MAX_LEN: usize = 256;` in one fixture, and `list_exemption_holds` only asserts the item count is not 1 — so a mutation restoring round two's regression (dropping `const` from the keyword alternation and `extern`'s ABI branch) still leaves two items counted and the case still passes. ⚠️ **A test that survives the bug it was written for is the class `testing.md` rule 15 names**, one level up from the code. Acceptance: each form is the only second item in its own fixture, so the count goes 2 → 1 under the mutation and the case reds; and `extern crate foo;` and `extern "C" { … }` blocks either count as items or the script says in its own comment that they do not and why. | todo |
+| M5.57 | `M5.47`'s directory check failed every tree that is not this repository | Serves FR-34 — ⚠️ **a defect `M5.47` introduced and `M5.42`'s commit body mis-attributed as pre-existing.** The planning leg failed outright when `crates/oqueue-compact/src` was absent, reasoning that a rule whose directory moved is a rule nobody is keeping. That is right for this repository and wrong for every scratch tree the gate runs in: `tests/gates/negative.sh` builds one-crate repositories per case, so three cases went red — and two of them are *converse* cases, which exist to prove the gate **allows** a virtual `tokio::time` clock. ⚠️ **A gate that fails everything reads as a gate that catches everything**, which is why the failure surfaced as "the clock leg has a false positive" rather than as its own defect. Acceptance: the leg asks whether the workspace claims the crate rather than whether the directory exists, and only the mismatch fails; `negative.sh` is green; and a case covers the skip so that restoring the unconditional failure reds. ⚠️ **Amended by `M5.57` itself: the case is the whole converse suite**, which is what caught it — `negative.sh` was already red in three places and `M5.42`'s commit body read that as a pre-existing clock defect. A dedicated case for the skip would have been a fourth copy of what those three already say, so what this adds instead is the summary line becoming conditional: a run that scans no planning file prints nothing rather than `ok`, so a tree without the crate cannot report a rule it did not apply. | done |
 
 ## M4: Consumer groups
 

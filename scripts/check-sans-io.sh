@@ -403,9 +403,22 @@ scan_trigger() {
   # a gate reports success while checking nothing -- the failure class this
   # whole script's header names -- so zero planning files is a failure, not a
   # clean run.
+  # ⚠️ **Absent crate, absent rule — but only when the workspace agrees it is
+  # absent** (`M5.57` correcting `M5.47`). The first version failed outright on
+  # a missing directory, reasoning that a rule whose directory moved is a rule
+  # nobody is keeping. That is right for *this* repository and wrong for every
+  # other tree this script runs in: `tests/gates/negative.sh` builds scratch
+  # repositories holding one crate and this gate, and all of them started
+  # failing — including the converse cases that exist to prove the gate
+  # *allows* something, which is how a false positive hides. So the question is
+  # not "does the directory exist" but "does the workspace claim this crate",
+  # and only the mismatch between those two fails.
+  if ! grep -q 'oqueue-compact' Cargo.toml 2>/dev/null; then
+    return 0
+  fi
   if [[ ! -d "$PLANNING_DIR" ]]; then
-    fail "$PLANNING_DIR does not exist, so compaction's no-store rule holds nothing"
-    note "a rule whose directory moved is a rule nobody is keeping"
+    fail "$PLANNING_DIR does not exist, but the workspace names that crate"
+    note "a rule whose directory moved is a rule nobody is keeping -- point it at the new path"
     trigger_violations=$((trigger_violations + 1))
     return 0
   fi
@@ -461,7 +474,9 @@ scan_trigger
 
 if (( violations == 0 && real_clock_violations == 0 && trigger_violations == 0 )); then
   ok "no library crate touches a socket, the real clock, or object storage ($scanned file(s) scanned)"
-  ok "compaction's planning half names no store ($planning_scanned file(s), ${#EXECUTOR_FILES[@]} executor file(s) excepted)"
+  if (( planning_scanned > 0 )); then
+    ok "compaction's planning half names no store ($planning_scanned file(s), ${#EXECUTOR_FILES[@]} executor file(s) excepted)"
+  fi
 else
   if (( violations > 0 )); then
     note "business logic is sans-I/O -- non-negotiable 5"
