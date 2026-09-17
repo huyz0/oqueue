@@ -6,12 +6,11 @@
 //! count on the one path whose cost model is request-bound, and the footer is
 //! at the tail of what was just read.
 //!
-//! ⚠️ **Sequential, so one input's bytes are resident at a time**, which is
-//! the bound this executor offers on the *input* side. ⚠️ **The output side is
-//! not bounded yet**: the merged payload accumulates in a
-//! [`BundleBuilder`](oqueue_core::BundleBuilder) and is PUT whole, so peak
-//! memory is one input plus the whole output. `M5.6`'s multipart writer makes
-//! that side streaming; `M5.3`'s records budget is what bounds it until then.
+//! ⚠️ **Sequential on both sides, so peak memory is one input plus one part.**
+//! One input's bytes are resident at a time, and the output goes out through a
+//! [`BundleStream`](oqueue_core::BundleStream), which holds at most one
+//! `BUNDLE_PART_BYTES` part plus the region metadata for the footer (`M5.6`).
+//! `M5.3`'s records budget bounds the *work* rather than the memory.
 //!
 //! ⚠️ **No random seeks**, which falls out of reading each input once in order
 //! rather than being arranged for.
@@ -19,10 +18,12 @@
 //! ⚠️ **This is the one operation that can silently lose acknowledged data**
 //! (NFR-20), so everything here that could be a caller's responsibility is
 //! this function's instead: the inputs are sorted by base offset rather than
-//! trusted to arrive in order, an input straddling the plan's range is
-//! refused rather than copied whole, an object whose regions do not account
-//! for what the index said it holds is refused, and the output is written
-//! `IfAbsent` so a retry cannot overwrite bytes an index entry already names.
+//! trusted to arrive in order, an input that does not tile the plan's range
+//! exactly is refused rather than copied, an object whose regions do not
+//! account for what the index said it holds is refused, and ⚠️ **a unique
+//! output key per attempt is what keeps a retry off an object the index
+//! already names** — the seal itself is unconditional (`ADR-0037`), which the
+//! `# Errors` section below says in the same words.
 
 // ⚠️ `redundant_pub_crate` and `unreachable_pub` disagree about a `pub(crate)`
 // item in a private module, and `gather` is exactly that: `layout.rs` needs it
