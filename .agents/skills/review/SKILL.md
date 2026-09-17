@@ -132,8 +132,14 @@ just added. `review.md` rule 15.
 *next* commit.** Otherwise it is caught anyway: the milestone-boundary review
 harvests commit-body minors into sweep rows — decided by ADR-0016, which
 closed `bcf5d6f697f2` (see `review.md` rule 15 and the `milestone-review`
-skill). Two rounds is also the cap per rule 15a: round one finds, round two
-verifies, and only a blocking finding extends it.
+skill). Three rounds is also the cap per rule 15a: round one finds, round two
+fixes and finds in the fix, round three verifies, and only a **blocking**
+finding extends it. ⚠️ **A `minor` never buys a round at all** — rule 15 makes
+that forbidden rather than discouraged (`M5.53`), and fixing one quietly is the
+same act, because the fix moves the hash and a moved hash is a round. Any other
+round past the cap is a signed line in
+[`reviews/overrides.md`](../../../reviews/overrides.md), and no standing
+authority to sign one is in force.
 
 ⚠️ A growing argued-list is itself a signal: somebody is being systematically
 overruled, and one side is systematically wrong.

@@ -114,7 +114,7 @@ fi
 # --- round one: no prior verdict, so the whole diff and no delta -----------
 dir="$(scratch)"
 out="$(packet "$dir" "first version")"
-check "round one names itself" "$out" "This is round 1 of 2"
+check "round one names itself" "$out" "This is round 1 of 3"
 check "round one shows the staged diff" "$out" "## The staged diff"
 refute "round one claims no delta" "$out" "## What changed since the last round"
 refute "round one lists no open findings" "$out" "## What earlier rounds left open"
@@ -125,7 +125,7 @@ dir="$(scratch)"
 packet "$dir" "first version" > /dev/null
 record_round "$dir" blocking
 out="$(packet "$dir" "second version")"
-check "round two names itself" "$out" "This is round 2 of 2"
+check "round two names itself" "$out" "This is round 2 of 3"
 check "round two shows the delta" "$out" "## What changed since the last round"
 check "round two carries the open finding" "$out" "a fixture finding"
 check "round two carries its scenario" "$out" "a fixture scenario"
@@ -139,7 +139,7 @@ packet "$dir" "first version" > /dev/null
 record_round "$dir" blocking
 rm -f "$dir"/target/review/*.tree
 out="$(packet "$dir" "second version")"
-check "a missing tree still names the round" "$out" "This is round 2 of 2"
+check "a missing tree still names the round" "$out" "This is round 2 of 3"
 check "a missing tree falls back to the whole diff" "$out" "## The staged diff"
 check "and says why" "$out" "recorded no tree"
 check "the whole diff is genuinely whole" "$out" "+second version"
@@ -247,6 +247,27 @@ if [ -z "$word" ]; then
 else
   check "review.md rule 15a states the cap review.sh uses" \
     "$standard" "**$word rounds is the cap**"
+fi
+
+# --- the override file says what the packet says about signing -------------
+# ⚠️ Both directions, the discipline `AGENTS.md` uses for its own "every script
+# exists" paragraph: a grant recorded while the file still says none is in
+# force is a contradiction, and so is a signed line with no grant above it.
+overrides="$(cat "$ROOT/reviews/overrides.md")"
+check "the override file states the cap it guards" "$overrides" "rule 15a"
+if printf '%s' "$overrides" | grep -q "No standing authority is in force"; then
+  # ⚠️ `[^<]`, because the file's own format block shows `approved-by: <name>`
+  # as a template. A template is not a signature, and a check that could not
+  # tell them apart would red on the day the file was written.
+  if printf '%s' "$overrides" | grep -qE 'approved-by: [^<]'; then
+    red "FAIL a signature is recorded while the file says no authority is in force"
+    FAIL=$((FAIL + 1))
+  else
+    green "ok   no signature stands against the no-authority sentence"
+    PASS=$((PASS + 1))
+  fi
+else
+  check "a grant is recorded, with its scope and expiry" "$overrides" "expires"
 fi
 
 printf '\n%s passed, %s failed\n' "$PASS" "$FAIL"

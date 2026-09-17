@@ -134,20 +134,71 @@ milestone loop is called out.
     finding.** A reviewer who judges a major finding non-blocking says so by
     returning `pass` — which still records the finding and warns, but does
     not require it to be fixed or argued before the commit lands.
-15. ⚠️ **A `minor` finding on a `pass` verdict is recorded, not re-reviewed.**
-    Record it in the **commit body**, which is not hashed and is therefore
-    free. ⚠️ Nothing else, and deliberately: staging a backlog row would change
-    the hash and force the re-review this rule exists to prevent. If the minor
-    is work worth scheduling, that is a decision and a later commit. Fixing it is
-    permitted and usually wrong: the hash changes, review re-runs, and the new
-    round's surface is the prose the fix just added.
+15. ⚠️ **A `minor` finding on a `pass` verdict is recorded, not re-reviewed,
+    and opening a round for one is forbidden rather than discouraged**
+    (`M5.53`). Record it in the **commit body**, which is not hashed and is
+    therefore free. ⚠️ Nothing else, and deliberately: staging a backlog row
+    would change the hash and force the re-review this rule exists to prevent.
+    If the minor is work worth scheduling, that is a decision and a later
+    commit. Fixing it is permitted and usually wrong: the hash changes, review
+    re-runs, and the new round's surface is the prose the fix just added.
 
-15a. ⚠️ **Two rounds is the cap** (ADR-0016). Round one finds; round two
-    verifies the fixes and may fail them. A non-blocking finding first raised
-    in round three or later is recorded per rule 15, not fixed inline. A
-    **blocking** finding lifts the cap — correctness has no round limit — and
-    a reviewer who keeps finding new blocking defects past round two is
-    describing a change that should be withdrawn and re-cut, not re-polished.
+    ⚠️ **"Discouraged" is what this said, and it was measured not holding.**
+    `M5.50` took five rounds on a commit that changed one Markdown file, and
+    every round after the first was opened for a finding that never blocked;
+    `M5.4` took four the same way. A rule that yields whenever a reviewer feels
+    strongly is a preference, and the two counter-pressures that make this one
+    a rule are that `review.sh context` prints it in every packet (`M5.51`) and
+    that there is no fix-it-quietly escape: fixing a minor moves the hash, which
+    is a round, which this forbids.
+
+15a. ⚠️ **Three rounds is the cap** (`M5.53`, raised from two by ADR-0016).
+    Round one finds; round two fixes and finds in the fix; round three
+    verifies. A non-blocking finding first raised in round three or later is
+    recorded per rule 15, not fixed inline. A **blocking** finding lifts the
+    cap — correctness has no round limit — and a reviewer who keeps finding new
+    blocking defects past round three is describing a change that should be
+    withdrawn and re-cut, not re-polished.
+
+    ⚠️ **This raises a cap, so it owes non-negotiable 2 an argument, and the
+    argument is checkable.** What rule 2 forbids is moving a threshold in the
+    direction that weakens its gate. This cap's gate is `check-reviewed.sh`,
+    which blocks on `blocking` and `major` and has never once blocked on a
+    `minor` — so the rounds the cap was meant to prevent are not the rounds it
+    was costing. Measured on this milestone, and ⚠️ **cited only where a
+    commit body or a verdict records it**, because an overrun remembered by
+    whoever ran it is exactly the thing this rule could not see:
+
+    - `M5.4` took **four** rounds, enumerated in its own body. Round one's
+      verdict did carry a blocking finding, which lifts the cap and always
+      has; rounds **three and four** were opened by `major` findings alone.
+    - `M5.51` took **three**, its body says so, and round two found a real
+      defect — `sed`'s `\t` is a GNU extension, so the packet's own findings
+      list rendered empty on macOS. Round three verified the fix, which is
+      what a third round is for.
+    - `M5.50` took **five**, and ⚠️ **nothing in the tree records that.** Its
+      body enumerates no rounds, and the one verdict that survives is a `pass`
+      with no findings at all. That is the second
+      half of the argument rather than a gap in it: a cap nothing counts is a
+      cap nothing enforces, which is why `M5.51` made the count an input to
+      every packet.
+
+    Three is the shape the recorded overruns took: round one finds, round two
+    fixes and finds in the fix, round three verifies. What is given up in
+    exchange is the silent escape: rule 15 above becomes a prohibition, and a
+    fourth round is a signed line in
+    [`reviews/overrides.md`](../../../reviews/overrides.md) rather than a
+    decision nobody sees.
+
+    ⚠️ **A blocking finding in round three does not mean a comfortable round
+    four.** It means two rounds of fixes did not converge, which is evidence
+    about the size of the change rather than about the defect. ⚠️ **No claim
+    is made here about what `M5.50`'s rounds found**, because nothing records
+    it — the bullet above says so, and repeating a remembered causal story
+    beside that admission is the defect this rule's own severity floor exists
+    to catch. Splitting is the answer the cap exists to
+    push toward, and the override file is where a decision not to split is
+    recorded with a name on it.
 
     ⚠️ **This rule and rule 16 were in tension, and M0's boundary review said
     so rather than resolving it** (finding `bcf5d6f697f2`): a commit body is a

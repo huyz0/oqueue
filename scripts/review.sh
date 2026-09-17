@@ -55,7 +55,7 @@ BACKLOG="docs/internal/product/backlog.md"
 # prose. `tests/harness/review-packet.sh` compares the two, so changing one
 # without the other reds CI instead of shipping a packet that contradicts the
 # standard it cites.
-REVIEW_ROUND_CAP=2
+REVIEW_ROUND_CAP=3
 
 # Shows the reviewer the change, as a delta from the previously reviewed tree
 # when there is one and as the whole staged diff when there is not.
@@ -399,7 +399,8 @@ context)
   # here and removed in the same task: it was unreachable at every cap this
   # repository has had, which makes it `M5.53`'s prose landed early rather than
   # code, and `M5.53` is where the cap and the sentence move together.
-  printf 'Round one finds; round two verifies the fixes and may fail them.\n'
+  printf 'Round one finds; round two fixes and finds in the fix; round three\n'
+  printf 'verifies.\n'
   # ⚠️ **This clause states `review.md` rule 15a and must move with it.** The
   # cap above is a number the standard and this script share; what a blocking
   # finding does to it is prose that lives only there, and an earlier draft of
@@ -411,13 +412,18 @@ context)
   printf 'limit. A `minor` never lifts it, and a reviewer still finding new\n'
   printf 'blocking defects past round %s is describing a change that should be\n' \
     "$REVIEW_ROUND_CAP"
-  printf 'withdrawn and re-cut rather than re-polished.\n\n'
+  printf 'withdrawn and re-cut rather than re-polished. A round past the cap\n'
+  printf 'for anything that is not blocking needs a signed line in\n'
+  printf '`reviews/overrides.md`, and no standing authority to sign one is in\n'
+  printf 'force.\n\n'
   printf '⚠️ Only `blocking` and `major` stop a commit. A `pass` carrying\n'
   printf '`minor` findings lands: they are recorded in the commit body or become\n'
-  printf 'a backlog row — `review.md` rule 15, which says a `minor` on a\n'
-  printf '`pass` is recorded rather than re-reviewed. Measured here: `M5.50`\n'
-  printf 'took five rounds on a change to one Markdown file, and every round\n'
-  printf 'after the first was opened for a finding that never blocked.\n\n'
+  printf 'a backlog row. ⚠️ **Opening a round for a `minor` is forbidden**\n'
+  printf '(`review.md` rule 15), not discouraged, and fixing one quietly is\n'
+  printf 'the same thing: the fix moves the hash, and a moved hash is a round.\n'
+  printf 'Measured here: `M5.50` took five rounds on a change to one Markdown\n'
+  printf 'file, and every round after the first was opened for a finding that\n'
+  printf 'never blocked.\n\n'
   printf 'So report severity honestly and do not hunt for a minor to justify the\n'
   printf 'round. An empty findings list is a valid and expected outcome.\n\n'
 

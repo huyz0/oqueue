@@ -232,6 +232,20 @@ binds a hash, not a round count. ⚠️ **It belongs beside the successor to
 `ADR-0016` above** — same ADR, sibling rules — and it is here rather than in
 the table for the same reason the other three are.
 
+⚠️ **Discharged by `M5.53`, and the answer was the first horn.** The cap was
+wrong: it is three rounds now, argued from M5's own overruns the way
+`ADR-0016` argued the original from M1's, and `ADR-0016` carries the amendment
+as a dated status line. The other half — "with nothing able to notice" — is
+discharged separately and only partly: `scripts/lib/review_rounds.py` counts
+the rounds and `review.sh context` prints the count into every packet
+(`M5.51`), so a round past the cap is visible to the reviewer at the moment it
+is opened, and a round past it for anything non-blocking is a signed line in
+`reviews/overrides.md`. ⚠️ **No gate refuses a commit for its round count**,
+and that is stated rather than implied: the counter is a packet's input, not
+`check-reviewed.sh`'s, because a verdict arriving after the cap is still a
+verdict about the staged bytes and refusing it would delete review rather than
+bound it.
+
 ⚠️ **A fifth joins them, from M4's fourth boundary round** (`M4.75`, argued as
 `3ab2f215707b`). **The disposition rule's reopen test**: `M4.73` wrote that a
 finding reopens a milestone only if acting on it changes what a client, operator

@@ -1,6 +1,17 @@
 # 0016. The loop spends prose faster than code: five repairs
 
-Status: accepted
+Status: accepted; 2026-09-17 (`M5.53`): repair 3's cap is **three rounds, not
+two**, and its severity floor for prose gains teeth — opening a round for a
+`minor` is now forbidden rather than discouraged. The reasoning is unchanged and
+so is the direction: what raised the number is that the cap was measured not
+binding. `M5.4` spent four rounds and `M5.51` three, both recorded in their own
+bodies, and none of the rounds past the second was opened by a blocking
+finding; `M5.50` spent five and nothing in the tree records it, which is the
+other half of the same argument. The gate behind the cap
+(`check-reviewed.sh`) has never blocked on a `minor`, so the rounds this cap was
+meant to prevent were not the rounds it was costing. A fourth round is now a
+signed line in `reviews/overrides.md` rather than a decision nobody sees.
+→ `review.md` rules 15 and 15a.
 Date: 2026-08-23
 Requirements: none — this governs the development loop, not the product
 
