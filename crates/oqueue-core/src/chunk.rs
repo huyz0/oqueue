@@ -182,6 +182,18 @@ impl<S: ObjectStore> ObjectStore for ChunkedObjectStore<S> {
         self.inner.put(key, payload, precondition)
     }
 
+    /// ⚠️ **Delegated whole, and chunking does not apply.** This wrapper
+    /// exists to hold a `put` to the store's chunk size; a streaming writer's
+    /// caller decides what a part is, and imposing a second chunking on top
+    /// would split parts the caller sized against
+    /// [`MultipartLimits`](crate::MultipartLimits) into ones it did not.
+    fn open_multipart<'a>(
+        &'a self,
+        key: &'a ObjectKey,
+    ) -> BoxFuture<'a, Result<Box<dyn crate::MultipartWriter<'a> + 'a>>> {
+        Box::pin(async move { self.inner.open_multipart(key).await })
+    }
+
     fn delete<'a>(&'a self, keys: &'a [ObjectKey]) -> BoxFuture<'a, Result<()>> {
         self.inner.delete(keys)
     }

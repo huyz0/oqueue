@@ -30,6 +30,7 @@ mod get;
 mod multipart;
 mod retry;
 mod s3;
+mod s3_stream;
 mod tls;
 
 pub use gcs::GcsStore;

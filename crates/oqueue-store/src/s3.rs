@@ -17,7 +17,7 @@
 //! GCS live verification lands (`M15`) — so change the twin in the same
 //! commit, by hand.
 
-mod put;
+pub(crate) mod put;
 
 use crate::classify::classify;
 use crate::get::{
@@ -25,6 +25,7 @@ use crate::get::{
 };
 use crate::multipart::{PutStrategy, put_strategy_for};
 use crate::retry::retry_config_for;
+use crate::s3_stream::StreamingWriter;
 use put::{S3_MULTIPART_LIMITS, put_options_for};
 // ⚠️ Both traits, unaliased-but-unnamed: `object_store::ObjectStore` (the
 // base trait, for `get_opts`/`put_opts`/`put_multipart_opts`) and
@@ -325,6 +326,23 @@ impl ObjectStore for S3Store {
                     self.put_multipart(key, &path, &payload, chunks).await
                 }
             }
+        })
+    }
+
+    fn open_multipart<'a>(
+        &'a self,
+        key: &'a ObjectKey,
+    ) -> BoxFuture<'a, Result<Box<dyn oqueue_core::MultipartWriter<'a> + 'a>>> {
+        Box::pin(async move {
+            let path = object_store_path(key)?;
+            let upload = self
+                .inner
+                .put_multipart_opts(&path, PutMultipartOptions::default())
+                .await
+                .map_err(|source| classify(&source, key))?;
+            let writer: Box<dyn oqueue_core::MultipartWriter<'a> + 'a> =
+                Box::new(StreamingWriter::new(key, upload));
+            Ok(writer)
         })
     }
 

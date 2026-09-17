@@ -65,6 +65,17 @@ impl<S: ObjectStore> ObjectStore for HangingStore<S> {
     fn delete<'a>(&'a self, keys: &'a [ObjectKey]) -> BoxFuture<'a, Result<()>> {
         self.inner.delete(keys)
     }
+
+    /// ⚠️ **Delegated, and deliberately not made to hang.** This double hangs
+    /// the *ack* after a durable `put`, which is the crash point it exists
+    /// for; nothing in the broker streams an object, and a hang here would be
+    /// a crash point nothing reaches.
+    fn open_multipart<'a>(
+        &'a self,
+        key: &'a ObjectKey,
+    ) -> BoxFuture<'a, Result<Box<dyn oqueue_core::MultipartWriter<'a> + 'a>>> {
+        self.inner.open_multipart(key)
+    }
 }
 
 /// Builds its own cluster, produces into it, and aborts the handler task the

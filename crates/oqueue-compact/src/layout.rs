@@ -12,9 +12,7 @@
 //! partition's bytes between them, so it stays one ranged GET (FR-13). Regions
 //! interleaved by arrival would turn one read into as many as there are runs.
 
-use oqueue_core::{
-    BundleBuilder, CommittedSpan, Error, ObjectKey, ObjectRef, ObjectStore, Precondition, Result,
-};
+use oqueue_core::{BundleStream, CommittedSpan, Error, ObjectKey, ObjectRef, ObjectStore, Result};
 
 use crate::merge::gather;
 use crate::{COMPACTION_PLAN_RECORDS_BUDGET, CompactionPlan, MergeOutcome};
@@ -85,20 +83,15 @@ where
     });
     admissible(&ordered)?;
 
-    let mut builder = BundleBuilder::new();
+    let mut stream = BundleStream::open(store, output).await?;
     let mut gets = 0_usize;
     let mut records = 0_i64;
     for planned in ordered {
-        let (read, moved) = gather(store, planned.plan(), planned.inputs(), &mut builder).await?;
+        let (read, moved) = gather(store, planned.plan(), planned.inputs(), &mut stream).await?;
         gets += read;
         records += moved;
     }
-
-    let sealed = builder.seal()?;
-    let spans: Vec<CommittedSpan> = sealed.spans().to_vec();
-    store
-        .put(output, sealed.into_payload(), Some(Precondition::IfAbsent))
-        .await?;
+    let spans: Vec<CommittedSpan> = stream.finish().await?;
 
     Ok(MergeOutcome::new(gets, 1, records, spans))
 }

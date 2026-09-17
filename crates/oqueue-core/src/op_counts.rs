@@ -137,6 +137,21 @@ impl<S: ObjectStore> ObjectStore for CountingObjectStore<S> {
         self.inner.put(key, payload, precondition)
     }
 
+    /// ⚠️ **Counted as one write**, whatever the part count: the number this
+    /// wrapper exists to report is object operations, and a multipart upload
+    /// is one object however many requests carry it — ⚠️ which is *not* the
+    /// same as one request, and a cost model that needs the request count
+    /// needs a second counter rather than this one reinterpreted.
+    fn open_multipart<'a>(
+        &'a self,
+        key: &'a ObjectKey,
+    ) -> crate::BoxFuture<'a, Result<Box<dyn crate::MultipartWriter<'a> + 'a>>> {
+        Box::pin(async move {
+            self.counts.increment(Operation::Put);
+            self.inner.open_multipart(key).await
+        })
+    }
+
     fn delete<'a>(&'a self, keys: &'a [ObjectKey]) -> crate::BoxFuture<'a, Result<()>> {
         self.counts.increment(Operation::Delete);
         self.inner.delete(keys)

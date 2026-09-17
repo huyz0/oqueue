@@ -210,17 +210,7 @@ impl BundleBuilder {
             count: record_count,
             producer,
         } = pushed;
-        if topic.as_str().len() > MAX_TOPIC_NAME_LEN {
-            return Err(Error::BundleTooLarge);
-        }
-        // ⚠️ **Bytes that advance no offsets are bytes nothing can ever
-        // read.** The fold turns a span's count into offsets, so a region
-        // carrying records under a count of zero is durable, indexed, billed
-        // and unreachable — with no error anywhere. This is the mirror of the
-        // empty-`records` case below, and refused for the same reason.
-        if record_count == 0 {
-            return Err(Error::EmptyRegion);
-        }
+        admissible(&topic, record_count)?;
         let offset = self.payload.len() as u64;
         let bytes = ByteRange::bounded(offset, records.len() as u64)?;
         self.payload.extend_from_slice(records);
@@ -234,6 +224,74 @@ impl BundleBuilder {
         });
         self.producers.push(producer);
         Ok(())
+    }
+
+    /// Records a region whose bytes go somewhere else.
+    ///
+    /// ⚠️ **For [`BundleStream`](crate::BundleStream) only**, which streams the
+    /// payload to an object store as it fills and needs the footer's regions
+    /// built by the same encoder a `put` would use. `offset` is where the
+    /// region's bytes start in the object being streamed, and `length` how many
+    /// there are — the two this type otherwise computes from its own payload.
+    ///
+    /// # Errors
+    ///
+    /// As [`BundleBuilder::push`].
+    pub(crate) fn push_streamed(
+        &mut self,
+        topic: TopicId,
+        partition: PartitionId,
+        pushed: PushedRecords,
+        at: (u64, usize),
+    ) -> Result<()> {
+        let (offset, length) = at;
+        let PushedRecords {
+            count: record_count,
+            producer,
+        } = pushed;
+        // ⚠️ **One statement of the two rules, shared with `push`.** A second
+        // copy of the topic-name bound and the empty-region refusal would be
+        // two statements of one rule, and the one nobody exercises is the one
+        // that drifts.
+        admissible(&topic, record_count)?;
+        let bytes = ByteRange::bounded(offset, length as u64)?;
+        self.regions.push(Region {
+            topic,
+            partition,
+            bytes,
+            record_count,
+            alg: RegionAlg::None,
+        });
+        self.producers.push(producer);
+        Ok(())
+    }
+
+    /// The encoded footer and the spans, for a payload written elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// As [`BundleBuilder::seal`].
+    pub(crate) fn into_footer(self) -> Result<(Vec<u8>, Vec<CommittedSpan>)> {
+        if self.regions.is_empty() {
+            return Err(Error::EmptyBundle);
+        }
+        let spans = self
+            .regions
+            .iter()
+            .zip(&self.producers)
+            .map(|(region, producer)| {
+                CommittedSpan::new(
+                    region.topic.clone(),
+                    region.partition,
+                    region.record_count,
+                    region.bytes,
+                    *producer,
+                )
+            })
+            .collect();
+        let mut footer = Vec::new();
+        encode_footer(&self.regions, &mut footer)?;
+        Ok((footer, spans))
     }
 
     /// How many regions have been added.
@@ -291,6 +349,28 @@ impl BundleBuilder {
             spans,
         })
     }
+}
+
+/// The two refusals every region must pass, wherever it was pushed from.
+///
+/// # Errors
+///
+/// [`Error::BundleTooLarge`] if the topic name will not fit the footer's length
+/// field — checked before any bytes are copied rather than at `seal`, when the
+/// payload is already built.
+///
+/// [`Error::EmptyRegion`] if `record_count` is zero. ⚠️ **Bytes that advance no
+/// offsets are bytes nothing can ever read**: the fold turns a span's count
+/// into offsets, so a region carrying records under a count of zero is durable,
+/// indexed, billed and unreachable — with no error anywhere.
+fn admissible(topic: &TopicId, record_count: u32) -> Result<()> {
+    if topic.as_str().len() > MAX_TOPIC_NAME_LEN {
+        return Err(Error::BundleTooLarge);
+    }
+    if record_count == 0 {
+        return Err(Error::EmptyRegion);
+    }
+    Ok(())
 }
 
 /// A sealed bundle: one payload, and the spans that describe it.

@@ -95,6 +95,14 @@ impl ObjectStore for Counting {
         self.inner.put(key, payload, precondition)
     }
 
+    fn open_multipart<'a>(
+        &'a self,
+        key: &'a ObjectKey,
+    ) -> oqueue_core::BoxFuture<'a, Result<Box<dyn oqueue_core::MultipartWriter<'a> + 'a>>> {
+        self.puts.fetch_add(1, Ordering::Relaxed);
+        self.inner.open_multipart(key)
+    }
+
     fn delete<'a>(&'a self, keys: &'a [ObjectKey]) -> oqueue_core::BoxFuture<'a, Result<()>> {
         self.inner.delete(keys)
     }

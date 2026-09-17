@@ -77,20 +77,34 @@ async fn an_input_straddling_the_plan_s_range_is_refused() {
     );
 }
 
-/// ⚠️ **`IfAbsent`, so a retry cannot overwrite an output the index may
-/// already name.**
+/// ⚠️ **A retry writes its own key, and the first output is untouched.**
+/// `ADR-0037`: the streaming seal cannot be conditioned — `object_store`
+/// carries no `PutMode` to `CompleteMultipartUpload` — so what keeps a rewrite
+/// from landing on bytes an index entry already names is that no two attempts
+/// share a key. The caller mints it; `M5.13`'s commit decides which one the
+/// index points at.
 #[tokio::test]
-async fn a_second_merge_to_the_same_key_is_refused() {
+async fn a_retry_writes_its_own_key_and_leaves_the_first_output_intact() {
     let store = Counting::new();
     let refs = inputs_of(&store, 13, 1, 64).await;
-    merge(&store, &planned(13), &refs, &key("out"))
+    merge(&store, &planned(13), &refs, &key("out-1"))
         .await
         .expect("the first merge");
-    let again = merge(&store, &planned(13), &refs, &key("out")).await;
-    assert!(
-        matches!(again, Err(Error::PreconditionFailed { .. })),
-        "a rewrite of an output already written is refused: {again:?}"
-    );
+    merge(&store, &planned(13), &refs, &key("out-2"))
+        .await
+        .expect("the retry, under its own key");
+
+    let first = store
+        .inner
+        .get(&key("out-1"), oqueue_core::ByteRange::Full)
+        .await
+        .expect("the first output is still there");
+    let second = store
+        .inner
+        .get(&key("out-2"), oqueue_core::ByteRange::Full)
+        .await
+        .expect("and so is the second");
+    assert_eq!(first, second, "the same inputs merge to the same bytes");
 }
 
 /// The estimate and the run must agree — `M5.3`'s criterion, which had no

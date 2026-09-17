@@ -35,8 +35,8 @@ mod outcome;
 pub use outcome::MergeOutcome;
 
 use oqueue_core::{
-    BundleBuilder, ByteRange, Error, ObjectKey, ObjectRef, ObjectStore, Precondition,
-    PushedRecords, Result, parse_footer,
+    BundleStream, ByteRange, Error, ObjectKey, ObjectRef, ObjectStore, PushedRecords, Result,
+    parse_footer,
 };
 
 use crate::CompactionPlan;
@@ -52,7 +52,9 @@ use crate::CompactionPlan;
 /// [`Error::IndexObjectMismatch`] if an input straddles the plan's range, if
 /// an input holds no region for the plan's partition, or if its regions do not
 /// account for the record count the index recorded. Otherwise the store's own
-/// errors, and [`Error::PreconditionFailed`] if `output` already exists.
+/// errors. ⚠️ **Not `PreconditionFailed`**: the seal is unconditional
+/// (`ADR-0037`), and a unique output key is what keeps a retry off an object
+/// the index already names.
 pub async fn merge<S>(
     store: &S,
     plan: &CompactionPlan,
@@ -62,16 +64,9 @@ pub async fn merge<S>(
 where
     S: ObjectStore + ?Sized,
 {
-    let mut builder = BundleBuilder::new();
-    let (gets, records) = gather(store, plan, inputs, &mut builder).await?;
-    let sealed = builder.seal()?;
-    let spans = sealed.spans().to_vec();
-    // ⚠️ **`IfAbsent`, so a retry cannot overwrite an output an index entry
-    // already names.** A re-run writes a fresh key; `M5.13`'s commit is what
-    // decides which key the index points at.
-    store
-        .put(output, sealed.into_payload(), Some(Precondition::IfAbsent))
-        .await?;
+    let mut stream = BundleStream::open(store, output).await?;
+    let (gets, records) = gather(store, plan, inputs, &mut stream).await?;
+    let spans = stream.finish().await?;
 
     Ok(MergeOutcome {
         gets,
@@ -92,11 +87,11 @@ where
 /// # Errors
 ///
 /// As [`merge`].
-pub(crate) async fn gather<S>(
-    store: &S,
+pub(crate) async fn gather<'store, S>(
+    store: &'store S,
     plan: &CompactionPlan,
     inputs: &[ObjectRef],
-    builder: &mut BundleBuilder,
+    stream: &mut BundleStream<'store>,
 ) -> Result<(usize, i64)>
 where
     S: ObjectStore + ?Sized,
@@ -114,7 +109,7 @@ where
     for reference in covering {
         let bytes = store.get(reference.object(), ByteRange::Full).await?;
         gets += 1;
-        records += i64::from(take_regions(&bytes, plan, reference, builder)?);
+        records += i64::from(take_regions(&bytes, plan, reference, stream).await?);
     }
 
     // ⚠️ **No final check against `plan.cost().records_rewritten()`, and none
@@ -194,11 +189,11 @@ fn tiling<'a>(ordered: &[&'a ObjectRef], plan: &CompactionPlan) -> Result<Vec<&'
 /// acknowledged records go missing without anything failing**, and this is the
 /// one place both numbers are in hand. [`Error::UnboundedRegion`] or
 /// [`Error::MalformedBundleFooter`] for bytes no `BundleBuilder` wrote.
-fn take_regions(
+async fn take_regions(
     bytes: &[u8],
     plan: &CompactionPlan,
     reference: &ObjectRef,
-    builder: &mut BundleBuilder,
+    stream: &mut BundleStream<'_>,
 ) -> Result<u32> {
     let mut taken = 0_u32;
     for region in parse_footer(bytes, bytes.len() as u64)? {
@@ -215,15 +210,17 @@ fn take_regions(
         let slice = bytes
             .get(from..to)
             .ok_or(Error::MalformedBundleFooter { at: from })?;
-        builder.push(
-            plan.topic().clone(),
-            plan.partition(),
-            PushedRecords {
-                count: region.record_count(),
-                producer: None,
-            },
-            slice,
-        )?;
+        stream
+            .push(
+                plan.topic().clone(),
+                plan.partition(),
+                PushedRecords {
+                    count: region.record_count(),
+                    producer: None,
+                },
+                slice,
+            )
+            .await?;
         taken = taken.saturating_add(region.record_count());
     }
     if taken != reference.record_count() {

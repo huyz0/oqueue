@@ -193,6 +193,16 @@ impl<S: ObjectStore> ObjectStore for MergingObjectStore<S> {
         self.inner.put(key, payload, precondition)
     }
 
+    /// ⚠️ **Delegated whole, and no merging happens.** This wrapper coalesces
+    /// whole-payload writes; a streaming write is already one object being
+    /// assembled, and merging two of them would interleave their parts.
+    fn open_multipart<'a>(
+        &'a self,
+        key: &'a ObjectKey,
+    ) -> BoxFuture<'a, Result<Box<dyn crate::MultipartWriter<'a> + 'a>>> {
+        Box::pin(async move { self.inner.open_multipart(key).await })
+    }
+
     fn delete<'a>(&'a self, keys: &'a [ObjectKey]) -> BoxFuture<'a, Result<()>> {
         self.inner.delete(keys)
     }

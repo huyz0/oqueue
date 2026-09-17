@@ -331,6 +331,15 @@ declare -A RUST_BOUNDS=(
   # Raising it is a different failure -- amplified ranges sit longer -- so it is
   # pinned rather than bounded on one side.
   ["crates/oqueue-compact/src/sweep.rs|COMPACTION_SWEEP_INTERVAL"]="Duration::from_mins(30)"
+  # How many bytes one part of a bundled object carries (`M5.6`). ⚠️ Weakening
+  # is *lowering*: S3 refuses any part but the last below 5 MiB, so a smaller
+  # value moves the failure from this crate to the backend, which is the wrong
+  # place to find out. It is also the streaming writer's memory bound, so
+  # raising it raises what a merge holds. UNDERIVED above the floor; `M14`
+  # measures whether a larger part buys anything. ⚠️ A literal rather than
+  # `8 * 1024 * 1024`: the arithmetic form leaves two mutants no test can
+  # distinguish, because nothing in a unit test writes eight megabytes.
+  ["crates/oqueue-core/src/bundle_stream.rs|BUNDLE_PART_BYTES"]="8_388_608"
   # How many object-storage reads one parked `Fetch` may make. Raising it lets
   # a client's read volume be set by somebody else's write rate.
   ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"
