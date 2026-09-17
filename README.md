@@ -26,10 +26,14 @@ A Kafka-protocol-compatible message broker in Rust that uses object storage
 > authentication, authorization, and tenant isolation — every operation
 > scoped to a principal, and a `Metadata` request costing O(topics this
 > principal can see) rather than O(topics that exist); the mechanism is
-> built and tested, and wiring it into the binary that ships is M4's own
-> task 18. M4, in progress, is consumer groups — join, sync, heartbeat,
-> rebalance, and committed offsets, on the classic protocol
-> (`ADR-0033`).
+> built and tested, and wiring it into the binary that ships was M4's own
+> task 18 — and M4's: consumer groups, join, sync, heartbeat, rebalance,
+> and committed offsets on the classic protocol (`ADR-0033`), whose
+> durable half outlives the process only once M6 replaces the fake
+> metadata log. M5, in progress, is compaction and retention — historical
+> reads bounded in cost, data ageing out on partitions nobody writes to,
+> and an object deleted only when no reader can still reference it
+> (`ADR-0036`).
 >
 > What is here is worth reading if you are interested in the design space:
 > ~110,000 words of cited research on object-storage-native streaming, and an
@@ -157,8 +161,8 @@ workspace standard in
 | M10 | Deterministic simulation and fault injection | complete |
 | M11 | Idempotent producers | complete |
 | M9 | Authentication, authorization, tenant isolation | complete |
-| M4 | Consumer groups | in progress |
-| M5 | Compaction and retention | not started |
+| M4 | Consumer groups | complete |
+| M5 | Compaction and retention | in progress |
 | M6 | Recovery and failover | not started |
 | M7 | Metadata sharding and scale | not started |
 | M8 | Encryption: BYOK and the FIPS build | not started |
