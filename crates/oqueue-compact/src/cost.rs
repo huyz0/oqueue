@@ -16,6 +16,10 @@ use crate::ReadAmp;
 /// need a GET per candidate and the estimate would cost what it is trying to
 /// bound.
 ///
+/// ⚠️ **It is the round's ceiling as well as one plan's** (`M5.5`), so a raise
+/// raises the in-memory accumulation a round builds before its first PUT, not
+/// only the size of one plan. Whoever raises it owns both.
+///
 /// ⚠️ **One compacted object's worth, because the merge writes one object**
 /// (`M5.4`). It was eight when `M5.3` set it, and that let a plan be costed at
 /// two outputs and run as one — the estimate and the run disagreeing about the
@@ -49,7 +53,13 @@ impl CostEstimate {
         self.gets
     }
 
-    /// Object writes: one per output object.
+    /// Object writes: one per output object **this plan alone** would need.
+    ///
+    /// ⚠️ **Not a round's PUT count.** `merge_round` writes one object for a
+    /// whole round, so a caller summing estimates over an `n`-plan round
+    /// predicts at least `n` PUTs against an actual one — an overstatement of
+    /// `n - 1` at best, and the direction that defers a round it could
+    /// afford.
     #[must_use]
     pub const fn puts(&self) -> usize {
         self.puts

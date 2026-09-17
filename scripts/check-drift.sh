@@ -324,9 +324,10 @@ declare -A RUST_BOUNDS=(
   # and run as one. `M5.6`'s multipart writer is what earns the raise.
   ["crates/oqueue-compact/src/cost.rs|COMPACTION_PLAN_RECORDS_BUDGET"]="524_288"
   # How often compaction looks for candidates (`M5.40`, `ADR-0036` decision 1).
-  # ⚠️ Weakening is *lowering*: a shorter interval repeats a whole-index scan
-  # more often for a detection latency nothing has measured as too long, and
-  # the ADR names that as the alternative to revisit first rather than a knob.
+  # ⚠️ Weakening is *lowering*: a shorter interval repeats every candidate's
+  # window walk more often for a detection latency nothing has measured as too
+  # long, and the ADR names that as the alternative to revisit first rather
+  # than a knob.
   # Raising it is a different failure -- amplified ranges sit longer -- so it is
   # pinned rather than bounded on one side.
   ["crates/oqueue-compact/src/sweep.rs|COMPACTION_SWEEP_INTERVAL"]="Duration::from_mins(30)"

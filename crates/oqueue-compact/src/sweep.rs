@@ -4,8 +4,9 @@
 //! (`ADR-0036` decision 1). A sweep reads the coordinator's in-memory index
 //! and costs no object-storage operation, so doc 14 §7's table — $720/day at a
 //! 60 s cadence over 100k partitions — prices every partition compacting every
-//! round rather than the steady state. What scales with partition count here
-//! is a memory scan.
+//! round rather than the steady state. What a sweep costs per candidate is one
+//! `end_offset` lookup plus, for a candidate with work in front of it, one
+//! paged walk of its window — never a walk of the whole partition.
 //!
 //! ⚠️ **The partitions come from the caller, not from the index**, and that is
 //! a deferral rather than a design. [`MaterializedIndex`] has no way to
@@ -99,12 +100,12 @@ impl Candidate {
 /// the partitions are what say which.
 ///
 /// ⚠️ **There is no deferred list.** A window is capped at
-/// [`COMPACTION_PLAN_RECORDS_BUDGET`] records and offsets are dense, so a
-/// window's records never exceed the budget and `plan`'s own
-/// [`Deferred`](crate::Planning::Deferred) is reachable only through
-/// `Offset::add` overflowing near `i64::MAX`; that lands in `held_over` with
-/// everything else that did not fit. The variant stays reachable for a caller
-/// that picks its own range, which is what it is for.
+/// [`COMPACTION_PLAN_RECORDS_BUDGET`] records, and no index this workspace
+/// builds can make one measure more than that — see the `Deferred` arm in
+/// [`sweep`] for why, and for why the arm nonetheless stays. Anything that did
+/// reach it lands in `held_over` with everything else that did not fit.
+/// `plan`'s own [`Deferred`](crate::Planning::Deferred) stays reachable for a
+/// caller that picks its own range, which is what the variant is for.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Sweep {
     round: Vec<CompactionPlan>,
@@ -153,14 +154,21 @@ where
         if !seen.insert((topic.clone(), partition)) {
             continue;
         }
-        // ⚠️ **A partition the index has not folded costs one lookup and no
-        // walk**, which is what makes a sweep over a cold catalog cheap: the
-        // window below is empty, and `plan`'s own walk returns before asking
-        // for a batch.
+        // ⚠️ **A cursor at or past the partition's end plans nothing and walks
+        // nothing, and no branch here is what makes that true.** The window
+        // below is empty at the end and reversed past it, and `read_amp`'s own
+        // `while cursor < end` bound returns from both before asking for a
+        // batch — which is also what makes a sweep over a cold catalog cost
+        // one lookup per partition and no walk.
+        //
+        // ⚠️ **A `from >= end` skip was here twice and is deliberately not
+        // now.** It was written for the walk (which the bound above holds) and
+        // then for the lookup (which `end_offset`, called unconditionally on
+        // the next line, does not save); with it deleted the whole suite stays
+        // green including the walk counts. A branch no input can distinguish
+        // is worse than no branch — `plan`'s own trim and `merge`'s straddle
+        // test went the same way in this milestone.
         let end = index.end_offset(topic, partition);
-        if candidate.from() >= end {
-            continue;
-        }
         // Offsets are dense and gap-free (FR-11), so a window of the budget's
         // width holds exactly the budget's records.
         let window_end = candidate
@@ -170,11 +178,20 @@ where
 
         match plan(index, topic, partition, candidate.from(), window_end)? {
             Planning::NotWorthIt => {}
-            // ⚠️ **Held over rather than refused.** A window is capped at the
-            // budget and offsets are dense, so the only way here is
-            // `Offset::add` overflowing near `i64::MAX` and the window falling
-            // back to the whole range — and one candidate's arithmetic edge
-            // must not discard every other partition's work.
+            // ⚠️ **No index this workspace builds reaches this arm, and it is
+            // not dead code.** `read_amp` adds `overlap` once *per span*, so
+            // clipping bounds each term and not the sum: what makes the sum
+            // fit the window is that an object's spans for one partition are
+            // **disjoint**, which `IndexState::stage_span` guarantees by
+            // basing each at the running staged end. That is a property of the
+            // one fold every implementation here shares, not of the trait — a
+            // `MaterializedIndex` built some other way could hand back
+            // overlapping spans and reach this arm. ⚠️ Two earlier stories
+            // told here were false: `Offset::add` overflowing near `i64::MAX`
+            // (which requires a window narrower than the budget) and clipping
+            // bounding the sum. Holding the candidate over is the answer that
+            // loses nothing, and refusing the round would discard every other
+            // partition's work for one candidate's edge.
             Planning::Deferred(_) => swept.held_over.push((topic.clone(), partition)),
             Planning::Planned(planned) => {
                 let cost = planned.cost().records_rewritten();

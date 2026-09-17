@@ -63,10 +63,6 @@ pub async fn merge_round<S>(
 where
     S: ObjectStore + ?Sized,
 {
-    // ⚠️ **Topic, then partition, then offset.** A fetch of one partition's
-    // compacted range must land on one run of regions: interleaving two
-    // partitions turns one ranged GET into as many reads as there are runs,
-    // which is the amplification this whole milestone is about.
     if round.is_empty() {
         // ⚠️ **Not an error.** A sweep over a quiet cluster finds no candidate
         // every thirty minutes, and a round that reports failure for having

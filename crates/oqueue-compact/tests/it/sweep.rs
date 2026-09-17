@@ -5,8 +5,8 @@
 
 use oqueue_compact::{COMPACTION_PLAN_RECORDS_BUDGET, Candidate, sweep};
 use oqueue_core::{
-    ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, MAX_BATCHES_PER_PAGE,
-    MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, TAIL_WINDOW_ENTRIES,
+    ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, MaterializedIndex,
+    MetadataEntry, MetadataRecord, ObjectKey, Offset, TAIL_WINDOW_ENTRIES,
 };
 
 use crate::support::{CountingIndex, partition_n, topic};
@@ -220,8 +220,10 @@ fn two_plans_that_fit_together_are_both_in_the_round() {
 /// this asserts the *walks* rather than the answer: `plan` on an unfolded
 /// partition returns `NotWorthIt` either way, so a test asserting only the
 /// round's length says nothing about what the sweep spent. What holds it is
-/// the `from >= end` check in `sweep`, which for an unfolded partition
-/// compares a zero cursor against a zero end and skips before planning.
+/// `read_amp`'s own `while cursor < end` bound: an unfolded partition's window
+/// is empty, and that loop returns before asking for a batch. ⚠️ **Not a skip
+/// in `sweep`** — one was there twice and `M5.43` deleted it, because it saved
+/// neither the walk nor the `end_offset` lookup beside it.
 #[test]
 fn an_unfolded_partition_costs_no_index_walk() {
     let index = CountingIndex::over(cluster(4, &[1]));
@@ -287,12 +289,16 @@ fn a_partition_behind_a_long_compacted_prefix_is_still_planned() {
             },
         ));
     };
-    // ⚠️ **Seventy budget-widths of compacted prefix, not six.** The walk
-    // pages at `MAX_BATCHES_PER_PAGE`, so a prefix shorter than one page never
-    // reaches the loop's own resume — and a planted regression there would go
-    // unobserved, which is the shape round two found twice.
+    // Seventy budget-widths of compacted prefix, which the cursor skips
+    // without reading: the sweep's window starts at `from`, so no prefix
+    // object is ever returned to it. ⚠️ **The count is arbitrary**, and two
+    // earlier versions of this comment claimed otherwise — a paging rationale
+    // belonging to a walk `M5.40` removed, then a visibility one that is false
+    // because both assertions are computed from `prefix`, so one object would
+    // pass too. Seventy is kept because a long prefix is the case the row is
+    // about, not because the test can tell.
     let compacted = u32::try_from(COMPACTION_PLAN_RECORDS_BUDGET).expect("a small budget");
-    let prefix = MAX_BATCHES_PER_PAGE + 6;
+    let prefix = 70_usize;
     for which in 0..prefix {
         push(&mut entries, format!("done-{which}"), compacted);
     }
@@ -319,24 +325,55 @@ fn a_partition_behind_a_long_compacted_prefix_is_still_planned() {
     );
 }
 
-/// A cursor at or past the partition's end has nothing to look at, and costs
-/// no walk to find that out.
+/// ⚠️ **A cursor at the partition's end plans nothing and walks nothing.**
+/// The window is `min(from + budget, end) == from`, an empty range, and
+/// `read_amp`'s `while cursor < end` bound returns before asking for a batch.
+/// This counts the walks, because the round's contents are `NotWorthIt` either
+/// way and say nothing about what the sweep spent.
 #[test]
 fn a_cursor_at_the_end_of_the_partition_plans_nothing() {
     let index = CountingIndex::over(cluster(2, &[0, 1]));
     let end = index.end_offset(&topic(), partition_n(0));
+    let before = index.walks();
+    let swept = sweep(&index, &[Candidate::new(topic(), partition_n(0), end)])
+        .expect("an index that answers");
+    assert!(swept.round().is_empty(), "nothing left to compact");
+    assert_eq!(index.walks(), before, "so the index is never walked for it");
+}
+
+/// ⚠️ **Past the end, where the window is reversed rather than empty.**
+/// `min(from + budget, end)` is `end`, which is *below* `from` — and a
+/// partition with work left in the same round must still be planned, so one
+/// candidate's bad cursor cannot cost the round.
+#[test]
+fn a_cursor_past_the_end_of_the_partition_plans_nothing() {
+    let index = CountingIndex::over(cluster(2, &[0, 1]));
+    let end = index.end_offset(&topic(), partition_n(0));
+    let past = end.add(50).expect("a valid offset");
+    let before = index.walks();
+
     let swept = sweep(
         &index,
         &[
-            Candidate::new(topic(), partition_n(0), end),
+            Candidate::new(topic(), partition_n(0), past),
             Candidate::new(topic(), partition_n(1), Offset::ZERO),
         ],
     )
     .expect("an index that answers");
-    assert_eq!(swept.round().len(), 1, "only the partition with work left");
+    assert_eq!(
+        swept.round().len(),
+        1,
+        "the other partition is still planned"
+    );
     assert_eq!(
         swept.round()[0].partition(),
         partition_n(1),
         "and it is the one whose cursor is behind its end"
+    );
+    assert_eq!(
+        index.walks() - before,
+        3,
+        "three pages for the partition with work, and none at all for the \
+         reversed one"
     );
 }

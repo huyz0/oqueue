@@ -20,8 +20,10 @@
 #
 # Rule 17: "The limit has an allowlist, and every entry carries a reason...
 # in the script, so adding to it is a diff someone reviews." `ALLOWLIST`
-# below is empty because no crate exists yet — the first entry, when one is
-# needed, is a one-line addition with its reason inline, not a separate file.
+# below has one entry, added by `M5.5` and expiring with `M5.42`: each entry is
+# a one-line addition with its reason inline, not a separate file, and each
+# carries the line count it was granted at (see below) so it cannot quietly
+# become a licence to grow.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
@@ -44,8 +46,10 @@ fi
 # away from a permanent failure with no suppression available.
 FILE_LINE_LIMIT=500
 
-# path (relative to repo root) -> why it is allowed past the limit. Empty
-# until a real crate needs an entry.
+# path (relative to repo root) -> "<granted line count>|<why it is allowed past
+# the limit>". ⚠️ **Both halves, and the count first**: an entry with no numeric
+# prefix is refused below rather than treated as an unbounded exemption, which
+# is what a bare reason silently became when `M5.43` added the count.
 # ⚠️ **One entry, and it is a deferral rather than an exemption** (`M5.5`).
 # `oqueue-core`'s `Error` is a single enum: rule 18 says to split a long file by
 # concept, and there is no concept boundary *inside* one enum — the split that
@@ -55,8 +59,14 @@ FILE_LINE_LIMIT=500
 # commit to add one hits this too. `M5.42` is the row that decides; this entry
 # comes out when it does, and it is the only thing keeping the rule honest in
 # the meantime — a 45-variant enum *is* the design signal rule 18 describes.
+# ⚠️ **The value is the count the exemption was granted at, not just a reason**
+# (`M5.43`). An allowlisted file that keeps growing is an allowlist entry that
+# has stopped being a deferral, and the only thing that could notice was the
+# `todo` row it defers to. Exceeding the granted count fails, with the entry's
+# own reason printed — so the next variant `oqueue-core`'s error enum gains
+# lands on `M5.42` rather than on this list.
 declare -A ALLOWLIST=(
-  [crates/oqueue-core/src/error.rs]="one error enum is one concept; the split is per-domain sub-enums and that is M5.42's decision"
+  [crates/oqueue-core/src/error.rs]="523|one error enum is one concept; the split is per-domain sub-enums and that is M5.42's decision"
 )
 
 # Module names that are a place to put things nobody decided where else to
@@ -92,7 +102,24 @@ for f in "${files[@]}"; do
 
   if (( lines > FILE_LINE_LIMIT )); then
     if [[ -n "${ALLOWLIST[$f]:-}" ]]; then
-      note "$f: $lines lines, over $FILE_LINE_LIMIT, allowlisted -- ${ALLOWLIST[$f]}"
+      entry="${ALLOWLIST[$f]}"
+      granted="${entry%%|*}"
+      why="${entry#*|}"
+      if [[ ! "$granted" =~ ^[0-9]+$ ]]; then
+        # ⚠️ **A malformed entry fails rather than exempting.** Without this the
+        # arithmetic below errors, evaluates false, and the file is exempted
+        # with no ceiling at all -- the gate off for exactly the entry someone
+        # got wrong.
+        fail "$f: allowlist entry must be \"<granted line count>|<reason>\", got: $entry"
+        violations=$((violations + 1))
+      elif (( lines > granted )); then
+        fail "$f: $lines lines, over the $granted it was allowlisted at"
+        note "$why"
+        note "an exemption is a deferral, not a licence to grow -- raise the count only with the row that retires it"
+        violations=$((violations + 1))
+      else
+        note "$f: $lines lines, over $FILE_LINE_LIMIT, allowlisted at $granted -- $why"
+      fi
     else
       fail "$f: $lines lines, over the $FILE_LINE_LIMIT-line limit"
       note "rule 18: a design signal, not a formatting problem -- split by concept"

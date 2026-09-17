@@ -41,7 +41,10 @@ impl MergeOutcome {
         self.gets
     }
 
-    /// Object writes it issued.
+    /// Object writes the run issued: **one for a merge or a non-empty round,
+    /// and zero for an empty round**, which writes nothing rather than an
+    /// empty object. `CostEstimate::puts` is per plan, so the two agree only
+    /// for a single-plan merge.
     #[must_use]
     pub const fn puts(&self) -> usize {
         self.puts
