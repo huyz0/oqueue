@@ -50,6 +50,7 @@ mod byte_range;
 mod chunk;
 mod clock;
 mod commit_version;
+mod composite;
 mod coordinator_epoch;
 mod error;
 mod fault;
@@ -104,6 +105,10 @@ pub use byte_range::ByteRange;
 pub use chunk::ChunkedObjectStore;
 pub use clock::{Clock, FakeClock, Timestamp};
 pub use commit_version::CommitVersion;
+pub use composite::{
+    COMPOSITE_FORMAT_VERSION, COMPOSITE_MAGIC, COMPOSITE_TRAILER_LEN, Component, CompositeBuilder,
+    Located, locate, parse_composite,
+};
 pub use coordinator_epoch::CoordinatorEpoch;
 pub use error::Error;
 pub use fault::{FaultConfig, StormKind};

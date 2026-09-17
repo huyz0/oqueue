@@ -6,6 +6,7 @@
 //! both are testable without touching a network.
 #![forbid(unsafe_code)]
 
+mod compose;
 mod cost;
 mod layout;
 mod merge;
@@ -13,6 +14,7 @@ mod plan;
 mod read_amp;
 mod sweep;
 
+pub use compose::{ComposeOutcome, compose, read_composite};
 pub use cost::{COMPACTION_PLAN_RECORDS_BUDGET, CostEstimate};
 pub use layout::{PlannedInputs, merge_round};
 pub use merge::{MergeOutcome, merge};

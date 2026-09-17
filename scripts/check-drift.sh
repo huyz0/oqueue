@@ -527,6 +527,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/records/count.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
   ["crates/oqueue-core/src/bundle.rs|BUNDLE_FORMAT_VERSION"]="this object format's version number"
   ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
+  ["crates/oqueue-core/src/composite.rs|COMPOSITE_FORMAT_VERSION"]="the composite manifest format's version number"
+  ["crates/oqueue-core/src/composite.rs|COMPOSITE_TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
   # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
   ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"

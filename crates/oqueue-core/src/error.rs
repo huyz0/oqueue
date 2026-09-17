@@ -234,6 +234,35 @@ pub enum Error {
         code: u8,
     },
 
+    /// A composite's manifest could not be read.
+    ///
+    /// ⚠️ Truncated, torn, or declaring lengths that do not fit — the same
+    /// class as [`Error::MalformedBundleFooter`] one format over, and a thing
+    /// that happens rather than a thing that would mean a bug, because these
+    /// are bytes an object store returned.
+    #[error("the composite manifest is malformed at byte {at}")]
+    MalformedCompositeManifest {
+        /// How far in the parser got.
+        at: usize,
+    },
+
+    /// The bytes handed to [`parse_composite`](crate::parse_composite) do not
+    /// end in a composite's magic.
+    ///
+    /// ⚠️ **Which is what a bundled object's bytes produce**, and is the whole
+    /// reason the magic exists: both formats end in a count, a version and a
+    /// length, so without it a bundle's trailer parses as a composite's and
+    /// yields component keys built out of record bytes.
+    #[error("these bytes are not a composite manifest")]
+    NotACompositeManifest,
+
+    /// A composite's manifest names a format version this build does not know.
+    #[error("composite format version {version} is not one this build knows")]
+    UnknownCompositeVersion {
+        /// The version read from the trailer.
+        version: u8,
+    },
+
     /// A bundled object's footer names a format version this build does not
     /// know.
     #[error("bundle format version {version} is not one this build knows")]

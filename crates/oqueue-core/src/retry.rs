@@ -89,6 +89,13 @@ impl Error {
             | Self::UnknownRegionAlg { .. }
             | Self::UnknownBundleFormat { .. }
             | Self::MalformedBundleFooter { .. }
+            // Never, for the same reason one format over: a manifest that is
+            // torn, or that is not a manifest at all, reads identically every
+            // time. ⚠️ `NotACompositeManifest` in particular means the caller
+            // asked the wrong object for the wrong thing, which no wait fixes.
+            | Self::MalformedCompositeManifest { .. }
+            | Self::NotACompositeManifest
+            | Self::UnknownCompositeVersion { .. }
             // Never, and `BundleTailTooShort`'s own docs say why it is here
             // rather than in `Bounded`: the object is healthy and the read was
             // too narrow, so the *same* call fails identically forever. A

@@ -350,6 +350,10 @@ EXECUTOR_FILES=(
   "crates/oqueue-compact/src/merge.rs"
   "crates/oqueue-compact/src/merge/outcome.rs"
   "crates/oqueue-compact/src/layout.rs"
+  # ⚠️ `compose` writes a manifest and reads each component's footer, so it is
+  # an executor for the same reason `merge` is -- and `M5.8` had to add it
+  # here, in a diff, which is the property the named-exception form buys.
+  "crates/oqueue-compact/src/compose.rs"
 )
 # ⚠️ **A substring, deliberately, and no `\b`.** Four types in `oqueue-core`
 # end in this name -- the seam itself, the fake beside it, and the chunked,

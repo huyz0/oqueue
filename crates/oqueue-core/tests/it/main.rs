@@ -6,6 +6,7 @@
 mod bundle;
 mod bundle_footer;
 mod clock;
+mod composite;
 mod coordinator;
 mod fault;
 mod footer_tail;
