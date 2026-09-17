@@ -216,6 +216,15 @@ async fn take_regions(
                 plan.topic().clone(),
                 plan.partition(),
                 PushedRecords {
+                    // ⚠️ **`None`, and it costs FR-14 nothing** (`ADR-0038`).
+                    // The footer carries no producer identity by design
+                    // (`M11.5`), so there is none here to carry; identity
+                    // survives a rewrite in the **metadata log**, which is
+                    // append-only and which `M5.13`'s swap adds to rather than
+                    // rewrites. ⚠️ A merged span holds records from several
+                    // input spans with several identities, and a
+                    // `CommittedSpan` carries one — so carrying it here is not
+                    // merely expensive, it is not well defined.
                     count: region.record_count(),
                     producer: None,
                 },

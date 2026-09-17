@@ -6,6 +6,7 @@
 mod assignment;
 mod cache;
 mod follower;
+mod idempotence;
 mod sequencing;
 mod support;
 mod tail;
