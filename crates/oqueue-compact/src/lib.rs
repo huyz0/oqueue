@@ -6,6 +6,8 @@
 //! both are testable without touching a network.
 #![forbid(unsafe_code)]
 
+mod plan;
 mod read_amp;
 
+pub use plan::{COMPACTION_READ_AMP_THRESHOLD, CompactionPlan, plan};
 pub use read_amp::{COMPACTED_OBJECT_RECORDS, ReadAmp, read_amp};

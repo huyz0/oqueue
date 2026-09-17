@@ -23,6 +23,10 @@
 //! together has no amplification to fix. Compacting it spends PUTs to improve
 //! a number nobody observes.
 
+mod survey;
+
+pub use survey::ReadAmp;
+
 use oqueue_core::{MaterializedIndex, ObjectKey, Offset, PartitionId, Result, TopicId};
 use std::collections::HashSet;
 
@@ -43,63 +47,6 @@ use std::collections::HashSet;
 ///
 /// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
 pub const COMPACTED_OBJECT_RECORDS: u32 = 524_288;
-
-/// What a range costs to read, against what it could cost.
-///
-/// ⚠️ **A measurement, not a verdict.** Whether a range is worth compacting is
-/// the planner's question (`M5.2`), and it needs the range's *age* as well as
-/// this — tail data still served from cache is never rewritten however
-/// amplified it looks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReadAmp {
-    objects_touched: usize,
-    objects_needed: usize,
-    records: i64,
-}
-
-impl ReadAmp {
-    /// Objects a fetch over the range must read today.
-    #[must_use]
-    pub const fn objects_touched(&self) -> usize {
-        self.objects_touched
-    }
-
-    /// Objects the same records would occupy at the compacted layout —
-    /// `ceil(records / COMPACTED_OBJECT_RECORDS)`, and never zero while any
-    /// record is in range.
-    #[must_use]
-    pub const fn objects_needed(&self) -> usize {
-        self.objects_needed
-    }
-
-    /// Records the range holds, as the index accounts for them.
-    #[must_use]
-    pub const fn records(&self) -> i64 {
-        self.records
-    }
-
-    /// The ratio compaction is triggered on.
-    ///
-    /// ⚠️ **`0.0` for a range holding nothing**, which is not a low ratio but
-    /// the absence of one: there is no work, and a planner comparing against a
-    /// threshold must not read it as "already compact enough" in a context
-    /// where that would mean something different. `1.0` is the compacted
-    /// layout.
-    #[must_use]
-    pub fn ratio(&self) -> f64 {
-        if self.objects_needed == 0 {
-            return 0.0;
-        }
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "both counts are object counts over one partition's range; \
-                      f64 is exact to 2^53 and the index cannot hold that many"
-        )]
-        {
-            self.objects_touched as f64 / self.objects_needed as f64
-        }
-    }
-}
 
 /// Computes read amplification for `[start, end)` from the index alone.
 ///
@@ -133,6 +80,8 @@ where
     I: MaterializedIndex + ?Sized,
 {
     let mut seen: HashSet<ObjectKey> = HashSet::new();
+    let mut tail: HashSet<ObjectKey> = HashSet::new();
+    let mut first_tail_base: Option<Offset> = None;
     let mut records: i64 = 0;
     let mut cursor = start;
 
@@ -158,6 +107,15 @@ where
             // the direction that silently skips compaction.
             records += overlap(base, object_end, start, end);
             seen.insert(reference.object().clone());
+            if batch.bytes().is_some() {
+                // An inline byte range is what the tail tier is: the index
+                // already knows where to read, so the fetch is one GET.
+                tail.insert(reference.object().clone());
+                // Ascending order, so the first one seen is the boundary --
+                // `min` rather than a first-write-wins flag, because ordering
+                // is `find_batches`' guarantee and not this walk's.
+                first_tail_base = Some(first_tail_base.map_or(base, |b: Offset| b.min(base)));
+            }
         }
         if furthest <= cursor {
             break;
@@ -180,6 +138,8 @@ where
         // one.
         objects_needed: usize::try_from(needed).unwrap_or(usize::MAX),
         records,
+        tail_objects: tail.len(),
+        first_tail_base,
     })
 }
 
@@ -198,7 +158,8 @@ mod tests {
     use super::{COMPACTED_OBJECT_RECORDS, read_amp};
     use oqueue_core::{
         ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, MAX_BATCHES_PER_PAGE,
-        MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId, TopicId,
+        MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,
+        TAIL_WINDOW_ENTRIES, TopicId,
     };
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -458,5 +419,44 @@ mod tests {
             "both spans' records are in range"
         );
         assert_eq!(amp.objects_needed(), 2);
+    }
+
+    /// ⚠️ **The tail tier is counted, not merely detected.** The planner trims
+    /// a range at the first tail object, so a count that always answered zero
+    /// would let tail data be rewritten — the one thing the age guard exists
+    /// to prevent.
+    #[test]
+    fn objects_still_in_the_tail_are_counted_and_located() {
+        let hot = 12;
+        let index = index_of(&vec![1_u32; hot]);
+        let amp = read_amp(
+            &index,
+            &topic(),
+            partition(),
+            offset(0),
+            offset(i64::try_from(hot).expect("a small count")),
+        )
+        .expect("an index that answers");
+        assert_eq!(
+            amp.tail_objects(),
+            hot,
+            "a fresh partition's objects are all inside the tail window"
+        );
+        assert_eq!(
+            amp.first_tail_base(),
+            Some(offset(0)),
+            "the boundary is the first of them, in ascending order"
+        );
+    }
+
+    #[test]
+    fn a_range_wholly_in_history_reports_no_tail() {
+        let mut counts = vec![1_u32; 4];
+        counts.extend(std::iter::repeat_n(1_u32, TAIL_WINDOW_ENTRIES));
+        let index = index_of(&counts);
+        let amp = read_amp(&index, &topic(), partition(), offset(0), offset(4))
+            .expect("an index that answers");
+        assert_eq!(amp.tail_objects(), 0);
+        assert_eq!(amp.first_tail_base(), None);
     }
 }

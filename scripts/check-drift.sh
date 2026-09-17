@@ -308,6 +308,13 @@ declare -A RUST_BOUNDS=(
   # fine and lowering makes it never fire. ⚠️ UNDERIVED, and the doc comment
   # says so -- `M14` replaces it with a measurement.
   ["crates/oqueue-compact/src/read_amp.rs|COMPACTED_OBJECT_RECORDS"]="524_288"
+  # The amplification a range must strictly exceed before compaction plans it
+  # (`M5.2`, `ADR-0036`). ⚠️ Weakening is *lowering*: a lower threshold plans
+  # ranges that were fine, spending PUTs and rewriting acknowledged data for
+  # no measured read benefit. Raising it is a different failure -- reads stay
+  # amplified -- which is why it is pinned rather than bounded on one side.
+  # UNDERIVED: `M5.md` calls the 8-16 band synthesis, and `M14` replaces it.
+  ["crates/oqueue-compact/src/plan.rs|COMPACTION_READ_AMP_THRESHOLD"]="12"
   # How many object-storage reads one parked `Fetch` may make. Raising it lets
   # a client's read volume be set by somebody else's write rate.
   ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"
