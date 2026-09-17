@@ -7,7 +7,8 @@
 # Non-negotiable 5, and `architecture.md`'s "Sans-I/O" section: "a concrete
 # socket type named inside a library crate is a violation; a generic bound is
 # not." This is a grep gate against **five** patterns — four project-wide-ish,
-# and a fifth (`M5.38`) that runs against one named file. ⚠️ **Three are
+# and a fifth (`M5.38`, widened by `M5.47`) that runs against one crate's
+# planning half. ⚠️ **Three are
 # literal-identifier matches** where a false positive is rare — unlike
 # `check-drift.sh`'s same-line heuristic, a concrete type name like
 # `TcpStream` cannot also be a generic bound — and so is the fifth, the
@@ -22,7 +23,8 @@
 # first reach.
 #
 # ## The five patterns: three project-wide except two named crates, one that
-# ## runs in exactly one crate, and one that runs against a single file
+# ## runs in exactly one crate, and one that runs against one crate's planning
+# ## half
 #
 # - **A concrete socket type.** `TcpStream`/`TcpListener`/`UdpSocket`/
 #   `UnixStream`/`UnixListener`, from `std::net`, `tokio::net`, or bare after a
@@ -67,13 +69,19 @@
 #   library crate, and `oqueue-broker` is exempt here too, for the same
 #   reason as the other two.
 #
-# - **A store named in the compaction trigger.** `read_amp.rs` in
-#   `oqueue-compact` may not name the store seam at all — the fake and the
-#   three wrappers included, so the pattern is a substring rather than a word
-#   match (`M5.38`). ⚠️ **It is a rule about one file, not about a crate**:
-#   `M5.4`'s merge executor legitimately brings a store into that crate, and
-#   what may not have one is the function evaluated per candidate partition
-#   per sweep (`ADR-0036` decision 1). An unreadable or moved file fails it,
+# - **A store named in compaction's planning half.** No file under
+#   `oqueue-compact/src` may name the store seam — the fake and the three
+#   wrappers included, so the pattern is a substring rather than a word match
+#   (`M5.38`) — **except** the executor's, which `EXECUTOR_FILES` names in
+#   this script. ⚠️ **It was a rule about one file until `M5.47`**, and two
+#   commits later `plan.rs` and `sweep.rs` were each claiming the property in
+#   their own docs with nothing holding either: a rule scoped to one file is
+#   one the next file does not inherit. The merge executor legitimately brings
+#   a store into that crate, so it is listed rather than exempted by pattern,
+#   and adding a file to that list is a diff with a reason. What may not have
+#   one is everything evaluated per candidate partition per sweep (`ADR-0036`
+#   decision 1). A moved directory, a sweep that finds no file, and an
+#   exemption naming a file that does not exist each fail it,
 #   because a rule that cannot read its own file is holding nothing.
 #
 # ## What this does not catch
@@ -96,7 +104,7 @@
 #   `check-unsafe.sh` (M-1.11) are what bound `unsafe` to begin with.
 # - **A store the compaction trigger reaches through a generic declared
 #   elsewhere** (`M5.39`, naming what `M5.38` left unnamed here). The fifth
-#   pattern forbids the store seam's name inside `read_amp.rs`; a
+#   pattern forbids the store seam's name in the planning files; a
 #   `Trigger<S>` declared in another module, with that file holding only a
 #   method call on a bound it never spells, passes. A grep cannot see a type
 #   it is not shown, and what closes it is a reviewer noticing the trigger
@@ -315,18 +323,34 @@ scan_pattern() {
   done <<< "$matches"
 }
 
-# ⚠️ **The fifth pattern: the compaction trigger may name no store at all**
-# (`M5.38`). `read_amp` is evaluated for every candidate partition on every
-# sweep, so one store call there is a per-partition cost at sweep cadence and
-# `ADR-0036`'s whole cost argument is about not paying it. The four patterns
-# above cannot hold that: `STORE_RE` looks for SDK paths, and the store this
-# crate could reach is `oqueue_core::ObjectStore`, a `pub trait` the seam
-# exists to make injectable. ⚠️ **Nor does the dependency set hold it** --
-# `oqueue-core` exports `ObjectStore` and `FakeObjectStore`, so depending on
-# `oqueue-core` alone leaves a store one `use` away, and `M5.4`'s merge
-# executor will legitimately bring one into this crate. This is a rule about
-# one file, and it is stated where a change to that file trips it.
-TRIGGER_FILE="crates/oqueue-compact/src/read_amp.rs"
+# ⚠️ **The fifth pattern: compaction's planning half may name no store at all**
+# (`M5.38`, widened by `M5.47`). `read_amp` is evaluated for every candidate
+# partition on every sweep, so one store call there is a per-partition cost at
+# sweep cadence and `ADR-0036`'s whole cost argument is about not paying it.
+# The four patterns above cannot hold that: `STORE_RE` looks for SDK paths, and
+# the store this crate could reach is `oqueue_core::ObjectStore`, a `pub trait`
+# the seam exists to make injectable. ⚠️ **Nor does the dependency set hold
+# it** -- `oqueue-core` exports `ObjectStore` and `FakeObjectStore`, so
+# depending on `oqueue-core` alone leaves a store one `use` away, and the merge
+# executor legitimately brings one into this crate.
+#
+# ⚠️ **Scoped to the crate with the executor named as the exception, rather
+# than to one file** (`M5.47`). `M5.38` wrote this leg for `read_amp.rs` alone,
+# and two commits later `plan.rs` and `sweep.rs` were each asserting in their
+# own docs that they cost no object-storage operation with nothing holding
+# either -- the convention abandoned by the next task that used it, which is
+# the shape `M5.38` exists to stop. A default of "no store" with a named list
+# of files that may have one inverts that: a new planner file is covered the
+# moment it exists, and a new *executor* file has to be added here, in a diff,
+# with a reason.
+PLANNING_DIR="crates/oqueue-compact/src"
+# The executor: the half that reads and writes objects by design. Each entry is
+# a path relative to the repository root.
+EXECUTOR_FILES=(
+  "crates/oqueue-compact/src/merge.rs"
+  "crates/oqueue-compact/src/merge/outcome.rs"
+  "crates/oqueue-compact/src/layout.rs"
+)
 # ⚠️ **A substring, deliberately, and no `\b`.** Four types in `oqueue-core`
 # end in this name -- the seam itself, the fake beside it, and the chunked,
 # merging and counting wrappers -- so a word-boundary match on the bare
@@ -337,23 +361,26 @@ TRIGGER_FILE="crates/oqueue-compact/src/read_amp.rs"
 # written against.
 TRIGGER_RE='ObjectStore'
 trigger_violations=0
+planning_scanned=0
+
+is_executor() {
+  local candidate="$1" known
+  for known in "${EXECUTOR_FILES[@]}"; do
+    [[ "$candidate" == "$known" ]] && return 0
+  done
+  return 1
+}
 
 # ⚠️ **`grep`'s status is three-valued and this reads all three.** 0 matched,
 # 1 clean, 2+ could not read -- and an unreadable file answering "clean" is the
 # class `M4.50`, `M4.68` and `M5.37` each found in a gate that wrote
 # `|| true`. Here the third value fails, because a rule that cannot read its
 # own file is holding nothing.
-scan_trigger() {
-  local matches status
-  if [[ ! -f "$TRIGGER_FILE" ]]; then
-    fail "$TRIGGER_FILE does not exist, so the compaction trigger's no-store rule holds nothing"
-    note "a rule whose file moved is a rule nobody is keeping -- point it at the new path"
-    trigger_violations=$((trigger_violations + 1))
-    return 0
-  fi
-  matches="$(grep -nE "$TRIGGER_RE" "$TRIGGER_FILE")" && status=0 || status=$?
+scan_one_planning_file() {
+  local file="$1" matches status
+  matches="$(grep -nE "$TRIGGER_RE" "$file")" && status=0 || status=$?
   if (( status >= 2 )); then
-    fail "cannot read $TRIGGER_FILE (grep exit $status)"
+    fail "cannot read $file (grep exit $status)"
     note "an unreadable file is not a clean one"
     trigger_violations=$((trigger_violations + 1))
     return 0
@@ -361,12 +388,48 @@ scan_trigger() {
   (( status == 1 )) && return 0
   while IFS= read -r m; do
     [[ -n "$m" ]] || continue
-    fail "the compaction trigger names a store: $TRIGGER_FILE:${m%%:*}"
+    fail "compaction's planning half names a store: $file:${m%%:*}"
     note "$(printf '%s' "${m#*:}" | sed -E 's/^[[:space:]]+//')"
-    note "read_amp is evaluated per candidate partition per sweep -- ADR-0036 decision 1"
-    note "a store belongs in the executor, not in the trigger"
+    note "planning is evaluated per candidate partition per sweep -- ADR-0036 decision 1"
+    note "a store belongs in the executor; if this file IS the executor, add it"
+    note "to EXECUTOR_FILES in this script, in the same commit, with a reason"
     trigger_violations=$((trigger_violations + 1))
   done <<< "$matches"
+}
+
+scan_trigger() {
+  local file found=0
+  # ⚠️ **The directory must exist and must hold files.** An empty sweep is how
+  # a gate reports success while checking nothing -- the failure class this
+  # whole script's header names -- so zero planning files is a failure, not a
+  # clean run.
+  if [[ ! -d "$PLANNING_DIR" ]]; then
+    fail "$PLANNING_DIR does not exist, so compaction's no-store rule holds nothing"
+    note "a rule whose directory moved is a rule nobody is keeping"
+    trigger_violations=$((trigger_violations + 1))
+    return 0
+  fi
+  while IFS= read -r file; do
+    [[ -n "$file" ]] || continue
+    is_executor "$file" && continue
+    found=$((found + 1))
+    scan_one_planning_file "$file"
+  done < <(find "$PLANNING_DIR" -name '*.rs' -type f | sort)
+  planning_scanned="$found"
+  if (( found == 0 )); then
+    fail "no planning files under $PLANNING_DIR, so this leg checked nothing"
+    note "every .rs file there is listed as an executor, or the crate moved"
+    trigger_violations=$((trigger_violations + 1))
+  fi
+  # ⚠️ **An executor entry that names no file is a stale exemption**, and it
+  # would exempt nothing while reading as though it does -- the same fail-open
+  # in the other direction.
+  for file in "${EXECUTOR_FILES[@]}"; do
+    [[ -f "$file" ]] && continue
+    fail "EXECUTOR_FILES names $file, which does not exist"
+    note "an exemption for an absent file exempts nothing and hides a moved one"
+    trigger_violations=$((trigger_violations + 1))
+  done
 }
 
 for f in "${files[@]}"; do
@@ -398,7 +461,7 @@ scan_trigger
 
 if (( violations == 0 && real_clock_violations == 0 && trigger_violations == 0 )); then
   ok "no library crate touches a socket, the real clock, or object storage ($scanned file(s) scanned)"
-  ok "the compaction trigger names no store ($TRIGGER_FILE)"
+  ok "compaction's planning half names no store ($planning_scanned file(s), ${#EXECUTOR_FILES[@]} executor file(s) excepted)"
 else
   if (( violations > 0 )); then
     note "business logic is sans-I/O -- non-negotiable 5"

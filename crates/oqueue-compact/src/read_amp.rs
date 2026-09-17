@@ -7,15 +7,19 @@
 //! [`MaterializedIndex`] rather than anything that can reach a network.
 //!
 //! ⚠️ **What holds that is this function's signature, plus one leg of
-//! `check-sans-io.sh` written for this file** (`M5.38`). It is *not* the
+//! `check-sans-io.sh`** (`M5.38`, widened by `M5.47`). It is *not* the
 //! dependency set: `oqueue-core` exports the store seam and a fake beside it,
-//! so a store is one `use` away from here and `M5.4`'s merge executor will
-//! legitimately bring one into the crate. Nor is it that gate's four SDK
-//! patterns, which look for vendor paths and would not see a call through the
-//! core seam. The leg forbids that seam's name in this file outright — ⚠️ **so
-//! this paragraph may not write it either**, which is the cost of a rule that
-//! greps rather than parses, and cheaper than a rule that reads a doc comment
-//! as an exemption. It fails if the file is unreadable or has moved.
+//! so a store is one `use` away from here and the merge executor legitimately
+//! brings one into the crate. Nor is it that gate's four SDK patterns, which
+//! look for vendor paths and would not see a call through the core seam. The
+//! leg forbids that seam's name in **every** file under this crate's `src/`
+//! except the executor's, which it names — ⚠️ **so this paragraph may not write it
+//! either**, which is the cost of a rule that greps rather than parses, and
+//! cheaper than a rule that reads a doc comment as an exemption. ⚠️ **It was
+//! this file alone until `M5.47`**, and two commits after it was written
+//! `plan.rs` and `sweep.rs` were each claiming the same property with nothing
+//! holding either: a rule scoped to one file is a rule the next file does not
+//! inherit.
 //!
 //! ⚠️ **Never triggered on object count**, which `M5.md` task 1 forbids
 //! outright: object *count* is a coordinator cost and object *bytes* are a

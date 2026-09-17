@@ -25,7 +25,7 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 | Must stay true | Held by |
 |---|---|
 | No acknowledged record is lost by a rewrite | `M5`'s tests; NFR-20 |
-| The compaction trigger costs no object-storage operation | `read_amp`'s signature, which takes a `MaterializedIndex` and no store, and `check-sans-io.sh`'s `read_amp` leg, which forbids that seam's name — the fake and the three wrappers included — anywhere in that file, and fails if the file is unreadable or has moved; `ADR-0036`, `M5.38`. ⚠️ **Not** the dependency set — `oqueue-core` exports `ObjectStore` — and **not** the gate's SDK patterns, which a call through the core trait does not match |
+| Compaction's planning half costs no object-storage operation | `read_amp`, `plan` and `sweep` take a `MaterializedIndex` and no store, and `check-sans-io.sh`'s planning leg forbids that seam's name — the fake and the three wrappers included — in **every** file under `src/` except the executor's (`merge.rs`, `merge/outcome.rs`, `layout.rs`), which are named in the script. It fails if the directory has moved, if it finds no file to check, or if an exempted file does not exist; `ADR-0036`, `M5.38`, widened by `M5.47` after `plan.rs` and `sweep.rs` each claimed the property with nothing holding it. ⚠️ **Not** the dependency set — `oqueue-core` exports `ObjectStore` — and **not** the gate's SDK patterns, which a call through the core trait does not match |
 
 ## Notes for whoever touches this
 
