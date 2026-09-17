@@ -35,10 +35,22 @@ pub const COMPACTION_PLAN_RECORDS_BUDGET: i64 = 524_288;
 ///
 /// ⚠️ **Estimated from the index, so the estimate costs nothing** — it is
 /// arithmetic over the measurement that selected the range, and reaches no
-/// store. ⚠️ **`puts` is one per output object and not one per multipart
-/// part**: `M5.6`'s writer decides the part size, so the number this reports
-/// is a floor until that exists, and `M5.4` is where the estimate is checked
-/// against an executor's actual counts.
+/// store.
+///
+/// ⚠️ **It is denominated in records, and carries no byte length and no
+/// request count** (`ADR-0039`). The history tier holds no byte range, so
+/// either quantity would need a GET per candidate — the cost this estimate
+/// exists to bound, paid to bound it. And a multipart write's request count is
+/// a function of the output's byte length, which is the quantity that is not
+/// there. Both are measured after the run instead, by
+/// [`MergeOutcome::written`](crate::MergeOutcome::written) — which reports
+/// *parts*, not requests, for the reason its own doc gives; `M14` is the
+/// milestone that can calibrate a model against what those measurements say.
+///
+/// ⚠️ **So `puts` counts output *objects*, and a round's request count is not
+/// derivable from it.** A multipart write of one object costs `parts + 2`
+/// requests — the backend's create and complete bracket the parts — so
+/// reading `puts` as a request count understates each object by `parts + 1`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CostEstimate {
     gets: usize,

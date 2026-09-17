@@ -67,13 +67,14 @@ where
 {
     let mut stream = BundleStream::open(store, output).await?;
     let (gets, records) = gather(store, plan, inputs, &mut stream).await?;
-    let spans = stream.finish().await?;
+    let (spans, written) = stream.finish().await?;
 
     Ok(MergeOutcome {
         gets,
         puts: 1,
         records,
         spans,
+        written,
     })
 }
 

@@ -39,10 +39,14 @@ use oqueue_core::{MaterializedIndex, Offset, PartitionId, Result, TopicId};
 /// How many records a compacted object is written to hold.
 ///
 /// ⚠️ **UNDERIVED — synthesis, not measurement**, the same status `M5.md`'s
-/// risks section gives the 8-16 amplification threshold: doc 14 §7's one
-/// published segment-merge datapoint is Redpanda's 500 MiB, which at this
-/// project's modelled ~1 KiB record is ~512k records. `M14` is the milestone
-/// that replaces this with a number, and nothing may cite it as derived.
+/// risks section gives the 8-16 amplification threshold: doc 14's one
+/// published segment-merge datapoint is Redpanda's 500 MiB, and 512k records
+/// is that figure at a record size of 1 KiB. ⚠️ **That record size is not this
+/// project's model, and calling it one was this comment's own defect**
+/// (`M5.7`): no requirement, no NFR and no research document states a modelled
+/// record size, so 1 KiB is an assumption made here to turn a byte figure into
+/// a record figure, and it is named as one. `M14` is the milestone that
+/// replaces this with a number, and nothing may cite it as derived.
 ///
 /// ⚠️ **In records rather than bytes, because the index does not hold bytes
 /// for history.** A [`TailEntry`](oqueue_core::TailEntry) carries a byte range

@@ -15,7 +15,7 @@
 
 use oqueue_core::{
     BUNDLE_PART_BYTES, BundleStream, ByteRange, Error, FakeObjectStore, FaultConfig, ObjectKey,
-    ObjectStore, PartitionId, PushedRecords, StormKind, TopicId, parse_footer,
+    ObjectStore, PartitionId, PushedRecords, StormKind, TopicId, Written, parse_footer,
 };
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
@@ -104,6 +104,56 @@ fn a_second_stream_to_one_key_overwrites_it() {
     assert_eq!(read, b"second".to_vec(), "last writer wins, by design");
 }
 
+/// Writes 200 quarter-part regions and reports the peak buffered bytes beside
+/// what the write cost.
+///
+/// ⚠️ **One run feeding two claims**, rather than two tests each doing their
+/// own: the run writes fifty parts, and doing it twice would double the
+/// wall-clock and the fake's memory to assert two facts about the same write.
+async fn fifty_parts(store: &FakeObjectStore, key: &ObjectKey) -> (usize, Written) {
+    let records = vec![b'r'; BUNDLE_PART_BYTES / 4];
+    let mut stream = BundleStream::open(store, key).await.expect("a stream");
+    assert_eq!(stream.buffered(), 0, "nothing is buffered before a push");
+    assert_eq!(stream.written(), 0, "and nothing has been written");
+    assert_eq!(stream.parts(), 0, "and no part has gone to the writer");
+    let mut peak = 0;
+    for which in 0..200_u32 {
+        stream
+            .push(
+                TopicId::new("t").expect("a valid topic"),
+                PartitionId::new(0).expect("a valid partition"),
+                PushedRecords {
+                    count: which + 1,
+                    producer: None,
+                },
+                &records,
+            )
+            .await
+            .expect("a region");
+        let buffered = stream.buffered();
+        if which == 0 {
+            assert_eq!(
+                buffered,
+                records.len(),
+                "one quarter-part push buffers exactly that much"
+            );
+            assert_eq!(
+                stream.written(),
+                records.len() as u64,
+                "and counts it as written, buffered or not"
+            );
+            assert_eq!(stream.parts(), 0, "nothing has filled a part yet");
+        }
+        if which == 3 {
+            assert_eq!(stream.parts(), 1, "four quarters fill exactly one part");
+        }
+        peak = peak.max(buffered);
+    }
+    assert_eq!(stream.parts(), 50, "fifty full parts, before the footer's");
+    let (_, cost) = stream.finish().await.expect("a sealed object");
+    (peak, cost)
+}
+
 /// ⚠️ **The criterion `M5.4` deferred here: peak memory stays under the bound
 /// while the object is 50x it.** `BundleStream::buffered` is what makes the
 /// claim observable — a test that cannot see it can only believe it.
@@ -111,38 +161,7 @@ fn a_second_stream_to_one_key_overwrites_it() {
 fn a_stream_holds_at_most_one_part_while_writing_fifty() {
     let store = FakeObjectStore::new();
     let key = key("fifty-parts");
-    let records = vec![b'r'; BUNDLE_PART_BYTES / 4];
-
-    let peak = block_on(async {
-        let mut stream = BundleStream::open(&store, &key).await.expect("a stream");
-        assert_eq!(stream.buffered(), 0, "nothing is buffered before a push");
-        let mut peak = 0;
-        for which in 0..200_u32 {
-            stream
-                .push(
-                    TopicId::new("t").expect("a valid topic"),
-                    PartitionId::new(0).expect("a valid partition"),
-                    PushedRecords {
-                        count: which + 1,
-                        producer: None,
-                    },
-                    &records,
-                )
-                .await
-                .expect("a region");
-            let buffered = stream.buffered();
-            if which == 0 {
-                assert_eq!(
-                    buffered,
-                    records.len(),
-                    "one quarter-part push buffers exactly that much"
-                );
-            }
-            peak = peak.max(buffered);
-        }
-        stream.finish().await.expect("a sealed object");
-        peak
-    });
+    let (peak, cost) = block_on(fifty_parts(&store, &key));
 
     assert!(
         peak < BUNDLE_PART_BYTES,
@@ -154,6 +173,20 @@ fn a_stream_holds_at_most_one_part_while_writing_fifty() {
         written.len() > BUNDLE_PART_BYTES * 40,
         "and the object really is many parts long: {} bytes",
         written.len()
+    );
+
+    // ⚠️ **What it cost, counted rather than estimated** (`ADR-0039`). 200
+    // quarter-part pushes are 50 parts of records, and the footer's own part
+    // is the 51st -- a number no `CostEstimate` can predict, because it is a
+    // function of the output's byte length. ⚠️ **Parts, not requests**: a real
+    // backend brackets these with a create and a complete that this seam
+    // cannot see.
+    let pushed = (BUNDLE_PART_BYTES / 4) as u64 * 200;
+    assert_eq!(cost.bytes(), pushed, "every record byte, footer excluded");
+    assert_eq!(cost.parts(), 51, "fifty full parts, and the footer's");
+    assert!(
+        u64::try_from(written.len()).expect("a representable length") > cost.bytes(),
+        "the object is the records plus a footer, so it is longer than they are"
     );
 }
 
@@ -183,8 +216,19 @@ fn a_streamed_bundle_reads_back_through_the_footer() {
         }
         stream.finish().await.expect("a sealed object")
     });
+    let (spans, cost) = spans;
 
     assert_eq!(spans.len(), 2);
+    // ⚠️ **What it cost, measured rather than estimated** (`ADR-0039`): the
+    // two regions' record bytes, and the single part the footer went out in.
+    // ⚠️ Parts, not requests -- a real backend brackets these with a create
+    // and a complete this seam cannot see.
+    assert_eq!(cost.bytes(), 64, "two 32-byte regions, footer excluded");
+    assert_eq!(
+        cost.parts(),
+        1,
+        "nothing filled a part, so the seal is the only one"
+    );
     let written = block_on(store.get(&key, ByteRange::Full)).expect("the object");
     let regions = parse_footer(&written, written.len() as u64).expect("a valid footer");
     assert_eq!(regions.len(), 2);

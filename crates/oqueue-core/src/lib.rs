@@ -98,7 +98,7 @@ pub use authz::authorize;
 pub use bundle::{BUNDLE_FORMAT_VERSION, BundleBuilder, PushedRecords, Region, RegionAlg, Sealed};
 pub use bundle_footer::parse_footer;
 pub use bundle_name::BundleNamer;
-pub use bundle_stream::{BUNDLE_PART_BYTES, BundleStream};
+pub use bundle_stream::{BUNDLE_PART_BYTES, BundleStream, Written};
 pub use byte_range::ByteRange;
 pub use chunk::ChunkedObjectStore;
 pub use clock::{Clock, FakeClock, Timestamp};

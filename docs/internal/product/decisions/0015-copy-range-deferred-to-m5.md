@@ -1,6 +1,6 @@
 # 0015. Server-side `copy_range` is deferred to `M5`; `M1.18` is dissolved
 
-Status: accepted
+Status: accepted; 2026-09-18 (`M5.7`): **discharged by `ADR-0039`**, which decides not to build `copy_range` at all. The deferral's premise held — the upstream gap is unchanged at the pinned 0.14.1 — and the reason for the decision is one this ADR could not have: a merge reorders regions and rewrites the footer, so a server-side range copy cannot express the operation whatever upstream exposes.
 Date: 2026-08-17
 Requirements: FR-31
 

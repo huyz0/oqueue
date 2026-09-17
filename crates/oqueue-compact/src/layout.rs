@@ -14,7 +14,7 @@
 
 use oqueue_core::{
     BundleStream, CommittedSpan, Error, MaterializedIndex, ObjectKey, ObjectRef, ObjectStore,
-    Result,
+    Result, Written,
 };
 
 use std::collections::HashMap;
@@ -159,7 +159,7 @@ where
         // ⚠️ **Not an error.** A sweep over a quiet cluster finds no candidate
         // every thirty minutes, and a round that reports failure for having
         // nothing to do is a failure an operator learns to ignore.
-        return Ok(MergeOutcome::new(0, 0, 0, Vec::new()));
+        return Ok(MergeOutcome::new(0, 0, 0, Vec::new(), Written::default()));
     }
 
     // ⚠️ **Topic, then partition, then offset.** A fetch of one partition's
@@ -185,9 +185,9 @@ where
         gets += read;
         records += moved;
     }
-    let spans: Vec<CommittedSpan> = stream.finish().await?;
+    let (spans, written): (Vec<CommittedSpan>, _) = stream.finish().await?;
 
-    Ok(MergeOutcome::new(gets, 1, records, spans))
+    Ok(MergeOutcome::new(gets, 1, records, spans, written))
 }
 
 /// Refuses a round whose plans overlap, or whose total is over the budget.

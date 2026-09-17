@@ -31,6 +31,53 @@ use crate::{CommittedSpan, MultipartWriter, ObjectKey, ObjectStore, PartitionId,
 /// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
 pub const BUNDLE_PART_BYTES: usize = 8_388_608;
 
+/// What writing an object actually cost, as opposed to what it was estimated
+/// to cost.
+///
+/// ⚠️ **Measured, not modelled** (`ADR-0039`). A compaction plan is costed in
+/// records because the index holds no byte length for history, so neither the
+/// egress a client-side copy pays nor the number of parts a multipart write
+/// takes is predictable before the run. Both are exact here, and `M14` is the
+/// milestone that can calibrate a model against them.
+///
+/// ⚠️ **Parts are not requests**, and nothing here reports requests: a
+/// backend's `CreateMultipartUpload` and `CompleteMultipartUpload` are issued
+/// inside the writer, so a real S3 write costs `parts + 2` and a reader
+/// treating this as a request count undercounts every object by two.
+/// `roadmap.md`'s "Multipart's true per-request cost" row (M14, from M1) is
+/// what makes the real number observable.
+///
+/// ⚠️ **`Default` is the empty write**, which an empty round is: zero bytes in
+/// zero parts, and not "unknown".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Written {
+    bytes: u64,
+    parts: usize,
+}
+
+impl Written {
+    /// Record bytes moved, footer excluded.
+    #[must_use]
+    pub const fn bytes(&self) -> u64 {
+        self.bytes
+    }
+
+    /// Parts handed to the writer, footer part included.
+    ///
+    /// ⚠️ **Not the request count, and this is the distinction that makes it
+    /// honest.** A backend's `CreateMultipartUpload` and
+    /// `CompleteMultipartUpload` are issued inside the writer and are not
+    /// visible at this seam, so a real S3 write costs `parts + 2` requests.
+    /// `roadmap.md`'s "Multipart's true per-request cost" row (M14, from M1)
+    /// is what makes that observable; until then a round's request count is
+    /// not derivable from anything here, and a caller that reads this as one
+    /// understates every object by two.
+    #[must_use]
+    pub const fn parts(&self) -> usize {
+        self.parts
+    }
+}
+
 /// A bundled object being written to a streaming writer.
 ///
 /// ⚠️ **Region metadata is built through [`BundleBuilder`] rather than beside
@@ -44,6 +91,14 @@ pub struct BundleStream<'store> {
     regions: BundleBuilder,
     buffer: Vec<u8>,
     written: u64,
+    /// Parts handed to the writer, footer part included once `finish` runs.
+    ///
+    /// ⚠️ **A quantity no estimate can predict** (`ADR-0039`): how many parts
+    /// a merge takes is a function of the output's byte length, and the byte
+    /// length of a merged object is not derivable from the index — the history
+    /// tier holds no byte range. So it is counted here rather than modelled
+    /// anywhere. ⚠️ It is **parts**, not requests — see [`Written::parts`].
+    parts: usize,
 }
 
 impl<'store> BundleStream<'store> {
@@ -61,6 +116,7 @@ impl<'store> BundleStream<'store> {
             regions: BundleBuilder::new(),
             buffer: Vec::with_capacity(BUNDLE_PART_BYTES),
             written: 0,
+            parts: 0,
         })
     }
 
@@ -86,8 +142,30 @@ impl<'store> BundleStream<'store> {
             let rest = self.buffer.split_off(BUNDLE_PART_BYTES);
             let part = core::mem::replace(&mut self.buffer, rest);
             self.writer.write_part(part).await?;
+            self.parts += 1;
         }
         Ok(())
+    }
+
+    /// Bytes of records pushed so far, footer excluded.
+    ///
+    /// ⚠️ **Records only, and the footer is deliberately not in it** until
+    /// [`finish`](Self::finish) adds it: this is what a caller compares
+    /// against what it read, and a footer is what this object adds rather than
+    /// what it moved.
+    #[must_use]
+    pub const fn written(&self) -> u64 {
+        self.written
+    }
+
+    /// Parts the writer has been handed, footer part included after
+    /// [`finish`](Self::finish).
+    ///
+    /// ⚠️ **Parts, not requests** — see [`Written::parts`] for what that costs
+    /// a reader who conflates them.
+    #[must_use]
+    pub const fn parts(&self) -> usize {
+        self.parts
     }
 
     /// How many bytes are buffered but not yet sent.
@@ -105,14 +183,22 @@ impl<'store> BundleStream<'store> {
     /// # Errors
     ///
     /// [`BundleBuilder::seal`]'s own errors, and whatever the writer says.
-    pub async fn finish(mut self) -> Result<Vec<CommittedSpan>> {
+    pub async fn finish(mut self) -> Result<(Vec<CommittedSpan>, Written)> {
         let (footer, spans) = self.regions.into_footer()?;
+        let bytes = self.written;
         self.buffer.extend_from_slice(&footer);
         // ⚠️ **Whatever is left goes as one part, however small.** Every
         // backend bounds a part's size from below *except the last*, which is
         // exactly this one.
         self.writer.write_part(self.buffer).await?;
+        self.parts += 1;
         self.writer.finish().await?;
-        Ok(spans)
+        Ok((
+            spans,
+            Written {
+                bytes,
+                parts: self.parts,
+            },
+        ))
     }
 }
