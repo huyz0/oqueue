@@ -301,6 +301,13 @@ declare -A RUST_BOUNDS=(
   # lowering it makes the two curves diverge the other way. A change here is
   # a decision about `ADR-0008`'s translation, not a tuning knob.
   ["crates/oqueue-store/src/retry.rs|BACKOFF_BASE"]="2.0"
+  # How many records a compacted object is written to hold -- the denominator
+  # read amplification is measured against (`M5.1`, `ADR-0036`). Raising it
+  # raises every partition's measured amplification, so it is a threshold in
+  # both directions: raising makes compaction fire on ranges that are already
+  # fine and lowering makes it never fire. ⚠️ UNDERIVED, and the doc comment
+  # says so -- `M14` replaces it with a measurement.
+  ["crates/oqueue-compact/src/read_amp.rs|COMPACTED_OBJECT_RECORDS"]="524_288"
   # How many object-storage reads one parked `Fetch` may make. Raising it lets
   # a client's read volume be set by somebody else's write rate.
   ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"

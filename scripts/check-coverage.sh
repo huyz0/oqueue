@@ -90,7 +90,6 @@ COVERAGE_FLOOR=85
 # crate starts to matter.
 declare -A UNTIL_FILLED=(
   [oqueue-buf]="empty skeleton — M2 fills it"
-  [oqueue-compact]="empty skeleton — M5 fills it"
 )
 
 # `ALWAYS` — excluded *for what the crate is*, permanently, and expected to have

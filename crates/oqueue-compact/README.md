@@ -25,7 +25,9 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 | Must stay true | Held by |
 |---|---|
 | No acknowledged record is lost by a rewrite | `M5`'s tests; NFR-20 |
+| The compaction trigger costs no object-storage operation | `check-sans-io.sh`, and `oqueue-core` being this crate's only dependency; `ADR-0036` |
 
 ## Notes for whoever touches this
 
 - **Compaction rewrites data that has already been acknowledged.** NFR-20 — no acknowledged record is ever lost — is the requirement everything here yields to.
+- **Read amplification is the only trigger.** Never object count: `M5.md` task 1 forbids it, because object count is a coordinator cost and a partition whose many objects are never read together has no amplification to fix.
