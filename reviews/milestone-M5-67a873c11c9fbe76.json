@@ -1,0 +1,83 @@
+{
+  "commits": [
+    "232073c36047a2fed09d16ef5c39198d77d2ece3",
+    "37f2e79df671ddc7119a3063457fc77951e129a2",
+    "97cb59315b6471e94179be74da94571287cbe120",
+    "8dff34e212d474cd0f1fc364174052f17372923f",
+    "2b5281a3879d39b7cdb27c4d747731562b6dfc87",
+    "9baf5edb1b87d9a40f91734984dce4749cd11003",
+    "1e08a5be500eef2a832ea1c7c7a7f0b427fbf7ac",
+    "ad65b4e2bd4868b4b1143a35fc05bd6837f036d5",
+    "36c1ede9ebf6939c9c31234ebebd72a0699749cf",
+    "69bf7fab7688ee3c578c381f24d5f31bf4f4a5e2",
+    "6762709db4d38822c06a5fd6ecc35cfbeb815075",
+    "ee06ef8454455ae8798d79ae38b9e60ab09e4a47"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-compact/src/sweep.rs:195-198 sets window_end = candidate.from() + COMPACTION_PLAN_RECORDS_BUDGET clipped to end_offset; crates/oqueue-compact/src/plan.rs:373-396 carries start/end through verbatim (only the tail trim lands on an object base). crates/oqueue-compact/src/merge.rs tiling() refuses unless the first input's base == plan.start() and the last input's end_offset() == plan.end(), returning Error::IndexObjectMismatch, and merge_round propagates it, so one misaligned candidate fails the whole round. Compare every merge fixture in crates/oqueue-compact/tests/it/support.rs (planned_from / planned_records build end = per * objects, always object-aligned) against tests/it/sweep.rs, which never runs a swept plan through merge. Also: PlannedInputs::new takes the ObjectRef list from a caller and no function in the crate derives it from the index, though read_amp already walks exactly those batches. No backlog row owns either half; M5.13 is the swap and M5.15 the claim.",
+      "id": "6151b47a4a4d",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "A plan the sweep produces cannot be executed: sweep windows are offset arithmetic, merge demands an exact object-boundary tiling, and nothing resolves a plan into its inputs.",
+      "task_id": "M5.46"
+    },
+    {
+      "evidence": "scripts/check-sans-io.sh:329 TRIGGER_FILE is the single file crates/oqueue-compact/src/read_amp.rs. crates/oqueue-compact/src/sweep.rs:25-30 ('A sweep reads the coordinator's in-memory index and costs no object-storage operation') and src/plan.rs:340 ('Planning costs no object-storage operation') assert the same property for two files nothing guards, in a crate that now legitimately contains ObjectStore (merge.rs). crates/oqueue-compact/README.md:28's invariant table still names only read_amp. This is the exact defect M5.38 was filed for, one layer up.",
+      "id": "5163ecb31fde",
+      "kind": "standard-not-followed",
+      "severity": "major",
+      "summary": "M5.38's rule that a no-store claim must have a mechanical holder was not extended when plan.rs and sweep.rs made the same claim.",
+      "task_id": "M5.47"
+    },
+    {
+      "evidence": "crates/oqueue-compact/src/merge.rs:11-13 says the output 'accumulates in a BundleBuilder and is PUT whole, so peak memory is one input plus the whole output' and that M5.6's writer 'makes that side streaming' \u2014 merge() uses BundleStream::open at line ~64. merge.rs:25 says 'the output is written IfAbsent so a retry cannot overwrite bytes an index entry already names', contradicted twenty lines below by merge()'s own Errors section ('Not PreconditionFailed: the seal is unconditional (ADR-0037)') and by ADR-0037 decision 2. docs/internal/product/backlog.md's M5.4 row repeats both claims.",
+      "id": "77e0f6222e9e",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "merge.rs's module doc describes the pre-M5.6 executor and contradicts its own code and its own Errors section.",
+      "task_id": "M5.48"
+    },
+    {
+      "evidence": "crates/oqueue-compact/src/cost.rs:39 still says puts 'is a floor until [M5.6's writer] exists' \u2014 it exists (BUNDLE_PART_BYTES in crates/oqueue-core/src/bundle_stream.rs). M5.4's acceptance ('CostEstimate::of predicts the run's GET and PUT counts') is satisfied by MergeOutcome's hardcoded puts: 1 in merge.rs and by tests/it/support.rs:98-104, where the Counting double increments puts once per open_multipart regardless of part count. baselines/mutants.txt:28 already records that M5.6 was named as its discharge and did not discharge it. The records budget is FR-34's only cost control and it is now denominated in a quantity that no longer tracks requests.",
+      "id": "727000e1f079",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "The cost estimate's PUT count agrees with the executor only because both are the literal 1, and after M5.6 a run's real request count is a function of the part size.",
+      "task_id": "M5.7"
+    },
+    {
+      "evidence": "crates/oqueue-compact/src/merge.rs take_regions() pushes PushedRecords { count, producer: None } for every region; the footer parse_footer reads carries no identity (M11.5 keeps producers parallel to Region, out of the footer) so it is structurally unrecoverable. M11.3's allocator rebuilds producer_state by folding MetadataEntry producer fields, so once M5.13 commits merged spans a producer's retried batch is admitted as new. Commit 1e08a5b's round-4 minor (3) says 'The next commit opens a row'; the next commits opened M5.42 and M5.43 and neither is this. grep 'producer' over docs/internal/product/backlog.md finds no M5 row.",
+      "id": "03f803651de5",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "Compaction erases idempotent-producer identity from every region it rewrites, against M11 which is complete, and the row M5.4's review promised was never opened.",
+      "task_id": "M5.49"
+    },
+    {
+      "evidence": "crates/oqueue-compact/src/cost.rs:678 (524_288, equal to COMPACTED_OBJECT_RECORDS), consumed as the window width in sweep.rs:195-198, as the round ceiling in layout.rs admissible(), and as the plan ceiling in CostEstimate::within_budget. One candidate with a full window consumes the entire round, so a round bundling several partitions only happens for small candidates. M5.6 was named as what earns the raise and did not raise it.",
+      "id": "f687ca122d58",
+      "kind": "spec-wrong",
+      "severity": "minor",
+      "summary": "COMPACTION_PLAN_RECORDS_BUDGET is simultaneously the per-plan budget, the sweep's per-candidate window width and the round ceiling, so the one-object-per-round bundling M5.5 exists for is mostly unreachable at the current value."
+    },
+    {
+      "evidence": "crates/oqueue-compact/src/merge/outcome.rs documents pub(crate) new() as preventing 'a caller reporting a run it did not make', while crates/oqueue-compact/src/merge.rs builds the struct literally through pub(super) fields and only layout.rs uses new().",
+      "id": "7d1d2dfd6b95",
+      "kind": "abstraction",
+      "severity": "minor",
+      "summary": "MergeOutcome is constructed two ways, which weakens the argument its own constructor doc makes."
+    },
+    {
+      "evidence": "crates/oqueue-compact/src/sweep.rs:172-177 skips a repeated (topic, partition) with no record, against Sweep's own doc at lines 117-121 arguing that a count is not enough for an operator to tell a backlog from a stall.",
+      "id": "b3183ae7f170",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "sweep() silently drops duplicate candidates while held_over was deliberately made operator-legible."
+    }
+  ],
+  "milestone": "M5",
+  "recorded_at": "2026-09-17T06:28:28Z",
+  "reviewer": "claude-opus-5 (milestone-review, did not drive M5)",
+  "verdict": "changes-requested"
+}
