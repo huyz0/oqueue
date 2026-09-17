@@ -315,6 +315,12 @@ declare -A RUST_BOUNDS=(
   # amplified -- which is why it is pinned rather than bounded on one side.
   # UNDERIVED: `M5.md` calls the 8-16 band synthesis, and `M14` replaces it.
   ["crates/oqueue-compact/src/plan.rs|COMPACTION_READ_AMP_THRESHOLD"]="12"
+  # The most records one compaction plan may rewrite (`M5.3`). ⚠️ Weakening is
+  # *raising*: the budget exists so a plan cannot grow past what one round can
+  # finish, and a bigger ceiling is a longer window in which a half-run merge
+  # could lose acknowledged data (NFR-20). Lowering it only defers more work.
+  # UNDERIVED -- eight compacted objects, ~4 GiB at the modelled record size.
+  ["crates/oqueue-compact/src/cost.rs|COMPACTION_PLAN_RECORDS_BUDGET"]="4_194_304"
   # How many object-storage reads one parked `Fetch` may make. Raising it lets
   # a client's read volume be set by somebody else's write rate.
   ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"

@@ -1,6 +1,6 @@
 //! Compaction planning: which `(partition, range)` is worth rewriting.
 
-use crate::{ReadAmp, read_amp};
+use crate::{CostEstimate, ReadAmp, read_amp};
 use oqueue_core::{MaterializedIndex, Offset, PartitionId, Result, TopicId};
 
 /// The amplification a range must exceed before it is worth rewriting.
@@ -15,6 +15,25 @@ use oqueue_core::{MaterializedIndex, Offset, PartitionId, Result, TopicId};
 ///
 /// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
 pub const COMPACTION_READ_AMP_THRESHOLD: u32 = 12;
+
+/// What planning a range concluded.
+///
+/// ⚠️ **Three outcomes rather than an `Option`**, because "not worth
+/// compacting" and "worth compacting and too big to do now" are different
+/// facts and an operator who cannot tell them apart cannot tell a quiet system
+/// from a stuck one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Planning {
+    /// Below the amplification threshold, or wholly inside the tail.
+    NotWorthIt,
+    /// Worth rewriting and over [`COMPACTION_PLAN_RECORDS_BUDGET`]: deferred
+    /// with its estimate, never truncated to fit.
+    ///
+    /// [`COMPACTION_PLAN_RECORDS_BUDGET`]: crate::COMPACTION_PLAN_RECORDS_BUDGET
+    Deferred(CostEstimate),
+    /// Planned, with the cost of running it.
+    Planned(CompactionPlan),
+}
 
 /// One range selected for rewriting, and the measurement that selected it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,6 +75,12 @@ impl CompactionPlan {
     pub const fn amplification(&self) -> ReadAmp {
         self.amplification
     }
+
+    /// What running it will cost.
+    #[must_use]
+    pub const fn cost(&self) -> CostEstimate {
+        CostEstimate::of(&self.amplification)
+    }
 }
 
 /// Plans a rewrite of `[start, end)`, or declines to.
@@ -91,7 +116,7 @@ pub fn plan<I>(
     partition: PartitionId,
     start: Offset,
     end: Offset,
-) -> Result<Option<CompactionPlan>>
+) -> Result<Planning>
 where
     I: MaterializedIndex + ?Sized,
 {
@@ -121,9 +146,13 @@ where
     // construction, and `a_range_straddling_the_tail_boundary_is_trimmed...`
     // asserts exactly that on the result.
     if amplification.ratio() <= f64::from(COMPACTION_READ_AMP_THRESHOLD) {
-        return Ok(None);
+        return Ok(Planning::NotWorthIt);
     }
-    Ok(Some(CompactionPlan {
+    let cost = CostEstimate::of(&amplification);
+    if !cost.within_budget() {
+        return Ok(Planning::Deferred(cost));
+    }
+    Ok(Planning::Planned(CompactionPlan {
         topic: topic.clone(),
         partition,
         start,
@@ -137,7 +166,7 @@ mod tests {
     // A panic in a test harness is the test failing, which is what it is for.
     #![allow(clippy::expect_used)]
 
-    use super::{COMPACTION_READ_AMP_THRESHOLD, plan};
+    use super::{COMPACTION_READ_AMP_THRESHOLD, Planning, plan};
     use crate::COMPACTED_OBJECT_RECORDS;
     use oqueue_core::{
         ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, MaterializedIndex,
@@ -214,7 +243,7 @@ mod tests {
             let planned = plan(&index, &topic(), partition(), offset(0), offset(objects))
                 .expect("an index that answers");
             assert_eq!(
-                planned.is_some(),
+                matches!(planned, Planning::Planned(_)),
                 expected,
                 "objects={objects} aged={aged}: amplified *and* out of the tail is the one \
                  case that plans"
@@ -234,7 +263,7 @@ mod tests {
                 offset(i64::from(COMPACTED_OBJECT_RECORDS))
             )
             .expect("an index that answers")
-            .is_none(),
+                == Planning::NotWorthIt,
             "one object at the compacted size is what compaction produces"
         );
     }
@@ -243,15 +272,16 @@ mod tests {
     fn a_plan_carries_the_measurement_that_selected_it() {
         let objects = 40_usize;
         let index = aged_index(&vec![1_u32; objects]);
-        let planned = plan(
+        let Planning::Planned(planned) = plan(
             &index,
             &topic(),
             partition(),
             offset(0),
             offset(i64::try_from(objects).expect("a small count")),
         )
-        .expect("an index that answers")
-        .expect("a plan");
+        .expect("an index that answers") else {
+            panic!("a plan")
+        };
         assert_eq!(planned.topic(), &topic());
         assert_eq!(planned.partition(), partition());
         assert_eq!(planned.start(), offset(0));
@@ -274,9 +304,12 @@ mod tests {
         ]);
         let whole = history + i64::try_from(TAIL_WINDOW_ENTRIES).expect("a small window");
 
-        let planned = plan(&index, &topic(), partition(), offset(0), offset(whole))
-            .expect("an index that answers")
-            .expect("a plan over the history portion");
+        let Planning::Planned(planned) =
+            plan(&index, &topic(), partition(), offset(0), offset(whole))
+                .expect("an index that answers")
+        else {
+            panic!("a plan over the history portion")
+        };
         assert_eq!(
             planned.end(),
             offset(history),
@@ -307,7 +340,7 @@ mod tests {
                 offset(whole)
             )
             .expect("an index that answers")
-            .is_none(),
+                == Planning::NotWorthIt,
             "tail data still served from cache is never rewritten"
         );
     }
@@ -322,16 +355,18 @@ mod tests {
         let planned = plan(&index, &topic(), partition(), offset(0), offset(at))
             .expect("an index that answers");
         assert!(
-            planned.is_none(),
+            planned == Planning::NotWorthIt,
             "amplification of exactly {at} is the threshold, not past it"
         );
 
         let over = at + 1;
         let index = aged_index(&vec![1_u32; usize::try_from(over).expect("a small count")]);
         assert!(
-            plan(&index, &topic(), partition(), offset(0), offset(over))
-                .expect("an index that answers")
-                .is_some(),
+            matches!(
+                plan(&index, &topic(), partition(), offset(0), offset(over))
+                    .expect("an index that answers"),
+                Planning::Planned(_)
+            ),
             "one object more is past it"
         );
     }
