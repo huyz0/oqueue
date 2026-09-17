@@ -319,8 +319,10 @@ declare -A RUST_BOUNDS=(
   # *raising*: the budget exists so a plan cannot grow past what one round can
   # finish, and a bigger ceiling is a longer window in which a half-run merge
   # could lose acknowledged data (NFR-20). Lowering it only defers more work.
-  # UNDERIVED -- eight compacted objects, ~4 GiB at the modelled record size.
-  ["crates/oqueue-compact/src/cost.rs|COMPACTION_PLAN_RECORDS_BUDGET"]="4_194_304"
+  # ⚠️ One compacted object's worth (`M5.4` lowered it from eight): the merge
+  # writes one object, so a larger budget lets a plan be costed at two outputs
+  # and run as one. `M5.6`'s multipart writer is what earns the raise.
+  ["crates/oqueue-compact/src/cost.rs|COMPACTION_PLAN_RECORDS_BUDGET"]="524_288"
   # How many object-storage reads one parked `Fetch` may make. Raising it lets
   # a client's read volume be set by somebody else's write rate.
   ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"

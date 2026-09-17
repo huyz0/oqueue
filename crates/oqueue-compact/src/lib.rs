@@ -7,9 +7,11 @@
 #![forbid(unsafe_code)]
 
 mod cost;
+mod merge;
 mod plan;
 mod read_amp;
 
 pub use cost::{COMPACTION_PLAN_RECORDS_BUDGET, CostEstimate};
+pub use merge::{MergeOutcome, merge};
 pub use plan::{COMPACTION_READ_AMP_THRESHOLD, CompactionPlan, Planning, plan};
 pub use read_amp::{COMPACTED_OBJECT_RECORDS, ReadAmp, read_amp};

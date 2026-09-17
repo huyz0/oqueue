@@ -14,12 +14,18 @@ use crate::ReadAmp;
 /// [`COMPACTED_OBJECT_RECORDS`](crate::COMPACTED_OBJECT_RECORDS) is: the
 /// history tier carries no byte range, so a byte-denominated budget would
 /// need a GET per candidate and the estimate would cost what it is trying to
-/// bound. Eight compacted objects' worth — ~4 GiB at this project's modelled
-/// ~1 KiB record — and UNDERIVED like everything else in this band, `M14`'s
-/// to replace.
+/// bound.
+///
+/// ⚠️ **One compacted object's worth, because the merge writes one object**
+/// (`M5.4`). It was eight when `M5.3` set it, and that let a plan be costed at
+/// two outputs and run as one — the estimate and the run disagreeing about the
+/// thing the estimate exists to predict. `M5.6`'s multipart writer is what
+/// earns the raise, and non-negotiable 2 names raising as the weakening
+/// direction here, so the raise arrives with the writer that justifies it and
+/// not before. UNDERIVED either way, `M14`'s to replace.
 ///
 /// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
-pub const COMPACTION_PLAN_RECORDS_BUDGET: i64 = 4_194_304;
+pub const COMPACTION_PLAN_RECORDS_BUDGET: i64 = 524_288;
 
 /// What running a plan will cost, estimated before it runs.
 ///
@@ -170,10 +176,14 @@ mod tests {
     #[test]
     fn a_plan_over_the_budget_is_deferred_with_its_estimate() {
         // ⚠️ Small enough objects that the range is amplified as well as
-        // large: `COMPACTED_OBJECT_RECORDS / per` is the ratio, so a per-object
-        // count well under a twelfth of the compacted target clears the
-        // threshold, and enough of them clear the budget.
-        let per = COMPACTED_OBJECT_RECORDS / 17;
+        // over budget, and the two pull against each other: past the budget
+        // the records need two compacted objects, so `objects_needed` is 2 and
+        // the ratio is `objects / 2` — which must still clear 12. A
+        // thirty-fourth of the compacted target gives 35 objects and a ratio
+        // of 17.5. ⚠️ The ratio is **not** `COMPACTED_OBJECT_RECORDS / per`,
+        // which an earlier version of this comment said: that is the ratio
+        // only while the ceiling in `objects_needed` does not bite.
+        let per = COMPACTED_OBJECT_RECORDS / 34;
         let objects = usize::try_from(COMPACTION_PLAN_RECORDS_BUDGET / i64::from(per) + 1)
             .expect("a small count");
         let index = aged_index(&vec![per; objects]);

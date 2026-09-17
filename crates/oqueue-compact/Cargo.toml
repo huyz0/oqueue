@@ -11,5 +11,13 @@ license.workspace = true
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
 
+[dev-dependencies]
+# ⚠️ Not a production dependency, and this crate takes no runtime handle: the
+# merge executor is an `async fn` over `ObjectStore`'s own `BoxFuture`s, so
+# whichever crate drives one owns the runtime. Only the test binary needs one,
+# to await a merge against the fake store. `oqueue-store`'s own dev-dependency
+# comment is the precedent; features come from the workspace pin.
+tokio = { workspace = true }
+
 [lints]
 workspace = true
