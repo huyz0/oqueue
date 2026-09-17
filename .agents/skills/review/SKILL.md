@@ -18,6 +18,13 @@ scripts/review.sh record --file v.json --task <ID>   validate and store it
 scripts/check-reviewed.sh                the gate
 ```
 
+⚠️ **Record every verdict, `changes-requested` as much as `pass`.** The round
+counter the packet prints and the delta a later round is shown are derived from
+recorded verdicts and from nothing else, so a round that ends with a message
+and no artifact costs the next round its delta and makes it call itself round
+one. It also leaves no trace that the round happened, which is what turned
+`M5.50` into five rounds nobody was counting (`M5.51`).
+
 ⚠️ **`review.sh` does not spawn the reviewer**, because no script can do that in
 a way that works across tools. It owns the hash, the packet, the schema, and the
 artifact; the agent owns the judgement.
@@ -25,7 +32,12 @@ artifact; the agent owns the judgement.
 ## What the reviewer receives
 
 - The task, verbatim from the backlog, with its acceptance criteria
-- The staged diff
+- The change: the staged diff whole, or — from round two on, when the previous
+  round recorded the tree it reviewed — **only what has changed since that
+  round**, under a heading that says so. ⚠️ A delta is a reduction in what you
+  are shown, so every way of failing to compute one falls back to the whole
+  diff and says why it did. The verdict is still bound to the whole staged
+  diff, and `git diff --cached` shows it if a finding needs its surroundings.
 - The relevant standards — selected from the staged paths by
   `scripts/which-standards.sh`, not chosen by the author
 - **The list of deterministic gates that already passed**

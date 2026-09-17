@@ -46,6 +46,64 @@ cd "$REPO_ROOT"
 REVIEW_DIR="target/review"
 BACKLOG="docs/internal/product/backlog.md"
 
+# How many rounds a task gets. `review.md` rule 15a is where the number and the
+# argument for it live; this is the packet's copy of it.
+#
+# ⚠️ **Two copies, and a test rather than a promise.** An earlier comment here
+# claimed the cap was "named once" so packet and standard could not drift —
+# which was false the moment it was written, since rule 15a states the number in
+# prose. `tests/harness/review-packet.sh` compares the two, so changing one
+# without the other reds CI instead of shipping a packet that contradicts the
+# standard it cites.
+REVIEW_ROUND_CAP=2
+
+# Shows the reviewer the change, as a delta from the previously reviewed tree
+# when there is one and as the whole staged diff when there is not.
+#
+# ⚠️ **Every path out of here falls back to the whole diff** (`M5.51`), and
+# that direction is the point: a delta that silently showed nothing would be a
+# review of nothing that recorded a verdict, which is the one failure this can
+# have. So an absent sidecar, an unreadable one, a tree object git no longer
+# has, and an empty delta each print the full diff and say why.
+emit_diff() {
+  local previous="$1" tree="" delta=""
+  if [[ -n "$previous" && -f "$REVIEW_DIR/$previous.tree" ]]; then
+    tree="$(tr -d '[:space:]' < "$REVIEW_DIR/$previous.tree")"
+    # ⚠️ `cat-file -e`, because `target/` is disposable: a pruned or garbage
+    # collected tree is an ordinary state here, not a broken one.
+    if [[ -n "$tree" ]] && git cat-file -e "$tree^{tree}" 2>/dev/null; then
+      delta="$(git diff "$tree" --cached 2>/dev/null || true)"
+    fi
+  fi
+
+  if [[ -n "$delta" ]]; then
+    printf '## What changed since the last round\n\n'
+    printf 'Everything not shown here was in the diff round %s reviewed and\n' \
+      "$((round - 1))"
+    printf 'already carries a verdict. Re-reading it is what made review cost\n'
+    printf 'more than the work it reviewed.\n\n'
+    printf '```diff\n%s\n```\n\n' "$delta"
+    printf 'The full staged diff is still what the verdict is bound to, and\n'
+    printf '`git diff --cached` shows it if a finding needs its surroundings.\n\n'
+    return
+  fi
+
+  printf '## The staged diff\n\n'
+  if [[ -n "$previous" ]]; then
+    printf '⚠️ The whole diff, although this is not round one: '
+    if [[ ! -f "$REVIEW_DIR/$previous.tree" ]]; then
+      printf 'the previous round\nrecorded no tree to compare against.\n\n'
+    elif [[ -z "$tree" ]] || ! git cat-file -e "$tree^{tree}" 2>/dev/null; then
+      printf 'the tree the previous round\nreviewed is no longer in the object database.\n\n'
+    else
+      printf 'the delta against the previous\nround is empty, so the change is elsewhere or the tree is unchanged.\n\n'
+    fi
+  fi
+  printf '```diff\n'
+  git diff --cached
+  printf '```\n\n'
+}
+
 # Gates excluded from the "already passed" list in the packet, each for a
 # reason. Everything else matching scripts/check-*.sh is discovered, so a gate
 # added by a later task appears here without anyone remembering to add it.
@@ -293,10 +351,78 @@ context)
   run_gates_on_staged_tree "$h" || gate_failed=1
   printf '\n'
 
-  printf '## The staged diff\n\n'
-  printf '```diff\n'
-  git diff --cached
-  printf '```\n\n'
+  # ⚠️ **The round number and the rule are printed, not left to memory**
+  # (`M5.51`). Rule 15 — a `minor` on a `pass` is recorded and the commit
+  # lands — is read at the start of a task, and the verdict that tests it
+  # arrives many turns later carrying one word. `M5.50` spent five rounds on a
+  # documentation-only commit for exactly that reason.
+  round_info=""
+  if [[ -x "$(command -v python3 || true)" ]]; then
+    round_info="$(python3 "$REPO_ROOT/scripts/lib/review_rounds.py" "$TASK" "$h" "$REVIEW_DIR" 2>/dev/null || true)"
+  fi
+  # ⚠️ Here-strings rather than `printf | sed | head` (`portability.md` rules
+  # 21-22): `head` closing the pipe early is a `SIGPIPE` this script takes
+  # under `pipefail`, and the value is already in a variable.
+  round="$(awk -F= '$1 == "ROUND" { print $2; exit }' <<< "$round_info")"
+  previous="$(awk -F= '$1 == "PREVIOUS" { print $2; exit }' <<< "$round_info")"
+  [[ -n "$round" ]] || round=1
+
+  printf '## Which round this is\n\n'
+  printf 'This is round %s of %s for %s.\n\n' "$round" "$REVIEW_ROUND_CAP" "$TASK"
+  # ⚠️ The shape of the rounds, and it is `review.md` rule 15a's shape rather
+  # than a second account of it. A branch for a three-round shape was written
+  # here and removed in the same task: it was unreachable at every cap this
+  # repository has had, which makes it `M5.53`'s prose landed early rather than
+  # code, and `M5.53` is where the cap and the sentence move together.
+  printf 'Round one finds; round two verifies the fixes and may fail them.\n'
+  # ⚠️ **This clause states `review.md` rule 15a and must move with it.** The
+  # cap above is a number the standard and this script share; what a blocking
+  # finding does to it is prose that lives only there, and an earlier draft of
+  # this banner shipped `M5.53`'s intended rule under the rule as it stands —
+  # so a reviewer read "the commit is too big, split it" while the author read
+  # 15a's "correctness has no round limit". Two readers, two procedures, one
+  # packet.
+  printf 'A **blocking** finding lifts the cap: correctness has no round\n'
+  printf 'limit. A `minor` never lifts it, and a reviewer still finding new\n'
+  printf 'blocking defects past round %s is describing a change that should be\n' \
+    "$REVIEW_ROUND_CAP"
+  printf 'withdrawn and re-cut rather than re-polished.\n\n'
+  printf '⚠️ Only `blocking` and `major` stop a commit. A `pass` carrying\n'
+  printf '`minor` findings lands: they are recorded in the commit body or become\n'
+  printf 'a backlog row — `review.md` rule 15, which says a `minor` on a\n'
+  printf '`pass` is recorded rather than re-reviewed. Measured here: `M5.50`\n'
+  printf 'took five rounds on a change to one Markdown file, and every round\n'
+  printf 'after the first was opened for a finding that never blocked.\n\n'
+  printf 'So report severity honestly and do not hunt for a minor to justify the\n'
+  printf 'round. An empty findings list is a valid and expected outcome.\n\n'
+
+  if [[ -n "$previous" ]]; then
+    printf '## What earlier rounds left open\n\n'
+    # ⚠️ **`awk`, not `sed`, because the fields are tab-separated.** `\t` in a
+    # `sed` script is a GNU extension and BSD `sed` reads it as a literal `t`,
+    # so on macOS — a supported platform, `portability.md` rule 2 — the
+    # substitutions matched nothing while the `grep` above still saw the line.
+    # The heading and "⚠️ Verify these" printed over an empty list, which the
+    # reviewer cannot tell from "there were none": the one failure this whole
+    # change must not have, in the section that exists to prevent it.
+    # ⚠️ **And a here-string, not `printf | grep`** (`portability.md` rules
+    # 21-22): `round_info` is already a variable, and under `pipefail` a
+    # producer whose reader exits early is a failure this script would take.
+    open_list="$(awk -F'\t' '
+      $1 == "FINDING"  { printf "- [%s] %s — %s: %s\n", $2, $3, $4, $5 }
+      $1 == "SCENARIO" { printf "  scenario: %s\n", $2 }
+    ' <<< "$round_info")"
+    if [[ -n "$open_list" ]]; then
+      printf '%s\n\n' "$open_list"
+      printf '⚠️ Verify these. A finding an earlier round raised and the author\n'
+      printf 'did not fix is what this round exists to catch.\n\n'
+    else
+      printf 'Nothing blocking or major. An earlier round passed or raised only\n'
+      printf 'minors, and a minor does not open a round.\n\n'
+    fi
+  fi
+
+  emit_diff "$previous"
 
   printf '## What you are not given\n\n'
   printf 'The author'"'"'s plan, transcript, or justification, and you must not go\n'
@@ -306,6 +432,12 @@ context)
   printf '## How to return the verdict\n\n'
   printf 'Write JSON and hand it to:\n\n'
   printf '    scripts/review.sh record --file <path> --task %s\n\n' "$TASK"
+  printf '⚠️ **Record every verdict, `changes-requested` as much as `pass`.**\n'
+  printf 'The round counter above and the delta the next round is shown are\n'
+  printf 'derived from recorded verdicts and from nothing else, so a round that\n'
+  printf 'ends without one costs the next round its delta and makes it call\n'
+  printf 'itself round one. A verdict that only ever existed as a message is a\n'
+  printf 'verdict the harness cannot see (`M5.51`).\n\n'
   printf 'The task is named twice on purpose: the verdict carries one and the\n'
   printf 'command carries one, and a mismatch means the verdict came from a\n'
   printf 'different review. It is refused rather than stored.\n\n'
@@ -348,6 +480,20 @@ record)
 
   h="$(staged_hash)" || { fail "could not hash the staged diff"; finish; }
   mkdir -p "$REVIEW_DIR" || { fail "cannot create $REVIEW_DIR"; finish; }
+
+  # ⚠️ **The reviewed index, written as a tree, so the next round can be shown
+  # a delta** (`M5.51`). A `diff_sha256` identifies a review but cannot be
+  # diffed against; a tree can. `git write-tree` writes objects and changes no
+  # ref, so this neither moves the index nor creates anything a later command
+  # has to clean up. ⚠️ **It is written before the verdict is validated on
+  # purpose**: a rejected verdict leaves a tree nobody reads, and the converse
+  # — a stored verdict with no tree — silently costs the next round its delta.
+  # A failure here is not fatal for the same reason: the fallback is the whole
+  # diff, which is what every round got before this existed.
+  if ! git write-tree > "$REVIEW_DIR/$h.tree" 2>/dev/null; then
+    rm -f "$REVIEW_DIR/$h.tree"
+    note "could not record the staged tree; the next round will get the whole diff"
+  fi
 
   # Validation is the anti-slop half of this script. The rules that matter:
   #

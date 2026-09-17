@@ -351,6 +351,24 @@ jobs:
             grep '^SKIPPED_CASES ' /tmp/negative.out; exit 1
           fi
 
+      # `M5.51`: the review packet's own suite. ⚠️ **Separate from
+      # `negative.sh` because its pass condition is not inverted**: what can go
+      # wrong with a packet is that it shows the reviewer less than it should,
+      # which looks like success. Same `pipefail` and same `SKIPPED_COUNT`
+      # discipline as the step above, for the same reason.
+      - name: the review packet says which round it is, and shows its delta
+        if: always()
+        run: |
+          set -euo pipefail
+          tests/harness/review-packet.sh | tee /tmp/review-packet.out
+          n="$(grep '^SKIPPED_COUNT ' /tmp/review-packet.out | tail -1 | sed 's/^SKIPPED_COUNT //')" || true
+          if [ -z "$n" ]; then
+            echo "::error::the suite printed no SKIPPED_COUNT line"; exit 1
+          fi
+          if [ "$n" != "0" ]; then
+            echo "::error::$n case(s) skipped in CI — the packet went unproven"; exit 1
+          fi
+
       # `M10.11`: the seed corpus, replayed on every push. ⚠️ **Here rather
       # than in `.pre-commit-config.yaml`**, because replaying it costs a
       # `cargo test` per entry and `check-budget.sh` holds the pre-commit suite
