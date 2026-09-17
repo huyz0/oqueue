@@ -71,7 +71,7 @@ fn a_sweep_over_many_partitions_plans_only_the_amplified_ones() {
     let planned: Vec<i32> = swept
         .round()
         .iter()
-        .map(|plan| plan.partition().get())
+        .map(|plan| plan.plan().partition().get())
         .collect();
     assert_eq!(planned, amplified.to_vec());
     assert!(swept.held_over().is_empty());
@@ -128,7 +128,7 @@ fn candidates_over_the_round_budget_are_held_over() {
         "the other waits for the next round, and says which"
     );
     assert!(
-        swept.round()[0].cost().records_rewritten() <= COMPACTION_PLAN_RECORDS_BUDGET,
+        swept.round()[0].plan().cost().records_rewritten() <= COMPACTION_PLAN_RECORDS_BUDGET,
         "and what is in the round fits it"
     );
 }
@@ -165,9 +165,9 @@ fn a_partition_larger_than_the_budget_is_swept_in_windows() {
     assert_eq!(swept.round().len(), 1, "the first window is planned");
     assert!(swept.held_over().is_empty());
     let planned = &swept.round()[0];
-    assert_eq!(planned.start(), Offset::ZERO);
+    assert_eq!(planned.plan().start(), Offset::ZERO);
     assert!(
-        planned.cost().records_rewritten() <= COMPACTION_PLAN_RECORDS_BUDGET,
+        planned.plan().cost().records_rewritten() <= COMPACTION_PLAN_RECORDS_BUDGET,
         "and the window fits one plan's budget"
     );
 }
@@ -208,7 +208,7 @@ fn two_plans_that_fit_together_are_both_in_the_round() {
     let total: i64 = swept
         .round()
         .iter()
-        .map(|plan| plan.cost().records_rewritten())
+        .map(|plan| plan.plan().cost().records_rewritten())
         .sum();
     assert!(
         total <= COMPACTION_PLAN_RECORDS_BUDGET,
@@ -236,10 +236,11 @@ fn an_unfolded_partition_costs_no_index_walk() {
     assert_eq!(swept.round().len(), 1, "one amplified partition");
     assert_eq!(
         index.walks(),
-        6,
-        "one walk for each of the three one-object partitions and three for \
-         the amplified one, whose measurement pages; and none at all for the \
-         hundred unfolded ones, which would each add one"
+        7,
+        "one walk for each of the three one-object partitions, three for the \
+         amplified one whose measurement pages, and one more to derive that \
+         plan's inputs; and none at all for the hundred unfolded ones, which \
+         would each add one"
     );
 }
 
@@ -319,7 +320,7 @@ fn a_partition_behind_a_long_compacted_prefix_is_still_planned() {
         .expect("an index that answers");
     assert_eq!(swept.round().len(), 1, "the prefix is skipped, not a wall");
     assert_eq!(
-        swept.round()[0].start().get(),
+        swept.round()[0].plan().start().get(),
         COMPACTION_PLAN_RECORDS_BUDGET * i64::try_from(prefix).expect("a small prefix"),
         "and the plan starts where the caller said compaction had reached"
     );
@@ -366,14 +367,14 @@ fn a_cursor_past_the_end_of_the_partition_plans_nothing() {
         "the other partition is still planned"
     );
     assert_eq!(
-        swept.round()[0].partition(),
+        swept.round()[0].plan().partition(),
         partition_n(1),
         "and it is the one whose cursor is behind its end"
     );
     assert_eq!(
         index.walks() - before,
-        3,
-        "three pages for the partition with work, and none at all for the \
-         reversed one"
+        4,
+        "three pages measuring the partition with work and one deriving its \
+         inputs, and none at all for the reversed one"
     );
 }

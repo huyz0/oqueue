@@ -12,13 +12,54 @@
 //! partition's bytes between them, so it stays one ranged GET (FR-13). Regions
 //! interleaved by arrival would turn one read into as many as there are runs.
 
-use oqueue_core::{BundleStream, CommittedSpan, Error, ObjectKey, ObjectRef, ObjectStore, Result};
+use oqueue_core::{
+    BundleStream, CommittedSpan, Error, MaterializedIndex, ObjectKey, ObjectRef, ObjectStore,
+    Result,
+};
+
+use std::collections::HashMap;
 
 use crate::merge::gather;
 use crate::{COMPACTION_PLAN_RECORDS_BUDGET, CompactionPlan, MergeOutcome};
 
+/// Folds one span into the ref for its object, adding it if new.
+///
+/// ⚠️ **One input per object, not per batch.** One object may hold several
+/// disjoint spans of one partition — `M3.8`'s ordinary case, and what
+/// `IndexState`'s fold produces — and [`merge`](crate::merge) reads an object
+/// once and takes *every* region it holds for the partition. Two refs naming
+/// one object therefore tile the range perfectly and then fail
+/// `take_regions`' record-count check, because the count it sums is both
+/// spans' and the count each ref carries is one span's. The ref that spans
+/// both is what one read of that object actually delivers.
+///
+/// ⚠️ **No admissibility test here, and one does not survive.** A plan's range
+/// is a union of whole objects by construction — `read_amp`'s walk decides it
+/// over objects rather than spans, which is `M5.46`'s second round — so no
+/// object this walk returns has a span outside the range. A `whole` flag was
+/// here and no index could distinguish it, and `merge`'s tiling refuses a ref
+/// that reaches outside the plan in any case.
+fn absorb(
+    inputs: &mut Vec<ObjectRef>,
+    seen: &mut HashMap<ObjectKey, usize>,
+    reference: &ObjectRef,
+) {
+    if let Some(at) = seen.get(reference.object()).copied() {
+        let held = &inputs[at];
+        let records = held.record_count().saturating_add(reference.record_count());
+        inputs[at] = ObjectRef::new(
+            reference.object().clone(),
+            held.base_offset().min(reference.base_offset()),
+            records,
+        );
+    } else {
+        seen.insert(reference.object().clone(), inputs.len());
+        inputs.push(reference.clone());
+    }
+}
+
 /// One plan and the index references that tile its range.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedInputs {
     plan: CompactionPlan,
     inputs: Vec<ObjectRef>,
@@ -41,6 +82,59 @@ impl PlannedInputs {
     #[must_use]
     pub fn inputs(&self) -> &[ObjectRef] {
         &self.inputs
+    }
+
+    /// Reads the references tiling `plan` out of the index that produced it.
+    ///
+    /// ⚠️ **Derived, not supplied** (`M5.46`). Until this existed the only way
+    /// to get a plan's inputs was for a caller to hand them over, and nothing
+    /// in the crate did — the trigger half of the write path and the merge
+    /// half had never met. The refs come from the same
+    /// [`find_batches`](MaterializedIndex::find_batches) walk the measurement
+    /// came from, so what tiles the plan is what measured it.
+    ///
+    /// ⚠️ **No straddle test here, and one does not survive.** A plan's range
+    /// is a union of whole objects by construction — that is what
+    /// [`ReadAmp::covered`](crate::ReadAmp::covered) reports and what `plan`
+    /// takes its bounds from — so no object this walk returns hangs over
+    /// either edge, and a skip for one was a branch no index could
+    /// distinguish: an object ending at or before the start is dropped by
+    /// [`merge`](crate::merge)'s own tiling, which is where a list that does
+    /// not tile is caught in any case.
+    ///
+    /// # Errors
+    ///
+    /// Propagates the index's own error.
+    pub fn derive<I>(index: &I, plan: CompactionPlan) -> Result<Self>
+    where
+        I: MaterializedIndex + ?Sized,
+    {
+        let (start, end) = (plan.start(), plan.end());
+        let mut inputs: Vec<ObjectRef> = Vec::new();
+        let mut seen: HashMap<ObjectKey, usize> = HashMap::new();
+        let mut cursor = start;
+        while cursor < end {
+            let page = index.find_batches(plan.topic(), plan.partition(), cursor, u64::MAX)?;
+            if page.is_empty() {
+                break;
+            }
+            let mut furthest = cursor;
+            for batch in &page {
+                let reference = batch.reference();
+                let base = reference.base_offset();
+                let object_end = reference.end_offset()?;
+                if base >= end {
+                    break;
+                }
+                furthest = furthest.max(object_end);
+                absorb(&mut inputs, &mut seen, reference);
+            }
+            if furthest <= cursor {
+                break;
+            }
+            cursor = furthest;
+        }
+        Ok(Self::new(plan, inputs))
     }
 }
 

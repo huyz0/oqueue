@@ -36,7 +36,7 @@ use std::collections::HashSet;
 
 use oqueue_core::{MaterializedIndex, Offset, PartitionId, Result, TopicId};
 
-use crate::{COMPACTION_PLAN_RECORDS_BUDGET, CompactionPlan, Planning, plan};
+use crate::{COMPACTION_PLAN_RECORDS_BUDGET, PlannedInputs, Planning, plan};
 
 /// How often candidates are looked for.
 ///
@@ -108,14 +108,19 @@ impl Candidate {
 /// caller that picks its own range, which is what the variant is for.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Sweep {
-    round: Vec<CompactionPlan>,
+    round: Vec<PlannedInputs>,
     held_over: Vec<(TopicId, PartitionId)>,
 }
 
 impl Sweep {
-    /// The plans this round will run.
+    /// The plans this round will run, each with the inputs that tile it.
+    ///
+    /// ⚠️ **The inputs are derived here rather than asked of the caller**
+    /// (`M5.46`): a sweep already holds the index the plan was measured
+    /// against, and a round that has to be paired with its objects by hand is
+    /// a round nothing can run.
     #[must_use]
-    pub fn round(&self) -> &[CompactionPlan] {
+    pub fn round(&self) -> &[PlannedInputs] {
         &self.round
     }
 
@@ -179,19 +184,20 @@ where
         match plan(index, topic, partition, candidate.from(), window_end)? {
             Planning::NotWorthIt => {}
             // ⚠️ **No index this workspace builds reaches this arm, and it is
-            // not dead code.** `read_amp` adds `overlap` once *per span*, so
-            // clipping bounds each term and not the sum: what makes the sum
-            // fit the window is that an object's spans for one partition are
-            // **disjoint**, which `IndexState::stage_span` guarantees by
+            // not dead code.** `read_amp` counts a whole object once per span
+            // it holds for the partition (`M5.46`), so what keeps the sum
+            // inside the window is that an object's spans for one partition
+            // are **disjoint**, which `IndexState::stage_span` guarantees by
             // basing each at the running staged end. That is a property of the
             // one fold every implementation here shares, not of the trait — a
             // `MaterializedIndex` built some other way could hand back
-            // overlapping spans and reach this arm. ⚠️ Two earlier stories
+            // overlapping spans and reach this arm. ⚠️ Three earlier stories
             // told here were false: `Offset::add` overflowing near `i64::MAX`
-            // (which requires a window narrower than the budget) and clipping
-            // bounding the sum. Holding the candidate over is the answer that
-            // loses nothing, and refusing the round would discard every other
-            // partition's work for one candidate's edge.
+            // (which requires a window narrower than the budget), clipping
+            // bounding the sum, and clipping at all — `M5.46` deleted it.
+            // Holding the candidate over is the answer that loses nothing, and
+            // refusing the round would discard every other partition's work
+            // for one candidate's edge.
             Planning::Deferred(_) => swept.held_over.push((topic.clone(), partition)),
             Planning::Planned(planned) => {
                 let cost = planned.cost().records_rewritten();
@@ -203,7 +209,7 @@ where
                     continue;
                 }
                 budget -= cost;
-                swept.round.push(planned);
+                swept.round.push(PlannedInputs::derive(index, planned)?);
             }
         }
     }

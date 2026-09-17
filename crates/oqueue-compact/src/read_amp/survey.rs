@@ -22,6 +22,7 @@ pub struct ReadAmp {
     pub(super) first_tail_base: Option<Offset>,
     pub(super) history_objects: usize,
     pub(super) history_records: i64,
+    pub(super) covered: Option<(Offset, Offset)>,
 }
 
 impl ReadAmp {
@@ -39,7 +40,13 @@ impl ReadAmp {
         self.objects_needed
     }
 
-    /// Records the range holds, as the index accounts for them.
+    /// Records the objects wholly inside the range hold.
+    ///
+    /// ⚠️ **Not the records the range holds** (`M5.46`): an object hanging
+    /// over either edge contributes none of its records here, because what a
+    /// compaction can rewrite is a union of whole objects and this is the
+    /// number the plan is costed on. [`covered`](Self::covered) is the range
+    /// these records are actually over.
     #[must_use]
     pub const fn records(&self) -> i64 {
         self.records
@@ -91,7 +98,26 @@ impl ReadAmp {
             first_tail_base: None,
             history_objects: self.history_objects,
             history_records: self.history_records,
+            covered: self
+                .covered
+                .zip(self.first_tail_base)
+                .filter(|&((lo, _), boundary)| lo < boundary)
+                .map(|((lo, _), boundary)| (lo, boundary)),
         }
+    }
+
+    /// The object-aligned range the measurement is actually over.
+    ///
+    /// ⚠️ **What makes a plan mergeable** (`M5.46`). The caller names a range
+    /// by offset; what a compaction can rewrite is a union of whole objects,
+    /// because `merge` copies an object's regions rather than parsing records
+    /// out of the middle of one. So the walk skips any object hanging over
+    /// either edge and reports the range it did cover — `None` when no object
+    /// lies wholly inside, which is a range with nothing to compact rather
+    /// than a small one.
+    #[must_use]
+    pub const fn covered(&self) -> Option<(Offset, Offset)> {
+        self.covered
     }
 
     /// Where the tail tier starts inside the measured range, if it does.

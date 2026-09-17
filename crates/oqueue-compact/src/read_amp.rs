@@ -24,11 +24,13 @@
 //! a number nobody observes.
 
 mod survey;
+mod walk;
 
 pub use survey::ReadAmp;
 
-use oqueue_core::{MaterializedIndex, ObjectKey, Offset, PartitionId, Result, TopicId};
-use std::collections::HashSet;
+use walk::Walk;
+
+use oqueue_core::{MaterializedIndex, Offset, PartitionId, Result, TopicId};
 
 /// How many records a compacted object is written to hold.
 ///
@@ -79,12 +81,35 @@ pub fn read_amp<I>(
 where
     I: MaterializedIndex + ?Sized,
 {
-    let mut seen: HashSet<ObjectKey> = HashSet::new();
-    let mut tail: HashSet<ObjectKey> = HashSet::new();
-    let mut first_tail_base: Option<Offset> = None;
-    let mut history_objects = 0_usize;
-    let mut history_records = 0_i64;
-    let mut records: i64 = 0;
+    let mut walk = Walk::over(start, end);
+
+    // ⚠️ **One lookup below the start, and it is what makes the alignment
+    // sound** (`M5.46`). `find_batches` answers from the batch holding the
+    // cursor, so an object whose earlier span for this partition ends exactly
+    // at `start` is never returned by the walk below — and that object then
+    // measures as though it lay wholly inside a range it straddles. This probe
+    // names it. It costs one index lookup per candidate whose cursor is not
+    // zero, and no object-storage operation, which is the property `ADR-0036`
+    // rests on.
+    // ⚠️ **`start < end` guards it**, so a cursor at or past the partition's
+    // end costs the probe nothing: a sweep over a cold catalog stays one
+    // `end_offset` lookup per partition and no index walk, which is what
+    // `sweep`'s own tests count.
+    // ⚠️ **No `start > ZERO` test, and one does not survive**: `Offset::new`
+    // refuses a negative offset, so a range starting at zero skips the probe
+    // through the `let Ok` below and a test for it is a branch no input can
+    // distinguish.
+    if start < end
+        && let Ok(before) = Offset::new(start.get() - 1)
+    {
+        for batch in index.find_batches(topic, partition, before, u64::MAX)? {
+            let reference = batch.reference();
+            if reference.base_offset() < start {
+                walk.bar(reference.object());
+            }
+        }
+    }
+
     let mut cursor = start;
 
     while cursor < end {
@@ -94,37 +119,9 @@ where
         }
         let mut furthest = cursor;
         for batch in &page {
-            let reference = batch.reference();
-            let base = reference.base_offset();
-            let object_end = reference.end_offset()?;
-            if base >= end {
-                break;
-            }
-            furthest = furthest.max(object_end);
-            // ⚠️ **Records accrue per span, objects per key.** One object may
-            // hold two disjoint spans for one partition — `IndexState`'s fold
-            // admits a partition appearing twice in one batch — so counting
-            // records only on first sight of a key would under-count the
-            // range and report amplification lower than the truth, which is
-            // the direction that silently skips compaction.
-            let here = overlap(base, object_end, start, end);
-            records += here;
-            let fresh = seen.insert(reference.object().clone());
-            // Ascending order, so "no tail object yet" is "still in history".
-            if first_tail_base.is_none() && batch.bytes().is_none() {
-                history_records += here;
-                if fresh {
-                    history_objects += 1;
-                }
-            }
-            if batch.bytes().is_some() {
-                // An inline byte range is what the tail tier is: the index
-                // already knows where to read, so the fetch is one GET.
-                tail.insert(reference.object().clone());
-                // Ascending order, so the first one seen is the boundary --
-                // `min` rather than a first-write-wins flag, because ordering
-                // is `find_batches`' guarantee and not this walk's.
-                first_tail_base = Some(first_tail_base.map_or(base, |b: Offset| b.min(base)));
+            match walk.visit(batch)? {
+                None => break,
+                Some(object_end) => furthest = furthest.max(object_end),
             }
         }
         if furthest <= cursor {
@@ -133,15 +130,7 @@ where
         cursor = furthest;
     }
 
-    Ok(ReadAmp {
-        objects_touched: seen.len(),
-        objects_needed: objects_needed(records),
-        records,
-        tail_objects: tail.len(),
-        first_tail_base,
-        history_objects,
-        history_records,
-    })
+    Ok(walk.finish())
 }
 
 /// How many compacted objects `records` would occupy.
@@ -156,13 +145,6 @@ fn objects_needed(records: i64) -> usize {
         .div_euclid(target)
         .saturating_add(i64::from(records.rem_euclid(target) != 0));
     usize::try_from(needed).unwrap_or(usize::MAX)
-}
-
-/// How many records of `[base, object_end)` fall inside `[start, end)`.
-fn overlap(base: Offset, object_end: Offset, start: Offset, end: Offset) -> i64 {
-    let lower = base.max(start).get();
-    let upper = object_end.min(end).get();
-    (upper - lower).max(0)
 }
 
 #[cfg(test)]
@@ -274,17 +256,28 @@ mod tests {
         );
     }
 
+    /// ⚠️ **A straddler is skipped, not clipped** (`M5.46`). Counting the
+    /// records an object contributes to a range it hangs over measures a
+    /// range no set of objects tiles, and `merge` refuses exactly that — so
+    /// the measurement is over whole objects and `covered` says which.
     #[test]
     fn records_outside_the_range_are_not_counted() {
         let index = index_of(&[10; 4]);
-        let amp = read_amp(&index, &topic(), partition(), offset(15), offset(25))
+        let amp = read_amp(&index, &topic(), partition(), offset(15), offset(35))
             .expect("an index that answers");
         assert_eq!(
             amp.objects_touched(),
-            2,
-            "offsets 15..25 straddle the second and third objects only"
+            1,
+            "only 20..30 lies wholly inside 15..35"
         );
-        assert_eq!(amp.records(), 10, "the overlap, not the objects' own spans");
+        assert_eq!(amp.records(), 10, "the whole object, and only that one");
+        assert_eq!(amp.covered(), Some((offset(20), offset(30))));
+
+        let none = read_amp(&index, &topic(), partition(), offset(15), offset(25))
+            .expect("an index that answers");
+        assert_eq!(none.objects_touched(), 0, "no object lies wholly inside");
+        assert_eq!(none.records(), 0);
+        assert_eq!(none.covered(), None);
     }
 
     #[test]

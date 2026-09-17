@@ -137,11 +137,20 @@ where
     // `read_amp` accumulates it during the one pass, because by the paragraph
     // above a live partition's range always straddles, so a second call was
     // the normal path rather than the exception.
-    let (end, amplification) = surveyed
+    let amplification = surveyed
         .first_tail_base()
-        .map_or((end, surveyed), |boundary| {
-            (boundary, surveyed.before_tail())
-        });
+        .map_or(surveyed, |_| surveyed.before_tail());
+
+    // ⚠️ **The plan's range is the measurement's, not the caller's**
+    // (`M5.46`). What compaction rewrites is a union of whole objects, so the
+    // survey reports the object-aligned range it covered and the plan is over
+    // that — a plan over the caller's offsets is one `merge`'s `tiling()`
+    // refuses whenever an object hangs over either edge, which is the general
+    // case for a sweep's window. `None` is a range no object lies wholly
+    // inside: nothing to compact.
+    let Some((start, end)) = amplification.covered() else {
+        return Ok(Planning::NotWorthIt);
+    };
 
     // The trim above is what makes the guard hold, so there is no second test
     // for it here: after trimming, a planned range has no tail object in it by
