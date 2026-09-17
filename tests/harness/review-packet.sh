@@ -32,6 +32,7 @@ scratch() {
   local dir; dir="$(mktemp -d)"
   mkdir -p "$dir/scripts/lib" "$dir/docs/internal/product" "$dir/target/review"
   cp "$ROOT/scripts/review.sh" "$ROOT/scripts/lib.sh" "$dir/scripts/"
+  cp "$ROOT/scripts/review-lenses.sh" "$dir/scripts/"
   cp "$ROOT/scripts/lib/review_rounds.py" "$dir/scripts/lib/"
   # ⚠️ `which-standards.sh` and the gate list are consulted by the packet. They
   # are copied when present and the packet tolerates their absence; a case here
@@ -183,6 +184,50 @@ check "an empty delta still shows the diff" "$out" "## The staged diff"
 check "and the diff is not empty" "$out" "+first version"
 refute "no delta is claimed" "$out" "## What changed since the last round"
 rm -rf "$dir"
+
+# --- the lenses are selected from the paths, not from the author ----------
+# ⚠️ Run directly rather than through a packet: a lens that fails to appear is
+# invisible in a packet and obvious here. `M5.52`.
+lenses() { (cd "$ROOT" && bash scripts/review-lenses.sh "$@"); }
+
+out="$(lenses docs/internal/product/backlog.md)"
+check "a docs path selects the prose lens" "$out" "false before anyone re-reads it"
+refute "and not the write-path lens" "$out" "acknowledged data, lost silently"
+refute "and not the gate lens" "$out" "reports success while checking nothing"
+
+out="$(lenses scripts/check-drift.sh)"
+check "a gate path selects the gate lens" "$out" "reports success while checking nothing"
+refute "and not the prose lens" "$out" "false before anyone re-reads it"
+
+out="$(lenses crates/oqueue-compact/src/merge.rs)"
+check "the write path selects its own lens" "$out" "acknowledged data, lost silently"
+check "and a .rs file selects the test lens" "$out" "without constraining anything"
+
+out="$(lenses crates/oqueue-core/src/store.rs)"
+check "a core seam selects the fakes lens" "$out" "fakes no longer say what the backends do"
+
+# ⚠️ The case review round one caught: `*commit*` matched eight unrelated
+# paths, and the three-paths case below counted only the lens it expected.
+out="$(lenses .pre-commit-config.yaml)"
+check "the hook config selects the gate lens" "$out" "reports success while checking nothing"
+refute "and not the write-path lens" "$out" "acknowledged data, lost silently"
+
+out="$(lenses crates/oqueue-codec/src/offset_commit.rs)"
+refute "a codec named for a commit is not the write path" "$out" "acknowledged data, lost silently"
+check "it is still Rust, so the test lens applies" "$out" "without constraining anything"
+
+out="$(lenses some/unmatched/file.txt)"
+check "a path matching nothing selects nothing" "$out" "No lens matched these paths"
+refute "rather than everything" "$out" "### Lens:"
+
+out="$(lenses scripts/a.sh scripts/b.sh .pre-commit-config.yaml)"
+if [ "$(printf '%s' "$out" | grep -c '^### Lens: a gate')" = "1" ]; then
+  green "ok   three selecting paths print one lens"
+  PASS=$((PASS + 1))
+else
+  red "FAIL three selecting paths print one lens"
+  FAIL=$((FAIL + 1))
+fi
 
 # --- the packet's cap and the standard's cap are the same number -----------
 # ⚠️ ⚠️ **The comment this replaces claimed they could not drift.** They are two

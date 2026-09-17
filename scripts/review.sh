@@ -343,6 +343,31 @@ context)
   printf '%s\n' "$ws_out" | sed 's/^/- /'
   printf '\n'
 
+  # ⚠️ **Selected from the paths, like the standards above** (`M5.52`,
+  # `review.md` rule 12a). What the reviewer is judged against was derived and
+  # what it was asked to look at was improvised per task, which is how
+  # attention goes to whatever was most recently on the author's mind.
+  # ⚠️ Neither its exit status nor its stderr is dropped, for the reason the
+  # standards block above gives: a selector that failed silently would leave
+  # the packet asserting a brief it never printed.
+  printf '## What to look at, selected from the paths\n\n'
+  # ⚠️ **stdout into the packet, stderr to stderr**, which is what the
+  # standards block above does and what an earlier draft of this claimed to do
+  # while folding the two together with `2>&1`. A diagnostic inside the packet
+  # is a diagnostic the reviewer reads as a brief: a deletion-only change made
+  # the lens section read "no paths, so no lenses" with no FAIL line anywhere.
+  lens_out=""
+  lens_rc=0
+  lens_out="$(./scripts/review-lenses.sh)" || lens_rc=$?
+  if (( lens_rc != 0 )); then
+    fail "review-lenses.sh failed; the packet would name no lenses"
+    finish
+  fi
+  printf 'These are the classes of defect that have got through in this\n'
+  printf 'repository on paths like these, with the tasks that earned each one.\n'
+  printf 'They route attention; every deterministic gate runs regardless.\n'
+  printf '%s\n\n' "$lens_out"
+
   printf '## Deterministic gates that already passed\n\n'
   printf 'Run against the staged bytes, not the working tree. Do not re-check\n'
   printf 'these — attention spent here is attention not spent on what only a\n'
