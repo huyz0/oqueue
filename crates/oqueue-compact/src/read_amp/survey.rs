@@ -20,6 +20,8 @@ pub struct ReadAmp {
     pub(super) records: i64,
     pub(super) tail_objects: usize,
     pub(super) first_tail_base: Option<Offset>,
+    pub(super) history_objects: usize,
+    pub(super) history_records: i64,
 }
 
 impl ReadAmp {
@@ -45,8 +47,13 @@ impl ReadAmp {
 
     /// How many of the touched objects are still in the index's tail tier.
     ///
-    /// ⚠️ **The age guard's input** (`M5.2`), and a proxy rather than the
-    /// thing itself: the tail tier is the hot window by construction — byte
+    /// ⚠️ **The witness the age guard's tests assert on, not its input**
+    /// (`M5.41` corrects `M5.2`, which said the opposite). The planner matches
+    /// on [`first_tail_base`](Self::first_tail_base) — that is what trims a
+    /// straddling range — and a maintainer who believed this sentence would
+    /// delete the boundary as redundant and restore the defect that made a
+    /// live partition permanently uncompactable. This count is a proxy for the
+    /// range's age rather than the thing itself: the tail tier is the hot window by construction — byte
     /// ranges inline, one GET — so "still in the tail" is what this index can
     /// say in place of "still inside the latency SLO". `M5.16` gives the index
     /// `ts_min`/`ts_max` and the guard becomes time-based there.
@@ -63,6 +70,28 @@ impl ReadAmp {
     #[must_use]
     pub const fn tail_objects(&self) -> usize {
         self.tail_objects
+    }
+
+    /// The same measurement over the range's history portion alone.
+    ///
+    /// ⚠️ **Accumulated during the one walk, not by walking again**
+    /// (`M5.41`). The planner trims a straddling range at
+    /// [`first_tail_base`](Self::first_tail_base) and needs the amplification
+    /// of what is left; measuring that with a second `read_amp` call meant two
+    /// index walks per candidate, on the path that by the planner's own doc a
+    /// live partition always takes — ~200k page walks per sweep at 100k
+    /// partitions where 100k do.
+    #[must_use]
+    pub fn before_tail(&self) -> Self {
+        Self {
+            objects_touched: self.history_objects,
+            objects_needed: super::objects_needed(self.history_records),
+            records: self.history_records,
+            tail_objects: 0,
+            first_tail_base: None,
+            history_objects: self.history_objects,
+            history_records: self.history_records,
+        }
     }
 
     /// Where the tail tier starts inside the measured range, if it does.

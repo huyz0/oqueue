@@ -129,17 +129,19 @@ where
     // *rewriting* tail data, and dropping the tail portion of the range obeys
     // that while still planning the history portion.
     // ⚠️ **No separate "starts inside the tail" arm, and none is needed**: a
-    // boundary at or before `start` trims the range to an empty one, whose
-    // amplification is 0.0 and which therefore fails the threshold below. An
-    // explicit guard for it was a branch no input could distinguish, which
-    // cargo-mutants said by surviving its removal.
-    let (end, amplification) = match surveyed.first_tail_base() {
-        None => (end, surveyed),
-        Some(boundary) => (
-            boundary,
-            read_amp(index, topic, partition, start, boundary)?,
-        ),
-    };
+    // boundary at or before `start` leaves no history portion at all, so the
+    // trimmed measurement is of nothing, its ratio is 0.0, and it fails the
+    // threshold below. An explicit guard for it was a branch no input could
+    // distinguish, which cargo-mutants said by surviving its removal.
+    // ⚠️ **And the trimmed measurement costs no second walk** (`M5.41`):
+    // `read_amp` accumulates it during the one pass, because by the paragraph
+    // above a live partition's range always straddles, so a second call was
+    // the normal path rather than the exception.
+    let (end, amplification) = surveyed
+        .first_tail_base()
+        .map_or((end, surveyed), |boundary| {
+            (boundary, surveyed.before_tail())
+        });
 
     // The trim above is what makes the guard hold, so there is no second test
     // for it here: after trimming, a planned range has no tail object in it by
@@ -251,8 +253,27 @@ mod tests {
         }
     }
 
+    /// ⚠️ **At both ages, because the two are refused by different
+    /// mechanisms.** Out of the tail it is the ratio, which is 1.0 for one
+    /// object at the compacted size; still in the tail it is the trim, which
+    /// leaves no history portion at all. A test at one age would let the other
+    /// mechanism break unobserved.
     #[test]
     fn a_range_already_contiguous_is_never_planned_however_old() {
+        let hot = index_of(&[COMPACTED_OBJECT_RECORDS]);
+        assert!(
+            plan(
+                &hot,
+                &topic(),
+                partition(),
+                offset(0),
+                offset(i64::from(COMPACTED_OBJECT_RECORDS))
+            )
+            .expect("an index that answers")
+                == Planning::NotWorthIt,
+            "contiguous and still in the tail: the trim leaves nothing"
+        );
+
         let index = aged_index(&[COMPACTED_OBJECT_RECORDS]);
         assert!(
             plan(
@@ -323,6 +344,11 @@ mod tests {
     }
 
     /// A range wholly inside the tail has no history portion to trim to.
+    ///
+    /// ⚠️ **Both `boundary == start` and `boundary < start`.** A test landing
+    /// only on the equality leaves the strictly-inside case to whatever the
+    /// arithmetic happens to do, and `M5.2`'s own comment claims the property
+    /// for "at or before".
     #[test]
     fn a_range_starting_inside_the_tail_is_declined() {
         let history = 40_i64;
@@ -331,17 +357,31 @@ mod tests {
             usize::try_from(history).expect("a small count")
         ]);
         let whole = history + i64::try_from(TAIL_WINDOW_ENTRIES).expect("a small window");
+        for start in [history, history + 5] {
+            assert!(
+                plan(&index, &topic(), partition(), offset(start), offset(whole))
+                    .expect("an index that answers")
+                    == Planning::NotWorthIt,
+                "tail data still served from cache is never rewritten (start={start})"
+            );
+        }
+
+        // ⚠️ **And `boundary < start`, which one-record objects cannot
+        // produce**: `find_batches` never returns a batch based below `start`,
+        // so with one record per object the boundary always lands exactly on
+        // it. Ten-record objects and a start mid-object are what make the
+        // strictly-inside case reachable at all — round one measured that the
+        // loop above tested the equality twice.
+        // 168 ten-record objects: the last `TAIL_WINDOW_ENTRIES` of them are
+        // the tail, so the object at base 400 is a tail object holding
+        // 400..410, and a start of 405 falls strictly inside it.
+        let wide = index_of(&[10_u32; 168]);
+        let mid = 405;
         assert!(
-            plan(
-                &index,
-                &topic(),
-                partition(),
-                offset(history),
-                offset(whole)
-            )
-            .expect("an index that answers")
+            plan(&wide, &topic(), partition(), offset(mid), offset(mid + 100))
+                .expect("an index that answers")
                 == Planning::NotWorthIt,
-            "tail data still served from cache is never rewritten"
+            "a start inside a tail object, with the boundary strictly below it"
         );
     }
 

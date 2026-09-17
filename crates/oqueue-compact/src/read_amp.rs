@@ -82,6 +82,8 @@ where
     let mut seen: HashSet<ObjectKey> = HashSet::new();
     let mut tail: HashSet<ObjectKey> = HashSet::new();
     let mut first_tail_base: Option<Offset> = None;
+    let mut history_objects = 0_usize;
+    let mut history_records = 0_i64;
     let mut records: i64 = 0;
     let mut cursor = start;
 
@@ -105,8 +107,16 @@ where
             // records only on first sight of a key would under-count the
             // range and report amplification lower than the truth, which is
             // the direction that silently skips compaction.
-            records += overlap(base, object_end, start, end);
-            seen.insert(reference.object().clone());
+            let here = overlap(base, object_end, start, end);
+            records += here;
+            let fresh = seen.insert(reference.object().clone());
+            // Ascending order, so "no tail object yet" is "still in history".
+            if first_tail_base.is_none() && batch.bytes().is_none() {
+                history_records += here;
+                if fresh {
+                    history_objects += 1;
+                }
+            }
             if batch.bytes().is_some() {
                 // An inline byte range is what the tail tier is: the index
                 // already knows where to read, so the fetch is one GET.
@@ -123,24 +133,29 @@ where
         cursor = furthest;
     }
 
-    let needed = records
-        .div_euclid(i64::from(COMPACTED_OBJECT_RECORDS))
-        .saturating_add(i64::from(
-            records.rem_euclid(i64::from(COMPACTED_OBJECT_RECORDS)) != 0,
-        ));
-
     Ok(ReadAmp {
         objects_touched: seen.len(),
-        // `needed` is a count of objects over one partition's range and cannot
-        // exceed the entries the index holds, so a failure here means the fold
-        // that produced them was already wrong. Saturating is the honest
-        // reading on a 32-bit target: an unrepresentable count is not a small
-        // one.
-        objects_needed: usize::try_from(needed).unwrap_or(usize::MAX),
+        objects_needed: objects_needed(records),
         records,
         tail_objects: tail.len(),
         first_tail_base,
+        history_objects,
+        history_records,
     })
+}
+
+/// How many compacted objects `records` would occupy.
+///
+/// ⚠️ Saturating on a 32-bit target rather than wrapping: a count that cannot
+/// be represented is not a small one. It cannot exceed the entries the index
+/// holds, so reaching the saturation means the fold that produced them was
+/// already wrong.
+fn objects_needed(records: i64) -> usize {
+    let target = i64::from(COMPACTED_OBJECT_RECORDS);
+    let needed = records
+        .div_euclid(target)
+        .saturating_add(i64::from(records.rem_euclid(target) != 0));
+    usize::try_from(needed).unwrap_or(usize::MAX)
 }
 
 /// How many records of `[base, object_end)` fall inside `[start, end)`.
@@ -161,7 +176,6 @@ mod tests {
         MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,
         TAIL_WINDOW_ENTRIES, TopicId,
     };
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn topic() -> TopicId {
         TopicId::new("t").expect("a valid topic")
@@ -307,75 +321,6 @@ mod tests {
         assert!((amp.ratio() - 1.0).abs() < f64::EPSILON);
     }
 
-    /// Counts what the walk asks of the index, because the cost of the trigger
-    /// is the point of it.
-    #[derive(Debug)]
-    struct CountingIndex {
-        inner: FakeMaterializedIndex,
-        queries: AtomicUsize,
-    }
-
-    impl CountingIndex {
-        fn over(counts: &[u32]) -> Self {
-            Self {
-                inner: index_of(counts),
-                queries: AtomicUsize::new(0),
-            }
-        }
-    }
-
-    impl MaterializedIndex for CountingIndex {
-        fn apply(&self, entries: &[MetadataEntry]) -> oqueue_core::Result<()> {
-            self.inner.apply(entries)
-        }
-
-        fn applied_upto(&self) -> Option<CommitVersion> {
-            self.inner.applied_upto()
-        }
-
-        fn entries(&self) -> usize {
-            self.inner.entries()
-        }
-
-        fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset {
-            self.inner.end_offset(topic, partition)
-        }
-
-        fn find_batches(
-            &self,
-            topic: &TopicId,
-            partition: PartitionId,
-            start: Offset,
-            max_bytes: u64,
-        ) -> oqueue_core::Result<Vec<oqueue_core::IndexedBatch>> {
-            self.queries.fetch_add(1, Ordering::Relaxed);
-            self.inner.find_batches(topic, partition, start, max_bytes)
-        }
-
-        fn clear(&self) {
-            self.inner.clear();
-        }
-    }
-
-    /// ⚠️ **A range ending exactly on an object boundary must not ask again.**
-    /// The walk's own bound is `cursor < end`; at `<=` the cursor that has
-    /// reached the end queries one more page, finds every batch at or past the
-    /// end and counts none — the same answer for one extra index query per
-    /// candidate partition per sweep, which at `ADR-0036`'s cadence is the
-    /// cost this whole module is shaped around.
-    #[test]
-    fn a_walk_that_reaches_the_end_of_its_range_asks_no_further() {
-        let index = CountingIndex::over(&[10; 3]);
-        let amp = read_amp(&index, &topic(), partition(), offset(0), offset(20))
-            .expect("an index that answers");
-        assert_eq!(amp.objects_touched(), 2);
-        assert_eq!(
-            index.queries.load(Ordering::Relaxed),
-            1,
-            "one page covered the range, so one query is the whole cost"
-        );
-    }
-
     /// ⚠️ **One object, two spans for one partition** — which `IndexState`'s
     /// fold admits. Counting records per key rather than per span would report
     /// half the records and so half the amplification, and a planner reading
@@ -458,5 +403,56 @@ mod tests {
             .expect("an index that answers");
         assert_eq!(amp.tail_objects(), 0);
         assert_eq!(amp.first_tail_base(), None);
+    }
+
+    /// ⚠️ **One object with two history spans is one object.** `records`
+    /// accrues per span and the history *object* count must not: an object
+    /// counted twice inflates the trimmed ratio without inflating
+    /// `objects_needed`, so a range of seven objects each holding two spans
+    /// reads as amplification 14 and is planned when it needs nothing.
+    #[test]
+    fn two_history_spans_of_one_object_count_as_one_object() {
+        let index = FakeMaterializedIndex::new();
+        let span = |count: u32| {
+            CommittedSpan::new(
+                topic(),
+                partition(),
+                count,
+                ByteRange::bounded(0, u64::from(count)).expect("a valid range"),
+                None,
+            )
+        };
+        let mut entries = Vec::new();
+        for i in 0..7_u64 {
+            entries.push(MetadataEntry::new(
+                CommitVersion::new(i + 1),
+                MetadataRecord::BatchCommitted {
+                    object: ObjectKey::new(format!("two-{i}")).expect("a valid key"),
+                    spans: vec![span(1), span(1)],
+                },
+            ));
+        }
+        // Enough behind them to push all seven out of the tail window.
+        for i in 0..TAIL_WINDOW_ENTRIES {
+            entries.push(MetadataEntry::new(
+                CommitVersion::new(8 + i as u64),
+                MetadataRecord::BatchCommitted {
+                    object: ObjectKey::new(format!("filler-{i}")).expect("a valid key"),
+                    spans: vec![span(1)],
+                },
+            ));
+        }
+        index.apply(&entries).expect("a valid fold");
+
+        let whole = 14 + i64::try_from(TAIL_WINDOW_ENTRIES).expect("a small window");
+        let amp = read_amp(&index, &topic(), partition(), offset(0), offset(whole))
+            .expect("an index that answers");
+        let history = amp.before_tail();
+        assert_eq!(history.records(), 14, "two spans each, seven objects");
+        assert_eq!(
+            history.objects_touched(),
+            7,
+            "and seven objects, not fourteen"
+        );
     }
 }

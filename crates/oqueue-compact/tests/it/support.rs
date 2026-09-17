@@ -399,3 +399,29 @@ pub(crate) fn planned_from_topic(
     };
     planned
 }
+
+/// An index folded from `counts`, one object per entry, in order.
+pub(crate) fn history_index(counts: &[u32]) -> FakeMaterializedIndex {
+    let index = FakeMaterializedIndex::new();
+    let entries: Vec<MetadataEntry> = counts
+        .iter()
+        .enumerate()
+        .map(|(i, count)| {
+            MetadataEntry::new(
+                CommitVersion::new(i as u64 + 1),
+                MetadataRecord::BatchCommitted {
+                    object: key(&format!("obj-{i}")),
+                    spans: vec![CommittedSpan::new(
+                        topic(),
+                        partition(),
+                        *count,
+                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
+                        None,
+                    )],
+                },
+            )
+        })
+        .collect();
+    index.apply(&entries).expect("a valid fold");
+    index
+}
