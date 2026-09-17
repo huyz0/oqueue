@@ -19,11 +19,17 @@
 # ## The allowlist
 #
 # Rule 17: "The limit has an allowlist, and every entry carries a reason...
-# in the script, so adding to it is a diff someone reviews." `ALLOWLIST`
-# below has one entry, added by `M5.5` and expiring with `M5.42`: each entry is
-# a one-line addition with its reason inline, not a separate file, and each
-# carries the line count it was granted at (see below) so it cannot quietly
-# become a licence to grow.
+# in the script, so adding to it is a diff someone reviews." `ALLOWLIST` below
+# has one entry: each is a one-line addition with its reason inline, not a
+# separate file.
+#
+# ⚠️ **Two kinds of entry, and they bound growth differently** (`M5.42`,
+# `ADR-0040`). A **numeric** entry is a deferral — the file is over the limit,
+# it should not be, and the count it was granted at is what stops it quietly
+# becoming a licence to grow. A **`list`** entry is rule 17's own
+# generated-table case, and it carries no count because a count would have to
+# be raised by every commit that adds an entry to the list; what bounds it is
+# structural instead, and the section on `ALLOWLIST` below says exactly what.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
@@ -46,28 +52,78 @@ fi
 # away from a permanent failure with no suppression available.
 FILE_LINE_LIMIT=500
 
-# path (relative to repo root) -> "<granted line count>|<why it is allowed past
-# the limit>". ⚠️ **Both halves, and the count first**: an entry with no numeric
-# prefix is refused below rather than treated as an unbounded exemption, which
-# is what a bare reason silently became when `M5.43` added the count.
-# ⚠️ **One entry, and it is a deferral rather than an exemption** (`M5.5`).
-# `oqueue-core`'s `Error` is a single enum: rule 18 says to split a long file by
-# concept, and there is no concept boundary *inside* one enum — the split that
-# would work is into per-domain sub-enums with `#[from]` conversions, which
-# changes every construction site in the workspace and is a decision nobody has
-# made. It stood at 499 lines before `M5.5` needed two variants, so the next
-# commit to add one hits this too. `M5.42` is the row that decides; this entry
-# comes out when it does, and it is the only thing keeping the rule honest in
-# the meantime — a 45-variant enum *is* the design signal rule 18 describes.
-# ⚠️ **The value is the count the exemption was granted at, not just a reason**
-# (`M5.43`). An allowlisted file that keeps growing is an allowlist entry that
-# has stopped being a deferral, and the only thing that could notice was the
-# `todo` row it defers to. Exceeding the granted count fails, with the entry's
-# own reason printed — so the next variant `oqueue-core`'s error enum gains
-# lands on `M5.42` rather than on this list.
+# path (relative to repo root) -> "<granted line count>|<why>" or
+# "list|<why>". ⚠️ **Both halves, and the first one decides which kind of
+# exemption it is**: an entry with neither a numeric prefix nor `list` is
+# refused below rather than treated as an unbounded exemption, which is what a
+# bare reason silently became when `M5.43` added the count.
+#
+# ⚠️ **A numeric entry is a deferral**: the file is over the limit, someone
+# wrote down the count it was granted at, and a row says when it comes out.
+# Exceeding the granted count fails, with the entry's own reason printed.
+#
+# ⚠️ **A `list` entry is rule 17's own case, and it has no number** (`M5.42`,
+# `ADR-0040`). Rule 16's limit measures a module you can hold in your head; a
+# file that is one flat list — a generated table, an enum of independent
+# variants — is not that, and giving it a number would mean raising the number
+# on the commit that adds the forty-seventh entry, which is the churn `M5.42`
+# was opened by. What keeps it honest instead is **structural**: the file must
+# hold exactly one top-level item, and it must not be a module. The moment it
+# grows an `impl`, a helper or a second type, it is a module again and the
+# limit bites — so the exemption cannot outlive the reason it was granted for,
+# which no line count could check.
 declare -A ALLOWLIST=(
-  [crates/oqueue-core/src/error.rs]="523|one error enum is one concept; the split is per-domain sub-enums and that is M5.42's decision"
+  [crates/oqueue-core/src/error.rs]="list|one error enum is one list of independent variants; ADR-0040 keeps it flat because splitting it into sub-enums would let a new variant land without breaking an exhaustive match"
 )
+
+# Top-level item keywords. A file exempt as a `list` may hold exactly one, and
+# `mod` counts as one on purpose: a file with a module in it is a module.
+#
+# ⚠️ **The modifiers are the whole difficulty, and a first version missed six
+# forms.** `impl<T> From<T> for Error {}`, `unsafe impl Send for Error {}`,
+# `async fn`, `pub async fn`, `pub unsafe fn` and `pub(crate) async fn` all
+# passed a pattern that allowed only `pub`/`pub(...)` and demanded a space
+# immediately after the keyword — and a `From` impl is the most likely thing an
+# error enum ever grows. So visibility and any run of `async`/`unsafe`/
+# `const`/`extern`/`default` are consumed before the keyword, and the keyword
+# is followed by any non-identifier character or the line's end, which admits
+# `impl<T>` and `macro_rules!`.
+#
+# ⚠️ **`const` is in both halves, and that is not redundancy**: `const fn` is a
+# modifier and `const MAX: usize` is an item, so a pattern that moved it into
+# the modifier run alone stopped matching a bare `const` — which round two
+# found, with `pub const MAX_LEN: usize = 256;` taking the exemption. `extern`
+# has the same shape one step further, since `extern "C" fn` puts an ABI string
+# between the modifier and the keyword.
+#
+# ⚠️ **No `\b`**, which this repository forbids outright: GNU and BSD grep
+# disagree about it, and a pattern that silently matches nothing is the
+# fail-open every leg here is written against.
+ITEM_RE='^(pub(\([^)]*\))?[[:space:]]+)?((async|unsafe|const|default)[[:space:]]+|extern([[:space:]]+"[^"]*")?[[:space:]]+)*(enum|struct|union|trait|impl|fn|mod|const|static|type|macro_rules)([^A-Za-z0-9_]|$)'
+
+# Counts a `list` file's top-level items, failing if there is not exactly one,
+# or if one of them is a module declaration.
+#
+# ⚠️ **`^` anchored, so nested items do not count.** An `impl` inside a
+# function body is indented; a top-level one is not. That is a grep's reading
+# of Rust rather than a parser's, and it is the same reading every other gate
+# in this repository makes — deliberately, since a parser here would be a
+# second compiler to keep correct.
+list_exemption_holds() {
+  local file="$1" items
+  items="$(grep -cE "$ITEM_RE" "$file" || true)"
+  if (( items != 1 )); then
+    fail "$file: allowlisted as a list, but holds $items top-level item(s), not 1"
+    note "a list exemption is rule 17's generated-table case; a file with more"
+    note "than one item is a module, and rule 16's limit is what measures it"
+    return 1
+  fi
+  if grep -qE '^(pub(\([^)]*\))?[[:space:]]+)?mod[[:space:]]' "$file"; then
+    fail "$file: allowlisted as a list, but declares a module"
+    return 1
+  fi
+  return 0
+}
 
 # Module names that are a place to put things nobody decided where else to
 # put, not a concept — rule 24. Matched against the file's stem, so
@@ -105,12 +161,20 @@ for f in "${files[@]}"; do
       entry="${ALLOWLIST[$f]}"
       granted="${entry%%|*}"
       why="${entry#*|}"
-      if [[ ! "$granted" =~ ^[0-9]+$ ]]; then
+      if [[ "$granted" == "list" ]]; then
+        if list_exemption_holds "$f"; then
+          note "$f: $lines lines, over $FILE_LINE_LIMIT, allowlisted as a list -- $why"
+        else
+          note "$why"
+          note "the exemption's own condition no longer holds, so the limit applies"
+          violations=$((violations + 1))
+        fi
+      elif [[ ! "$granted" =~ ^[0-9]+$ ]]; then
         # ⚠️ **A malformed entry fails rather than exempting.** Without this the
         # arithmetic below errors, evaluates false, and the file is exempted
         # with no ceiling at all -- the gate off for exactly the entry someone
         # got wrong.
-        fail "$f: allowlist entry must be \"<granted line count>|<reason>\", got: $entry"
+        fail "$f: allowlist entry must be \"<granted line count>|<reason>\" or \"list|<reason>\", got: $entry"
         violations=$((violations + 1))
       elif (( lines > granted )); then
         fail "$f: $lines lines, over the $granted it was allowlisted at"

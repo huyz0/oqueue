@@ -518,6 +518,3 @@ pub enum Error {
         budget: i64,
     },
 }
-
-/// The crate's result alias.
-pub type Result<T> = core::result::Result<T, Error>;

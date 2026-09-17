@@ -1352,6 +1352,52 @@ invoke_file_size() {
   bash "$1/scripts/check-file-size.sh"
 }
 
+# --- check-file-size.sh: a `list` exemption whose file became a module -----
+# ⚠️ **The condition `ADR-0040` replaced a line count with.** A numeric
+# exemption is outlived when the file grows past its count, and something
+# notices; a structural one is outlived when the file stops being a list, and
+# this is what notices. Without this case the exemption is unbounded in the one
+# direction it was written to bound.
+setup_file_size_list_became_a_module() {
+  local dir; dir="$(new_scratch file-size-list)"
+  copy_gate "$dir" check-file-size.sh
+  mkdir -p "$dir/crates/oqueue-core/src"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/oqueue-core"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-core/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-core"
+version = "0.1.0"
+edition = "2021"
+EOF
+  # The real allowlist entry names this path, so the fixture writes that file:
+  # a list of 501 lines, plus the second item that ends the exemption.
+  {
+    printf 'pub enum Error {\n'
+    printf '    V%s,\n' {1..500}
+    printf '}\n'
+    # ⚠️ **A generic `From` impl, not `impl Error {}`.** Round one of `M5.42`
+    # found the first pattern allowed only `pub`/`pub(...)` before the keyword
+    # and demanded a space right after it, so six forms slipped through --
+    # `impl<T> From<T> for Error`, `unsafe impl`, `async fn`, `pub async fn`,
+    # `pub unsafe fn`, `pub(crate) async fn` -- while the case planted the one
+    # form the pattern did catch. A `From` impl is the most likely thing an
+    # error enum ever grows, so it is what this plants -- with a `pub const`
+    # beside it, which round two found slipping through the *fix*: `const` had
+    # moved into the modifier run and left the keyword alternation.
+    printf 'impl<T> From<T> for Error {}\n'
+    printf 'pub const MAX_LEN: usize = 256;\n'
+  } > "$dir/crates/oqueue-core/src/error.rs"
+  (cd "$dir" && git add -A && git commit -q -m "M-1.1: a list that grew an impl")
+  printf '%s\n' "$dir"
+}
+invoke_file_size_list_became_a_module() {
+  bash "$1/scripts/check-file-size.sh"
+}
+
 # --- check-readmes.sh: a crate whose README Upstream section is stale ------
 setup_readmes() {
   local dir; dir="$(new_scratch readmes)"
@@ -3396,6 +3442,8 @@ run_case "build-index.sh --check"       setup_build_index         invoke_build_i
 run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace \
   "cites FR-999"
 run_case "check-file-size.sh"           setup_file_size           invoke_file_size
+run_case "check-file-size.sh (a list exemption that became a module)" \
+  setup_file_size_list_became_a_module invoke_file_size_list_became_a_module
 run_case "check-readmes.sh"             setup_readmes             invoke_readmes
 run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readmes_bin \
   "mimalloc"
