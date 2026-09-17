@@ -25,7 +25,7 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 | Must stay true | Held by |
 |---|---|
 | No acknowledged record is lost by a rewrite | `M5`'s tests; NFR-20 |
-| The compaction trigger costs no object-storage operation | `check-sans-io.sh`, and `oqueue-core` being this crate's only dependency; `ADR-0036` |
+| The compaction trigger costs no object-storage operation | `read_amp`'s signature, which takes a `MaterializedIndex` and no store, and `check-sans-io.sh`'s `read_amp` leg, which forbids that seam's name — the fake and the three wrappers included — anywhere in that file, and fails if the file is unreadable or has moved; `ADR-0036`, `M5.38`. ⚠️ **Not** the dependency set — `oqueue-core` exports `ObjectStore` — and **not** the gate's SDK patterns, which a call through the core trait does not match |
 
 ## Notes for whoever touches this
 

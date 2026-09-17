@@ -4,10 +4,18 @@
 //! trigger must cost no object-storage operation, because it is evaluated for
 //! every candidate partition on every sweep — `ADR-0036` decision 1 is what
 //! that buys, and it is why this module takes a
-//! [`MaterializedIndex`] rather than anything that can reach a network. The
-//! crate depends on `oqueue-core` alone and `check-sans-io.sh` is what holds
-//! that, so "issues zero store calls" is a property of the signature rather
-//! than of a test.
+//! [`MaterializedIndex`] rather than anything that can reach a network.
+//!
+//! ⚠️ **What holds that is this function's signature, plus one leg of
+//! `check-sans-io.sh` written for this file** (`M5.38`). It is *not* the
+//! dependency set: `oqueue-core` exports the store seam and a fake beside it,
+//! so a store is one `use` away from here and `M5.4`'s merge executor will
+//! legitimately bring one into the crate. Nor is it that gate's four SDK
+//! patterns, which look for vendor paths and would not see a call through the
+//! core seam. The leg forbids that seam's name in this file outright — ⚠️ **so
+//! this paragraph may not write it either**, which is the cost of a rule that
+//! greps rather than parses, and cheaper than a rule that reads a doc comment
+//! as an exemption. It fails if the file is unreadable or has moved.
 //!
 //! ⚠️ **Never triggered on object count**, which `M5.md` task 1 forbids
 //! outright: object *count* is a coordinator cost and object *bytes* are a

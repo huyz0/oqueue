@@ -276,6 +276,60 @@ scan_pattern() {
   done <<< "$matches"
 }
 
+# ⚠️ **The fifth pattern: the compaction trigger may name no store at all**
+# (`M5.38`). `read_amp` is evaluated for every candidate partition on every
+# sweep, so one store call there is a per-partition cost at sweep cadence and
+# `ADR-0036`'s whole cost argument is about not paying it. The four patterns
+# above cannot hold that: `STORE_RE` looks for SDK paths, and the store this
+# crate could reach is `oqueue_core::ObjectStore`, a `pub trait` the seam
+# exists to make injectable. ⚠️ **Nor does the dependency set hold it** --
+# `oqueue-core` exports `ObjectStore` and `FakeObjectStore`, so depending on
+# `oqueue-core` alone leaves a store one `use` away, and `M5.4`'s merge
+# executor will legitimately bring one into this crate. This is a rule about
+# one file, and it is stated where a change to that file trips it.
+TRIGGER_FILE="crates/oqueue-compact/src/read_amp.rs"
+# ⚠️ **A substring, deliberately, and no `\b`.** Four types in `oqueue-core`
+# end in this name -- the seam itself, the fake beside it, and the chunked,
+# merging and counting wrappers -- so a word-boundary match on the bare
+# identifier reads green while `FakeObjectStore` sits in the signature, which
+# is the exact type this rule's own row names as the reachable one. And this
+# file's header forbids `\b` outright, because GNU and BSD grep disagree about
+# it: a pattern that silently matches nothing is the fail-open this leg was
+# written against.
+TRIGGER_RE='ObjectStore'
+trigger_violations=0
+
+# ⚠️ **`grep`'s status is three-valued and this reads all three.** 0 matched,
+# 1 clean, 2+ could not read -- and an unreadable file answering "clean" is the
+# class `M4.50`, `M4.68` and `M5.37` each found in a gate that wrote
+# `|| true`. Here the third value fails, because a rule that cannot read its
+# own file is holding nothing.
+scan_trigger() {
+  local matches status
+  if [[ ! -f "$TRIGGER_FILE" ]]; then
+    fail "$TRIGGER_FILE does not exist, so the compaction trigger's no-store rule holds nothing"
+    note "a rule whose file moved is a rule nobody is keeping -- point it at the new path"
+    trigger_violations=$((trigger_violations + 1))
+    return 0
+  fi
+  matches="$(grep -nE "$TRIGGER_RE" "$TRIGGER_FILE")" && status=0 || status=$?
+  if (( status >= 2 )); then
+    fail "cannot read $TRIGGER_FILE (grep exit $status)"
+    note "an unreadable file is not a clean one"
+    trigger_violations=$((trigger_violations + 1))
+    return 0
+  fi
+  (( status == 1 )) && return 0
+  while IFS= read -r m; do
+    [[ -n "$m" ]] || continue
+    fail "the compaction trigger names a store: $TRIGGER_FILE:${m%%:*}"
+    note "$(printf '%s' "${m#*:}" | sed -E 's/^[[:space:]]+//')"
+    note "read_amp is evaluated per candidate partition per sweep -- ADR-0036 decision 1"
+    note "a store belongs in the executor, not in the trigger"
+    trigger_violations=$((trigger_violations + 1))
+  done <<< "$matches"
+}
+
 for f in "${files[@]}"; do
   [[ -f "$f" ]] || continue
   scanned=$((scanned + 1))
@@ -301,8 +355,11 @@ for f in "${files[@]}"; do
   fi
 done
 
-if (( violations == 0 && real_clock_violations == 0 )); then
+scan_trigger
+
+if (( violations == 0 && real_clock_violations == 0 && trigger_violations == 0 )); then
   ok "no library crate touches a socket, the real clock, or object storage ($scanned file(s) scanned)"
+  ok "the compaction trigger names no store ($TRIGGER_FILE)"
 else
   if (( violations > 0 )); then
     note "business logic is sans-I/O -- non-negotiable 5"
@@ -310,6 +367,9 @@ else
   fi
   if (( real_clock_violations > 0 )); then
     note "a seeded run replays only if every clock it reads is one it can advance -- ADR-0028"
+  fi
+  if (( trigger_violations > 0 )); then
+    note "the trigger's cost is what ADR-0036 decision 1 buys -- M5.38"
   fi
 fi
 
