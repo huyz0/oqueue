@@ -46,7 +46,18 @@ FILE_LINE_LIMIT=500
 
 # path (relative to repo root) -> why it is allowed past the limit. Empty
 # until a real crate needs an entry.
-declare -A ALLOWLIST=()
+# ⚠️ **One entry, and it is a deferral rather than an exemption** (`M5.5`).
+# `oqueue-core`'s `Error` is a single enum: rule 18 says to split a long file by
+# concept, and there is no concept boundary *inside* one enum — the split that
+# would work is into per-domain sub-enums with `#[from]` conversions, which
+# changes every construction site in the workspace and is a decision nobody has
+# made. It stood at 499 lines before `M5.5` needed two variants, so the next
+# commit to add one hits this too. `M5.42` is the row that decides; this entry
+# comes out when it does, and it is the only thing keeping the rule honest in
+# the meantime — a 45-variant enum *is* the design signal rule 18 describes.
+declare -A ALLOWLIST=(
+  [crates/oqueue-core/src/error.rs]="one error enum is one concept; the split is per-domain sub-enums and that is M5.42's decision"
+)
 
 # Module names that are a place to put things nobody decided where else to
 # put, not a concept — rule 24. Matched against the file's stem, so

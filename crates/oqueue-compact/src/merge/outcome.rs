@@ -16,6 +16,25 @@ pub struct MergeOutcome {
 }
 
 impl MergeOutcome {
+    /// Builds one.
+    ///
+    /// ⚠️ **`pub(crate)` rather than public**: the only honest source of these
+    /// numbers is a merge that happened, and a constructor anyone could call
+    /// would let a caller report a run it did not make.
+    pub(crate) const fn new(
+        gets: usize,
+        puts: usize,
+        records: i64,
+        spans: Vec<CommittedSpan>,
+    ) -> Self {
+        Self {
+            gets,
+            puts,
+            records,
+            spans,
+        }
+    }
+
     /// Object reads the merge issued.
     #[must_use]
     pub const fn gets(&self) -> usize {

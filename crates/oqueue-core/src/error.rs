@@ -493,6 +493,30 @@ pub enum Error {
     /// is a request that was never going to succeed.
     #[error("backend failure will not succeed on retry")]
     Permanent,
+
+    /// Two plans in one compaction round cover the same offsets.
+    ///
+    /// ⚠️ **The planner's error, not storage's** — running the round would
+    /// write those records twice into one object, and the commit's fold would
+    /// then shift every later offset in the partition. `oqueue-compact`'s
+    /// `admissible` is where the reasoning lives; the merge refuses the same
+    /// shape one level down, between an input list's references, as
+    /// [`Error::IndexObjectMismatch`].
+    #[error("two plans in one compaction round cover overlapping offsets")]
+    OverlappingCompactionPlans,
+
+    /// A compaction round would rewrite more records than one object may hold.
+    ///
+    /// ⚠️ **Refused rather than split**, for the reason an over-budget plan is
+    /// deferred rather than truncated: a partially written round is the one
+    /// operation that can silently lose acknowledged data.
+    #[error("a compaction round of {records} records is over the {budget}-record budget")]
+    CompactionRoundTooLarge {
+        /// What the round would rewrite.
+        records: i64,
+        /// What one round may rewrite.
+        budget: i64,
+    },
 }
 
 /// The crate's result alias.

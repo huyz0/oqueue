@@ -24,6 +24,12 @@
 //! for what the index said it holds is refused, and the output is written
 //! `IfAbsent` so a retry cannot overwrite bytes an index entry already names.
 
+// ⚠️ `redundant_pub_crate` and `unreachable_pub` disagree about a `pub(crate)`
+// item in a private module, and `gather` is exactly that: `layout.rs` needs it
+// and nothing outside this crate may. `pub(crate)` is the visibility that is
+// true, so the lint that disagrees is the one allowed — `oqueue-core`'s
+// `bundle.rs` makes the same call for the same reason.
+#![allow(clippy::redundant_pub_crate)]
 mod outcome;
 
 pub use outcome::MergeOutcome;
@@ -56,31 +62,8 @@ pub async fn merge<S>(
 where
     S: ObjectStore + ?Sized,
 {
-    // ⚠️ **Sorted here rather than required of the caller.** The output's
-    // regions are read back in the order they were written, so an input list
-    // in the wrong order produces an object that parses perfectly and serves
-    // one offset's records for another's.
-    let mut ordered: Vec<&ObjectRef> = inputs.iter().collect();
-    ordered.sort_by_key(|reference| reference.base_offset());
-    let covering = tiling(&ordered, plan)?;
-
     let mut builder = BundleBuilder::new();
-    let mut gets = 0_usize;
-    let mut records = 0_i64;
-
-    for reference in covering {
-        let bytes = store.get(reference.object(), ByteRange::Full).await?;
-        gets += 1;
-        records += i64::from(take_regions(&bytes, plan, reference, &mut builder)?);
-    }
-
-    // ⚠️ **No final check against `plan.cost().records_rewritten()`, and none
-    // is needed.** An exact tiling of `[start, end)` whose every object was
-    // verified against its own indexed record count already sums to
-    // `end - start`, which is what the plan was costed on — so the comparison
-    // is one no input can fail, and a branch no test can distinguish is worse
-    // than no branch. The tiling is the check.
-
+    let (gets, records) = gather(store, plan, inputs, &mut builder).await?;
     let sealed = builder.seal()?;
     let spans = sealed.spans().to_vec();
     // ⚠️ **`IfAbsent`, so a retry cannot overwrite an output an index entry
@@ -96,6 +79,51 @@ where
         records,
         spans,
     })
+}
+
+/// Reads one plan's inputs into `builder`, returning the reads it took and the
+/// records it moved.
+///
+/// ⚠️ **Separated from the write so a round can share one builder**
+/// (`M5.5`): several plans' regions go into one object, and the alternative —
+/// one object per plan — is a PUT and an index entry per partition per round,
+/// which is the object-count cost compaction exists to reduce.
+///
+/// # Errors
+///
+/// As [`merge`].
+pub(crate) async fn gather<S>(
+    store: &S,
+    plan: &CompactionPlan,
+    inputs: &[ObjectRef],
+    builder: &mut BundleBuilder,
+) -> Result<(usize, i64)>
+where
+    S: ObjectStore + ?Sized,
+{
+    // ⚠️ **Sorted here rather than required of the caller.** The output's
+    // regions are read back in the order they were written, so an input list
+    // in the wrong order produces an object that parses perfectly and serves
+    // one offset's records for another's.
+    let mut ordered: Vec<&ObjectRef> = inputs.iter().collect();
+    ordered.sort_by_key(|reference| reference.base_offset());
+    let covering = tiling(&ordered, plan)?;
+
+    let mut gets = 0_usize;
+    let mut records = 0_i64;
+    for reference in covering {
+        let bytes = store.get(reference.object(), ByteRange::Full).await?;
+        gets += 1;
+        records += i64::from(take_regions(&bytes, plan, reference, builder)?);
+    }
+
+    // ⚠️ **No final check against `plan.cost().records_rewritten()`, and none
+    // is needed.** An exact tiling of `[start, end)` whose every object was
+    // verified against its own indexed record count already sums to
+    // `end - start`, which is what the plan was costed on — so the comparison
+    // is one no input can fail, and a branch no test can distinguish is worse
+    // than no branch. The tiling is the check.
+    Ok((gets, records))
 }
 
 /// The inputs that tile the plan's range exactly, in ascending order.

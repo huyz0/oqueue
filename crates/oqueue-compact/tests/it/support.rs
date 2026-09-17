@@ -220,3 +220,182 @@ pub(crate) fn planned_from(start: i64, end: i64) -> CompactionPlan {
     };
     planned
 }
+
+/// A partition by index.
+pub(crate) fn partition_n(index: i32) -> PartitionId {
+    PartitionId::new(index).expect("a valid partition")
+}
+
+/// `count` objects of `per` records each for one topic and partition.
+pub(crate) async fn inputs_of_topic(
+    store: &Counting,
+    at: (&TopicId, PartitionId),
+    count: usize,
+    per: u32,
+    size: usize,
+) -> Vec<ObjectRef> {
+    let (topic, partition) = at;
+    let mut refs = Vec::new();
+    for i in 0..count {
+        let name = format!("{}-{}-{i}", topic.as_str(), partition.get());
+        let mut builder = BundleBuilder::new();
+        builder
+            .push(
+                topic.clone(),
+                partition,
+                PushedRecords {
+                    count: per,
+                    producer: None,
+                },
+                // ⚠️ **One byte per topic, so "and nothing else" can fail.**
+                // A shared filler makes a foreign region inside a span
+                // indistinguishable from this partition's own bytes, which is
+                // the assertion a layout test most needs to be able to fail.
+                &vec![fill_for(topic); size],
+            )
+            .expect("a valid region");
+        let sealed = builder.seal().expect("a sealed bundle");
+        store
+            .inner
+            .put(&key(&name), sealed.into_payload(), None)
+            .await
+            .expect("a store that accepts");
+        refs.push(ObjectRef::new(
+            key(&name),
+            offset(i64::try_from(i).expect("a small count") * i64::from(per)),
+            per,
+        ));
+    }
+    refs
+}
+
+/// A plan over `[0, end)` for one topic and partition.
+pub(crate) fn planned_topic(topic: &TopicId, partition: PartitionId, end: i64) -> CompactionPlan {
+    planned_records_topic(
+        topic,
+        partition,
+        1,
+        usize::try_from(end).expect("a small count"),
+    )
+}
+
+/// A plan over `objects` objects of `per` records each, for one topic.
+pub(crate) fn planned_records_topic(
+    topic: &TopicId,
+    partition: PartitionId,
+    per: u32,
+    objects: usize,
+) -> CompactionPlan {
+    let index = FakeMaterializedIndex::new();
+    let end = i64::from(per) * i64::try_from(objects).expect("a small count");
+    let mut counts = vec![per; objects];
+    counts.extend(std::iter::repeat_n(per, TAIL_WINDOW_ENTRIES));
+    let entries: Vec<MetadataEntry> = counts
+        .iter()
+        .enumerate()
+        .map(|(i, count)| {
+            MetadataEntry::new(
+                CommitVersion::new(i as u64 + 1),
+                MetadataRecord::BatchCommitted {
+                    object: key(&format!("planned-{i}")),
+                    spans: vec![CommittedSpan::new(
+                        topic.clone(),
+                        partition,
+                        *count,
+                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
+                        None,
+                    )],
+                },
+            )
+        })
+        .collect();
+    index.apply(&entries).expect("a valid fold");
+    let Planning::Planned(planned) =
+        plan(&index, topic, partition, offset(0), offset(end)).expect("an index that answers")
+    else {
+        panic!("a plan over an amplified, aged range")
+    };
+    planned
+}
+
+/// The byte `inputs_of_topic` fills a topic's records with.
+pub(crate) fn fill_for(topic: &TopicId) -> u8 {
+    topic.as_str().as_bytes()[0]
+}
+
+/// `count` one-record objects for a topic and partition, based at `from`.
+pub(crate) async fn shifted_inputs(
+    store: &Counting,
+    at: (&TopicId, PartitionId),
+    count: usize,
+    from: i64,
+) -> Vec<ObjectRef> {
+    let (topic, partition) = at;
+    let mut refs = Vec::new();
+    for i in 0..count {
+        let name = format!("{}-{}-shifted-{i}", topic.as_str(), partition.get());
+        let mut builder = BundleBuilder::new();
+        builder
+            .push(
+                topic.clone(),
+                partition,
+                PushedRecords {
+                    count: 1,
+                    producer: None,
+                },
+                &[fill_for(topic); 32],
+            )
+            .expect("a valid region");
+        let sealed = builder.seal().expect("a sealed bundle");
+        store
+            .inner
+            .put(&key(&name), sealed.into_payload(), None)
+            .await
+            .expect("a store that accepts");
+        refs.push(ObjectRef::new(
+            key(&name),
+            offset(from + i64::try_from(i).expect("a small count")),
+            1,
+        ));
+    }
+    refs
+}
+
+/// A plan over `[start, end)` for one topic and partition.
+pub(crate) fn planned_from_topic(
+    topic: &TopicId,
+    partition: PartitionId,
+    start: i64,
+    end: i64,
+) -> CompactionPlan {
+    let index = FakeMaterializedIndex::new();
+    let objects = usize::try_from(end).expect("a small count");
+    let mut counts = vec![1_u32; objects];
+    counts.extend(std::iter::repeat_n(1_u32, TAIL_WINDOW_ENTRIES));
+    let entries: Vec<MetadataEntry> = counts
+        .iter()
+        .enumerate()
+        .map(|(i, count)| {
+            MetadataEntry::new(
+                CommitVersion::new(i as u64 + 1),
+                MetadataRecord::BatchCommitted {
+                    object: key(&format!("planned-{i}")),
+                    spans: vec![CommittedSpan::new(
+                        topic.clone(),
+                        partition,
+                        *count,
+                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
+                        None,
+                    )],
+                },
+            )
+        })
+        .collect();
+    index.apply(&entries).expect("a valid fold");
+    let Planning::Planned(planned) =
+        plan(&index, topic, partition, offset(start), offset(end)).expect("an index that answers")
+    else {
+        panic!("a plan over an amplified, aged range")
+    };
+    planned
+}

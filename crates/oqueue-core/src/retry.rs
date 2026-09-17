@@ -79,6 +79,11 @@ impl Error {
             | Self::EncryptionDisabled
             | Self::EmptyObjectKey
             | Self::EmptyByteRange
+            // Never: a round whose plans overlap, or whose total exceeds what
+            // one object may hold, is a round the planner built wrong. The same
+            // round retried is the same round.
+            | Self::OverlappingCompactionPlans
+            | Self::CompactionRoundTooLarge { .. }
             // Never: a malformed or unknown-format object does not become
             // well-formed by being read again.
             | Self::UnknownRegionAlg { .. }
