@@ -6,10 +6,13 @@
 #
 # Non-negotiable 5, and `architecture.md`'s "Sans-I/O" section: "a concrete
 # socket type named inside a library crate is a violation; a generic bound is
-# not." This is a grep gate against **four** patterns. ⚠️ **Three are
+# not." This is a grep gate against **five** patterns — four project-wide-ish,
+# and a fifth (`M5.38`) that runs against one named file. ⚠️ **Three are
 # literal-identifier matches** where a false positive is rare — unlike
 # `check-drift.sh`'s same-line heuristic, a concrete type name like
-# `TcpStream` cannot also be a generic bound. ⚠️ **The fourth is not**:
+# `TcpStream` cannot also be a generic bound — and so is the fifth, the
+# trigger's store-seam name, which is why a doc comment in `read_amp.rs` may
+# not write it. ⚠️ **The fourth is not**:
 # `REAL_CLOCK_RE` (`M10.5`) spans to a semicolon so it catches a braced import,
 # which means it also matches the same text in a doc comment. It runs on every
 # `oqueue-broker` file — `src/` and `tests/` alike, because `ADR-0027` point 3
@@ -18,8 +21,8 @@
 # offers, a whole-file exemption, is a blunt one: a last resort rather than a
 # first reach.
 #
-# ## The four patterns: three project-wide except two named crates, and one
-# ## that runs in exactly one crate
+# ## The five patterns: three project-wide except two named crates, one that
+# ## runs in exactly one crate, and one that runs against a single file
 #
 # - **A concrete socket type.** `TcpStream`/`TcpListener`/`UdpSocket`/
 #   `UnixStream`/`UnixListener`, from `std::net`, `tokio::net`, or bare after a
@@ -64,6 +67,15 @@
 #   library crate, and `oqueue-broker` is exempt here too, for the same
 #   reason as the other two.
 #
+# - **A store named in the compaction trigger.** `read_amp.rs` in
+#   `oqueue-compact` may not name the store seam at all — the fake and the
+#   three wrappers included, so the pattern is a substring rather than a word
+#   match (`M5.38`). ⚠️ **It is a rule about one file, not about a crate**:
+#   `M5.4`'s merge executor legitimately brings a store into that crate, and
+#   what may not have one is the function evaluated per candidate partition
+#   per sweep (`ADR-0036` decision 1). An unreadable or moved file fails it,
+#   because a rule that cannot read its own file is holding nothing.
+#
 # ## What this does not catch
 #
 # - **A generic bound named after the concrete type it will be instantiated
@@ -79,9 +91,16 @@
 #   `M1.1`, the crate is `object_store`, and the list is kept wider than the
 #   one real import on purpose. A re-export under some other path is still
 #   uncaught, which is the actual residue this bullet exists to name.
-# - **`unsafe` or FFI calls that perform I/O without naming any of the three
+# - **`unsafe` or FFI calls that perform I/O without naming any of the five
 #   patterns above.** Out of scope for this gate; `security.md` rule 18 and
 #   `check-unsafe.sh` (M-1.11) are what bound `unsafe` to begin with.
+# - **A store the compaction trigger reaches through a generic declared
+#   elsewhere** (`M5.39`, naming what `M5.38` left unnamed here). The fifth
+#   pattern forbids the store seam's name inside `read_amp.rs`; a
+#   `Trigger<S>` declared in another module, with that file holding only a
+#   method call on a bound it never spells, passes. A grep cannot see a type
+#   it is not shown, and what closes it is a reviewer noticing the trigger
+#   acquired a field.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
@@ -218,8 +237,26 @@ scan_real_clock() {
 # deterministic — the same gap `REAL_CLOCK_RE`'s own header describes for the
 # `std::time::Instant` side, mirrored here rather than re-discovered. The
 # import regex covers the same three spans that one names: a plain `use`, a
-# braced list, and a nested `use tokio::{time::Instant, ..}`.
-TOKIO_INSTANT_USE_RE='(tokio::time::[^;]*\bInstant\b|tokio::\{[^;]*time::[^;]*\bInstant\b)'
+# braced list, and a nested `use tokio::{time::Instant, ..}` — ⚠️ **checked by
+# running it against all three rather than by reading it**, because `M5.39`
+# broke two of them while leaving this sentence saying otherwise.
+# ⚠️ **No `\b` here either** (`M5.39`). This file's own header rules it out for
+# GNU/BSD disagreement, and these two were the residue: on a grep that ignores
+# it the strip below is never appended, a virtual `tokio::time` read is flagged
+# as a real clock, and that is exactly the false positive `M10.27` removed.
+#
+# ⚠️ **The class is optional, and that is the whole difficulty.** `\b` is
+# zero-width; `[^A-Za-z0-9_]` consumes a character, so the obvious substitution
+# `tokio::time::[^;]*(^|[^A-Za-z0-9_])Instant` cannot match the plain
+# `use tokio::time::Instant;` at all — after the literal prefix the next
+# character is `I`, `[^;]*` must be empty, and there is nothing left for the
+# class to eat. `M5.39`'s first attempt did exactly that and its own review
+# caught it: two of the three spans stopped matching, so a plain `use` plus a
+# bare `Instant::now()` under a paused runtime was flagged as a real clock read
+# — the regression the replacement was written to prevent. `([^;]*[^A-Za-z0-9_])?`
+# — an optional run ending in a non-identifier character — is the portable form
+# that keeps all three spans and still rejects `Instants`.
+TOKIO_INSTANT_USE_RE='(tokio::time::([^;]*[^A-Za-z0-9_])?Instant([^A-Za-z0-9_]|$)|tokio::\{[^;]*time::([^;]*[^A-Za-z0-9_])?Instant([^A-Za-z0-9_]|$))'
 scan_clock() {
   local f="$1" matches lineno strip rest crate tail
   # ⚠️ **The exemption is for a `tests/` tree only, anchored at the crate
@@ -249,7 +286,9 @@ scan_clock() {
   if [[ "$tail" == tests/* ]]; then
     strip='s/tokio::time::Instant::now\(\)//g'
     if grep -qE "$TOKIO_INSTANT_USE_RE" "$f" 2>/dev/null; then
-      strip="$strip"'; s/\bInstant::now\(\)//g'
+      # ⚠️ Excluding a leading `:` as well, so `std::time::Instant::now()` is
+      # not stripped by the rule that exists for the tokio one.
+      strip="$strip"'; s/(^|[^A-Za-z0-9_:])Instant::now\(\)/\1/g'
     fi
     matches="$(sed -E "$strip" "$f" 2>/dev/null | grep -nE "$CLOCK_RE" || true)"
   else

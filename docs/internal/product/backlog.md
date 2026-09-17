@@ -32,20 +32,21 @@ re-derived rather than copied when a milestone opens. Read the plan's
 
 ## M5: Compaction and retention
 
-⚠️ **39 rows against `sdd.md`'s 20-task cap, argued here because the standard
+⚠️ **40 rows against `sdd.md`'s 20-task cap, argued here because the standard
 asks for the argument in this section's own notes.** The test the cap exists
 for is whether these rows are one milestone, and the honest answer is that
-**23 of them are M5's own work, 15 are debt this milestone received rather than
+**24 of them are M5's own work, 15 are debt this milestone received rather than
 generated, and 1 is the opening bookkeeping**. ⚠️ **It was 38 when `M5.0`
-wrote it and `M5.38` is the row that moved it**, filed by `M5.1`'s own review:
+wrote it and `M5.38` and `M5.39` are the rows that moved it**, filed by `M5.1`'s own review:
 a milestone's row count moves while it runs, and a count written once and never
 re-read is the failure this paragraph exists to avoid. Every id, classified, because a
 cap argument that accounts for only some of the rows is what `sdd.md` says the
 cap exists to catch:
 
-- **`M5.1`-`M5.5`, `M5.8`, `M5.12`-`M5.27`, `M5.38` — twenty-three ids**: M5's
-  own deliverable and its consequences, `M5.38` being a false invariant `M5.1`
-  wrote and its own review caught. Compaction (`M5.1`-`M5.5`, `M5.8`,
+- **`M5.1`-`M5.5`, `M5.8`, `M5.12`-`M5.27`, `M5.38`, `M5.39` — twenty-four
+  ids**: M5's own deliverable and its consequences, `M5.38` being a false
+  invariant `M5.1` wrote and its own review caught, and `M5.39` the gate
+  `M5.38` left describing itself wrongly. Compaction (`M5.1`-`M5.5`, `M5.8`,
   `M5.12`-`M5.15`), retention (`M5.16`-`M5.19`), deletion safety
   (`M5.20`-`M5.23`), the log start offset a consumer can reset to once
   something deletes (`M5.24`), the 404-on-read metric (`M5.25`), the recorded
@@ -124,6 +125,7 @@ not arguing against.
 | M5.36 | A boundary round that files rows can never be the last one, and the escape is undocumented | Serves no FR/NFR — re-derived from `M4.85` (`M4.86`). `lib.sh`'s `milestone_commits` excludes a commit only when every path it touches is under `reviews/`, so a closing round's own rows commit is uncovered and fails leg 0. Nine terminating rounds have escaped by hand with a verdict-only commit — eight milestone closings and `M4.41`'s `d2db096` inside a still-open milestone — and no skill names the move or says the terminating round must find nothing at blocking or major for it to be reachable. ⚠️ The gate fails *correctly*; it is the **procedure** that has no documented terminating state. Acceptance: `milestone-review`'s skill states the terminating condition and the verdict-only escape, and the statement is checked against `milestone_commits`' actual exclusion rule rather than against prose describing it. | todo |
 | M5.37 | `check-fencing-seam.sh`'s two `grep` legs read a three-valued status as two | Serves FR-20 — re-derived from `M4.89` (`M4.86`). Both legs end `grep … 2>/dev/null \| … \|\| true`, so a violation planted in an unreadable file takes the gate from `FAIL 9 site(s) … the ceiling is 8` to `ok 7 site(s) … within the ceiling of 8`, rc 0. ⚠️ **The third instance of this class** after `M4.50` and `M4.68`, in the file whose other two legs `M4.50` hardened for exactly it. Acceptance: the legs distinguish grep's 0/1/2, and a `chmod 000` on a file containing a real violation makes the gate fail rather than pass — observed, both directions. | todo |
 | M5.38 | The no-store guarantee is claimed by four documents and held by none of them | Serves FR-34 — filed by `M5.1`'s round-two review as a major on a `pass` verdict, written as a row in the next commit rather than fixed inline (`review.md` rule 15). `M5.1`'s backlog row, `crates/oqueue-compact/AGENTS.md`, its `README.md` invariant table and `read_amp`'s module doc all say the trigger's no-object-storage property is held by the crate depending on `oqueue-core` alone and by `check-sans-io.sh`. Neither holds it: `oqueue-core` exports `ObjectStore` **and** `FakeObjectStore`, so a store is reachable from this crate today, and `check-sans-io.sh` greps for `object_store::`, `aws_sdk_s3`, `aws_config`, `google_cloud_storage` and `opendal::` — a call through `oqueue_core::ObjectStore` matches none of them. ⚠️ **The failure is a guard that reads green while the thing it names has already happened**: `M5.4`'s merge executor legitimately needs a store, and once it is in the crate a later change can put one on the trigger path with every named holder still passing. Acceptance: each of the four places names what actually holds the property, and a check fails when `read_amp`'s own signature gains a store parameter — observed failing against a planted one. | done |
+| M5.39 | `check-sans-io.sh`'s header describes four patterns and the file has five, and two `\b`s the header forbids | Serves no FR/NFR — filed by `M5.38`'s round-two review as two minors on a `pass` verdict, one subject: the script's account of itself. The header says "a grep gate against **four** patterns", "**The fourth is not**" and "## The four patterns" while `M5.38` added a fifth, and the fifth appears nowhere in the header's enumeration of what the gate does *not* catch — so an author who trips it reads a contract that does not describe the failure and reaches for a whole-file exemption the header itself calls a last resort. And `TOKIO_INSTANT_USE_RE` and `scan_clock`'s sed strip both still contain `\b`, which `M5.38`'s own new comment tells a reader this file does not: on a grep that does not honour it, the strip is never appended, a virtual `tokio::time` read is flagged as a real clock, and that is the false positive `M10.27` removed. Acceptance: the header's count and its does-not-catch list match the legs the file actually has, checked by running the gate rather than by reading it; and both `\b`s replaced with the portable class the header prescribes, with the `M10.27` case observed still passing and a planted `std::time::Instant::now()` in the same file observed still failing. | done |
 
 ## M4: Consumer groups
 
