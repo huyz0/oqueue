@@ -163,7 +163,7 @@ fn a_malformed_log_is_refused_at_every_page_size() {
             "page size {page} refuses exactly the one"
         );
         assert!(
-            refusals[0] == "a manifest covering up to 64 does not meet history at 2",
+            refusals[0] == "a manifest for t-0 covering up to 64 does not meet history at 2",
             "page size {page} refuses it for the boundary, not incidentally: {}",
             refusals[0]
         );
@@ -215,7 +215,7 @@ fn a_commit_after_a_publication_does_not_widen_what_it_may_cover() {
             .collect();
         assert_eq!(
             refusals,
-            vec!["a manifest covering up to 1 does not meet history at 0"],
+            vec!["a manifest for t-0 covering up to 1 does not meet history at 0"],
             "page size {page} must refuse it too"
         );
     }

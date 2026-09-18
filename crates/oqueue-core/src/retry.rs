@@ -126,6 +126,13 @@ impl Error {
             | Self::EmptyBundle
             | Self::IndexObjectMismatch
             | Self::EmptyRegion
+            // Never, and for the same reason the two above are: a metadata log
+            // that holds a malformed record holds it identically on every
+            // replay. ⚠️ These are the fold's own vocabulary for two
+            // malformations the variants above state in the writer's and the
+            // reader's, so they classify where those do.
+            | Self::EmptySpanInLog { .. }
+            | Self::SwapRefused { .. }
             // Never: a quota built with its alarm at or above its ceiling is a
             // configuration, and the same configuration is rejected the same
             // way every time.

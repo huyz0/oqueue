@@ -45,7 +45,22 @@ fn two_swaps_with_the_same_inputs_in_one_batch_are_refused() {
             swap(version + 2, retiring, vec![reference("merged-b", 0, 8)]),
         ])
         .expect_err("the second retires what the first retired");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    // ⚠️ **The reason, not only the variant.** Two swaps for one partition
+    // refuse for different causes, and a message that said the same thing for
+    // both would tell an operator which partition and nothing else.
+    let Error::SwapRefused {
+        topic: ref named,
+        partition: ref named_partition,
+        ref because,
+    } = refused
+    else {
+        panic!("a refusal naming the swap: {refused:?}");
+    };
+    assert_eq!((named.as_str(), *named_partition), ("t", 0));
+    assert!(
+        because.contains("history does not hold"),
+        "the second swap retires what the first already retired: {because}"
+    );
     assert_eq!(index.entries(), before, "and neither was applied");
 }
 
@@ -115,7 +130,15 @@ fn a_publication_and_a_swap_for_one_partition_do_not_overlap() {
             swap(version + 2, retiring, vec![reference("merged", 0, 8)]),
         ])
         .expect_err("the manifest absorbed what the swap would retire");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    // The publication absorbed what the swap would retire, so the swap names a
+    // reference the partition's history no longer holds.
+    let Error::SwapRefused { ref because, .. } = refused else {
+        panic!("a refusal naming the swap: {refused:?}");
+    };
+    assert!(
+        because.contains("history does not hold"),
+        "the manifest took it first: {because}"
+    );
     assert_eq!(index.entries(), before, "and neither was applied");
 }
 
@@ -143,7 +166,56 @@ fn a_swap_installing_an_empty_reference_is_refused() {
             vec![reference("merged", 0, 1), reference("empty", 1, 0)],
         )])
         .expect_err("a reference covering no offsets is not an output");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    // ⚠️ **The sentence has to name the empty reference, not the bounds.** A
+    // zero-offset output passes a comparison of bounds — `[0,1)` against
+    // `[0,1)` — so a message about coverage would send an operator to check
+    // the one thing that is not wrong.
+    let Error::SwapRefused {
+        topic: ref named,
+        partition: ref named_partition,
+        ref because,
+    } = refused
+    else {
+        panic!("a refusal naming the swap: {refused:?}");
+    };
+    assert_eq!((named.as_str(), *named_partition), ("t", 0));
+    assert!(
+        because.contains("empty") && because.contains("covers no offsets"),
+        "it names the reference covering no offsets: {because}"
+    );
     assert_eq!(index.entries(), before, "nothing was applied");
     assert_eq!(history_keys(&index), served, "and the inputs stay live");
+}
+
+/// ⚠️ **A swap with an empty side is refused, and says which side.** Retiring
+/// a run and installing nothing would delete acknowledged records from the
+/// index with no object holding them; installing a run against nothing to
+/// retire would name records twice. Both fail the coverage check, and both
+/// look like a bounds mismatch unless the message says otherwise — the
+/// operator reading it has two lists, one of which is empty, and needs to be
+/// told that is the whole problem.
+#[test]
+fn a_swap_with_an_empty_side_is_refused_and_says_so() {
+    let objects = 8 + TAIL_WINDOW_ENTRIES;
+    let version = u64::try_from(objects).expect("a small count") + 1;
+
+    for (retiring, installing) in [
+        (vec![reference("obj-0", 0, 1)], Vec::new()),
+        (Vec::new(), vec![reference("merged", 0, 1)]),
+    ] {
+        let mut index = loaded(objects);
+        let before = index.entries();
+
+        let refused = index
+            .apply(&[swap(version, retiring, installing)])
+            .expect_err("neither side of a swap may be empty");
+        let Error::SwapRefused { ref because, .. } = refused else {
+            panic!("a refusal naming the swap: {refused:?}");
+        };
+        assert!(
+            because.contains("neither side of a swap may be empty"),
+            "it names the empty side rather than the bounds: {because}"
+        );
+        assert_eq!(index.entries(), before, "and nothing was applied");
+    }
 }

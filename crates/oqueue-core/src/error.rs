@@ -126,6 +126,59 @@ pub enum Error {
         delta: i64,
     },
 
+    /// A committed span in the metadata log claims no records.
+    ///
+    /// ⚠️ **Not [`Error::EmptyRegion`], though it is the same malformation**
+    /// (`M5.79`). That variant is `BundleBuilder::push`'s, where the caller is
+    /// the code that just built the region and needs no more context; here the
+    /// caller is a broker materializing a log it did not write, the failure is
+    /// permanent, and a message in the writer's vocabulary leaves an operator
+    /// bisecting a log. `error-handling.md` rule 10: an error gains context as
+    /// it crosses a boundary it did not originate at.
+    ///
+    /// ⚠️ **Refused because such a span becomes an un-retirable reference.**
+    /// It covers no offsets, [`contiguous_span`](crate::contiguous_span)
+    /// refuses any set containing one, so no compaction can ever name it — and
+    /// it sorts into history ahead of the real object at its base offset,
+    /// where a fetch resuming there skips an acknowledged record.
+    #[error("the span for {topic}-{partition} in object {object} claims no records")]
+    EmptySpanInLog {
+        /// The topic the span names.
+        topic: String,
+        /// The partition the span names.
+        partition: i32,
+        /// The object the span belongs to, which is where to look.
+        object: String,
+    },
+
+    /// A compaction swap in the metadata log does not describe a swap the
+    /// index can make.
+    ///
+    /// ⚠️ **Not [`Error::IndexObjectMismatch`], for `M5.79`'s reason.** That
+    /// variant is the read path's — the index named a batch and the object
+    /// came back without it — and it is raised from the broker and from
+    /// `oqueue-compact` as well as here. A fold refusing a *record* owes its
+    /// caller the record, not a sentence about an object.
+    ///
+    /// ⚠️ **One variant for both halves of the check**, with `because` saying
+    /// which: the outputs must cover exactly what the inputs did, and every
+    /// retired reference must be one the partition's history holds. Splitting
+    /// them would add a variant that carries the same four fields and is
+    /// matched by nobody separately.
+    #[error("a compaction swap for {topic}-{partition} was refused: {because}")]
+    SwapRefused {
+        /// The topic the record names.
+        topic: String,
+        /// The partition the record names.
+        partition: i32,
+        /// Which half of the check failed, and what it saw.
+        ///
+        /// ⚠️ **A sentence, not a nested error.** `error-handling.md` rule 5
+        /// says this enum classifies rather than wraps, so a `Box<Error>`
+        /// here would be the thing that rule forbids.
+        because: String,
+    },
+
     /// A fold would have taken the index past its quota.
     ///
     /// ⚠️ **A refusal, never an eviction** (`ADR-0043` decision 3). The
@@ -307,8 +360,20 @@ pub enum Error {
     /// served twice**, and a reader binary-searching a manifest cannot tell
     /// either from a healthy one — so the fold refuses the event rather than
     /// applying it and leaving the index to be wrong later (`ADR-0042`).
-    #[error("a manifest covering up to {upto} does not meet history at {expected}")]
+    ///
+    /// ⚠️ **It names the partition, because the fold's caller is not the code
+    /// that wrote the record** (`M5.79`). A broker materializing a log
+    /// somebody else wrote is told which entry it refused and where, rather
+    /// than being left to bisect a log for the one that does not fit.
+    #[error(
+        "a manifest for {topic}-{partition} covering up to {upto} does not meet \
+         history at {expected}"
+    )]
     ManifestDoesNotMeetHistory {
+        /// The topic the record names.
+        topic: String,
+        /// The partition the record names.
+        partition: i32,
         /// Where the manifest says it ends.
         upto: i64,
         /// Where the partition's remaining records begin.

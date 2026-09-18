@@ -118,18 +118,25 @@ impl IndexState {
     /// - [`Error::OffsetOverflow`], a partition's next offset past
     ///   `i64::MAX` — [`Offset`] carries the protocol's `int64` range, not a
     ///   `u64` one, so the ceiling is half where a reader might place it;
-    /// - [`Error::EmptyRegion`], a [`CommittedSpan`](crate::CommittedSpan) of
-    ///   no records, which would become an [`ObjectRef`] covering no offsets;
+    /// - [`Error::EmptySpanInLog`], a [`CommittedSpan`](crate::CommittedSpan)
+    ///   of no records, which would become an [`ObjectRef`] covering no
+    ///   offsets;
     /// - [`Error::ManifestDoesNotMeetHistory`], a `ManifestPublished` whose
     ///   `upto` does not meet what is left of the partition;
     /// - [`Error::IndexQuotaExceeded`], a batch whose net growth would take
     ///   the index past the ceiling [`with_quota`](Self::with_quota) set, if
     ///   one was set at all;
-    /// - [`Error::IndexObjectMismatch`], a `RangeCompacted` retiring a
-    ///   reference the partition's **history** does not hold — a reference
-    ///   still inside the tail window is refused too, and compaction's age
-    ///   guard is what keeps a swap away from it — or installing a run that
-    ///   does not cover exactly what it retires.
+    /// - [`Error::SwapRefused`], a `RangeCompacted` retiring a reference the
+    ///   partition's **history** does not hold — a reference still inside the
+    ///   tail window is refused too, and compaction's age guard is what keeps
+    ///   a swap away from it — or installing a run that does not cover exactly
+    ///   what it retires.
+    ///
+    /// ⚠️ **Three of the six are the fold's own** (`M5.79`) —
+    /// `ManifestDoesNotMeetHistory`, `EmptySpanInLog` and `SwapRefused` each
+    /// name the `(topic, partition)` the refused record named, because the
+    /// caller here is a broker materializing a log it did not write and the
+    /// failure is permanent.
     ///
     /// ⚠️ **The list is exhaustive and is meant to stay so.** An applier
     /// deciding abort-versus-retry matches on these, and doc 21 §4's point is

@@ -159,7 +159,8 @@ fn a_manifest_that_does_not_meet_history_is_refused() {
             err,
             Error::ManifestDoesNotMeetHistory {
                 upto: 35,
-                expected: 40
+                expected: 40,
+                ..
             }
         ),
         "and it names the boundary above: {err:?}"
@@ -247,7 +248,8 @@ fn a_manifest_reaching_into_the_tail_is_refused() {
             err,
             Error::ManifestDoesNotMeetHistory {
                 upto: 64,
-                expected: 2
+                expected: 2,
+                ..
             }
         ),
         "and it names where the tail begins: {err:?}"
@@ -337,7 +339,8 @@ fn a_manifest_that_covers_less_than_its_predecessor_is_refused() {
             err,
             Error::ManifestDoesNotMeetHistory {
                 upto: 30,
-                expected: 64
+                expected: 64,
+                ..
             }
         ),
         "and it names what is already covered: {err:?}"

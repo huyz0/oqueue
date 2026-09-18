@@ -165,7 +165,24 @@ fn a_swap_missing_one_range_is_refused_and_the_inputs_stay_live() {
             vec![reference("merged", 0, 7)],
         )])
         .expect_err("outputs seven records short");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    // ⚠️ **The fallback sentence, pinned.** This is the one case that reaches
+    // it, so without an assertion here the whole coverage branch could say
+    // "history does not hold" — the other half of the check — and stay green,
+    // sending an operator to look for a reference that is right where it
+    // should be.
+    let Error::SwapRefused {
+        topic: ref named,
+        partition: ref named_partition,
+        ref because,
+    } = refused
+    else {
+        panic!("a refusal naming the swap: {refused:?}");
+    };
+    assert_eq!((named.as_str(), *named_partition), ("t", 0));
+    assert!(
+        because.contains("do not cover exactly") && because.contains("obj-0"),
+        "it names the coverage half of the check, and the run: {because}"
+    );
 
     assert_eq!(index.entries(), before, "nothing was applied");
     assert_eq!(
@@ -192,7 +209,10 @@ fn a_swap_retiring_a_reference_the_index_does_not_hold_is_refused() {
             vec![reference("merged", 0, 8)],
         )])
         .expect_err("the index holds no such reference");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    assert!(
+        matches!(refused, Error::SwapRefused { ref topic, partition, .. } if topic == "t" && partition == 0),
+        "the refusal names the partition it is about: {refused:?}"
+    );
     assert_eq!(index.entries(), before, "nothing was applied");
 }
 
@@ -226,7 +246,10 @@ fn a_swap_naming_a_tail_reference_is_refused() {
             )],
         )])
         .expect_err("the tail is not compactable");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    assert!(
+        matches!(refused, Error::SwapRefused { ref topic, partition, .. } if topic == "t" && partition == 0),
+        "the refusal names the partition it is about: {refused:?}"
+    );
     assert_eq!(index.entries(), before, "nothing was applied");
 }
 
@@ -260,7 +283,10 @@ fn a_second_attempt_at_one_plan_is_refused_and_the_index_names_one() {
             vec![reference("merged-b", 0, 8)],
         )])
         .expect_err("the references it retires are gone");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    assert!(
+        matches!(refused, Error::SwapRefused { ref topic, partition, .. } if topic == "t" && partition == 0),
+        "the refusal names the partition it is about: {refused:?}"
+    );
     assert_eq!(index.entries(), after_first, "the index names one of them");
 
     let found = index
@@ -386,7 +412,10 @@ fn a_swap_naming_a_reference_its_own_batch_left_in_the_tail_is_refused() {
     let refused = index
         .apply(&log)
         .expect_err("the newest object is still in the tail");
-    assert!(matches!(refused, Error::IndexObjectMismatch));
+    assert!(
+        matches!(refused, Error::SwapRefused { ref topic, partition, .. } if topic == "t" && partition == 0),
+        "the refusal names the partition it is about: {refused:?}"
+    );
 }
 
 /// ⚠️ **A committed span of no records is refused** (`M5.77`). It would become
@@ -426,7 +455,19 @@ fn a_committed_span_of_no_records_is_refused() {
     let refused = index
         .apply(&[empty_span])
         .expect_err("a span of no records is not a span");
-    assert!(matches!(refused, Error::EmptyRegion));
+    // ⚠️ **The object too, and asserted by name.** It is the field that says
+    // *where to look* in a log somebody else wrote, and under a `..` it was
+    // the one field a mutation could empty with every test still green.
+    let Error::EmptySpanInLog {
+        topic: ref named,
+        partition: ref named_partition,
+        ref object,
+    } = refused
+    else {
+        panic!("a refusal naming the span: {refused:?}");
+    };
+    assert_eq!((named.as_str(), *named_partition), ("t", 0));
+    assert_eq!(object, "obj-1", "and the object the span belongs to");
     assert_eq!(index.entries(), before, "nothing was applied");
     assert_eq!(
         index.end_offset(&topic(), partition()),

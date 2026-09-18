@@ -94,7 +94,11 @@ impl IndexState {
         // index's job is to refuse a malformed log, not to trust the writer,
         // which is the standard every other check in this fold is held to.
         if span.record_count() == 0 {
-            return Err(Error::EmptyRegion);
+            return Err(Error::EmptySpanInLog {
+                topic: span.topic().as_str().to_owned(),
+                partition: span.partition().get(),
+                object: object.as_str().to_owned(),
+            });
         }
         let key = (span.topic(), span.partition());
         let base = staged
@@ -130,7 +134,7 @@ impl IndexState {
     ///
     /// [`Error::ManifestDoesNotMeetHistory`] for a manifest that does not end
     /// where the partition's remaining history begins, and
-    /// [`Error::IndexObjectMismatch`] for a swap whose outputs do not cover
+    /// [`Error::SwapRefused`] for a swap whose outputs do not cover
     /// its inputs or that names a reference the partition does not hold in
     /// history. [`Error::OffsetOverflow`] if a stored entry's own fold was
     /// wrong.
@@ -152,7 +156,7 @@ impl IndexState {
             });
             let already = taken.entry(key).or_insert(0);
             catch_up(slot, staged.get(&key), already, effect.precedes);
-            apply_effect(slot, &effect.effect)?;
+            apply_effect(slot, effect.topic, effect.partition, &effect.effect)?;
         }
         // The commits *after* the last effect, so an installed projection is
         // the whole batch rather than its prefix.
@@ -194,11 +198,23 @@ fn catch_up(
 }
 
 /// One effect against one partition, as it now stands.
-fn apply_effect(slot: &mut PartitionIndex, effect: &Effect<'_>) -> Result<()> {
+///
+/// ⚠️ **Every refusal here names the `(topic, partition)` the record does**
+/// (`M5.79`). The fold's caller is a broker materializing a log it did not
+/// write, and the failure is permanent — so a message that identifies no
+/// entry leaves an operator bisecting a log to find the one that does not fit.
+fn apply_effect(
+    slot: &mut PartitionIndex,
+    topic: &TopicId,
+    partition: PartitionId,
+    effect: &Effect<'_>,
+) -> Result<()> {
     match effect {
         Effect::Published { manifest, upto } => {
             if let Some(expected) = slot.boundary(*upto) {
                 return Err(Error::ManifestDoesNotMeetHistory {
+                    topic: topic.as_str().to_owned(),
+                    partition: partition.get(),
                     upto: upto.get(),
                     expected: expected.get(),
                 });
@@ -211,10 +227,28 @@ fn apply_effect(slot: &mut PartitionIndex, effect: &Effect<'_>) -> Result<()> {
         } => {
             let from: Vec<&ObjectRef> = retiring.iter().collect();
             let to: Vec<&ObjectRef> = installing.iter().collect();
-            covers(&from, &to)?;
+            // ⚠️ **`covers` keeps its own vocabulary and this translates it.**
+            // That function is shared with `oqueue-compact`'s merge, where
+            // `IndexObjectMismatch` is the right thing to say; what it cannot
+            // know is which record asked.
+            covers(&from, &to).map_err(|error| match error {
+                Error::IndexObjectMismatch => Error::SwapRefused {
+                    topic: topic.as_str().to_owned(),
+                    partition: partition.get(),
+                    because: why_it_does_not_cover(retiring, installing),
+                },
+                other => other,
+            })?;
             for reference in *retiring {
                 if !slot.holds_in_history(reference) {
-                    return Err(Error::IndexObjectMismatch);
+                    return Err(Error::SwapRefused {
+                        topic: topic.as_str().to_owned(),
+                        partition: partition.get(),
+                        because: format!(
+                            "it retires {}, which this partition's history does not hold",
+                            reference.object().as_str()
+                        ),
+                    });
                 }
             }
             slot.replace_history(retiring, installing);
@@ -233,4 +267,60 @@ pub(super) fn precedes(staged: &StagedSpans<'_>, topic: &TopicId, partition: Par
     staged
         .get(&(topic, partition))
         .map_or(0, |(_, entries)| entries.len())
+}
+
+/// Why a swap's two runs did not cover each other, in a sentence.
+///
+/// ⚠️ **It describes, it does not decide** (`M5.79`). The decision is
+/// [`covers`](crate::covers)'s and stays there — this is reached only after
+/// that function has already said no, so the two cannot disagree about
+/// accepting or refusing. Re-deriving the rule here would be the second
+/// description of one rule that `M5.13`'s first round found three defects in.
+///
+/// ⚠️ **What it adds is the one cause an operator cannot see in the offsets.**
+/// A reference covering no offsets passes a comparison of bounds — `[0,1)`
+/// against `[0,1)` — and fails anyway, so a message about coverage would send
+/// a reader to check the one thing that is not wrong. An empty side is visible
+/// in the record, but naming it is what stops it reading as a bounds mismatch.
+///
+/// ⚠️ **"The bounds differ" is the fallback and is true of what is left.** A
+/// gap, an overlap and a run that starts or ends elsewhere are all visible in
+/// the offsets the record carries, so naming them individually would buy an
+/// operator nothing a diff of the two lists does not already show.
+fn why_it_does_not_cover(retiring: &[ObjectRef], installing: &[ObjectRef]) -> String {
+    // ⚠️ Destructured rather than defaulted, so every arm below is one some
+    // input reaches: `retiring` is non-empty past this point, which is what
+    // lets the fallback name the run it is about.
+    let Some(first) = retiring.first() else {
+        return format!(
+            "it retires nothing and installs {}, and neither side of a swap may be empty",
+            installing.len()
+        );
+    };
+    if installing.is_empty() {
+        return format!(
+            "it retires {} reference(s) starting at {} and installs nothing, and neither \
+             side of a swap may be empty",
+            retiring.len(),
+            first.object().as_str()
+        );
+    }
+    if let Some(empty) = retiring
+        .iter()
+        .chain(installing.iter())
+        .find(|reference| reference.record_count() == 0)
+    {
+        return format!(
+            "it names {}, which covers no offsets — such a reference can never be \
+             retired, and sorts ahead of the real object at its base offset",
+            empty.object().as_str()
+        );
+    }
+    format!(
+        "the {} reference(s) it installs do not cover exactly the {} it retires, \
+         starting at {}",
+        installing.len(),
+        retiring.len(),
+        first.object().as_str()
+    )
 }
