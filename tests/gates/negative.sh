@@ -475,6 +475,51 @@ invoke_drift() {
   bash "$1/scripts/check-drift.sh"
 }
 
+# --- check-drift.sh: a pin inserted between a comment and the entry it names -
+#
+# ⚠️ **`M5.65`.** `M5.63` added a comment-and-entry pair to `RUST_BOUNDS`
+# *between* an existing block and the entry that block described, so each key
+# sat under the other's weakening-direction rule. A pin whose stated reason
+# belongs to a different constant is a pin nobody can check — the value is just
+# a number, and the reason is the whole of what makes it reviewable.
+#
+# ⚠️ **The fixture reproduces that arrangement rather than a contrived one.**
+# A block about ALPHA, then ALPHA's own entry, then a *new* comment-and-entry
+# pair for GAMMA inserted before BETA — which leaves BETA sitting directly
+# under GAMMA's entry, with no comment of its own and GAMMA's rule above it.
+# That is `M5.63`'s diff with the names changed. ⚠️ **No block names its
+# constant**, because 33 of the real map's 34 do not: a fixture whose comments
+# spell their pins would certify a rule that fires on nothing the map contains,
+# which is what `M5.65`'s first round found the first two rules doing.
+setup_drift_pin_under_another_pins_reason() {
+  local dir; dir="$(new_scratch drift-pin-comment)"
+  copy_gate "$dir" check-drift.sh
+  mkdir -p "$dir/crates/oqueue-x/src"
+  printf 'pub const ALPHA: usize = 1;\npub const BETA: usize = 2;\npub const GAMMA: usize = 3;\n' \
+    > "$dir/crates/oqueue-x/src/lib.rs"
+  python3 - "$dir/scripts/check-drift.sh" <<'DRIFT_PY'
+import sys
+
+path = sys.argv[1]
+text = open(path, encoding="utf-8").read()
+start = text.index("declare -A RUST_BOUNDS=(")
+end = text.index("\n)", start) + 2
+replacement = """declare -A RUST_BOUNDS=(
+  # How long the first thing waits. Raising it is the weakening direction.
+  ["crates/oqueue-x/src/lib.rs|ALPHA"]="1"
+  # How many times the third thing tries. Lowering it gives up too early.
+  ["crates/oqueue-x/src/lib.rs|GAMMA"]="3"
+  ["crates/oqueue-x/src/lib.rs|BETA"]="2"
+)"""
+open(path, "w", encoding="utf-8").write(text[:start] + replacement + text[end:])
+DRIFT_PY
+  (cd "$dir" && git add -A && git commit -q -m "M5.65: a pin under another pin's reason")
+  printf '%s\n' "$dir"
+}
+invoke_drift_pin_under_another_pins_reason() {
+  bash "$1/scripts/check-drift.sh"
+}
+
 # --- check-layering.sh: a leaf crate depending on a sibling leaf crate ------
 setup_layering() {
   local dir; dir="$(new_scratch layering)"
@@ -3518,6 +3563,9 @@ run_case "check-drift.sh (a _days threshold)" setup_drift_days       invoke_drif
   "threshold made settable"
 run_case "check-drift.sh (a raised Rust bound)" setup_rust_bound     invoke_rust_bound \
   "MAX_READS_PER_REQUEST is '64'"
+run_case "check-drift.sh (a pin under another pin's reason)" \
+  setup_drift_pin_under_another_pins_reason invoke_drift_pin_under_another_pins_reason \
+  "has no comment of its own"
 run_case "check-layering.sh"            setup_layering            invoke_layering \
   "depends on oqueue-codec, not oqueue-core"
 run_case "check-layering.sh (non-UTF-8 crash)" setup_layering_non_utf8 invoke_layering_non_utf8 \

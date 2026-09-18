@@ -300,13 +300,13 @@ declare -A RUST_BOUNDS=(
   # faster than the policy's own retry-budget arithmetic assumes, and
   # lowering it makes the two curves diverge the other way. A change here is
   # a decision about `ADR-0008`'s translation, not a tuning knob.
+  ["crates/oqueue-store/src/retry.rs|BACKOFF_BASE"]="2.0"
   # How many links of a partition-manifest chain one fetch follows before
   # refusing (`M5.63`, `ADR-0042` point 2). A ceiling on GETs per read, so
   # raising it is the weakening direction: NFR-30's "bounded GETs" is what it
   # buys, and a chain is data a writer produced -- a cycle in one is a read
   # that never returns. Lowering it refuses history a correct writer wrote.
   ["crates/oqueue-broker/src/read/manifest.rs|MAX_MANIFEST_HOPS"]="16"
-  ["crates/oqueue-store/src/retry.rs|BACKOFF_BASE"]="2.0"
   # How many records a compacted object is written to hold -- the denominator
   # read amplification is measured against (`M5.1`, `ADR-0036`). Raising it
   # raises every partition's measured amplification, so it is a threshold in
@@ -392,6 +392,7 @@ declare -A RUST_BOUNDS=(
   # slow GC pause or scheduling hiccup evict a healthy member; raising the
   # maximum lets a stuck member hold its own seat that much longer.
   ["crates/oqueue-broker/src/heartbeat/deadline.rs|MIN_SESSION_TIMEOUT_MS"]="6_000"
+  # The other half of the decision above: one bound, two ends of it.
   ["crates/oqueue-broker/src/heartbeat/deadline.rs|MAX_SESSION_TIMEOUT_MS"]="1_800_000"
   # `M4.14`: how many `GroupMetadataLog` entries `CommittedOffsets::open`
   # reads per page while replaying. Lowering it means more round trips to
@@ -480,6 +481,8 @@ declare -A RUST_BOUNDS=(
   # when `Page` (which this bounds) got its own file, the natural cut from
   # the fold beside it.
   ["crates/oqueue-core/src/index_state/page.rs|MAX_BATCHES_PER_PAGE"]="64"
+  # The second of the two the block above names: how many entries a partition
+  # keeps in the cheap tier, bounding the same paths for the same reason.
   ["crates/oqueue-core/src/index_state.rs|TAIL_WINDOW_ENTRIES"]="128"
   # How many commits may queue behind the single serialization point. Raising
   # it turns a durable engine's commit latency into seconds of queueing against
@@ -782,6 +785,93 @@ for key in "${!STRUCT_FIELD_BOUNDS[@]}"; do
 done
 if (( struct_violations == 0 )); then
   ok "struct-literal bounds match the pin map (${#STRUCT_FIELD_BOUNDS[@]} pinned)"
+fi
+
+# ── Each pin's reason belongs to that pin ───────────────────────────────────
+#
+# ⚠️ **`M5.65`.** `M5.63` added a comment-and-entry pair to `RUST_BOUNDS`
+# *between* an existing block and the entry that block described, so each key
+# sat under the other's weakening-direction rule and one had no comment at all.
+# A pin whose stated reason belongs to a different constant is a pin nobody can
+# check — the value is a number, and the reason is the whole of what makes it
+# reviewable.
+#
+# ⚠️ **What a script can see is adjacency, not attribution.** Two rules that
+# read the English were written and both were measured wrong before this one:
+# "the block must name its entries" fires on nothing, because 33 of the map's
+# 34 blocks describe their constant in prose without spelling it — the gate
+# went green on the exact arrangement `M5.63` shipped; and "the block must not
+# name a different pin" fires on seven legitimate cross-references ("bounded by
+# `MIN_SESSION_TIMEOUT_MS`"). A rule about what a comment *means* is not one a
+# grep can hold.
+#
+# ⚠️ **So the rule is positional and the shared case gets a spelling.** Every
+# entry is immediately preceded by a comment line. Two pins that genuinely
+# share one decision — `MIN_`/`MAX_SESSION_TIMEOUT_MS` — say so in a one-line
+# back-reference rather than sitting silently under their neighbour's block,
+# which costs a line and makes "these two are one decision" a claim in the file
+# instead of an inference from whitespace.
+pin_rc=0
+# ⚠️ `2>&1` on the invocation, not after the heredoc's terminator. Written
+# after it, it is a *null command with a redirection* — the last command in the
+# substitution — so the substitution's status is that null command's 0 and the
+# check reported a pass on every input. Measured here before it shipped.
+pin_out="$(python3 - "$REPO_ROOT/scripts/check-drift.sh" 2>&1 <<'PIN_PY'
+import re
+import sys
+
+source = open(sys.argv[1], encoding="utf-8").read().splitlines()
+entry = re.compile(r'^\s*\["([^"]+)\|([A-Za-z_][A-Za-z0-9_]*)"\]=')
+
+inside = False
+previous_was_entry = False
+seen = 0
+orphans = []
+for line in source:
+    if line.startswith("declare -A RUST_BOUNDS=("):
+        inside = True
+        continue
+    if not inside:
+        continue
+    if line.startswith(")"):
+        break
+    if not line.strip():
+        # ⚠️ A blank line documents nothing, so it neither separates an entry
+        # from its comment nor stands in for one.
+        continue
+    hit = entry.match(line)
+    if hit:
+        seen += 1
+        if previous_was_entry:
+            orphans.append(line.strip())
+        previous_was_entry = True
+    else:
+        previous_was_entry = False
+
+# ⚠️ **A parse that found nothing is a failure, not a clean run.** The first
+# draft read `$0` after the gate had `cd`-ed to `REPO_ROOT`, so in a review
+# packet the path did not resolve — and the shape of that bug the other way is
+# a leg that parses an empty file, finds no orphan and prints `ok` with a count
+# taken from the shell array rather than from anything it read.
+if seen == 0:
+    print("    found no RUST_BOUNDS entries to check", file=sys.stderr)
+    sys.exit(2)
+print(f"PINS {seen}")
+for line in orphans:
+    print(f"    {line}")
+sys.exit(1 if orphans else 0)
+PIN_PY
+)" || pin_rc=$?
+pins="$(awk '$1 == "PINS" { print $2; exit }' <<< "$pin_out")"
+if (( pin_rc == 0 )); then
+  ok "every RUST_BOUNDS pin sits under a comment of its own ($pins read)"
+else
+  fail "check-drift.sh: a RUST_BOUNDS pin has no comment of its own"
+  grep -v '^PINS ' <<< "$pin_out" | while IFS= read -r orphan; do
+    [[ -n "$orphan" ]] && note "$orphan"
+  done
+  note "every entry sits directly under a comment line; two pins that share one"
+  note "decision say so in a one-line back-reference (M5.65)"
 fi
 
 finish
