@@ -8,6 +8,7 @@ use oqueue_compact::{COMPACTION_PLAN_RECORDS_BUDGET, merge};
 use oqueue_core::{BundleBuilder, CommittedSpan, Error, ObjectRef, ObjectStore, PushedRecords};
 use std::sync::atomic::Ordering;
 
+use crate::naming::namer;
 use crate::support::{
     Counting, inputs_of, key, offset, other, partition, planned, planned_from, planned_records,
     topic, write_input,
@@ -51,7 +52,7 @@ async fn an_object_short_of_its_indexed_record_count_is_refused() {
 
     let mut refs = refs;
     refs[7] = ObjectRef::new(key("hollow"), offset(7), 1);
-    let outcome = merge(&store, &planned(13), &refs, &key("out")).await;
+    let outcome = merge(&store, &planned(13), &refs, &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::IndexObjectMismatch)),
         "the index said one record for this partition and the object holds none: {outcome:?}"
@@ -70,7 +71,7 @@ async fn an_input_straddling_the_plan_s_range_is_refused() {
     write_input(&store, "straddle-high", &topic(), 2, 32).await;
     let last = refs.len() - 1;
     refs[last] = ObjectRef::new(key("straddle-high"), refs[last].base_offset(), 2);
-    let outcome = merge(&store, &planned(13), &refs, &key("out")).await;
+    let outcome = merge(&store, &planned(13), &refs, &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::IndexObjectMismatch)),
         "refused rather than trimmed: {outcome:?}"
@@ -81,30 +82,54 @@ async fn an_input_straddling_the_plan_s_range_is_refused() {
 /// `ADR-0037`: the streaming seal cannot be conditioned — `object_store`
 /// carries no `PutMode` to `CompleteMultipartUpload` — so what keeps a rewrite
 /// from landing on bytes an index entry already names is that no two attempts
-/// share a key. The caller mints it; `M5.13`'s commit decides which one the
-/// index points at.
+/// share a key.
+///
+/// ⚠️ **Asserted against the store rather than against the index** (`M5.75`).
+/// `M5.13`'s fold already makes the index safe: a second attempt at one plan
+/// retires references the first retired and is refused, so the index names one
+/// object whatever keys were used. What that says nothing about is the bytes —
+/// and if the first attempt's swap committed, bytes overwritten under a shared
+/// key are bytes a fetch resolves.
 #[tokio::test]
 async fn a_retry_writes_its_own_key_and_leaves_the_first_output_intact() {
     let store = Counting::new();
     let refs = inputs_of(&store, 13, 1, 64).await;
-    merge(&store, &planned(13), &refs, &key("out-1"))
+    // ⚠️ **One namer across both attempts**, which is the case that matters: a
+    // retry is the same compactor trying again, and it is the sequence rather
+    // than the caller's diligence that makes the second key a different one.
+    let mut namer = namer();
+    let before = store.inner.len();
+
+    let first = merge(&store, &planned(13), &refs, &mut namer)
         .await
         .expect("the first merge");
-    merge(&store, &planned(13), &refs, &key("out-2"))
+    let retry = merge(&store, &planned(13), &refs, &mut namer)
         .await
         .expect("the retry, under its own key");
 
-    let first = store
+    let first_key = first.object().expect("a merge seals one object");
+    let retry_key = retry.object().expect("and so does the retry");
+    assert_ne!(first_key, retry_key, "two attempts, two keys");
+    assert_eq!(
+        store.inner.len(),
+        before + 2,
+        "and two objects in the store, not one overwritten"
+    );
+
+    let first_bytes = store
         .inner
-        .get(&key("out-1"), oqueue_core::ByteRange::Full)
+        .get(first_key, oqueue_core::ByteRange::Full)
         .await
         .expect("the first output is still there");
-    let second = store
+    let retry_bytes = store
         .inner
-        .get(&key("out-2"), oqueue_core::ByteRange::Full)
+        .get(retry_key, oqueue_core::ByteRange::Full)
         .await
         .expect("and so is the second");
-    assert_eq!(first, second, "the same inputs merge to the same bytes");
+    assert_eq!(
+        first_bytes, retry_bytes,
+        "the same inputs merge to the same bytes"
+    );
 }
 
 /// The estimate and the run must agree — `M5.3`'s criterion, which had no
@@ -115,7 +140,7 @@ async fn the_cost_estimate_predicts_what_the_run_does() {
     let refs = inputs_of(&store, 13, 1, 64).await;
     let planned = planned(13);
     let estimate = planned.cost();
-    let outcome = merge(&store, &planned, &refs, &key("out"))
+    let outcome = merge(&store, &planned, &refs, &mut namer())
         .await
         .expect("a merge that runs");
 
@@ -133,7 +158,7 @@ async fn the_cost_estimate_predicts_what_the_run_does() {
 async fn a_merge_reports_the_spans_of_what_it_wrote() {
     let store = Counting::new();
     let refs = inputs_of(&store, 13, 1, 64).await;
-    let outcome = merge(&store, &planned(13), &refs, &key("out"))
+    let outcome = merge(&store, &planned(13), &refs, &mut namer())
         .await
         .expect("a merge that runs");
     let total: u32 = outcome
@@ -160,7 +185,7 @@ async fn an_input_outside_the_plan_s_range_is_skipped_without_a_read() {
     write_input(&store, "far", &topic(), 1, 32).await;
     refs.push(ObjectRef::new(key("far"), offset(500), 1));
 
-    let outcome = merge(&store, &planned(13), &refs, &key("out"))
+    let outcome = merge(&store, &planned(13), &refs, &mut namer())
         .await
         .expect("a merge that runs");
     assert_eq!(
@@ -188,7 +213,7 @@ async fn an_input_reaching_below_the_plan_s_start_is_refused() {
     write_input(&store, "straddle-low", &topic(), 2, 32).await;
     refs[13] = ObjectRef::new(key("straddle-low"), offset(12), 2);
 
-    let outcome = merge(&store, &planned_from(13, 26), &refs[13..], &key("out")).await;
+    let outcome = merge(&store, &planned_from(13, 26), &refs[13..], &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::IndexObjectMismatch)),
         "an input reaching below the plan's start is refused: {outcome:?}"
@@ -203,7 +228,7 @@ async fn a_gap_in_the_inputs_is_refused() {
     let store = Counting::new();
     let mut refs = inputs_of(&store, 13, 1, 32).await;
     refs.remove(7);
-    let outcome = merge(&store, &planned(13), &refs, &key("out")).await;
+    let outcome = merge(&store, &planned(13), &refs, &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::IndexObjectMismatch)),
         "offset 7's record is missing from the inputs: {outcome:?}"
@@ -216,7 +241,7 @@ async fn a_duplicated_input_is_refused() {
     let store = Counting::new();
     let mut refs = inputs_of(&store, 13, 1, 32).await;
     refs.push(refs[3].clone());
-    let outcome = merge(&store, &planned(13), &refs, &key("out")).await;
+    let outcome = merge(&store, &planned(13), &refs, &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::IndexObjectMismatch)),
         "offset 3's record would be written twice: {outcome:?}"
@@ -230,7 +255,7 @@ async fn inputs_that_do_not_reach_the_plan_s_end_are_refused() {
     let store = Counting::new();
     let mut refs = inputs_of(&store, 13, 1, 32).await;
     refs.truncate(11);
-    let outcome = merge(&store, &planned(13), &refs, &key("out")).await;
+    let outcome = merge(&store, &planned(13), &refs, &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::IndexObjectMismatch)),
         "the last two offsets are uncovered: {outcome:?}"
@@ -268,7 +293,7 @@ async fn the_estimate_predicts_the_run_at_the_budget_s_largest_plan() {
     let end = i64::from(per) * i64::try_from(objects).expect("a small count");
     let planned = planned_records(per, objects);
     let estimate = planned.cost();
-    let outcome = merge(&store, &planned, &refs, &key("out"))
+    let outcome = merge(&store, &planned, &refs, &mut namer())
         .await
         .expect("a merge that runs");
 
@@ -307,7 +332,7 @@ async fn a_plan_whose_inputs_all_lie_outside_its_range_is_refused() {
     // one step later, because a bundle holding nothing cannot be sealed — so
     // `expect_err` alone is satisfied by the defect. `IndexObjectMismatch` is
     // the tiling's answer; `EmptyBundle` is the writer's.
-    let refused = merge(&store, &planned(13), &refs, &key("out"))
+    let refused = merge(&store, &planned(13), &refs, &mut namer())
         .await
         .expect_err("a covering of nothing does not tile a range of thirteen");
     assert!(

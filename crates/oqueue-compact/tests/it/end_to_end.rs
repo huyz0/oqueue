@@ -17,6 +17,7 @@ use oqueue_core::{
     TAIL_WINDOW_ENTRIES, parse_footer,
 };
 
+use crate::naming::namer;
 use crate::support::{Counting, key, offset, partition, topic};
 
 /// Writes `objects + TAIL_WINDOW_ENTRIES` objects of `per` records each into
@@ -125,16 +126,17 @@ async fn a_sweep_s_round_merges() {
         "one input per history object"
     );
 
-    let outcome = merge_round(&store, swept.round(), &key("out"))
+    let outcome = merge_round(&store, swept.round(), &mut namer())
         .await
         .expect("a round the sweep produced is a round that runs");
     assert_eq!(outcome.puts(), 1, "one object for the round");
     assert_eq!(outcome.gets(), objects, "one read per input");
     assert_eq!(outcome.records(), records, "every record, once");
+    let sealed = outcome.object().expect("a round seals one object");
 
     let written = store
         .inner
-        .get(&key("out"), ByteRange::Full)
+        .get(sealed, ByteRange::Full)
         .await
         .expect("an output object");
     let regions = parse_footer(&written, written.len() as u64).expect("a valid footer");
@@ -160,7 +162,7 @@ async fn a_sweep_over_objects_of_any_size_produces_a_round_that_merges() {
         let swept = sweep(&index, &[Candidate::new(topic(), partition(), offset(0))])
             .expect("an index that answers");
         assert_eq!(swept.round().len(), 1, "amplified at every object size");
-        let outcome = merge_round(&store, swept.round(), &key("out"))
+        let outcome = merge_round(&store, swept.round(), &mut namer())
             .await
             .unwrap_or_else(|error| {
                 panic!("a round that runs at {per} records per object: {error}")
@@ -194,7 +196,7 @@ async fn a_cursor_inside_an_object_plans_from_the_next_boundary() {
     );
     assert_eq!(planned.inputs().len(), objects - 1);
 
-    let outcome = merge_round(&store, swept.round(), &key("out"))
+    let outcome = merge_round(&store, swept.round(), &mut namer())
         .await
         .expect("a round that runs");
     assert_eq!(
@@ -223,7 +225,7 @@ async fn an_object_holding_two_spans_is_one_input() {
         "one per object, not one per span"
     );
 
-    let outcome = merge_round(&store, swept.round(), &key("out"))
+    let outcome = merge_round(&store, swept.round(), &mut namer())
         .await
         .expect("a round that runs");
     assert_eq!(outcome.gets(), objects, "and one read per object");
@@ -260,7 +262,7 @@ async fn a_cursor_between_two_spans_of_one_object_drops_that_object_whole() {
     );
     assert_eq!(planned.inputs().len(), objects - 1, "obj-0 is not an input");
 
-    let outcome = merge_round(&store, swept.round(), &key("out"))
+    let outcome = merge_round(&store, swept.round(), &mut namer())
         .await
         .expect("a round that runs");
     assert_eq!(
@@ -295,7 +297,7 @@ async fn a_range_ending_between_two_spans_drops_that_object_whole() {
 
     let derived = PlannedInputs::derive(&index, planned).expect("an index that answers");
     assert_eq!(derived.inputs().len(), 19);
-    let outcome = merge_round(&store, &[derived], &key("out"))
+    let outcome = merge_round(&store, &[derived], &mut namer())
         .await
         .expect("a round that runs");
     assert_eq!(

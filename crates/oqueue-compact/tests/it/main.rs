@@ -8,6 +8,7 @@ mod end_to_end;
 mod layout;
 mod merge;
 mod merge_refusals;
+mod naming;
 mod read_amp;
 mod support;
 mod sweep;

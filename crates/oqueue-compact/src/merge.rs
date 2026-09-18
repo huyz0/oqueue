@@ -36,14 +36,13 @@ mod outcome;
 pub use outcome::MergeOutcome;
 
 use oqueue_core::{
-    BundleStream, ByteRange, Error, ObjectKey, ObjectRef, ObjectStore, PushedRecords, Result,
-    parse_footer,
+    BundleStream, ByteRange, Error, ObjectRef, ObjectStore, PushedRecords, Result, parse_footer,
 };
 
-use crate::CompactionPlan;
+use crate::{CompactionNamer, CompactionPlan};
 use oqueue_core::contiguous_span;
 
-/// Merges the plan's inputs into `output`.
+/// Merges the plan's inputs into an object this mints the name of.
 ///
 /// `inputs` are the index's references for the partition — each carrying the
 /// base offset that says where in the partition its records sit. They may
@@ -56,17 +55,25 @@ use oqueue_core::contiguous_span;
 /// account for the record count the index recorded. Otherwise the store's own
 /// errors. ⚠️ **Not `PreconditionFailed`**: the seal is unconditional
 /// (`ADR-0037`), and a unique output key is what keeps a retry off an object
-/// the index already names.
+/// the index already names — plus [`Error::BundleSequenceExhausted`] if the
+/// namer has no key left.
+///
+/// ⚠️ **The key is minted here rather than received** (`M5.75`). A caller that
+/// passes a key can pass the same one twice, which is what the unconditional
+/// seal has no defence against: the second attempt overwrites the first's
+/// bytes, and after the first attempt's swap committed those are bytes an
+/// index entry names.
 pub async fn merge<S>(
     store: &S,
     plan: &CompactionPlan,
     inputs: &[ObjectRef],
-    output: &ObjectKey,
+    namer: &mut CompactionNamer,
 ) -> Result<MergeOutcome>
 where
     S: ObjectStore + ?Sized,
 {
-    let mut stream = BundleStream::open(store, output).await?;
+    let output = namer.next_key()?;
+    let mut stream = BundleStream::open(store, &output).await?;
     let (gets, records) = gather(store, plan, inputs, &mut stream).await?;
     let (spans, written) = stream.finish().await?;
 
@@ -76,6 +83,7 @@ where
         records,
         spans,
         written,
+        object: Some(output),
     })
 }
 

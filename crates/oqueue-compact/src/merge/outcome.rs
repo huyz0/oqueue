@@ -4,38 +4,48 @@
 //! (`code-structure.md` rule 18): `M5.13`'s atomic commit consumes this, and
 //! `merge.rs` reached the 500-line limit holding both the run and its record.
 
-use oqueue_core::{CommittedSpan, Written};
+use oqueue_core::{CommittedSpan, ObjectKey, Written};
 
 /// What a merge did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MergeOutcome {
-    pub(super) gets: usize,
-    pub(super) puts: usize,
-    pub(super) records: i64,
-    pub(super) spans: Vec<CommittedSpan>,
-    pub(super) written: Written,
+    pub(crate) gets: usize,
+    pub(crate) puts: usize,
+    pub(crate) records: i64,
+    pub(crate) spans: Vec<CommittedSpan>,
+    pub(crate) written: Written,
+    pub(crate) object: Option<ObjectKey>,
 }
 
 impl MergeOutcome {
-    /// Builds one.
+    /// An empty run: no reads, no write, no object.
     ///
-    /// ⚠️ **`pub(crate)` rather than public**: the only honest source of these
-    /// numbers is a merge that happened, and a constructor anyone could call
-    /// would let a caller report a run it did not make.
-    pub(crate) const fn new(
-        gets: usize,
-        puts: usize,
-        records: i64,
-        spans: Vec<CommittedSpan>,
-        written: Written,
-    ) -> Self {
+    /// ⚠️ **The only constructor, and it takes nothing**, which is what keeps
+    /// the numbers honest: the fields are `pub(crate)` so the two functions
+    /// that actually merge can fill them in, and nothing outside this crate
+    /// can report a run it did not make. A `new` taking six numbers was the
+    /// same hazard with a longer signature.
+    pub(crate) fn empty() -> Self {
         Self {
-            gets,
-            puts,
-            records,
-            spans,
-            written,
+            gets: 0,
+            puts: 0,
+            records: 0,
+            spans: Vec::new(),
+            written: Written::default(),
+            object: None,
         }
+    }
+
+    /// The object this run sealed, or `None` for an empty round.
+    ///
+    /// ⚠️ **The caller cannot know it any other way, now that the run mints
+    /// it** (`M5.75`), and the commit that follows needs it: the `ObjectRef`
+    /// a swap installs names this key. ⚠️ **`None` is a round that wrote
+    /// nothing**, not a round whose key was lost — an empty round writes no
+    /// object and consumes no sequence number, so there is no key to report.
+    #[must_use]
+    pub const fn object(&self) -> Option<&ObjectKey> {
+        self.object.as_ref()
     }
 
     /// Object reads the merge issued.

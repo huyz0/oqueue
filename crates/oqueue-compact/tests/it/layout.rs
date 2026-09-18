@@ -7,8 +7,9 @@ use oqueue_compact::{COMPACTION_PLAN_RECORDS_BUDGET, PlannedInputs, merge_round}
 use oqueue_core::{ByteRange, Error, ObjectStore, Region, TopicId, parse_footer};
 use std::sync::atomic::Ordering;
 
+use crate::naming::namer;
 use crate::support::{
-    Counting, fill_for, inputs_of_topic, key, partition, partition_n, planned_from_topic,
+    Counting, fill_for, inputs_of_topic, partition, partition_n, planned_from_topic,
     planned_records_topic, planned_topic, shifted_inputs, topic,
 };
 
@@ -41,16 +42,17 @@ async fn a_round_lays_each_partition_down_once() {
         ));
     }
 
-    let outcome = merge_round(&store, &round, &key("out"))
+    let outcome = merge_round(&store, &round, &mut namer())
         .await
         .expect("a round that runs");
     assert_eq!(outcome.puts(), 1, "one object for the whole round");
     assert_eq!(outcome.gets(), 52, "one read per input across four plans");
     assert_eq!(outcome.records(), 52);
+    let sealed = outcome.object().expect("a round seals one object");
 
     let written = store
         .inner
-        .get(&key("out"), ByteRange::Full)
+        .get(sealed, ByteRange::Full)
         .await
         .expect("an output object");
     let regions = parse_footer(&written, written.len() as u64).expect("a valid footer");
@@ -85,13 +87,14 @@ async fn a_compacted_partition_s_range_is_one_contiguous_span() {
     }
     store.gets.store(0, Ordering::Relaxed);
 
-    merge_round(&store, &round, &key("out"))
+    let outcome = merge_round(&store, &round, &mut namer())
         .await
         .expect("a round that runs");
+    let sealed = outcome.object().expect("a round seals one object");
 
     let written = store
         .inner
-        .get(&key("out"), ByteRange::Full)
+        .get(sealed, ByteRange::Full)
         .await
         .expect("an output object");
     let regions = parse_footer(&written, written.len() as u64).expect("a valid footer");
@@ -105,11 +108,7 @@ async fn a_compacted_partition_s_range_is_one_contiguous_span() {
 
     // One ranged GET over that span returns every record of the range.
     store.gets.store(0, Ordering::Relaxed);
-    let read = store
-        .inner
-        .get(&key("out"), span)
-        .await
-        .expect("a ranged read");
+    let read = store.inner.get(sealed, span).await.expect("a ranged read");
     let ByteRange::Bounded(bounded) = span else {
         panic!("a bounded span")
     };
@@ -152,7 +151,7 @@ fn contiguous_span(regions: &[&Region]) -> ByteRange {
 #[tokio::test]
 async fn an_empty_round_writes_nothing_and_says_so() {
     let store = Counting::new();
-    let outcome = merge_round(&store, &[], &key("out"))
+    let outcome = merge_round(&store, &[], &mut namer())
         .await
         .expect("nothing to do is not a failure");
     assert_eq!(
@@ -179,7 +178,7 @@ async fn a_round_naming_one_range_twice_is_refused() {
         PlannedInputs::new(planned_topic(&topic(), partition(), 13), refs.clone()),
         PlannedInputs::new(planned_topic(&topic(), partition(), 13), refs),
     ];
-    let outcome = merge_round(&store, &round, &key("out")).await;
+    let outcome = merge_round(&store, &round, &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::OverlappingCompactionPlans)),
         "the same range planned twice: {outcome:?}"
@@ -207,7 +206,7 @@ async fn a_round_over_the_records_budget_is_refused() {
             refs,
         ));
     }
-    let outcome = merge_round(&store, &round, &key("out")).await;
+    let outcome = merge_round(&store, &round, &mut namer()).await;
     assert!(
         matches!(outcome, Err(Error::CompactionRoundTooLarge { .. })),
         "two plans each at the budget are twice the budget: {outcome:?}"
@@ -232,7 +231,7 @@ async fn a_round_reads_every_plan_s_inputs_and_writes_once() {
     }
     store.gets.store(0, Ordering::Relaxed);
 
-    let outcome = merge_round(&store, &round, &key("out"))
+    let outcome = merge_round(&store, &round, &mut namer())
         .await
         .expect("a round that runs");
     assert_eq!(
@@ -255,7 +254,7 @@ async fn a_round_with_adjacent_ranges_for_one_partition_runs() {
         PlannedInputs::new(planned_topic(&topic(), partition(), 13), low),
         PlannedInputs::new(planned_from_topic(&topic(), partition(), 13, 26), high),
     ];
-    let outcome = merge_round(&store, &round, &key("out"))
+    let outcome = merge_round(&store, &round, &mut namer())
         .await
         .expect("adjacent ranges are not overlapping ones");
     assert_eq!(outcome.records(), 26);
@@ -277,7 +276,7 @@ async fn a_round_at_exactly_the_records_budget_runs() {
         planned_records_topic(&topic(), partition(), per, objects),
         refs,
     )];
-    let outcome = merge_round(&store, &round, &key("out"))
+    let outcome = merge_round(&store, &round, &mut namer())
         .await
         .expect("exactly at the budget is inside it");
     assert_eq!(outcome.records(), COMPACTION_PLAN_RECORDS_BUDGET);

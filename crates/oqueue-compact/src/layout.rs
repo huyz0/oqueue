@@ -14,13 +14,13 @@
 
 use oqueue_core::{
     BundleStream, CommittedSpan, Error, MaterializedIndex, ObjectKey, ObjectRef, ObjectStore,
-    Result, Written,
+    Result,
 };
 
 use std::collections::HashMap;
 
 use crate::merge::gather;
-use crate::{COMPACTION_PLAN_RECORDS_BUDGET, CompactionPlan, MergeOutcome};
+use crate::{COMPACTION_PLAN_RECORDS_BUDGET, CompactionNamer, CompactionPlan, MergeOutcome};
 
 /// Folds one span into the ref for its object, adding it if new.
 ///
@@ -150,7 +150,7 @@ impl PlannedInputs {
 pub async fn merge_round<S>(
     store: &S,
     round: &[PlannedInputs],
-    output: &ObjectKey,
+    namer: &mut CompactionNamer,
 ) -> Result<MergeOutcome>
 where
     S: ObjectStore + ?Sized,
@@ -159,7 +159,12 @@ where
         // ⚠️ **Not an error.** A sweep over a quiet cluster finds no candidate
         // every thirty minutes, and a round that reports failure for having
         // nothing to do is a failure an operator learns to ignore.
-        return Ok(MergeOutcome::new(0, 0, 0, Vec::new(), Written::default()));
+        // ⚠️ **And no key is minted**, which is why the namer is untouched
+        // above this line: a sequence number spent on an object that was never
+        // written is a gap in a sequence whose only job is to be unrepeatable,
+        // and a reader of the store would have no way to tell it from a write
+        // that was lost.
+        return Ok(MergeOutcome::empty());
     }
 
     // ⚠️ **Topic, then partition, then offset.** A fetch of one partition's
@@ -177,7 +182,8 @@ where
     });
     admissible(&ordered)?;
 
-    let mut stream = BundleStream::open(store, output).await?;
+    let output = namer.next_key()?;
+    let mut stream = BundleStream::open(store, &output).await?;
     let mut gets = 0_usize;
     let mut records = 0_i64;
     for planned in ordered {
@@ -187,7 +193,14 @@ where
     }
     let (spans, written): (Vec<CommittedSpan>, _) = stream.finish().await?;
 
-    Ok(MergeOutcome::new(gets, 1, records, spans, written))
+    Ok(MergeOutcome {
+        gets,
+        puts: 1,
+        records,
+        spans,
+        written,
+        object: Some(output),
+    })
 }
 
 /// Refuses a round whose plans overlap, or whose total is over the budget.

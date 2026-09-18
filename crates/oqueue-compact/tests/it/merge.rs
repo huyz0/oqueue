@@ -7,13 +7,14 @@ use oqueue_compact::merge;
 use oqueue_core::{BundleBuilder, ByteRange, ObjectRef, ObjectStore, PushedRecords, parse_footer};
 use std::sync::atomic::Ordering;
 
+use crate::naming::namer;
 use crate::support::{Counting, inputs_of, key, offset, other, partition, planned, topic};
 
 #[tokio::test]
 async fn a_merge_reads_each_input_exactly_once() {
     let store = Counting::new();
     let refs = inputs_of(&store, 13, 1, 64).await;
-    let outcome = merge(&store, &planned(13), &refs, &key("out"))
+    let outcome = merge(&store, &planned(13), &refs, &mut namer())
         .await
         .expect("a merge that runs");
 
@@ -33,7 +34,7 @@ async fn a_merge_reads_each_input_exactly_once() {
 async fn a_merge_holds_one_input_at_a_time() {
     let store = Counting::new();
     let refs = inputs_of(&store, 50, 1, 1024).await;
-    merge(&store, &planned(50), &refs, &key("out"))
+    merge(&store, &planned(50), &refs, &mut namer())
         .await
         .expect("a merge that runs");
 
@@ -84,13 +85,14 @@ async fn inputs_are_merged_in_offset_order_whatever_order_they_arrive_in() {
     }
     refs.reverse();
 
-    merge(&store, &planned(13), &refs, &key("out"))
+    let outcome = merge(&store, &planned(13), &refs, &mut namer())
         .await
         .expect("a merge that runs");
+    let sealed = outcome.object().expect("a merge seals one object");
 
     let written = store
         .inner
-        .get(&key("out"), ByteRange::Full)
+        .get(sealed, ByteRange::Full)
         .await
         .expect("an output object");
     let expected: Vec<u8> = markers
@@ -142,7 +144,7 @@ async fn a_merge_takes_only_the_planned_partition_s_regions() {
         .expect("a store that accepts");
     refs.push(ObjectRef::new(key("mixed"), offset(12), 1));
 
-    let outcome = merge(&store, &planned(13), &refs, &key("out"))
+    let outcome = merge(&store, &planned(13), &refs, &mut namer())
         .await
         .expect("a merge that runs");
     assert_eq!(
@@ -150,10 +152,11 @@ async fn a_merge_takes_only_the_planned_partition_s_regions() {
         13,
         "the other topic's seven records stay behind"
     );
+    let sealed = outcome.object().expect("a merge seals one object");
 
     let written = store
         .inner
-        .get(&key("out"), ByteRange::Full)
+        .get(sealed, ByteRange::Full)
         .await
         .expect("an output object");
     let regions = parse_footer(&written, written.len() as u64).expect("a valid footer");
