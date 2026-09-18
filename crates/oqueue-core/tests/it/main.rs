@@ -36,3 +36,4 @@ mod store;
 mod store_streaming;
 mod tiers;
 mod time_span;
+mod trimmed;

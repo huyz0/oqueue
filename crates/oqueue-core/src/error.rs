@@ -179,6 +179,40 @@ pub enum Error {
         because: String,
     },
 
+    /// A trim in the metadata log names a start past the partition's end.
+    ///
+    /// ⚠️ **Refused, not clamped.** A trim past the end would move the log
+    /// start beyond records that do not exist yet, and the next produce would
+    /// land *below* it — acknowledged and unreadable. A log holding one is
+    /// malformed, and the fold says which entry (`M5.79`'s rule).
+    #[error("a trim for {topic}-{partition} to {start} is past the partition's end at {end}")]
+    TrimPastEnd {
+        /// The topic the record names.
+        topic: String,
+        /// The partition the record names.
+        partition: i32,
+        /// The start the record asked for.
+        start: i64,
+        /// Where the partition's records end.
+        end: i64,
+    },
+
+    /// A read asked for an offset below the partition's log start.
+    ///
+    /// ⚠️ **Not an empty page** (`M5.19`). Those records were trimmed, and a
+    /// page starting at the first live offset instead would silently move a
+    /// consumer forward past data it never saw — the "successful poll that
+    /// skipped" doc 12 §4.6 names. The broker answers
+    /// `OFFSET_OUT_OF_RANGE`, which is what lets the client's own
+    /// `auto.offset.reset` decide where to go.
+    #[error("offset {requested} is below the log start at {log_start}")]
+    BelowLogStart {
+        /// The offset asked for.
+        requested: i64,
+        /// The partition's first readable offset.
+        log_start: i64,
+    },
+
     /// A fold would have taken the index past its quota.
     ///
     /// ⚠️ **A refusal, never an eviction** (`ADR-0043` decision 3). The

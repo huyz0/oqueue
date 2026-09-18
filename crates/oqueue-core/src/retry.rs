@@ -133,6 +133,10 @@ impl Error {
             // reader's, so they classify where those do.
             | Self::EmptySpanInLog { .. }
             | Self::SwapRefused { .. }
+            | Self::TrimPastEnd { .. }
+            // Never: the records below the start are gone, and asking again
+            // does not bring them back. The client resets its own position.
+            | Self::BelowLogStart { .. }
             // Never: a quota built with its alarm at or above its ceiling is a
             // configuration, and the same configuration is rejected the same
             // way every time.

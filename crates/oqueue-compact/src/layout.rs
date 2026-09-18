@@ -14,7 +14,7 @@
 
 use oqueue_core::{
     BundleStream, CommittedSpan, Error, MaterializedIndex, ObjectKey, ObjectRef, ObjectStore,
-    Result,
+    Offset, Result,
 };
 
 use std::collections::HashMap;
@@ -114,7 +114,18 @@ impl PlannedInputs {
         let mut seen: HashMap<ObjectKey, usize> = HashMap::new();
         let mut cursor = start;
         while cursor < end {
-            let page = index.find_batches(plan.topic(), plan.partition(), cursor, u64::MAX)?;
+            // ⚠️ A trim can land between the plan and the derivation, and the
+            // index then refuses the cursor (`M5.19`). The refusal says where
+            // the readable log begins, so the walk resumes there rather than
+            // failing the round — asked only when refused, so an untrimmed
+            // derivation costs exactly what it did.
+            let page = match index.find_batches(plan.topic(), plan.partition(), cursor, u64::MAX) {
+                Err(Error::BelowLogStart { log_start, .. }) if log_start > cursor.get() => {
+                    cursor = Offset::new(log_start)?;
+                    continue;
+                }
+                other => other?,
+            };
             if page.is_empty() {
                 break;
             }

@@ -455,7 +455,8 @@ fn a_commit_record_carries_spans_and_the_object_it_came_from() {
         }
         MetadataRecord::EpochChanged { .. }
         | MetadataRecord::ManifestPublished { .. }
-        | MetadataRecord::RangeCompacted { .. } => {
+        | MetadataRecord::RangeCompacted { .. }
+        | MetadataRecord::Trimmed { .. } => {
             panic!("constructed a BatchCommitted")
         }
     }
@@ -469,14 +470,12 @@ fn an_epoch_change_is_its_own_record() {
     let record = MetadataRecord::EpochChanged {
         epoch: CoordinatorEpoch::new(7),
     };
-    match record {
-        MetadataRecord::EpochChanged { epoch } => assert_eq!(epoch.get(), 7),
-        MetadataRecord::BatchCommitted { .. }
-        | MetadataRecord::ManifestPublished { .. }
-        | MetadataRecord::RangeCompacted { .. } => {
-            panic!("constructed an EpochChanged")
-        }
-    }
+    // `let … else`: a new variant lands in the `else` and fails the test,
+    // which is the property the exhaustive match had, in four lines fewer.
+    let MetadataRecord::EpochChanged { epoch } = record else {
+        panic!("constructed an EpochChanged")
+    };
+    assert_eq!(epoch.get(), 7);
 }
 
 /// ⚠️ Mutation testing found these gaps, and the convention `invariants.rs`

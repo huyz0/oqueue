@@ -26,6 +26,7 @@ mod page;
 mod partition;
 mod projection;
 mod quota;
+mod retention;
 mod tiers;
 pub use page::MAX_BATCHES_PER_PAGE;
 use page::Page;
@@ -72,6 +73,21 @@ struct Batch<'a> {
     staged: StagedSpans<'a>,
 }
 
+impl<'a> Batch<'a> {
+    /// Queues an effect on one partition, recording how much of this batch's
+    /// own commits precede it — the one thing every effect needs and the
+    /// three record kinds that carry one used to each spell out.
+    fn stage_effect(&mut self, topic: &'a TopicId, partition: PartitionId, effect: Effect<'a>) {
+        let precedes = precedes(&self.staged, topic, partition);
+        self.effects.push(Staged {
+            topic,
+            partition,
+            effect,
+            precedes,
+        });
+    }
+}
+
 /// The state every in-memory materialization keeps, and the fold over it.
 ///
 /// ⚠️ Shared by [`FakeMaterializedIndex`](crate::FakeMaterializedIndex) and by
@@ -108,7 +124,7 @@ impl IndexState {
     ///
     /// # Errors
     ///
-    /// Six variants, and **the state is left untouched for every one of
+    /// Seven variants, and **the state is left untouched for every one of
     /// them** — guarantee 2 is what makes the list worth reading, because a
     /// caller that retries a rejected batch retries it against the state it
     /// had before:
@@ -123,6 +139,8 @@ impl IndexState {
     ///   offsets;
     /// - [`Error::ManifestDoesNotMeetHistory`], a `ManifestPublished` whose
     ///   `upto` does not meet what is left of the partition;
+    /// - [`Error::TrimPastEnd`], a `Trimmed` whose start is past the
+    ///   partition's end — the next produce would land below it;
     /// - [`Error::IndexQuotaExceeded`], a batch whose net growth would take
     ///   the index past the ceiling [`with_quota`](Self::with_quota) set, if
     ///   one was set at all;
@@ -132,8 +150,9 @@ impl IndexState {
     ///   a swap away from it — or installing a run that does not cover exactly
     ///   what it retires.
     ///
-    /// ⚠️ **Three of the six are the fold's own** (`M5.79`) —
-    /// `ManifestDoesNotMeetHistory`, `EmptySpanInLog` and `SwapRefused` each
+    /// ⚠️ **Four of the seven are the fold's own** (`M5.79`) —
+    /// `ManifestDoesNotMeetHistory`, `EmptySpanInLog`, `SwapRefused` and
+    /// `TrimPastEnd` each
     /// name the `(topic, partition)` the refused record named, because the
     /// caller here is a broker materializing a log it did not write and the
     /// failure is permanent.
@@ -239,35 +258,32 @@ impl IndexState {
                 partition,
                 manifest,
                 upto,
-            } => {
-                let precedes = precedes(&batch.staged, topic, *partition);
-                batch.effects.push(Staged {
-                    topic,
-                    partition: *partition,
-                    effect: Effect::Published {
-                        manifest,
-                        upto: *upto,
-                    },
-                    precedes,
-                });
-            }
+            } => batch.stage_effect(
+                topic,
+                *partition,
+                Effect::Published {
+                    manifest,
+                    upto: *upto,
+                },
+            ),
             MetadataRecord::RangeCompacted {
                 topic,
                 partition,
                 retiring,
                 installing,
-            } => {
-                let precedes = precedes(&batch.staged, topic, *partition);
-                batch.effects.push(Staged {
-                    topic,
-                    partition: *partition,
-                    effect: Effect::Swapped {
-                        retiring,
-                        installing,
-                    },
-                    precedes,
-                });
-            }
+            } => batch.stage_effect(
+                topic,
+                *partition,
+                Effect::Swapped {
+                    retiring,
+                    installing,
+                },
+            ),
+            MetadataRecord::Trimmed {
+                topic,
+                partition,
+                start,
+            } => batch.stage_effect(topic, *partition, Effect::Trimmed { start: *start }),
             // An event about the log, not about any partition.
             MetadataRecord::EpochChanged { .. } => {}
         }
@@ -337,6 +353,15 @@ impl IndexState {
         let Some(slot) = self.partition(topic, partition) else {
             return Ok(Vec::new());
         };
+        // ⚠️ **Refused, not skipped** (`M5.19`). Those records were trimmed;
+        // a page from the first live offset would move a consumer forward past
+        // data it never saw with a successful poll.
+        if start < slot.log_start {
+            return Err(Error::BelowLogStart {
+                requested: start.get(),
+                log_start: slot.log_start.get(),
+            });
+        }
         let mut page = Page::new(max_bytes);
         // ⚠️ **Not a scan from element zero**, and the difference is the FR-12
         // case. `history` is unbounded — `M3.md` sizes it in the millions per

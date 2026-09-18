@@ -13,3 +13,4 @@ mod naming;
 mod read_amp;
 mod support;
 mod sweep;
+mod trimmed;

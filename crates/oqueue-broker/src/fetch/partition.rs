@@ -275,7 +275,14 @@ pub(crate) async fn one_partition(
 /// and is retried; it does not let a client conclude it is caught up.
 const fn refusal_code(error: &Error) -> i16 {
     match error {
-        Error::ObjectNotFound { .. } => error_codes::OFFSET_OUT_OF_RANGE,
+        // ⚠️ **A trimmed range is out of range, by name** (`M5.19`), beside
+        // the reaped object it is the planned version of. The catch-all below
+        // answers "retry", and a consumer retrying a trimmed offset retries
+        // forever; out of range is what hands the decision to its own
+        // `auto.offset.reset`.
+        Error::ObjectNotFound { .. } | Error::BelowLogStart { .. } => {
+            error_codes::OFFSET_OUT_OF_RANGE
+        }
         _ => error_codes::OFFSET_NOT_AVAILABLE,
     }
 }
@@ -372,6 +379,25 @@ mod tests {
             fixture.store.counts().count(Operation::Get),
             before,
             "the idle poll must not touch object storage"
+        );
+    }
+
+    /// ⚠️ **A trimmed offset is out of range, not "retry"** (`M5.19`). The
+    /// catch-all answers `OFFSET_NOT_AVAILABLE`, which the Java consumer
+    /// retries — and a trimmed offset never becomes available, so it would
+    /// retry forever. Out of range is what hands the decision to the client's
+    /// own `auto.offset.reset`. ⚠️ **The mapping, not the path**: nothing
+    /// commits a `Trimmed` through the coordinator until the retention round
+    /// exists, so the end-to-end fetch against a trimmed partition is that
+    /// round's to drive.
+    #[test]
+    fn a_read_below_the_log_start_is_out_of_range() {
+        assert_eq!(
+            super::refusal_code(&oqueue_core::Error::BelowLogStart {
+                requested: 5,
+                log_start: 20,
+            }),
+            oqueue_codec::error_codes::OFFSET_OUT_OF_RANGE
         );
     }
 }

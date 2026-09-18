@@ -227,6 +227,28 @@ pub enum MetadataRecord {
         /// fetch resolves them from the object's own footer (`ADR-0022`).
         installing: Vec<ObjectRef>,
     },
+    /// A partition's records below `start` are gone (`M5.19`).
+    ///
+    /// ⚠️ **The only partition-level retention primitive, and it is
+    /// metadata-only.** Advancing the logical start writes no object and
+    /// deletes none: physical deletion is the object lifecycle's, reached only
+    /// once liveness says every partition inside an object is dead (`M5.20`,
+    /// `M5.21`). Deleting here would delete bytes another partition in the
+    /// same bundled object still serves.
+    ///
+    /// ⚠️ **An absolute boundary, so replay is safe.** Applying it twice is
+    /// applying it once, and a trim to a start at or below the current one is
+    /// a no-op rather than a refusal — Kafka's `DeleteRecords` has the same
+    /// shape, and a retention round that re-issues a trim after a crash must
+    /// not wedge the fold.
+    Trimmed {
+        /// The topic whose partition this is about.
+        topic: TopicId,
+        /// The partition.
+        partition: PartitionId,
+        /// The partition's new first readable offset.
+        start: Offset,
+    },
     /// The log passed to a new coordinator incarnation.
     ///
     /// A reader that sees this knows the log it was following may have been

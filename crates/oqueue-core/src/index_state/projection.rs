@@ -42,6 +42,8 @@ pub(super) enum Effect<'a> {
         retiring: &'a [ObjectRef],
         installing: &'a [ObjectRef],
     },
+    /// Everything below `start` is gone (`M5.19`).
+    Trimmed { start: Offset },
 }
 
 /// One effect, with the partition it lands on and how much of its own batch it
@@ -168,7 +170,7 @@ impl IndexState {
                     .unwrap_or_default()
             });
             let already = taken.entry(key).or_insert(0);
-            catch_up(slot, staged.get(&key), already, effect.precedes);
+            catch_up(slot, staged.get(&key), already, effect.precedes)?;
             apply_effect(slot, effect.topic, effect.partition, &effect.effect)?;
         }
         // The commits *after* the last effect, so an installed projection is
@@ -176,7 +178,7 @@ impl IndexState {
         for (key, slot) in &mut projected {
             let already = taken.entry(*key).or_insert(0);
             let all = staged.get(key).map_or(0, |(_, entries, _)| entries.len());
-            catch_up(slot, staged.get(key), already, all);
+            catch_up(slot, staged.get(key), already, all)?;
             if let Some((end, _, when)) = staged.get(key) {
                 slot.end_offset = *end;
                 // ⚠️ **The projection's copy has to see the commit time too**,
@@ -201,19 +203,33 @@ impl IndexState {
 /// effect. A second condition would be a branch no input can take, which this
 /// repository holds to be worse than no branch; cargo-mutants found the
 /// version that had one, by showing both spellings behave identically.
+///
+/// ⚠️ **It advances the end offset as it goes** (`M5.19`), because an effect
+/// that follows these commits in the log checks against it. `push` never
+/// moved `end_offset` and the final loop in `project` set it only after every
+/// effect had run, so a trim arriving in the same batch as the commits it
+/// trims saw the end from *before* the batch — `TrimPastEnd { start: 20, end:
+/// 0 }` over four ten-record commits folded whole, and success one entry at a
+/// time. A log refused at one page size and accepted at another is the
+/// failure the paging-invariance tests exist to stop; found by `M5.19`'s first
+/// round.
 fn catch_up(
     slot: &mut PartitionIndex,
     staged: Option<&(Offset, Vec<TailEntry>, TimeSpan)>,
     already: &mut usize,
     upto: usize,
-) {
+) -> Result<()> {
     let Some((_, entries, _)) = staged else {
-        return;
+        return Ok(());
     };
     while *already < upto {
-        slot.push(entries[*already].clone());
+        let entry = entries[*already].clone();
+        let end = entry.reference().end_offset()?;
+        slot.push(entry);
+        slot.end_offset = end;
         *already += 1;
     }
+    Ok(())
 }
 
 /// One effect against one partition, as it now stands.
@@ -243,34 +259,20 @@ fn apply_effect(
         Effect::Swapped {
             retiring,
             installing,
-        } => {
-            let from: Vec<&ObjectRef> = retiring.iter().collect();
-            let to: Vec<&ObjectRef> = installing.iter().collect();
-            // ⚠️ **`covers` keeps its own vocabulary and this translates it.**
-            // That function is shared with `oqueue-compact`'s merge, where
-            // `IndexObjectMismatch` is the right thing to say; what it cannot
-            // know is which record asked.
-            covers(&from, &to).map_err(|error| match error {
-                Error::IndexObjectMismatch => Error::SwapRefused {
+        } => apply_swap(slot, topic, partition, retiring, installing)?,
+        Effect::Trimmed { start } => {
+            // ⚠️ **Past the end is refused, not clamped.** The next produce
+            // would land below a start that far out — acknowledged and
+            // unreadable.
+            if *start > slot.end_offset {
+                return Err(Error::TrimPastEnd {
                     topic: topic.as_str().to_owned(),
                     partition: partition.get(),
-                    because: why_it_does_not_cover(retiring, installing),
-                },
-                other => other,
-            })?;
-            for reference in *retiring {
-                if !slot.holds_in_history(reference) {
-                    return Err(Error::SwapRefused {
-                        topic: topic.as_str().to_owned(),
-                        partition: partition.get(),
-                        because: format!(
-                            "it retires {}, which this partition's history does not hold",
-                            reference.object().as_str()
-                        ),
-                    });
-                }
+                    start: start.get(),
+                    end: slot.end_offset.get(),
+                });
             }
-            slot.replace_history(retiring, installing);
+            slot.trim(*start);
         }
     }
     Ok(())
@@ -286,6 +288,45 @@ pub(super) fn precedes(staged: &StagedSpans<'_>, topic: &TopicId, partition: Par
     staged
         .get(&(topic, partition))
         .map_or(0, |(_, entries, _)| entries.len())
+}
+
+/// A swap against one partition: the outputs must cover exactly what the
+/// inputs did, and every input must be one this partition's history holds.
+fn apply_swap(
+    slot: &mut PartitionIndex,
+    topic: &TopicId,
+    partition: PartitionId,
+    retiring: &[ObjectRef],
+    installing: &[ObjectRef],
+) -> Result<()> {
+    let from: Vec<&ObjectRef> = retiring.iter().collect();
+    let to: Vec<&ObjectRef> = installing.iter().collect();
+    // ⚠️ **`covers` keeps its own vocabulary and this translates it.**
+    // That function is shared with `oqueue-compact`'s merge, where
+    // `IndexObjectMismatch` is the right thing to say; what it cannot
+    // know is which record asked.
+    covers(&from, &to).map_err(|error| match error {
+        Error::IndexObjectMismatch => Error::SwapRefused {
+            topic: topic.as_str().to_owned(),
+            partition: partition.get(),
+            because: why_it_does_not_cover(retiring, installing),
+        },
+        other => other,
+    })?;
+    for reference in retiring {
+        if !slot.holds_in_history(reference) {
+            return Err(Error::SwapRefused {
+                topic: topic.as_str().to_owned(),
+                partition: partition.get(),
+                because: format!(
+                    "it retires {}, which this partition's history does not hold",
+                    reference.object().as_str()
+                ),
+            });
+        }
+    }
+    slot.replace_history(retiring, installing);
+    Ok(())
 }
 
 /// Why a swap's two runs did not cover each other, in a sentence.

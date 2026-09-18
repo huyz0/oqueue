@@ -50,6 +50,7 @@ async fn a_commit_is_stamped_with_the_coordinator_s_clock() {
             MetadataRecord::BatchCommitted { written_at, .. } => Some(*written_at),
             MetadataRecord::ManifestPublished { .. }
             | MetadataRecord::RangeCompacted { .. }
+            | MetadataRecord::Trimmed { .. }
             | MetadataRecord::EpochChanged { .. } => None,
         })
         .collect();

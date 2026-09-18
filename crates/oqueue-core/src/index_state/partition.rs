@@ -55,6 +55,12 @@ pub(super) struct PartitionIndex {
     /// own, and a retention round that read `EPOCH` there would reap it
     /// immediately. `Offset` has no `Default` for the same reason one field up.
     pub(super) when: Option<TimeSpan>,
+    /// The first readable offset (`M5.19`).
+    ///
+    /// ⚠️ **Zero until a trim moves it**, and it only moves forward: a trim at
+    /// or below it is a no-op, so a retention round re-issuing one after a
+    /// crash cannot move a partition's start backwards over deleted data.
+    pub(super) log_start: Offset,
 }
 
 impl Default for PartitionIndex {
@@ -65,6 +71,7 @@ impl Default for PartitionIndex {
             history: Vec::new(),
             manifest: None,
             when: None,
+            log_start: Offset::ZERO,
         }
     }
 }
@@ -162,6 +169,35 @@ impl PartitionIndex {
         {
             self.history.push(evicted.demote());
         }
+    }
+
+    /// Drops every entry wholly below `start` and moves the log start there.
+    ///
+    /// ⚠️ **Wholly below, not overlapping.** An object whose span straddles
+    /// `start` still holds live records, so its reference stays and a read
+    /// from `start` resolves into it; dropping it would lose `[start, end)`.
+    /// The manifest goes only when everything it covers is dead, for the same
+    /// reason.
+    ///
+    /// ⚠️ **Removes references, never objects.** What it drops is an entry in
+    /// this index; whether the object behind it can be deleted is a question
+    /// about every *other* partition in it, which is liveness's (`M5.20`).
+    pub(super) fn trim(&mut self, start: Offset) {
+        if start <= self.log_start {
+            return;
+        }
+        let dead = |end: Result<Offset, crate::Error>| end.is_ok_and(|end| end <= start);
+        self.history.retain(|entry| !dead(entry.end_offset()));
+        self.tail
+            .retain(|entry| !dead(entry.reference().end_offset()));
+        if self
+            .manifest
+            .as_ref()
+            .is_some_and(|(_, upto)| *upto <= start)
+        {
+            self.manifest = None;
+        }
+        self.log_start = start;
     }
 
     /// Folds a batch's commit time into this partition's extent.

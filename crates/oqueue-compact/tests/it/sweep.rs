@@ -2,6 +2,9 @@
 
 // A panic in a test harness is the test failing, which is what it is for.
 #![allow(clippy::expect_used)]
+// `cluster` and `every_partition` are shared with `trimmed.rs`; `pub(crate)`
+// is the visibility that is true, the call `support.rs` makes.
+#![allow(clippy::redundant_pub_crate)]
 
 use oqueue_compact::{COMPACTION_PLAN_RECORDS_BUDGET, Candidate, sweep};
 use oqueue_core::Timestamp;
@@ -15,7 +18,7 @@ use crate::support::{CountingIndex, partition_n, topic};
 /// An index holding `partitions` partitions of one topic, where those named in
 /// `amplified` hold `TAIL_WINDOW_ENTRIES + 13` one-record objects and the rest
 /// hold one.
-fn cluster(partitions: i32, amplified: &[i32]) -> FakeMaterializedIndex {
+pub(crate) fn cluster(partitions: i32, amplified: &[i32]) -> FakeMaterializedIndex {
     let index = FakeMaterializedIndex::new();
     let mut entries = Vec::new();
     let mut version = 0_u64;
@@ -49,7 +52,7 @@ fn cluster(partitions: i32, amplified: &[i32]) -> FakeMaterializedIndex {
     index
 }
 
-fn every_partition(partitions: i32) -> Vec<Candidate> {
+pub(crate) fn every_partition(partitions: i32) -> Vec<Candidate> {
     (0..partitions)
         .map(|index| Candidate::new(topic(), partition_n(index), Offset::ZERO))
         .collect()
