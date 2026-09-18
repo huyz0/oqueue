@@ -40,10 +40,19 @@ struct Extent {
 pub(super) struct Walk {
     start: Offset,
     end: Offset,
-    /// Object keys in the order the walk first saw them, which is ascending by
-    /// the span that introduced them.
-    order: Vec<ObjectKey>,
-    extents: HashMap<ObjectKey, Extent>,
+    /// Every object the walk has seen, with what it holds, in the order the
+    /// walk first saw each — ascending by the span that introduced it.
+    ///
+    /// ⚠️ **One collection, not an order beside a map.** The two were separate
+    /// until `M5.54`, and `finish` then had to ask the map for a key the order
+    /// named — a lookup nothing could make fail, since `visit` writes both in
+    /// one arm and neither is ever removed from, so the `else` branch was one
+    /// no index could take. `M5.43` closed on an unreachable branch being
+    /// worse than none: it reads as a case that happens.
+    seen: Vec<(ObjectKey, Extent)>,
+    /// Where each object sits in [`seen`](Self::seen), so folding a second
+    /// span into it stays a lookup rather than a scan.
+    at: HashMap<ObjectKey, usize>,
     /// Objects the walk knows are not whole without having seen why.
     ///
     /// ⚠️ **Because a walk from `start` cannot see what lies below it.**
@@ -59,8 +68,8 @@ impl Walk {
         Self {
             start,
             end,
-            order: Vec::new(),
-            extents: HashMap::new(),
+            seen: Vec::new(),
+            at: HashMap::new(),
             barred: HashSet::new(),
         }
     }
@@ -90,15 +99,16 @@ impl Walk {
         // holding the cursor rather than from the next one after it. That is
         // what makes the disqualification possible at all.
         let whole = !past && base >= self.start && object_end <= self.end;
-        if let Some(extent) = self.extents.get_mut(&key) {
+        if let Some(&at) = self.at.get(&key) {
+            let extent = &mut self.seen[at].1;
             extent.first_base = extent.first_base.min(base);
             extent.last_end = extent.last_end.max(object_end);
             extent.records += object_end.get() - base.get();
             extent.tail |= batch.bytes().is_some();
             extent.whole &= whole;
         } else {
-            self.order.push(key.clone());
-            self.extents.insert(
+            self.at.insert(key.clone(), self.seen.len());
+            self.seen.push((
                 key,
                 Extent {
                     first_base: base,
@@ -109,7 +119,7 @@ impl Walk {
                     tail: batch.bytes().is_some(),
                     whole,
                 },
-            );
+            ));
         }
 
         if past { Ok(None) } else { Ok(Some(object_end)) }
@@ -131,10 +141,7 @@ impl Walk {
         let mut history_objects = 0_usize;
         let mut history_records = 0_i64;
 
-        for key in &self.order {
-            let Some(extent) = self.extents.get(key) else {
-                continue;
-            };
+        for (key, extent) in &self.seen {
             if !extent.whole || self.barred.contains(key) {
                 continue;
             }
