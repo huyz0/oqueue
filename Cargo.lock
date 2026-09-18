@@ -978,6 +978,7 @@ dependencies = [
  "kafka-protocol",
  "oqueue-checksum",
  "oqueue-codec",
+ "oqueue-compact",
  "oqueue-coordinator",
  "oqueue-core",
  "oqueue-testkit",

@@ -20,6 +20,9 @@ oqueue-checksum = { path = "../oqueue-checksum" }
 # are the composition root's to choose (FR-50), and this crate is written
 # against `oqueue-core`'s seams for both.
 oqueue-coordinator = { path = "../oqueue-coordinator" }
+# ⚠️ `M5.91`: the retention task runs `oqueue-compact`'s expiry heap and
+# object lifecycle; a composer is the only kind of crate that may.
+oqueue-compact = { path = "../oqueue-compact" }
 # `error-handling.md` rule 3: a public error is a `thiserror` type a caller can
 # match and render, not a bare enum.
 thiserror.workspace = true

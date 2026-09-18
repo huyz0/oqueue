@@ -15,6 +15,7 @@ Because *almost* everything else in this workspace is sans-I/O — ⚠️ **"by 
 - `oqueue-checksum` — the CRC-32C half of the ingest rule produce verifies batches with.
 - `thiserror` — the derive every public error here uses (`error-handling.md` rule 3).
 - `oqueue-coordinator` — where offsets are assigned and journalled. ⚠️ **The concrete materialized index and the concrete object store are *not* here**: both are seams in `oqueue-core`, chosen by `bin/oqueue`, so this crate has no `oqueue-index` or `oqueue-store` dependency.
+- `oqueue-compact` — the expiry heap and object lifecycle `retention.rs` runs every round (`M5.91`); the task that calls them does I/O, so it lives in this shell rather than beside them.
 - `tokio` — the runtime this I/O shell is written against (feature-minimal: io, sync, rt, time, macros — the last for `connection.rs`'s `select!`; `net` waits for `bin/oqueue`).
 - `uuid` — the type this crate converts `oqueue-codec`'s `[u8; 16]` topic ids to and from at the seam.
 - `rustls` — `tls.rs`'s TLS termination (`M9.5`, `ADR-0012`'s `ring` default build).

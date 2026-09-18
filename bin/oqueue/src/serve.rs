@@ -11,7 +11,6 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use crate::Wiring;
-use oqueue_core::ObjectStore;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -47,13 +46,20 @@ pub(crate) fn serve(
         let listener = tokio::net::TcpListener::bind(addr).await?;
         let local = listener.local_addr()?;
         let (advertised_host, advertised_port) = advertised_identity(advertise, local)?;
-        let (cluster, serving) =
-            build_cluster(advertised_host, advertised_port, Arc::clone(&wiring.store)).await?;
+        let (cluster, serving, retention) = crate::compose::build_cluster(
+            advertised_host,
+            advertised_port,
+            Arc::clone(&wiring.store),
+        )
+        .await?;
         if let Some(warning) = durability_warning(wiring.store_name) {
             eprintln!("{warning}");
         }
         // ⚠️ Spawned *here*, where something watches it — see `build_cluster`.
         let serving = tokio::spawn(serving.run());
+        // ⚠️ Not watched, deliberately: retention stopping delays deletion and
+        // loses no acknowledged record, so it is no reason to stop serving.
+        tokio::spawn(retention.run());
         let cluster = Arc::new(cluster);
         println!(
             "oqueue {} ({:?}, {})",
@@ -235,73 +241,6 @@ async fn accept_loop(
     }
 }
 
-/// Composes the broker: a coordinator over a metadata log, a materialized
-/// index, and the chosen object store.
-///
-/// ⚠️ **The one place the concrete materialization is chosen** (FR-50).
-/// `oqueue-index`'s `MemoryIndex` is `M3`'s answer and not the project's — doc
-/// 10 #12's disk engine is open — and it is picked here rather than defaulted
-/// inside a library, so swapping it is one line in a composition root.
-///
-/// ⚠️ **`FakeMetadataLog` is the only `MetadataLog` `M3` builds**
-/// (`ADR-0020` point 5, doc 10 #12, `M3.md`'s goal note), so this broker's
-/// offsets do not survive its process: a restart re-bases at `Offset::ZERO`
-/// over objects that already hold those offsets. `roadmap.md`'s deferral table
-/// gives the durable engine to `M6`. The warning below is so an operator hears
-/// it from the broker rather than from a consumer.
-///
-/// ⚠️ **The coordinator's loop is returned, not spawned here.** It is spawned
-/// by `serve`, which watches its handle — `async-concurrency.md` rule 13 wants
-/// an owner that can *observe* the task, and a `JoinHandle` dropped on the
-/// floor observes nothing. A loop that panicked would otherwise leave a process
-/// that stays up, accepts connections, and answers every produce
-/// `LEADER_NOT_AVAILABLE` forever while no supervisor restarts it, because it
-/// never exits and says nothing.
-pub(crate) async fn build_cluster(
-    host: String,
-    port: i32,
-    store: Arc<dyn ObjectStore>,
-) -> std::io::Result<(oqueue_broker::Cluster, oqueue_coordinator::CoordinatorLoop)> {
-    let log = Arc::new(oqueue_core::FakeMetadataLog::new());
-    let index = Box::new(oqueue_index::MemoryIndex::new());
-    let epoch = oqueue_core::CoordinatorEpoch::new(1);
-    let (coordinator, serving, reader) = oqueue_coordinator::Coordinator::open(
-        log,
-        index,
-        epoch,
-        Arc::new(crate::wall_clock::WallClock),
-    )
-    .await
-    .map_err(|error| std::io::Error::other(format!("the coordinator would not open: {error}")))?;
-    eprintln!(
-        "oqueue: WARNING -- the metadata log is in memory (M6 owns the durable one). \
-         Offsets do not survive a restart."
-    );
-    eprintln!(
-        "oqueue: WARNING -- consumer-group membership/generation is in memory (M4.15 owns the \
-         durable one, ADR-0034). Group membership and generation do not survive a restart."
-    );
-    eprintln!(
-        "oqueue: WARNING -- the group metadata log is in memory (M6 owns the durable engine, \
-         ADR-0035, the same one M4.14 names for the topic metadata log above). Committed \
-         offsets replay correctly across an in-process restart but do not survive the process."
-    );
-    let cluster = oqueue_broker::Cluster::new(
-        host,
-        port,
-        oqueue_broker::Sequencing::new(coordinator, reader),
-        oqueue_broker::Seams {
-            store,
-            group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
-            group_metadata_log: Arc::new(oqueue_core::FakeGroupMetadataLog::new()),
-        },
-        &oqueue_broker::WriterId::mint(),
-    )
-    .await
-    .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?;
-    Ok((cluster, serving))
-}
-
 /// The advertised identity: the override when given, else the bound
 /// address — the one address a client can reach a local stub at.
 fn advertised_identity(
@@ -428,9 +367,10 @@ mod tests {
     #[tokio::test]
     async fn the_accept_loop_notices_a_dead_coordinator_rather_than_serving_past_it() {
         let store: Arc<dyn ObjectStore> = Arc::new(oqueue_core::FakeObjectStore::new());
-        let (cluster, serving) = super::build_cluster("h".to_owned(), 1, store)
-            .await
-            .expect("an empty fixture composes");
+        let (cluster, serving, _retention) =
+            crate::compose::build_cluster("h".to_owned(), 1, store)
+                .await
+                .expect("an empty fixture composes");
         let serving = tokio::spawn(serving.run());
 
         // ⚠️ **Aborted, not left to finish on its own** — an idle coordinator

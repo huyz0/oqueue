@@ -49,6 +49,7 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 #[global_allocator]
 static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
+mod compose;
 mod security;
 mod serve;
 mod wall_clock;

@@ -21,6 +21,7 @@ mod overlap;
 mod quota;
 mod reads;
 mod reap;
+mod retention;
 mod roundtrip;
 mod secrets_log_scan;
 mod seeded;
