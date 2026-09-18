@@ -147,13 +147,53 @@ if (( ${#files[@]} == 0 )); then
   finish
 fi
 
+# ⚠️ **Every file's line count in one pass, not one `wc` per file.** This gate
+# is the slowest warm one in the pre-commit suite, and all of it was fork cost:
+# a `basename` and a `wc` per tracked `*.rs` file is two processes each, and
+# the suite's own budget (NFR-56, `check-budget.sh`) is 10 s for everything.
+# `xargs` rather than one argument list because a large enough tree would
+# exceed `ARG_MAX`, and `wc` then prints a `total` line per batch — skipped
+# below, by name, which is why the read keeps the name rather than the count
+# alone. ⚠️ **`wc -l` counts newlines**, which is what the per-file call
+# counted too; a file with no trailing newline reads one short here exactly as
+# it did before, and changing that would move every limit in `ALLOWLIST` by one.
+# ⚠️ **Only files that are actually there.** The loop below already skips a
+# tracked path missing from the worktree — an interrupted checkout, a deleted
+# file not yet staged — and handing it to `wc` instead would print an error to
+# stderr beside a gate that passes, which is the noise a reader learns to
+# ignore.
+present=()
+for f in "${files[@]}"; do
+  [[ -f "$f" ]] && present+=("$f")
+done
+
+declare -A LINE_COUNT=()
+if (( ${#present[@]} > 0 )); then
+  # ⚠️ **Split by hand rather than by `read -r count name`**, because `read`
+  # strips leading `IFS` whitespace from the name — so a tracked file whose
+  # path begins with a space would be keyed without it, miss its own lookup,
+  # and be rejected by the guard below as uncounted. `wc` right-aligns the
+  # count and separates it from the name with exactly one space, so the name
+  # is everything after that one space, spaces and all.
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    count="${line%%[[:space:]]*}"
+    name="${line#"$count" }"
+    [[ "$name" == "total" || -z "$name" ]] && continue
+    LINE_COUNT["$name"]="$count"
+  done < <(printf '%s\0' "${present[@]}" | xargs -0 wc -l --)
+fi
+
 checked=0
 violations=0
 for f in "${files[@]}"; do
   [[ -f "$f" ]] || continue
   checked=$((checked + 1))
 
-  stem="$(basename "$f" .rs)"
+  # ⚠️ Parameter expansion, not `basename`: one fewer process per file, and
+  # `basename` is the other half of what made this gate the slowest warm one.
+  stem="${f##*/}"
+  stem="${stem%.rs}"
   for bad in "${FORBIDDEN_STEMS[@]}"; do
     if [[ "$stem" == "$bad" ]]; then
       fail "$f: module named '$stem' -- util/common/helpers/misc is a dumping ground, not a concept"
@@ -163,8 +203,16 @@ for f in "${files[@]}"; do
     fi
   done
 
-  lines="$(wc -l < "$f")"
-  lines="${lines//[[:space:]]/}"
+  lines="${LINE_COUNT[$f]:-}"
+  if [[ -z "$lines" ]]; then
+    # ⚠️ **A file the batch did not count is a failure, not a pass.** The
+    # single-`wc` form could not miss a file; this one can, if `xargs` split a
+    # name or `wc` failed on it, and a missing count that fell through to the
+    # limit check would silently exempt the file from rule 16 entirely.
+    fail "$f: tracked, but the batched line count returned nothing for it"
+    violations=$((violations + 1))
+    continue
+  fi
 
   if (( lines > FILE_LINE_LIMIT )); then
     if [[ -n "${ALLOWLIST[$f]:-}" ]]; then
