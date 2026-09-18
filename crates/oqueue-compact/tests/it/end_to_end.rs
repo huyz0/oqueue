@@ -10,10 +10,13 @@
 // A panic in a test harness is the test failing, which is what it is for.
 #![allow(clippy::expect_used)]
 
-use oqueue_compact::{Candidate, PlannedInputs, Planning, merge_round, plan, sweep};
+use oqueue_compact::{
+    COMPACTION_READ_AMP_THRESHOLD, Candidate, PlannedInputs, Planning, merge_round, plan, read_amp,
+    sweep,
+};
 use oqueue_core::{
     BundleBuilder, ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex,
-    MaterializedIndex, MetadataEntry, MetadataRecord, ObjectStore, PushedRecords,
+    MaterializedIndex, MetadataEntry, MetadataRecord, ObjectRef, ObjectStore, PushedRecords,
     TAIL_WINDOW_ENTRIES, parse_footer,
 };
 
@@ -304,5 +307,102 @@ async fn a_range_ending_between_two_spans_drops_that_object_whole() {
         outcome.records(),
         190,
         "every record below the object the range would have split"
+    );
+}
+
+/// The ratio a reader faces over this partition's whole range.
+fn amplification(index: &FakeMaterializedIndex, records: i64) -> f64 {
+    read_amp(index, &topic(), partition(), offset(0), offset(records))
+        .expect("an index that answers")
+        .ratio()
+}
+
+/// ⚠️ **FR-34 itself: read amplification after compaction is within bound.**
+///
+/// Every other test in this file measures a *part* of the sequence — that the
+/// sweep picks a range, that the round runs, that the object holds what the
+/// index said. None of them measures the requirement, which is a statement
+/// about the ratio a reader faces **after** the swap is folded in, and that is
+/// a different number from the one the planner triggers on: `read_amp` is
+/// evaluated over the index, the swap changes the index, and nothing before
+/// this asserted the second measurement at all.
+///
+/// ⚠️ **Before and after over one partition, not a threshold restated.**
+/// `COMPACTION_READ_AMP_THRESHOLD` is what makes a partition a *candidate*;
+/// asserting that the post-round ratio is under it is asserting that the round
+/// achieved what it was selected to achieve. A test that only checked the
+/// candidate side would pass on a compaction that did nothing.
+#[tokio::test]
+async fn a_compacted_partition_reads_within_the_bound() {
+    let store = Counting::new();
+    let objects = 70_usize;
+    let per = 7_u32;
+    let index = partition_of(&store, per, objects).await;
+    let records = i64::from(per) * i64::try_from(objects).expect("a small count");
+
+    // The ratio a reader faces before anything is compacted, over the range
+    // the sweep is about to pick.
+    let before = amplification(&index, records);
+    assert!(
+        before > f64::from(COMPACTION_READ_AMP_THRESHOLD),
+        "the fixture must be amplified enough to be a candidate at all, got {before}"
+    );
+
+    let swept = sweep(&index, &[Candidate::new(topic(), partition(), offset(0))])
+        .expect("an index that answers");
+    let planned = &swept.round()[0];
+    let retiring: Vec<ObjectRef> = planned.inputs().to_vec();
+
+    let outcome = merge_round(&store, swept.round(), &mut namer())
+        .await
+        .expect("a round the sweep produced is a round that runs");
+    let sealed = outcome.object().expect("a round seals one object");
+
+    // ⚠️ **The swap, folded in.** This is the step that makes the measurement
+    // below the requirement's rather than the planner's: FR-34 is about what a
+    // reader faces, and a reader faces the index.
+    index
+        .apply(&[MetadataEntry::new(
+            // ⚠️ Past every entry the fixture folded, which is
+            // `objects + TAIL_WINDOW_ENTRIES` of them — the window's worth is
+            // what keeps the compactable history separate from the tail.
+            CommitVersion::new(
+                u64::try_from(objects + TAIL_WINDOW_ENTRIES).expect("a small count") + 1,
+            ),
+            MetadataRecord::RangeCompacted {
+                topic: topic(),
+                partition: partition(),
+                retiring,
+                // ⚠️ **What the round moved, not what the fixture assumed.**
+                // Built from `records` this test passed a compaction that
+                // silently dropped a span: the fold checks `installing`
+                // against `retiring`, so a count the test supplied covers for
+                // an object that does not hold it. Measured in a scratch tree
+                // — with `gather` skipping its last input, every other test in
+                // this file went red and this one, the test that is supposed
+                // to *be* FR-34, stayed green over a reference claiming 490
+                // records against an object holding 483. Found by `M5.85`'s
+                // first round.
+                installing: vec![ObjectRef::new(
+                    sealed.clone(),
+                    offset(0),
+                    u32::try_from(outcome.records()).expect("a small count"),
+                )],
+            },
+        )])
+        .expect("outputs covering the inputs exactly");
+
+    let after = amplification(&index, records);
+    assert!(
+        after <= f64::from(COMPACTION_READ_AMP_THRESHOLD),
+        "after the round a reader faces {after}, over the {COMPACTION_READ_AMP_THRESHOLD} bound"
+    );
+    // ⚠️ **1.0 is the compacted layout**, which `ReadAmp::ratio`'s own doc
+    // states, and it is the bound with content: `after < before` was implied
+    // by the two assertions above it and constrained nothing they did not.
+    // One object over the whole range is what the round was for.
+    assert!(
+        (after - 1.0).abs() < f64::EPSILON,
+        "a compacted range is one object per read: {before} -> {after}"
     );
 }
