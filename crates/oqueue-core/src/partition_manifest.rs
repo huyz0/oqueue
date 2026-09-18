@@ -13,8 +13,8 @@
 //! this are recorded in `ADR-0041`.
 //!
 //! ⚠️ **Chained, because the uncompacted backlog is not small.** Between
-//! compaction rounds a partition accumulates ~7,200 objects — ~169 KiB of
-//! entries — so a manifest that only ever grew would be read whole on every
+//! compaction rounds a partition accumulates ~7,200 objects — ~590 KiB of
+//! entries, five times the cap — so a manifest that only ever grew would be read whole on every
 //! cold fetch. Past [`PARTITION_MANIFEST_BYTES`] it spills: the newest
 //! manifest names its predecessor, and a reader follows the chain only for an
 //! offset the newest does not cover. That is doc 14 §7's friction row 3
@@ -52,13 +52,25 @@ pub const PARTITION_MANIFEST_TRAILER_LEN: usize = 4 + 1 + 4 + PARTITION_MANIFEST
 /// ⚠️ **UNDERIVED — Redpanda's measured number, not this project's.** Doc 14
 /// §7's friction row 3 cites `cloud_storage_spillover_manifest_size` capping
 /// their live manifest near 128 KiB; nothing here has measured anything, and
-/// `ADR-0042` says so rather than dressing it up. ⚠️ **An entry here is ~36
-/// bytes, not `ADR-0042`'s 24** — that figure was an estimate made before the
-/// format existed, and `encode_entry` writes `2 + key + 8 + 4 + 8 + 8` — so
-/// the cap is ~3,600 entries, against a compacted steady state of ~4.6 and an
-/// uncompacted backlog of ~7,200 between rounds. The cap therefore bites on
-/// the backlog and never on the steady state, which is the behaviour it is
-/// for, and the wider entry moves it in the safe direction: sooner.
+/// `ADR-0042` says so rather than dressing it up.
+///
+/// ⚠️ **An entry here is 84 bytes**, which is 30 the format decides
+/// (`encode_entry` writes `2 + key + 8 + 4 + 8 + 8`) plus the object key —
+/// 51–54 B for `BundleNamer`'s `bundles/{writer}/{sequence:020}`, quoted at
+/// its wide end because the figure bounds a cold read. ⚠️ **Not 24, not 36,
+/// and not 80**: `ADR-0042` estimated 24 before the format existed and `M5.61`
+/// measured 36 against a four-character *test* key, and `M5.64`'s own first
+/// draft said 80 from a key four digits short in its timestamp. The number
+/// above is
+/// derived in `an_entry_costs_thirty_bytes_plus_its_object_key`, which seals
+/// two manifests and subtracts, so a change to the encoder reds a test rather
+/// than leaving a paragraph wrong. `M5.64`.
+///
+/// So the cap holds **1,560** entries, against a compacted steady state of
+/// ~4.6 and an uncompacted backlog of ~7,200 between rounds. It therefore
+/// bites on the backlog and never on the steady state, which is the behaviour
+/// it is for — and each time the entry turned out to be wider it moved in the
+/// safe direction: sooner.
 ///
 /// ⚠️ **Raising it is the weakening direction**: a larger cap means more bytes
 /// read on every cold fetch, which is the column `ADR-0042` picked this shape

@@ -45,29 +45,62 @@ spans/s is **32 seconds** of tail. Nothing about keying moves it.
 ### Quantity 2 — bytes read on a cold fetch
 
 A partition's history, if it is a list of that partition's objects, is
-~`24 B` per entry (an object key reference, an offset, a length) — ⚠️ **an
-estimate made before the format existed, and `M5.61` measured ~36 B**, which
-moves both figures below up by half and neither column's verdict:
+**84 B per entry**, and that number is measured rather than estimated:
+`an_entry_costs_thirty_bytes_plus_its_object_key` in
+`crates/oqueue-core/tests/it/partition_manifest.rs` seals two manifests and
+subtracts. It is 30 B the format decides — two bytes of key length, an offset,
+a record count, and a range — plus the object key the caller brings, which for
+`BundleNamer`'s `bundles/{writer}/{sequence:020}` is 51–54 B — quoted at its
+wide end, because the figure bounds a cold read.
+
+⚠️ **This paragraph has been wrong three times, in the same direction.** It
+said `24 B` first, an estimate made before the format existed; `M5.61`
+corrected it to ~36 B, which was the encoder measured against a four-character
+*test* key; and `M5.64`'s own first draft said 80 B, from a key whose
+timestamp field was four digits short. All three understated it, and the rule that came out of `M5.64` is the one above:
+derive the figure from the encoder and a real key, in a test, and quote the
+test.
 
 | State | Objects in the partition | Manifest |
 |---|---|---|
-| Between compaction rounds (30 min at 4/s) | 7,200 | **169 KiB** |
-| After compaction (2.42M records ÷ `COMPACTED_OBJECT_RECORDS`) | ~4.6 | **111 B** |
+| Between compaction rounds (30 min at 4/s) | 7,200 | **590 KiB** |
+| After compaction (2.42M records ÷ `COMPACTED_OBJECT_RECORDS`) | ~4.6 | **386 B** |
 
 ⚠️ **Compaction is what keeps the manifest small**, and the uncompacted
 backlog is bounded by the sweep interval rather than by retention — which is
-why 169 KiB is the worst case and ~111 B the steady state. ⚠️ **A span here
+why 590 KiB is the worst case and ~386 B the steady state. ⚠️ **A span here
 holds one record**, which falls out of doc 14's own two numbers — 4 spans/s
 and ~4 records/s per partition — and is worth saying out loud, because it
 means this working set is a million tiny partitions rather than a few large
 ones. A workload with fewer, fatter partitions moves the compacted figure up
-and the entry count down, and neither direction changes which column binds. It also lands
-just over Redpanda's ~128 KiB live-manifest cap, which is the empirical
-number doc 14 §7's friction row 3 cites, and is why that row's mitigation chains rather than grows.
+and the entry count down, and neither direction changes which column binds. ⚠️ **The worst case is
+about four and a half times Redpanda's ~128 KiB live-manifest cap**, the
+empirical number doc 14 §7's friction row 3 cites — not "just over" it, which
+is what this said while the entry was priced at 24 B. The correction
+strengthens the row's own conclusion rather than weakening it: chaining is not
+a margin call, it is the only thing that keeps a cold fetch from reading half
+a megabyte.
 
-A cold fetch is therefore **one GET of ≤128 KiB plus one ranged GET of the
-component** — two, or three across a chain hop. Doc 14 §3's "1–3 GETs",
-arrived at rather than asserted.
+A cold fetch is therefore **one GET of ≤128 KiB per chain link followed, plus
+one ranged GET of the component**. The cap bounds each link — at 84 B an entry
+it holds 1,560 of them — and how many links there are is what the entry width
+decides.
+
+⚠️ **Which is where doc 14 §3's "1–3 GETs" holds and where it does not**, and
+this paragraph claimed the bound rather than the steady state until `M5.64`
+recomputed it. Compacted, a partition's manifest is ~386 B: one manifest GET
+and one ranged GET, which is the 2 that row asks for, and 3 across a hop. The
+*uncompacted* backlog is 590 KiB, which is **five** chained manifests, so a
+consumer cold-fetching the oldest offset late in a sweep interval pays six.
+`an_uncompacted_backlog_is_five_chained_manifests` derives it.
+
+⚠️ **It is bounded, and it is bounded by the sweep interval rather than by
+retention** — the same fact that makes the manifest small is what makes the
+chain short, and `MAX_MANIFEST_HOPS` refuses a chain past sixteen whatever the
+data says. But six is not three, and the honest statement is that the read
+column this shape was chosen on is met in the steady state and exceeded
+against a backlog nothing has swept yet. Shortening the sweep interval is the
+lever, and it is `M5.16`'s.
 
 ### Quantity 3 — manifest writes per key
 
@@ -96,8 +129,8 @@ reference to it.
    orders of magnitude apart, and the difference is what the manifest is
    keyed by.
 2. **Chained when it exceeds `PARTITION_MANIFEST_BYTES`**, Redpanda's
-   spillover shape, because the uncompacted backlog reaches 169 KiB between
-   rounds.
+   spillover shape, because the uncompacted backlog reaches 590 KiB between
+   rounds — five links, not a margin.
 3. **`M5.8`'s composites are orthogonal and both are needed.** A composite
    collapses *object count*, which is the cloud-side cost doc 14 prices in
    PUTs and GETs; a partition manifest collapses *coordinator state*. Neither
@@ -132,8 +165,9 @@ reference to it.
   a rebuild cannot restore.
 - **A manifest per topic.** Divides the write rate by partitions-per-topic and
   multiplies the manifest by it: a 10k-partition topic's manifest is ~46k
-  entries after compaction, ~1.1 MB, GET whole per fetch — against ~111 B. This is shape 3 with
-  a different key, and it fails the same column.
+  entries after compaction, ~3.9 MB at 84 B an entry, GET whole per fetch —
+  against ~386 B. This is shape 3 with a different key, and it fails the same
+  column.
 
 ## Consequences
 

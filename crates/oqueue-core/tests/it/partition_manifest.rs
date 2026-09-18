@@ -267,3 +267,90 @@ fn an_object_named_twice_in_stored_bytes_is_refused_when_read_back() {
         Err(Error::MalformedPartitionManifest { .. })
     ));
 }
+
+/// ⚠️ **What an entry actually costs, measured rather than estimated.**
+/// `ADR-0042` priced one at 24 B before the format existed and `M5.61`
+/// corrected that to ~36 — but ~36 was measured against a four-character test
+/// key, and a real one is `BundleNamer`'s `bundles/{writer}/{sequence:020}`,
+/// which is about fifty bytes on its own. Every figure the ADR and
+/// `partition_manifest.rs` quote is derived from the numbers this test
+/// asserts, so a change to the encoder reds here first and the prose is
+/// corrected rather than discovered to be wrong.
+///
+/// ⚠️ **The fixed part is what the format decides; the key is what a caller
+/// brings.** Stating the two separately is what keeps the figure usable when
+/// the key shape changes, which is the failure `M5.64` exists to end.
+#[test]
+fn an_entry_costs_thirty_bytes_plus_its_object_key() {
+    let one = sealed_with(1).len();
+    let two = sealed_with(2).len();
+    let width = two - one;
+    assert_eq!(
+        width,
+        30 + REALISTIC_KEY.len(),
+        "two bytes of key length, the key, an offset, a count, and a range"
+    );
+    assert_eq!(REALISTIC_KEY.len(), 54, "the wide end of a real key");
+    assert_eq!(width, 84, "which is 84 B for a key this shape");
+}
+
+/// ⚠️ **What the cap therefore bites at, and how many manifests a backlog
+/// becomes.** A cold fetch reads one manifest per chain link it follows, so
+/// this is the first term of `ADR-0042`'s read cost.
+///
+/// ⚠️ **What the cap therefore bites at.** `PARTITION_MANIFEST_BYTES` is
+/// Redpanda's measured 128 KiB and this is how many entries fit under it — the
+/// number every claim about when a manifest spills is derived from.
+#[test]
+fn the_cap_holds_about_sixteen_hundred_entries() {
+    let width = sealed_with(2).len() - sealed_with(1).len();
+    let entries = PARTITION_MANIFEST_BYTES / width;
+    assert_eq!(entries, 1560, "the cap in entries, at a realistic key");
+}
+
+/// A representative object key: `bundles/` + a `WriterId` of the shape
+/// `{pid:x}-{stamp:x}-{nth:x}` + `/` + a twenty-digit sequence.
+///
+/// ⚠️ **The wide end of the range, not the middle.** A pid reaches 0x400000 on
+/// Linux (six hex digits), a nanosecond stamp is sixteen, and `nth` is one for
+/// the first identity a process mints — so a real key runs 51–54 B and this is
+/// 54. The figure bounds a cold read, and a bound quoted from the *narrow* end
+/// is the mistake this whole row exists to stop making: `ADR-0042` understated
+/// the entry at 24 B, `M5.61` understated it again at 36, and `M5.64`'s own
+/// first draft understated it a third time with a 1974 timestamp.
+const REALISTIC_KEY: &str = "bundles/400000-18d649b1560f6000-1/00000000000000000001";
+
+/// A sealed manifest of `count` contiguous entries under realistic keys.
+fn sealed_with(count: u32) -> Vec<u8> {
+    let mut builder = PartitionManifestBuilder::new();
+    for which in 0..count {
+        builder
+            .push(
+                ManifestEntry::new(
+                    key(&format!("bundles/400000-18d649b1560f6000-1/{which:020}")),
+                    offset(i64::from(which)),
+                    1,
+                    ByteRange::bounded(u64::from(which) * 32, 32).expect("a valid range"),
+                )
+                .expect("a valid entry"),
+            )
+            .expect("contiguous, in order");
+    }
+    builder.seal().expect("a sealed manifest")
+}
+
+/// ⚠️ **How many manifests an uncompacted backlog becomes**, which is the
+/// first term of `ADR-0042`'s cold-read cost and the figure the ADR quoted
+/// doc 14 §3's "1–3 GETs" against. At 84 B an entry it is five, not one — so
+/// a cold fetch of the oldest uncompacted offset is six GETs, and the "1–3"
+/// is the *compacted* steady state rather than the bound.
+#[test]
+fn an_uncompacted_backlog_is_five_chained_manifests() {
+    // Doc 14 §3: 4 spans/s, a 30-minute sweep interval.
+    let backlog = 7_200_usize;
+    let width = sealed_with(2).len() - sealed_with(1).len();
+    let bytes = backlog * width;
+    assert_eq!(bytes, 604_800, "the backlog's entries");
+    assert_eq!(bytes / 1024, 590, "which is 590 KiB");
+    assert_eq!(bytes.div_ceil(PARTITION_MANIFEST_BYTES), 5, "five links");
+}
