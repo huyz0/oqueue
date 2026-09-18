@@ -1,7 +1,8 @@
 //! What one entry in the metadata log is.
 
 use crate::{
-    ByteRange, CoordinatorEpoch, ObjectKey, Offset, PartitionId, ProducerIdentity, TopicId,
+    ByteRange, CoordinatorEpoch, ObjectKey, ObjectRef, Offset, PartitionId, ProducerIdentity,
+    TopicId,
 };
 
 /// One `(topic, partition)`'s share of a committed object.
@@ -161,6 +162,47 @@ pub enum MetadataRecord {
         /// history begins: below that boundary is records nothing can serve,
         /// above it is records served twice.
         upto: Offset,
+    },
+    /// A run of a partition's objects was rewritten into another run.
+    ///
+    /// ⚠️ **An append that rewrites nothing** (`ADR-0038`, and `M5.13`'s row
+    /// makes it an acceptance criterion rather than advice). Every original
+    /// `BatchCommitted` event stays in the log exactly as written. An
+    /// idempotent producer's identity survives a compaction rewrite *in the
+    /// log and nowhere else* — the footer carries none by design, and a merged
+    /// span holds records from several input spans with several identities —
+    /// so a swap that edited those events would satisfy every other criterion
+    /// on that row and destroy the only thing `ADR-0038` rests on. It bites
+    /// when `M6` builds the replay path `ReplayRequired` names.
+    ///
+    /// ⚠️ **Compaction must never affect correctness, only efficiency.** The
+    /// fold refuses a swap whose outputs do not cover its inputs exactly
+    /// ([`covers`](crate::covers)), and refuses one naming a reference the
+    /// index does not hold — so a swap either replaces a run with an
+    /// equivalent run or does not happen, and the inputs stay live.
+    ///
+    /// ⚠️ **A delta that is not idempotent, unlike the other three**, and the
+    /// fold is what makes replay safe rather than the record: applying it
+    /// twice fails the second time, because the references it retires are no
+    /// longer there. That is a refusal on a log that cannot occur, not a
+    /// hazard — the log is append-only and a version is folded once
+    /// ([`IndexState::apply`](crate::IndexState::apply) refuses a replayed
+    /// version) — and it is stated because "a delta, like every record here"
+    /// is written above this variant about a different one.
+    RangeCompacted {
+        /// The topic whose partition this is about.
+        topic: TopicId,
+        /// The partition.
+        partition: PartitionId,
+        /// The references this retires, which the index must currently hold.
+        retiring: Vec<ObjectRef>,
+        /// The references this installs, which must cover the same offsets.
+        ///
+        /// ⚠️ **History-tier references, with no byte range.** Compaction's
+        /// age guard refuses to rewrite tail data, so what a swap replaces is
+        /// always history — where the index deliberately keeps no ranges and a
+        /// fetch resolves them from the object's own footer (`ADR-0022`).
+        installing: Vec<ObjectRef>,
     },
     /// The log passed to a new coordinator incarnation.
     ///

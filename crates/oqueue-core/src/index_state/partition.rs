@@ -30,7 +30,7 @@ use super::TAIL_WINDOW_ENTRIES;
 /// `Default`, because "the zero offset" and "no offset" are different claims
 /// and a derive would quietly pick one. A fresh partition genuinely starts at
 /// [`Offset::ZERO`], and saying so here is the only place that choice is made.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct PartitionIndex {
     /// Where the next record lands — the fold of every span's count.
     pub(super) end_offset: Offset,
@@ -71,7 +71,7 @@ impl PartitionIndex {
     /// not, because a publication arriving in the same batch as the commits it
     /// covers has to see them: a replay pages the log in arbitrary chunks, and
     /// a fold that refused a page holding both could not replay one.
-    pub(super) fn boundary(&self, upto: Offset, staged: &[TailEntry]) -> Option<Offset> {
+    pub(super) fn boundary(&self, upto: Offset) -> Option<Offset> {
         // ⚠️ **A manifest may cover history and never the tail.** `absorb`
         // retains over `history` alone, so a manifest reaching into the tail
         // would leave every tail entry below it in place — and those records
@@ -80,11 +80,13 @@ impl PartitionIndex {
         // also what compaction produces: the age guard refuses to rewrite tail
         // data at all. Found by `M5.62`'s third round.
         //
-        // ⚠️ **Where the tail *will* start, not where it starts now**, because
-        // this batch's own commits demote entries into history as they land.
-        // A publication arriving with the commits it covers has to see the
-        // arrangement they produce, or the same log folds one way in one page
-        // and another in two — which is what `M5.62`'s second round measured.
+        // ⚠️ **Where the tail starts, full stop.** This used to take the
+        // batch's staged entries and fold them in, because a publication
+        // arriving with the commits it covers has to see the arrangement they
+        // produce. It still does — `projection.rs` pushes those commits into
+        // this partition's copy *before* asking, in log order — so the
+        // question here is about a partition as it stands, which is the only
+        // question a partition can answer. `M5.13`.
         let bases: Vec<Offset> = self
             .history
             .iter()
@@ -92,7 +94,6 @@ impl PartitionIndex {
             .chain(
                 self.tail
                     .iter()
-                    .chain(staged)
                     .map(|entry| entry.reference().base_offset()),
             )
             .collect();
@@ -148,5 +149,39 @@ impl PartitionIndex {
         {
             self.history.push(evicted.demote());
         }
+    }
+
+    /// Whether this reference is one of the history entries, by identity
+    /// rather than by offset.
+    ///
+    /// ⚠️ **By identity, because two objects can name the same offsets.** A
+    /// compaction's own output covers the range its inputs did, so a check
+    /// asking "is something here at this base offset" would accept a swap
+    /// retiring the object it just installed.
+    pub(super) fn holds_in_history(&self, reference: &ObjectRef) -> bool {
+        self.history.iter().any(|held| held == reference)
+    }
+
+    /// Swaps a run of history references for another.
+    ///
+    /// ⚠️ **Sorted afterwards, because the tiers are read in offset order.**
+    /// `find_batches` walks history expecting ascending base offsets, and an
+    /// installed reference appended at the end would be invisible to a fetch
+    /// that stopped at the first entry past its start.
+    pub(super) fn replace_history(&mut self, retiring: &[ObjectRef], installing: &[ObjectRef]) {
+        self.history
+            .retain(|held| !retiring.iter().any(|going| going == held));
+        self.history.extend(installing.iter().cloned());
+        self.history.sort_by_key(ObjectRef::base_offset);
+    }
+
+    /// How many entries the two tiers and the manifest reference hold.
+    ///
+    /// ⚠️ **Counted, and only here.** `IndexState` maintains its total rather
+    /// than walking the map, but a partition the batch *replaced* wholesale
+    /// has no delta to add — so the total moves by this partition's count
+    /// before and after, which is the one place a walk is the cheap answer.
+    pub(super) fn entries(&self) -> usize {
+        self.history.len() + self.tail.len() + usize::from(self.manifest.is_some())
     }
 }

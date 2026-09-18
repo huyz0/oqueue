@@ -13,18 +13,25 @@
 //! record parsing — against a failure that is silent and permanent. `M5.md`
 //! task 9 calls it exactly that.
 //!
+//! ⚠️ **In `oqueue-core`, not in `oqueue-compact`, because the fold reads
+//! it.** `M5.12` put it beside the merge that produces the outputs; `M5.13`
+//! made the *coordinator* the caller — `IndexState` refuses a swap whose
+//! outputs do not cover its inputs — and `oqueue-compact` depends on this
+//! crate rather than the other way round. `oqueue-compact` re-exports it, so
+//! the merge side reads the same function it always did.
+//!
 //! ⚠️ **It is not the same check `merge`'s `tiling()` makes.** That one
 //! verifies the *inputs* tile the plan's range before anything is read; this
 //! one verifies the *outputs* cover the inputs before anything is swapped. The
 //! contiguity rule underneath them is one function, [`contiguous_span`], so
 //! the two cannot drift into different notions of what a gap is.
 
-use oqueue_core::{Error, ObjectRef, Offset, Result};
+use crate::{Error, ObjectRef, Offset, Result};
 
 /// The exact offset range a set of references covers, or an error if they do
 /// not cover one.
 ///
-/// ⚠️ **Contiguous, ascending, no gap and no overlap.** A gap is records the
+/// ⚠️ **Contiguous, ascending, no gap, no overlap, and nothing empty.** A gap is records the
 /// set does not hold; an overlap is records it holds twice, which a reader
 /// cannot tell from a partition that genuinely has them twice. `None` for an
 /// empty set, which is a set covering nothing rather than a set covering
@@ -36,9 +43,9 @@ use oqueue_core::{Error, ObjectRef, Offset, Result};
 ///
 /// # Errors
 ///
-/// [`Error::IndexObjectMismatch`] if the references leave a gap or overlap,
-/// and [`Error::OffsetOverflow`] if one of their own end offsets is
-/// unrepresentable.
+/// [`Error::IndexObjectMismatch`] if the references leave a gap, overlap, or
+/// include one covering no offsets, and [`Error::OffsetOverflow`] if one of
+/// their own end offsets is unrepresentable.
 pub fn contiguous_span(refs: &[&ObjectRef]) -> Result<Option<(Offset, Offset)>> {
     let mut ordered: Vec<&&ObjectRef> = refs.iter().collect();
     ordered.sort_by_key(|reference| reference.base_offset());
@@ -46,6 +53,19 @@ pub fn contiguous_span(refs: &[&ObjectRef]) -> Result<Option<(Offset, Offset)>> 
     for reference in ordered {
         let base = reference.base_offset();
         let end = reference.end_offset()?;
+        // ⚠️ **A reference covering no offsets is refused, and it is neither a
+        // gap nor an overlap** — which is why the contiguity test alone let it
+        // through. Measured by `M5.13`'s third round: an `installing` list of
+        // `merged@0+1` and `zero@1+0` spans exactly what it retired, so the
+        // swap was accepted, and the zero-length reference then sorted into
+        // history *ahead of* the real object at the same base offset. A fetch
+        // resuming at that offset partition-points onto the empty one, finds
+        // its end is not past the start, and resumes at the next object — the
+        // acknowledged record at that offset is never returned. Silent, and
+        // only from the offset a consumer actually resumes at.
+        if end == base {
+            return Err(Error::IndexObjectMismatch);
+        }
         span = Some(match span {
             None => (base, end),
             Some((low, high)) => {

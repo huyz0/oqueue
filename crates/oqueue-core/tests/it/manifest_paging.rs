@@ -20,7 +20,7 @@
 
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, IndexState, MetadataEntry, MetadataRecord, ObjectKey,
-    Offset, PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
+    ObjectRef, Offset, PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
 };
 
 fn topic() -> TopicId {
@@ -247,4 +247,50 @@ fn a_publication_before_any_commit_is_applied_rather_than_dropped() {
     assert_eq!(states[0], states[1], "both pagings reach one state");
     // Two objects in the tail and the manifest reference: three entries.
     assert_eq!(states[0], (3, 0, 2, 4));
+}
+
+/// ⚠️ **A swap folds the same however its log is paged** — the property
+/// `M5.62` spent four review rounds establishing for publication, asserted for
+/// the second record to need it. A swap retires *history* references, and the
+/// commits that demote an object into history may sit in the same batch, so a
+/// check against the pre-batch index alone refuses in one page what it accepts
+/// in several.
+#[test]
+fn a_swap_folds_the_same_at_any_page_size() {
+    let objects = 8 + TAIL_WINDOW_ENTRIES;
+    let mut log: Vec<MetadataEntry> = (0..objects)
+        .map(|which| commit(u64::try_from(which).expect("a small count") + 1, which, 1))
+        .collect();
+    let retiring: Vec<ObjectRef> = (0..8)
+        .map(|which| ObjectRef::new(key(&format!("obj-{which}")), offset(i64::from(which)), 1))
+        .collect();
+    log.push(MetadataEntry::new(
+        CommitVersion::new(u64::try_from(objects).expect("a small count") + 1),
+        MetadataRecord::RangeCompacted {
+            topic: topic(),
+            partition: partition(),
+            retiring,
+            installing: vec![ObjectRef::new(key("merged"), offset(0), 8)],
+        },
+    ));
+
+    let states: Vec<Signature> = [log.len(), 64, 7, 1]
+        .into_iter()
+        .map(|page| {
+            let mut index = IndexState::default();
+            for chunk in log.chunks(page) {
+                index.apply(chunk).expect("a well-formed log folds");
+            }
+            signature(&index)
+        })
+        .collect();
+    assert!(
+        states.iter().all(|state| *state == states[0]),
+        "every page size must reach the same state: {states:?}"
+    );
+    assert_eq!(
+        states[0],
+        (TAIL_WINDOW_ENTRIES + 1, 1, TAIL_WINDOW_ENTRIES, 136),
+        "one history reference where there were eight"
+    );
 }

@@ -24,11 +24,11 @@ use std::collections::HashMap;
 
 mod page;
 mod partition;
-mod publication;
+mod projection;
 pub use page::MAX_BATCHES_PER_PAGE;
 use page::Page;
 use partition::PartitionIndex;
-use publication::Publication;
+use projection::{Effect, Staged, StagedSpans};
 
 /// How many entries a partition keeps in the tail tier, byte ranges inline.
 ///
@@ -48,6 +48,25 @@ use publication::Publication;
 ///
 /// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
 pub const TAIL_WINDOW_ENTRIES: usize = 128;
+
+/// What one `apply` has read out of its batch and not yet applied.
+///
+/// ⚠️ **One scratch rather than three locals**, since `M5.13` added the third
+/// and `apply` outgrew `code-structure.md`'s 50-line limit. What it holds is
+/// the batch's own effect, computed without touching `self` — which is
+/// guarantee 2's shape, and grouping them names it.
+#[derive(Default)]
+struct Batch<'a> {
+    /// The publications and swaps, **in the order the log holds them**, which
+    /// is what lets one walk stand in for a check and an apply. Two of them
+    /// for one partition interact, and judging each against the pre-batch
+    /// index admitted pairs that one page at a time were refused — `M5.13`'s
+    /// first round measured three shapes of it.
+    effects: Vec<Staged<'a>>,
+    /// Staged as (running end offset, entries this batch adds), so a failure
+    /// part-way through commits neither.
+    staged: StagedSpans<'a>,
+}
 
 /// The state every in-memory materialization keeps, and the fold over it.
 ///
@@ -87,10 +106,7 @@ impl IndexState {
         // cannot leave a partially folded batch behind — guarantee 2. The
         // scratch holds only the partitions this batch touches.
         let mut previous = self.applied_upto;
-        let mut published: Vec<Publication<'_>> = Vec::new();
-        // Staged as (running end offset, entries this batch adds), so a
-        // failure part-way through commits neither — guarantee 2.
-        let mut staged: HashMap<(&TopicId, PartitionId), (Offset, Vec<TailEntry>)> = HashMap::new();
+        let mut batch = Batch::default();
 
         for entry in entries {
             if let Some(prev) = previous
@@ -102,37 +118,24 @@ impl IndexState {
                 });
             }
             previous = Some(entry.version());
-
-            match entry.record() {
-                MetadataRecord::BatchCommitted { object, spans } => {
-                    for span in spans {
-                        self.stage_span(&mut staged, object, span)?;
-                    }
-                }
-                MetadataRecord::ManifestPublished {
-                    topic,
-                    partition,
-                    manifest,
-                    upto,
-                } => published.push(Publication::staged(
-                    topic, *partition, manifest, *upto, &staged,
-                )),
-                // An event about the log, not about any partition.
-                MetadataRecord::EpochChanged { .. } => {}
-            }
+            self.read_record(entry.record(), &mut batch)?;
         }
+        let Batch { effects, staged } = batch;
 
-        // ⚠️ **Checked before anything is mutated**, guarantee 2, and that is
-        // why publication is staged rather than applied as it is read: a
-        // manifest that does not meet what is left must leave the index
-        // untouched, and it cannot know what is left until this batch's spans
-        // are staged too.
-        self.admissible(&published, &staged)?;
+        // ⚠️ **Applied to copies first**, guarantee 2 — and the check *is* the
+        // fold rather than a second description of it, which is what stopped
+        // the two from disagreeing. `projection.rs` says what that cost.
+        let projected = self.project(&effects, &staged)?;
 
         // ⚠️ The only mutation of `self` in this method, and it is after every
         // fallible step — guarantee 2. The clone happens here, on the write
         // path, rather than on the read path a lookup key would have put it.
         for ((topic, partition), (end, entries)) in staged {
+            if projected.contains_key(&(topic, partition)) {
+                // The projection already holds this partition's commits, in
+                // order with the effects between them.
+                continue;
+            }
             let slot = self
                 .partitions
                 .entry(topic.clone())
@@ -145,8 +148,74 @@ impl IndexState {
                 self.entries += 1;
             }
         }
-        self.absorb_published(published);
+        for ((topic, partition), slot) in projected {
+            // ⚠️ **The total moves by this partition's own count**, because a
+            // replaced partition has no delta to add: a swap that retires
+            // thirteen and installs one, a publication that absorbs a hundred,
+            // and the commits between them are all already folded into the
+            // copy.
+            let before = self
+                .partition(topic, partition)
+                .map_or(0, PartitionIndex::entries);
+            self.entries = self.entries + slot.entries() - before;
+            self.partitions
+                .entry(topic.clone())
+                .or_default()
+                .insert(partition, slot);
+        }
         self.applied_upto = previous;
+        Ok(())
+    }
+
+    /// Reads one record into the scratch this batch is accumulating.
+    ///
+    /// ⚠️ **Nothing here touches `self`** — guarantee 2. The three kinds that
+    /// affect a partition are staged so that the checks below them see the
+    /// whole batch before anything is applied.
+    fn read_record<'a>(&self, record: &'a MetadataRecord, batch: &mut Batch<'a>) -> Result<()> {
+        match record {
+            MetadataRecord::BatchCommitted { object, spans } => {
+                for span in spans {
+                    self.stage_span(&mut batch.staged, object, span)?;
+                }
+            }
+            MetadataRecord::ManifestPublished {
+                topic,
+                partition,
+                manifest,
+                upto,
+            } => {
+                let precedes = precedes(&batch.staged, topic, *partition);
+                batch.effects.push(Staged {
+                    topic,
+                    partition: *partition,
+                    effect: Effect::Published {
+                        manifest,
+                        upto: *upto,
+                    },
+                    precedes,
+                });
+            }
+            MetadataRecord::RangeCompacted {
+                topic,
+                partition,
+                retiring,
+                installing,
+            } => {
+                let precedes = precedes(&batch.staged, topic, *partition);
+                batch.effects.push(Staged {
+                    topic,
+                    partition: *partition,
+                    effect: Effect::Swapped {
+                        retiring,
+                        installing,
+                    },
+                    precedes,
+                });
+            }
+            // An event about the log, not about any partition.
+            MetadataRecord::EpochChanged { .. } => {}
+        }
         Ok(())
     }
 
@@ -342,6 +411,18 @@ impl IndexState {
         self.partitions.clear();
         self.entries = 0;
     }
+}
+
+/// How many of this partition's entries the batch has staged so far.
+///
+/// ⚠️ **So far, not in total.** An effect sees the commits before it in the
+/// log and no others; a commit after it is not part of the state it was
+/// written against. `M5.62`'s fourth round measured what counting the whole
+/// batch does.
+fn precedes(staged: &StagedSpans<'_>, topic: &TopicId, partition: PartitionId) -> usize {
+    staged
+        .get(&(topic, partition))
+        .map_or(0, |(_, entries)| entries.len())
 }
 
 #[cfg(test)]

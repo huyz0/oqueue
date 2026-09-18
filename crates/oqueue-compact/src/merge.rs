@@ -41,7 +41,7 @@ use oqueue_core::{
 };
 
 use crate::CompactionPlan;
-use crate::coverage::contiguous_span;
+use oqueue_core::contiguous_span;
 
 /// Merges the plan's inputs into `output`.
 ///
@@ -142,8 +142,11 @@ where
 ///
 /// [`Error::IndexObjectMismatch`] if an input straddles either edge of the
 /// range, if the refs leave a gap, if they overlap, or if they do not reach
-/// the range's ends — the first of those through the contiguity and reach
-/// tests rather than a test of its own, for the reason the body gives. ⚠️ **Refused, not trimmed**: trimming inside an object
+/// the range's ends. ⚠️ **A straddle is refused by the span comparison after
+/// the loop, both edges of it**, and this paragraph said "through the
+/// contiguity and reach tests" until `M5.12`'s third round — which was true
+/// before that task shared the contiguity rule and false after, in the same
+/// diff that corrected the body comment thirty lines below and not this one. ⚠️ **Refused, not trimmed**: trimming inside an object
 /// means parsing records to find the offset boundary, and copying a straddler
 /// whole would write records the plan does not cover — which, once the inputs
 /// retire, leaves the overlap in two objects and serves it twice.

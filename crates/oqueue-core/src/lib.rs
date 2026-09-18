@@ -52,6 +52,7 @@ mod clock;
 mod commit_version;
 mod composite;
 mod coordinator_epoch;
+mod coverage;
 mod cursor;
 mod error;
 mod fault;
@@ -112,6 +113,7 @@ pub use composite::{
     Located, locate, parse_composite,
 };
 pub use coordinator_epoch::CoordinatorEpoch;
+pub use coverage::{contiguous_span, covers};
 pub use error::Error;
 pub use fault::{FaultConfig, StormKind};
 pub use fault_group_metadata_log::FaultGroupMetadataLog;

@@ -9,8 +9,7 @@
 // A panic in a test harness is the test failing, which is what it is for.
 #![allow(clippy::expect_used)]
 
-use oqueue_compact::{contiguous_span, covers};
-use oqueue_core::{Error, ObjectKey, ObjectRef, Offset};
+use oqueue_core::{Error, ObjectKey, ObjectRef, Offset, contiguous_span, covers};
 
 fn reference(name: &str, base: i64, records: u32) -> ObjectRef {
     ObjectRef::new(
@@ -170,6 +169,53 @@ fn a_span_is_none_for_nothing_and_the_whole_run_otherwise() {
     let gapped = [reference("a", 5, 10), reference("b", 16, 5)];
     assert!(matches!(
         contiguous_span(&gapped.iter().collect::<Vec<_>>()),
+        Err(Error::IndexObjectMismatch)
+    ));
+}
+
+/// ⚠️ **A reference covering no offsets is refused, and it is neither a gap
+/// nor an overlap** — which is why a contiguity test alone admits it. The set
+/// below spans exactly what it claims to; the empty reference simply rides
+/// along.
+///
+/// ⚠️ **What it costs is an acknowledged record**, measured by `M5.13`'s third
+/// round: installed into a partition's history, the empty reference sorts in
+/// ahead of the real object at the same base offset, and a fetch resuming
+/// there lands on the empty one, finds its end is not past the start, and
+/// resumes at the *next* object. Silent, and only from the offset a consumer
+/// actually resumes at.
+#[test]
+fn a_reference_covering_no_offsets_is_refused() {
+    let inputs = [reference("in-0", 0, 2)];
+    let outputs = [reference("merged", 0, 2), reference("empty", 2, 0)];
+    assert!(matches!(
+        covers(
+            &inputs.iter().collect::<Vec<_>>(),
+            &outputs.iter().collect::<Vec<_>>()
+        ),
+        Err(Error::IndexObjectMismatch)
+    ));
+
+    // ⚠️ **In the middle of a run too**, where it is not even at an end of the
+    // span and no endpoint comparison can see it.
+    let middle = [
+        reference("a", 0, 1),
+        reference("empty", 1, 0),
+        reference("b", 1, 1),
+    ];
+    assert!(matches!(
+        contiguous_span(&middle.iter().collect::<Vec<_>>()),
+        Err(Error::IndexObjectMismatch)
+    ));
+
+    // And on the retiring side, which reaches the same rule.
+    let empty_input = [reference("empty", 0, 0)];
+    let empty_output = [reference("out", 0, 0)];
+    assert!(matches!(
+        covers(
+            &empty_input.iter().collect::<Vec<_>>(),
+            &empty_output.iter().collect::<Vec<_>>()
+        ),
         Err(Error::IndexObjectMismatch)
     ));
 }
