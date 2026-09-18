@@ -11,6 +11,7 @@
 #![allow(clippy::expect_used)]
 
 use core::mem::size_of;
+use oqueue_core::Timestamp;
 use oqueue_core::{
     BundleNamer, ByteRange, CommitVersion, CommittedSpan, IndexState, MetadataEntry,
     MetadataRecord, ObjectKey, ObjectRef, Offset, TAIL_WINDOW_ENTRIES, TailEntry, Tiers,
@@ -30,6 +31,7 @@ fn commit(version: u64, which: usize, records: u32) -> MetadataEntry {
                 ByteRange::bounded(0, u64::from(records) * 32).expect("a valid range"),
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }

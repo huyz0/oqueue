@@ -118,6 +118,7 @@ async fn mini_cluster_with_hanging_put() -> MiniCluster {
         Arc::clone(&log) as Arc<dyn oqueue_core::MetadataLog>,
         index,
         CoordinatorEpoch::new(1),
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("an empty log opens");

@@ -12,6 +12,7 @@
 // shares the fixture rather than owning a second copy of it.
 #![allow(unreachable_pub)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, Error, IndexState, MetadataEntry, MetadataRecord,
     ObjectKey, ObjectRef, Offset, PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
@@ -45,6 +46,7 @@ fn commit(version: u64, which: usize, records: u32) -> MetadataEntry {
                 ByteRange::bounded(0, u64::from(records) * 32).expect("a valid range"),
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }
@@ -450,6 +452,7 @@ fn a_committed_span_of_no_records_is_refused() {
                 ByteRange::bounded(0, 32).expect("a valid range"),
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     );
     let refused = index

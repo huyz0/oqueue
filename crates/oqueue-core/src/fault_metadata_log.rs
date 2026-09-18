@@ -229,6 +229,7 @@ mod tests {
                     crate::ByteRange::Full,
                     None,
                 )],
+                written_at: crate::Timestamp::EPOCH,
             },
         )
     }

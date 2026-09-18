@@ -51,6 +51,7 @@ static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod security;
 mod serve;
+mod wall_clock;
 
 use oqueue_core::{KeyProvider, ObjectStore};
 use oqueue_crypto::NoOpKeyProvider;

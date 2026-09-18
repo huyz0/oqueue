@@ -16,6 +16,26 @@ use oqueue_core::{
 };
 use std::sync::Arc;
 
+/// A coordinator over `log` with a fresh index — the setup every case here
+/// shares, and one place to change when `open` grows an argument (`M5.86`
+/// gave it a clock).
+async fn opened(
+    log: Arc<dyn MetadataLog>,
+) -> (
+    Coordinator,
+    oqueue_coordinator::CoordinatorLoop,
+    oqueue_core::IndexReader,
+) {
+    Coordinator::open(
+        log,
+        Box::new(FakeMaterializedIndex::new()),
+        CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect("a fresh log opens")
+}
+
 /// ⚠️ The documented bootstrap recipe, exercised rather than described. A
 /// follower subscribes first and folds second, so the two overlap — and the
 /// overlap is the follower's to strip, because an `apply` whose first entry is
@@ -23,13 +43,7 @@ use std::sync::Arc;
 #[tokio::test(start_paused = true)]
 async fn a_follower_bootstraps_by_stripping_the_overlap_it_asked_for() {
     let log: Arc<dyn MetadataLog> = Arc::new(FakeMetadataLog::new());
-    let (coordinator, driver, _view) = Coordinator::open(
-        Arc::clone(&log),
-        Box::new(FakeMaterializedIndex::new()),
-        CoordinatorEpoch::ZERO,
-    )
-    .await
-    .expect("a fresh log opens");
+    let (coordinator, driver, _view) = opened(Arc::clone(&log)).await;
     let driver = tokio::spawn(driver.run());
 
     for n in 0..2 {
@@ -90,13 +104,7 @@ async fn a_follower_bootstraps_by_stripping_the_overlap_it_asked_for() {
 /// which is the asymmetry that hides it.
 #[tokio::test(start_paused = true)]
 async fn a_follower_is_told_it_is_over_even_while_a_handle_is_still_held() {
-    let (coordinator, driver, _view) = Coordinator::open(
-        Arc::new(FakeMetadataLog::new()),
-        Box::new(FakeMaterializedIndex::new()),
-        CoordinatorEpoch::ZERO,
-    )
-    .await
-    .expect("a fresh log opens");
+    let (coordinator, driver, _view) = opened(Arc::new(FakeMetadataLog::new())).await;
     let mut stream = coordinator.subscribe();
     let mut watch = coordinator.watch();
 
@@ -177,13 +185,7 @@ async fn a_follower_receives_the_committed_entries_in_order() {
 #[tokio::test(start_paused = true)]
 async fn a_follower_that_falls_behind_is_told_to_re_bootstrap() {
     let log: Arc<dyn MetadataLog> = Arc::new(FakeMetadataLog::new());
-    let (coordinator, driver, _view) = Coordinator::open(
-        Arc::clone(&log),
-        Box::new(FakeMaterializedIndex::new()),
-        CoordinatorEpoch::ZERO,
-    )
-    .await
-    .expect("a fresh log opens");
+    let (coordinator, driver, _view) = opened(Arc::clone(&log)).await;
     let driver = tokio::spawn(driver.run());
     let mut stream = coordinator.subscribe();
 

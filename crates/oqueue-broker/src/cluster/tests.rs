@@ -32,9 +32,14 @@ async fn cluster_still_loading() -> Cluster {
 async fn cluster_still_loading_over(group_metadata_log: Arc<dyn GroupMetadataLog>) -> Cluster {
     let log = Arc::new(FakeMetadataLog::new());
     let index = Box::new(FakeMaterializedIndex::new());
-    let (coordinator, _serving, reader) = Coordinator::open(log, index, CoordinatorEpoch::new(1))
-        .await
-        .expect("an empty log opens");
+    let (coordinator, _serving, reader) = Coordinator::open(
+        log,
+        index,
+        CoordinatorEpoch::new(1),
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect("an empty log opens");
     Cluster::new(
         "h",
         1,
@@ -60,9 +65,14 @@ async fn cluster_still_loading_over(group_metadata_log: Arc<dyn GroupMetadataLog
 async fn cluster_over(group_metadata_log: Arc<dyn GroupMetadataLog>) -> Cluster {
     let log = Arc::new(FakeMetadataLog::new());
     let index = Box::new(FakeMaterializedIndex::new());
-    let (coordinator, _serving, reader) = Coordinator::open(log, index, CoordinatorEpoch::new(1))
-        .await
-        .expect("an empty log opens");
+    let (coordinator, _serving, reader) = Coordinator::open(
+        log,
+        index,
+        CoordinatorEpoch::new(1),
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect("an empty log opens");
     let cluster = Cluster::new(
         "h",
         1,

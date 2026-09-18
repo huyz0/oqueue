@@ -62,7 +62,7 @@ fn commit(allocator: &mut Allocator, span: CommittedSpan) {
     );
     let admitted: Vec<CommittedSpan> = admission.admitted.into_iter().map(|(_, s)| s).collect();
     let staged = allocator
-        .stage(object(), admitted)
+        .stage(object(), admitted, oqueue_core::Timestamp::EPOCH)
         .expect("a fresh allocator always has room");
     allocator.apply(staged);
 }

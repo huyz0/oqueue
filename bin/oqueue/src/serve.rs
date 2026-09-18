@@ -265,11 +265,14 @@ pub(crate) async fn build_cluster(
     let log = Arc::new(oqueue_core::FakeMetadataLog::new());
     let index = Box::new(oqueue_index::MemoryIndex::new());
     let epoch = oqueue_core::CoordinatorEpoch::new(1);
-    let (coordinator, serving, reader) = oqueue_coordinator::Coordinator::open(log, index, epoch)
-        .await
-        .map_err(|error| {
-            std::io::Error::other(format!("the coordinator would not open: {error}"))
-        })?;
+    let (coordinator, serving, reader) = oqueue_coordinator::Coordinator::open(
+        log,
+        index,
+        epoch,
+        Arc::new(crate::wall_clock::WallClock),
+    )
+    .await
+    .map_err(|error| std::io::Error::other(format!("the coordinator would not open: {error}")))?;
     eprintln!(
         "oqueue: WARNING -- the metadata log is in memory (M6 owns the durable one). \
          Offsets do not survive a restart."

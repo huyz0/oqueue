@@ -293,6 +293,7 @@ async fn a_log_carrying_producer_sequence_history_refuses_a_second_coordinator_t
         log,
         Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect_err("a non-empty log refuses a second coordinator, sequence history or not");

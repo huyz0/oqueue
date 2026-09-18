@@ -11,6 +11,7 @@
 
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, IndexState, MetadataEntry, MetadataRecord, ObjectKey,
     PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
@@ -37,6 +38,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
                 ByteRange::Full,
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }
@@ -65,6 +67,7 @@ fn the_entry_count_follows_every_span_folded() {
                         CommittedSpan::new(topic("orders"), partition(p), 1, ByteRange::Full, None)
                     })
                     .collect(),
+                written_at: Timestamp::EPOCH,
             },
         )])
         .expect("applied");
@@ -146,6 +149,7 @@ proptest! {
                             ByteRange::Full,
                             None,
                         )],
+                        written_at: Timestamp::EPOCH,
                     },
                 )])
                 .expect("applied");

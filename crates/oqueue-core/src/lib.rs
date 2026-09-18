@@ -96,6 +96,7 @@ mod staleness;
 mod store;
 #[cfg(test)]
 mod test_executor;
+mod time_span;
 mod topic;
 mod topic_grants;
 
@@ -160,5 +161,6 @@ pub use result::Result;
 pub use retry::{RetryClass, RetryDecision, RetryPolicy};
 pub use staleness::{CacheState, MAX_METADATA_STALENESS_MS, RefreshReason, SessionWatermark};
 pub use store::{BoxFuture, FakeMultipartWriter, FakeObjectStore, MultipartWriter, ObjectStore};
+pub use time_span::TimeSpan;
 pub use topic::TopicId;
 pub use topic_grants::TopicGrants;

@@ -49,6 +49,7 @@ fn formatting_the_allocator_summarises_rather_than_lists() {
         .stage(
             ObjectKey::new("o".to_owned()).expect("a valid object key"),
             vec![span],
+            oqueue_core::Timestamp::EPOCH,
         )
         .expect("a first commit stages");
     allocator.apply(staged);
@@ -85,7 +86,7 @@ fn a_partition_at_the_end_of_its_line_refuses_rather_than_wrapping() {
         )],
     );
 
-    let refused = allocator.stage(object(), vec![span(2)]);
+    let refused = allocator.stage(object(), vec![span(2)], oqueue_core::Timestamp::EPOCH);
 
     assert!(
         matches!(refused, Err(Error::OffsetOverflow { .. })),
@@ -95,7 +96,7 @@ fn a_partition_at_the_end_of_its_line_refuses_rather_than_wrapping() {
     // ceiling rather than an off-by-one: a guard one too eager refuses the
     // last legal record of every partition that ever reaches here.
     allocator
-        .stage(object(), vec![span(1)])
+        .stage(object(), vec![span(1)], oqueue_core::Timestamp::EPOCH)
         .expect("the last record on the line is still assignable");
 }
 
@@ -108,7 +109,7 @@ fn a_partition_at_the_end_of_its_line_refuses_rather_than_wrapping() {
 fn a_version_line_at_its_end_refuses_rather_than_wrapping() {
     let allocator = Allocator::seeded(CommitVersion::new(u64::MAX), &[]);
 
-    let refused = allocator.stage(object(), vec![span(1)]);
+    let refused = allocator.stage(object(), vec![span(1)], oqueue_core::Timestamp::EPOCH);
 
     assert!(
         matches!(refused, Err(Error::CommitVersionOverflow { .. })),
@@ -119,7 +120,7 @@ fn a_version_line_at_its_end_refuses_rather_than_wrapping() {
     // too eager costs a shard its final commit, and a test that only ever
     // probes the value past the end cannot tell the two apart.
     Allocator::seeded(CommitVersion::new(u64::MAX - 1), &[])
-        .stage(object(), vec![span(1)])
+        .stage(object(), vec![span(1)], oqueue_core::Timestamp::EPOCH)
         .expect("the last version on the line is still assignable");
 }
 
@@ -137,10 +138,14 @@ fn a_refused_stage_consumes_nothing() {
         )],
     );
 
-    assert!(allocator.stage(object(), vec![span(2)]).is_err());
+    assert!(
+        allocator
+            .stage(object(), vec![span(2)], oqueue_core::Timestamp::EPOCH)
+            .is_err()
+    );
 
     let staged = allocator
-        .stage(object(), vec![span(1)])
+        .stage(object(), vec![span(1)], oqueue_core::Timestamp::EPOCH)
         .expect("a batch that fits still fits");
     assert_eq!(staged.entry.version(), CommitVersion::new(7));
 }

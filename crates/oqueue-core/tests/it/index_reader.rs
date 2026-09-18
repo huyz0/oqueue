@@ -10,6 +10,7 @@
 // Every `expect` is on a value the test built from a literal it controls.
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, IndexReader, MaterializedIndex,
     MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId, TopicId,
@@ -36,6 +37,7 @@ fn commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
                 ByteRange::bounded(0, bytes).expect("a non-empty range"),
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }

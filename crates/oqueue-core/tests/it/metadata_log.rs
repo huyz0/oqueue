@@ -16,6 +16,7 @@
 // controls, so a panic means the suite is wrong, not the code under test.
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, FakeMetadataLog, MetadataEntry, MetadataLog,
     MetadataRecord, ObjectKey, PartitionId, TopicId,
@@ -48,6 +49,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
         MetadataRecord::BatchCommitted {
             object: ObjectKey::new(format!("obj-{version}")).expect("a valid key"),
             spans: vec![span],
+            written_at: Timestamp::EPOCH,
         },
     )
 }
@@ -58,7 +60,7 @@ mod conformance {
     use oqueue_core::{
         ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, MetadataEntry,
         MetadataLog, MetadataRecord, ObjectKey, PartitionId, ProducerEpoch, ProducerId,
-        ProducerIdentity, TopicId,
+        ProducerIdentity, Timestamp, TopicId,
     };
 
     /// What was appended reads back, in the order it was appended.
@@ -239,6 +241,7 @@ mod conformance {
             MetadataRecord::BatchCommitted {
                 object: ObjectKey::new("obj-producer").expect("a valid key"),
                 spans: vec![span],
+                written_at: Timestamp::EPOCH,
             },
         );
         block_on(log.append(std::slice::from_ref(&entry))).expect("accepted");

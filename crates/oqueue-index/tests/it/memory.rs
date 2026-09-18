@@ -7,6 +7,7 @@
 
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, MaterializedIndex, MetadataEntry, MetadataRecord,
     ObjectKey, Offset, PartitionId, TopicId,
@@ -37,6 +38,7 @@ fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataEntry
                 ByteRange::Full,
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }

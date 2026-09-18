@@ -4,6 +4,7 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_compact::{COMPACTION_PLAN_RECORDS_BUDGET, Candidate, sweep};
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, MaterializedIndex,
     MetadataEntry, MetadataRecord, ObjectKey, Offset, TAIL_WINDOW_ENTRIES,
@@ -31,6 +32,7 @@ fn cluster(partitions: i32, amplified: &[i32]) -> FakeMaterializedIndex {
                     ByteRange::bounded(0, 1).expect("a valid range"),
                     None,
                 )],
+                written_at: Timestamp::EPOCH,
             },
         ));
     };
@@ -110,6 +112,7 @@ fn candidates_over_the_round_budget_are_held_over() {
                         ByteRange::bounded(0, u64::from(per)).expect("a valid range"),
                         None,
                     )],
+                    written_at: Timestamp::EPOCH,
                 },
             ));
         }
@@ -156,6 +159,7 @@ fn a_partition_larger_than_the_budget_is_swept_in_windows() {
                     ByteRange::bounded(0, u64::from(per)).expect("a valid range"),
                     None,
                 )],
+                written_at: Timestamp::EPOCH,
             },
         ));
     }
@@ -196,6 +200,7 @@ fn two_plans_that_fit_together_are_both_in_the_round() {
                         ByteRange::bounded(0, u64::from(per)).expect("a valid range"),
                         None,
                     )],
+                    written_at: Timestamp::EPOCH,
                 },
             ));
         }
@@ -287,6 +292,7 @@ fn a_partition_behind_a_long_compacted_prefix_is_still_planned() {
                     ByteRange::bounded(0, u64::from(count)).expect("a valid range"),
                     None,
                 )],
+                written_at: Timestamp::EPOCH,
             },
         ));
     };

@@ -24,8 +24,8 @@
 use std::collections::HashMap;
 
 use crate::{
-    CommittedSpan, Error, ObjectKey, ObjectRef, Offset, PartitionId, Result, TailEntry, TopicId,
-    covers,
+    CommittedSpan, Error, ObjectKey, ObjectRef, Offset, PartitionId, Result, TailEntry, TimeSpan,
+    TopicId, covers,
 };
 
 use super::{IndexState, partition::PartitionIndex};
@@ -63,7 +63,14 @@ pub(super) struct Staged<'a> {
 
 /// The staged tail entries a batch adds, per partition, with each partition's
 /// running end offset.
-pub(super) type StagedSpans<'a> = HashMap<(&'a TopicId, PartitionId), (Offset, Vec<TailEntry>)>;
+/// ⚠️ **Three things per partition, and the third is `M5.86`'s.** The running
+/// end offset and the entries this batch adds were always here; the
+/// [`TimeSpan`] is when those commits happened, folded so a retention decision
+/// can read a partition's age straight out of the index rather than reaching
+/// for an object (FR-33, `ADR-0036` decision 1's property one requirement
+/// over).
+pub(super) type StagedSpans<'a> =
+    HashMap<(&'a TopicId, PartitionId), (Offset, Vec<TailEntry>, TimeSpan)>;
 
 /// Every partition an effect touched, as it will be.
 pub(super) type Projected<'a> = HashMap<(&'a TopicId, PartitionId), PartitionIndex>;
@@ -77,9 +84,10 @@ impl IndexState {
     /// `M3.8` commits every N ≥ 1,000 entries, so that is its ordinary case.
     pub(super) fn stage_span<'a>(
         &self,
-        staged: &mut HashMap<(&'a TopicId, PartitionId), (Offset, Vec<TailEntry>)>,
+        staged: &mut StagedSpans<'a>,
         object: &ObjectKey,
         span: &'a CommittedSpan,
+        when: TimeSpan,
     ) -> Result<()> {
         // ⚠️ **A span of no records is refused** (`M5.77`). It would become an
         // `ObjectRef` covering no offsets, which `M5.13` made *un-retirable*:
@@ -103,7 +111,7 @@ impl IndexState {
         let key = (span.topic(), span.partition());
         let base = staged
             .get(&key)
-            .map(|(end, _)| *end)
+            .map(|(end, _, _)| *end)
             .or_else(|| {
                 self.partitions
                     .get(span.topic())
@@ -118,9 +126,14 @@ impl IndexState {
             ObjectRef::new(object.clone(), base, span.record_count()),
             span.bytes(),
         );
-        let slot = staged.entry(key).or_insert((base, Vec::new()));
+        let slot = staged.entry(key).or_insert((base, Vec::new(), when));
         slot.0 = next;
         slot.1.push(entry);
+        // ⚠️ **Widened rather than assigned**, so a batch holding two commits
+        // for one partition keeps the extent of both: a replay folding the
+        // whole log and a coordinator folding it forward must reach the same
+        // state, and "the last one seen" depends on arrival order.
+        slot.2 = slot.2.widened(when);
         Ok(())
     }
 
@@ -162,10 +175,16 @@ impl IndexState {
         // the whole batch rather than its prefix.
         for (key, slot) in &mut projected {
             let already = taken.entry(*key).or_insert(0);
-            let all = staged.get(key).map_or(0, |(_, entries)| entries.len());
+            let all = staged.get(key).map_or(0, |(_, entries, _)| entries.len());
             catch_up(slot, staged.get(key), already, all);
-            if let Some((end, _)) = staged.get(key) {
+            if let Some((end, _, when)) = staged.get(key) {
                 slot.end_offset = *end;
+                // ⚠️ **The projection's copy has to see the commit time too**,
+                // or a partition whose batch held both commits and an effect
+                // would come out of the fold with the commits applied and no
+                // record of when they happened — and a retention round would
+                // read the state before the batch.
+                slot.observe(*when);
             }
         }
         Ok(projected)
@@ -184,11 +203,11 @@ impl IndexState {
 /// version that had one, by showing both spellings behave identically.
 fn catch_up(
     slot: &mut PartitionIndex,
-    staged: Option<&(Offset, Vec<TailEntry>)>,
+    staged: Option<&(Offset, Vec<TailEntry>, TimeSpan)>,
     already: &mut usize,
     upto: usize,
 ) {
-    let Some((_, entries)) = staged else {
+    let Some((_, entries, _)) = staged else {
         return;
     };
     while *already < upto {
@@ -266,7 +285,7 @@ fn apply_effect(
 pub(super) fn precedes(staged: &StagedSpans<'_>, topic: &TopicId, partition: PartitionId) -> usize {
     staged
         .get(&(topic, partition))
-        .map_or(0, |(_, entries)| entries.len())
+        .map_or(0, |(_, entries, _)| entries.len())
 }
 
 /// Why a swap's two runs did not cover each other, in a sentence.

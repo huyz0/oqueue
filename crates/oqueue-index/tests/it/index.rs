@@ -22,6 +22,7 @@
 // controls, so a panic means the suite is wrong, not the code under test.
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, MaterializedIndex,
     MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId, TopicId,
@@ -57,6 +58,7 @@ pub fn commit_on(version: u64, name: &str, part: i32, records: u32) -> MetadataE
                 ByteRange::Full,
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }
@@ -76,6 +78,7 @@ pub fn sized_commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
                 ByteRange::bounded(0, bytes).expect("a non-empty range"),
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }
@@ -85,7 +88,7 @@ mod contract {
     use super::{commit, commit_on, offset, partition, topic};
     use oqueue_core::{
         CommitVersion, Error, MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset,
-        TAIL_WINDOW_ENTRIES,
+        TAIL_WINDOW_ENTRIES, Timestamp,
     };
 
     /// A fresh index has folded nothing and knows no partition.
@@ -157,6 +160,7 @@ mod contract {
                         None,
                     ),
                 ],
+                written_at: Timestamp::EPOCH,
             },
         );
         index.apply(std::slice::from_ref(&entry)).expect("applied");

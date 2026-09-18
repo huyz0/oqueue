@@ -16,8 +16,8 @@ use crate::allocator::Allocator;
 use crate::commit::{CommitAck, SpanOutcome};
 use crate::error::CoordinatorError;
 use oqueue_core::{
-    CommitVersion, CommittedSpan, CoordinatorEpoch, MaterializedIndex, MetadataEntry, MetadataLog,
-    ObjectKey,
+    Clock, CommitVersion, CommittedSpan, CoordinatorEpoch, MaterializedIndex, MetadataEntry,
+    MetadataLog, ObjectKey,
 };
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -83,6 +83,8 @@ pub struct CoordinatorLoop {
     /// asking read-your-writes for. This field is updated in the same
     /// synchronous step as `Allocator::apply`, so it cannot lag.
     pub(crate) last_committed: Option<CommitVersion>,
+    /// Stamps each commit with the moment the log took it (`M5.86`).
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 impl CoordinatorLoop {
@@ -158,7 +160,7 @@ impl CoordinatorLoop {
         } else {
             let staged = self
                 .allocator
-                .stage(object, admitted_spans)
+                .stage(object, admitted_spans, self.clock.now())
                 .map_err(CoordinatorError::Unassignable)?;
             // ⚠️ Journaled before the allocator takes the position, so a
             // refusal leaves the line exactly where it was. The reverse

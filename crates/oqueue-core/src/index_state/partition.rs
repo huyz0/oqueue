@@ -8,7 +8,7 @@
 //! things that can happen to it: a push, a demotion, and a manifest absorbing
 //! its history.
 
-use crate::{ObjectKey, ObjectRef, Offset, TailEntry, Tiers};
+use crate::{ObjectKey, ObjectRef, Offset, TailEntry, Tiers, TimeSpan};
 use core::cmp::Ordering;
 use std::collections::VecDeque;
 
@@ -47,6 +47,14 @@ pub(super) struct PartitionIndex {
     /// `history` (or the tail, when `history` is empty) begins exactly at
     /// `upto` — the fold refuses anything else.
     pub(super) manifest: Option<(ObjectKey, Offset)>,
+    /// When this partition's commits happened (`M5.86`).
+    ///
+    /// ⚠️ **`None` until something is committed**, and that is a different
+    /// claim from "committed at the epoch": a partition the fold knows about
+    /// only because a manifest was published for it has no commit time of its
+    /// own, and a retention round that read `EPOCH` there would reap it
+    /// immediately. `Offset` has no `Default` for the same reason one field up.
+    pub(super) when: Option<TimeSpan>,
 }
 
 impl Default for PartitionIndex {
@@ -56,6 +64,7 @@ impl Default for PartitionIndex {
             tail: VecDeque::new(),
             history: Vec::new(),
             manifest: None,
+            when: None,
         }
     }
 }
@@ -153,6 +162,11 @@ impl PartitionIndex {
         {
             self.history.push(evicted.demote());
         }
+    }
+
+    /// Folds a batch's commit time into this partition's extent.
+    pub(super) fn observe(&mut self, when: TimeSpan) {
+        self.when = Some(self.when.map_or(when, |held| held.widened(when)));
     }
 
     /// Whether this reference is one of the history entries, by identity

@@ -10,6 +10,7 @@
 // A panic in a test harness is the test failing, which is what it is for.
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, Error, IndexQuota, IndexState, MetadataEntry,
     MetadataRecord, Offset, PartitionId, Pressure, TAIL_WINDOW_ENTRIES, TopicId,
@@ -33,6 +34,7 @@ fn commit_to(version: u64, which: usize, topic: TopicId, partition: PartitionId)
                 ByteRange::bounded(0, 32).expect("a valid range"),
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }

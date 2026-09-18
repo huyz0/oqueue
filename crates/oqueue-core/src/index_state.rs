@@ -18,7 +18,7 @@
 
 use crate::{
     CommitVersion, Error, IndexedBatch, MetadataEntry, MetadataRecord, ObjectKey, ObjectRef,
-    Offset, PartitionId, Result, TailEntry, TopicId,
+    Offset, PartitionId, Result, TailEntry, TimeSpan, TopicId,
 };
 use std::collections::HashMap;
 
@@ -172,7 +172,7 @@ impl IndexState {
         // ⚠️ The only mutation of `self` in this method, and it is after every
         // fallible step — guarantee 2. The clone happens here, on the write
         // path, rather than on the read path a lookup key would have put it.
-        for ((topic, partition), (end, entries)) in staged {
+        for ((topic, partition), (end, entries, when)) in staged {
             if projected.contains_key(&(topic, partition)) {
                 // The projection already holds this partition's commits, in
                 // order with the effects between them.
@@ -185,6 +185,7 @@ impl IndexState {
                 .entry(partition)
                 .or_default();
             slot.end_offset = end;
+            slot.observe(when);
             // ⚠️ **Before and after, not one per entry.** A push demotes at
             // most one entry out of the window, so a commit can move the tail
             // and history by different amounts — the arithmetic that knew a
@@ -223,9 +224,14 @@ impl IndexState {
     /// whole batch before anything is applied.
     fn read_record<'a>(&self, record: &'a MetadataRecord, batch: &mut Batch<'a>) -> Result<()> {
         match record {
-            MetadataRecord::BatchCommitted { object, spans } => {
+            MetadataRecord::BatchCommitted {
+                object,
+                spans,
+                written_at,
+            } => {
+                let when = TimeSpan::at(*written_at);
                 for span in spans {
-                    self.stage_span(&mut batch.staged, object, span)?;
+                    self.stage_span(&mut batch.staged, object, span, when)?;
                 }
             }
             MetadataRecord::ManifestPublished {

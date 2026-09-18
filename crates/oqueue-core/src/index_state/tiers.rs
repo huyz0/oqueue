@@ -19,6 +19,7 @@
 
 use super::IndexState;
 use crate::{ObjectKey, ObjectRef, Offset, TailEntry};
+use crate::{PartitionId, TimeSpan, TopicId};
 use core::mem::size_of;
 use core::ops::{Add, Sub};
 
@@ -142,5 +143,24 @@ impl IndexState {
     #[must_use]
     pub const fn tiers(&self) -> Tiers {
         self.tiers
+    }
+}
+
+impl IndexState {
+    /// When this partition's commits happened, if any have.
+    ///
+    /// ⚠️ **What FR-33's decision reads, and it costs no object-storage
+    /// operation** (`M5.86`). A retention round asks this of every partition a
+    /// node holds, so a decision that reached for an object would be one GET
+    /// per partition per round — `ADR-0036` decision 1 is the same property
+    /// one requirement over, and compaction's trigger already obeys it.
+    ///
+    /// ⚠️ **`None` is "nothing has been committed here", not "committed at the
+    /// epoch".** A partition the fold knows about only because a manifest was
+    /// published for it has no commit time of its own, and a round reading
+    /// `EPOCH` there would reap it on its first sweep.
+    #[must_use]
+    pub fn time_span(&self, topic: &TopicId, partition: PartitionId) -> Option<TimeSpan> {
+        self.partition(topic, partition).and_then(|slot| slot.when)
     }
 }

@@ -16,6 +16,7 @@
 // `invariants.rs`.
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CacheState, CommitVersion, CommittedSpan, CoordinatorEpoch, Error,
     MAX_METADATA_STALENESS_MS, MetadataRecord, ObjectKey, PartitionId, ReadMode, RefreshReason,
@@ -444,9 +445,10 @@ fn a_commit_record_carries_spans_and_the_object_it_came_from() {
             ByteRange::Full,
             None,
         )],
+        written_at: Timestamp::EPOCH,
     };
     match record {
-        MetadataRecord::BatchCommitted { object, spans } => {
+        MetadataRecord::BatchCommitted { object, spans, .. } => {
             assert_eq!(object, an_object());
             assert_eq!(spans.len(), 1);
             assert_eq!(spans[0].record_count(), 3);

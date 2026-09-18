@@ -10,6 +10,7 @@
 
 use crate::support::{object, offset, partition, span, start_indexed, topic};
 use oqueue_coordinator::{Coordinator, CoordinatorError, REBUILD_PAGE_ENTRIES};
+use oqueue_core::Timestamp;
 use oqueue_core::{
     CommitVersion, CoordinatorEpoch, FakeMaterializedIndex, FakeMetadataLog, FaultMetadataLog,
     LogFaults, MaterializedIndex, MetadataEntry, MetadataLog, MetadataRecord, Offset,
@@ -60,6 +61,7 @@ async fn an_ordinary_commit_never_reads_the_log_back() {
         Arc::clone(&log) as Arc<dyn MetadataLog>,
         Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("a fresh log opens");
@@ -97,6 +99,7 @@ async fn a_failed_rebuild_leaves_the_index_empty_and_says_so() {
         Arc::clone(&log) as Arc<dyn MetadataLog>,
         Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("a fresh log opens");
@@ -177,13 +180,18 @@ async fn an_index_carrying_another_line_s_version_is_cleared_at_open() {
             MetadataRecord::BatchCommitted {
                 object: object(99),
                 spans: vec![span(7)],
+                written_at: Timestamp::EPOCH,
             },
         )])
         .expect("some other line folded into it");
-    let (coordinator, driver, index) =
-        Coordinator::open(log, Box::new(stale), CoordinatorEpoch::ZERO)
-            .await
-            .expect("a fresh log opens");
+    let (coordinator, driver, index) = Coordinator::open(
+        log,
+        Box::new(stale),
+        CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect("a fresh log opens");
     let driver = tokio::spawn(driver.run());
 
     assert_eq!(index.applied_upto(), None, "the foreign line is gone");
@@ -280,6 +288,7 @@ async fn dropping_the_cache_on_a_stopped_coordinator_is_refused() {
         Arc::new(FakeMetadataLog::new()),
         Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("a fresh log opens");
@@ -315,6 +324,7 @@ async fn a_drop_cannot_land_between_a_commits_journal_and_its_fold() {
         Arc::clone(&log) as Arc<dyn MetadataLog>,
         Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("a fresh log opens");

@@ -8,5 +8,6 @@ mod cache;
 mod follower;
 mod idempotence;
 mod sequencing;
+mod stamping;
 mod support;
 mod tail;

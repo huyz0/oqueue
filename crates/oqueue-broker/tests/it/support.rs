@@ -118,6 +118,7 @@ pub async fn broker(topics: &[&str]) -> Broker {
         Arc::clone(&log) as Arc<dyn oqueue_core::MetadataLog>,
         shared_index,
         CoordinatorEpoch::new(1),
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("an empty log opens");

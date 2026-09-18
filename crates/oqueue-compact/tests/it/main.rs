@@ -5,6 +5,7 @@
 
 mod compose;
 mod end_to_end;
+mod indexes;
 mod layout;
 mod merge;
 mod merge_refusals;

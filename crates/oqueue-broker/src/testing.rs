@@ -199,9 +199,10 @@ pub(crate) async fn with_store(
     let log = Arc::new(FakeMetadataLog::new());
     let index = Box::new(FakeMaterializedIndex::new());
     let epoch = CoordinatorEpoch::new(1);
-    let (coordinator, serving, reader) = Coordinator::open(log, index, epoch)
-        .await
-        .expect("an empty log opens");
+    let (coordinator, serving, reader) =
+        Coordinator::open(log, index, epoch, Arc::new(oqueue_core::FakeClock::new()))
+            .await
+            .expect("an empty log opens");
     let shared: Arc<dyn ObjectStore> = Arc::clone(&store) as Arc<dyn ObjectStore>;
     let sequencing = crate::cluster::Sequencing::new(coordinator, reader);
     let group_coordinator = Arc::new(oqueue_core::FakeGroupCoordinator::new());

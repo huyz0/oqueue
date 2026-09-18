@@ -20,7 +20,7 @@ pub use admission::RejectReason;
 use crate::commit::Assignment;
 use oqueue_core::{
     CommitVersion, CommittedSpan, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,
-    ProducerEpoch, ProducerId, Result, TopicId,
+    ProducerEpoch, ProducerId, Result, Timestamp, TopicId,
 };
 use std::collections::HashMap;
 
@@ -145,7 +145,12 @@ impl Allocator {
     /// [`Error::CommitVersionOverflow`](oqueue_core::Error::CommitVersionOverflow)
     /// if the shard's version line would leave the `u64` range. ⚠️ In either
     /// case nothing has been consumed, because nothing has been applied.
-    pub(crate) fn stage(&self, object: ObjectKey, spans: Vec<CommittedSpan>) -> Result<Staged> {
+    pub(crate) fn stage(
+        &self,
+        object: ObjectKey,
+        spans: Vec<CommittedSpan>,
+        written_at: Timestamp,
+    ) -> Result<Staged> {
         let mut assignments = Vec::with_capacity(spans.len());
         // ⚠️ Keyed on a **borrowed** topic, exactly as
         // `IndexState::stage_span` keys the same fold in `oqueue-core`. A
@@ -211,7 +216,11 @@ impl Allocator {
         Ok(Staged {
             entry: MetadataEntry::new(
                 self.next_version,
-                MetadataRecord::BatchCommitted { object, spans },
+                MetadataRecord::BatchCommitted {
+                    object,
+                    spans,
+                    written_at,
+                },
             ),
             assignments,
             ends,

@@ -11,6 +11,7 @@
 // controls, so a panic means the test is wrong, not the code under test.
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, FakeMaterializedIndex,
     IndexState, MAX_BATCHES_PER_PAGE, MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey,
@@ -41,6 +42,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
                 ByteRange::Full,
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }
@@ -303,6 +305,7 @@ fn sized(version: u64, records: u32, bytes: u64) -> MetadataEntry {
                 ByteRange::bounded(0, bytes).expect("a non-empty range"),
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }

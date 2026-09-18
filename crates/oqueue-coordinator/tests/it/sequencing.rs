@@ -153,6 +153,7 @@ async fn a_coordinator_that_has_stopped_refuses_rather_than_answering() {
         log,
         Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("a fresh log opens");
@@ -191,9 +192,14 @@ async fn opening_over_a_log_that_already_holds_entries_refuses() {
         )])
         .expect("a fold this test can look for afterwards");
 
-    let rejected = Coordinator::open(log, Box::new(index), CoordinatorEpoch::ZERO)
-        .await
-        .expect_err("a non-empty log refuses");
+    let rejected = Coordinator::open(
+        log,
+        Box::new(index),
+        CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect_err("a non-empty log refuses");
 
     assert_eq!(
         rejected.error(),
@@ -248,6 +254,7 @@ async fn a_transient_journal_failure_hands_the_index_back_to_be_retried_with() {
         Arc::clone(&log) as Arc<dyn MetadataLog>,
         Box::new(index),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect_err("a log that will not answer cannot be opened over");
@@ -262,10 +269,14 @@ async fn a_transient_journal_failure_hands_the_index_back_to_be_retried_with() {
 
     // The same index, into the retry that now succeeds.
     log.set_faults(LogFaults::default());
-    let (coordinator, driver, _reader) =
-        Coordinator::open(log as Arc<dyn MetadataLog>, index, CoordinatorEpoch::ZERO)
-            .await
-            .expect("the retry opens over the same index");
+    let (coordinator, driver, _reader) = Coordinator::open(
+        log as Arc<dyn MetadataLog>,
+        index,
+        CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect("the retry opens over the same index");
     let driver = tokio::spawn(driver.run());
     coordinator
         .commit(object(0), vec![span(2)])

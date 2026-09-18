@@ -68,9 +68,14 @@ pub(crate) async fn start_with(
     log: Arc<dyn MetadataLog>,
     index: Box<dyn MaterializedIndex>,
 ) -> (Coordinator, tokio::task::JoinHandle<()>) {
-    let (coordinator, driver, _index) = Coordinator::open(log, index, CoordinatorEpoch::ZERO)
-        .await
-        .expect("a fresh log opens");
+    let (coordinator, driver, _index) = Coordinator::open(
+        log,
+        index,
+        CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect("a fresh log opens");
     (coordinator, tokio::spawn(driver.run()))
 }
 
@@ -102,6 +107,7 @@ pub(crate) async fn start_indexed() -> (Coordinator, IndexReader, tokio::task::J
         log,
         Box::new(FakeMaterializedIndex::new()),
         CoordinatorEpoch::ZERO,
+        Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
     .expect("a fresh log opens");

@@ -8,8 +8,8 @@ use crate::serve::REBUILD_PAGE_ENTRIES;
 use crate::serve::{CommitRequest, CoordinatorLoop, Request};
 use crate::subscribe::{DELTA_BUFFER_ENTRIES, DeltaStream, IndexWatch};
 use oqueue_core::{
-    CommitVersion, CommittedSpan, CoordinatorEpoch, IndexReader, MaterializedIndex, MetadataEntry,
-    MetadataLog, ObjectKey,
+    Clock, CommitVersion, CommittedSpan, CoordinatorEpoch, IndexReader, MaterializedIndex,
+    MetadataEntry, MetadataLog, ObjectKey,
 };
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -104,10 +104,18 @@ impl Coordinator {
     /// and the loss this row exists to prevent arriving through a `select!`
     /// arm or a startup `timeout`. Bound the log's own read instead of this
     /// call, or accept that a cancelled open costs an index.
+    /// ⚠️ **`clock` is what makes retention possible at all** (`M5.86`).
+    /// Every `BatchCommitted` carries the moment the log took it, the fold
+    /// keeps a per-partition extent from those, and FR-33's decision — is this
+    /// partition older than its retention — then costs no object-storage
+    /// operation. ⚠️ **The coordinator's clock, not the producer's
+    /// timestamps**: a record's own time is client-supplied and unordered, so
+    /// retention driven by it is retention a client can defeat by backdating.
     pub async fn open(
         log: Arc<dyn MetadataLog>,
         index: Box<dyn MaterializedIndex>,
         epoch: CoordinatorEpoch,
+        clock: Arc<dyn Clock>,
     ) -> Result<(Self, CoordinatorLoop, IndexReader), OpenRejected> {
         let last = match log.last_version().await {
             Ok(last) => last,
@@ -155,6 +163,7 @@ impl Coordinator {
                 index: Arc::clone(&index),
                 epoch,
                 allocator: Allocator::new(),
+                clock,
                 requests,
                 deltas,
                 published,

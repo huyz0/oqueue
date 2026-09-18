@@ -2,7 +2,7 @@
 
 use crate::{
     ByteRange, CoordinatorEpoch, ObjectKey, ObjectRef, Offset, PartitionId, ProducerIdentity,
-    TopicId,
+    Timestamp, TopicId,
 };
 
 /// One `(topic, partition)`'s share of a committed object.
@@ -129,6 +129,29 @@ pub enum MetadataRecord {
         /// What it added, per `(topic, partition)`. One object bundles many,
         /// which is what makes FR-32's one-PUT-across-N-topics flush possible.
         spans: Vec<CommittedSpan>,
+        /// When the coordinator committed it.
+        ///
+        /// ⚠️ **One per object rather than per span, and that is the whole
+        /// design** (`M5.86`). FR-33 needs to know how old a partition's data
+        /// is *without touching object storage*, and an object's records are
+        /// written together — so one timestamp here folds into a per-partition
+        /// `ts_min`/`ts_max` that a retention decision reads straight out of
+        /// the index. A timestamp per span would say the same thing N times
+        /// and widen every entry in the tier `ADR-0043` prices.
+        ///
+        /// ⚠️ **The coordinator's commit time, not the producer's.** A
+        /// record's own timestamp is client-supplied and unordered — Kafka
+        /// lets a producer send anything — so retention driven by it is
+        /// retention a client can defeat. This is the moment the log took the
+        /// object.
+        ///
+        /// ⚠️ **Not monotone with the commit version**, and nothing may treat
+        /// it as though it were: a wall clock steps backwards over NTP
+        /// corrections, and a failover can hand the log to a coordinator whose
+        /// clock is behind. Retention reads a per-partition *extent*, which is
+        /// insensitive to that; anything needing order uses the version, which
+        /// is what `ADR-0020` makes every staleness comparison rest on.
+        written_at: Timestamp,
     },
     /// A partition's history below `upto` now lives in a manifest.
     ///

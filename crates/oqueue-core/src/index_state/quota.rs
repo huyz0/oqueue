@@ -162,7 +162,7 @@ impl IndexState {
         // it installs. An unsigned running total would wrap on the way past a
         // ceiling it never reaches.
         let mut contributions: Vec<(&str, i32, i64)> = Vec::new();
-        for ((topic, partition), (_, entries)) in staged {
+        for ((topic, partition), (_, entries, _)) in staged {
             if projected.contains_key(&(*topic, *partition)) {
                 continue;
             }

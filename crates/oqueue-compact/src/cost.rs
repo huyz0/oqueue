@@ -145,6 +145,7 @@ mod tests {
                             ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
                             None,
                         )],
+                        written_at: oqueue_core::Timestamp::EPOCH,
                     },
                 )
             })

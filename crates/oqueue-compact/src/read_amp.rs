@@ -199,6 +199,7 @@ mod tests {
                     MetadataRecord::BatchCommitted {
                         object: ObjectKey::new(format!("obj-{i}")).expect("a valid key"),
                         spans: vec![span],
+                        written_at: oqueue_core::Timestamp::EPOCH,
                     },
                 )
             })
@@ -346,6 +347,7 @@ mod tests {
                     span(COMPACTED_OBJECT_RECORDS),
                     span(COMPACTED_OBJECT_RECORDS),
                 ],
+                written_at: oqueue_core::Timestamp::EPOCH,
             },
         );
         index.apply(&[entry]).expect("a valid fold");
@@ -430,6 +432,7 @@ mod tests {
                 MetadataRecord::BatchCommitted {
                     object: ObjectKey::new(format!("two-{i}")).expect("a valid key"),
                     spans: vec![span(1), span(1)],
+                    written_at: oqueue_core::Timestamp::EPOCH,
                 },
             ));
         }
@@ -440,6 +443,7 @@ mod tests {
                 MetadataRecord::BatchCommitted {
                     object: ObjectKey::new(format!("filler-{i}")).expect("a valid key"),
                     spans: vec![span(1)],
+                    written_at: oqueue_core::Timestamp::EPOCH,
                 },
             ));
         }

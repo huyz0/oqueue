@@ -17,10 +17,28 @@
 use oqueue_compact::{CompactionPlan, Planning, plan};
 use oqueue_core::{
     BundleBuilder, ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, FakeObjectStore,
-    IndexedBatch, MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, ObjectRef,
-    ObjectStore, Offset, PartitionId, PushedRecords, Result, TAIL_WINDOW_ENTRIES, TopicId,
+    MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, ObjectRef, ObjectStore, Offset,
+    PartitionId, PushedRecords, Result, TAIL_WINDOW_ENTRIES, TopicId,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// One object's commit at version `version` — the record every fixture here
+/// builds, in one place, so a field the log grows (`M5.86` added a timestamp)
+/// is one edit rather than one per fixture.
+pub(crate) const fn committed(
+    version: u64,
+    object: ObjectKey,
+    spans: Vec<CommittedSpan>,
+) -> MetadataEntry {
+    MetadataEntry::new(
+        CommitVersion::new(version),
+        MetadataRecord::BatchCommitted {
+            object,
+            spans,
+            written_at: oqueue_core::Timestamp::EPOCH,
+        },
+    )
+}
 
 pub(crate) fn topic() -> TopicId {
     TopicId::new("t").expect("a valid topic")
@@ -168,18 +186,16 @@ pub(crate) fn planned_records(per: u32, objects: usize) -> CompactionPlan {
         .iter()
         .enumerate()
         .map(|(i, count)| {
-            MetadataEntry::new(
-                CommitVersion::new(i as u64 + 1),
-                MetadataRecord::BatchCommitted {
-                    object: key(&format!("planned-{i}")),
-                    spans: vec![CommittedSpan::new(
-                        topic(),
-                        partition(),
-                        *count,
-                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
-                        None,
-                    )],
-                },
+            committed(
+                i as u64 + 1,
+                key(&format!("planned-{i}")),
+                vec![CommittedSpan::new(
+                    topic(),
+                    partition(),
+                    *count,
+                    ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
+                    None,
+                )],
             )
         })
         .collect();
@@ -204,18 +220,16 @@ pub(crate) fn planned_from(start: i64, end: i64) -> CompactionPlan {
         .iter()
         .enumerate()
         .map(|(i, count)| {
-            MetadataEntry::new(
-                CommitVersion::new(i as u64 + 1),
-                MetadataRecord::BatchCommitted {
-                    object: key(&format!("planned-{i}")),
-                    spans: vec![CommittedSpan::new(
-                        topic(),
-                        partition(),
-                        *count,
-                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
-                        None,
-                    )],
-                },
+            committed(
+                i as u64 + 1,
+                key(&format!("planned-{i}")),
+                vec![CommittedSpan::new(
+                    topic(),
+                    partition(),
+                    *count,
+                    ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
+                    None,
+                )],
             )
         })
         .collect();
@@ -302,18 +316,16 @@ pub(crate) fn planned_records_topic(
         .iter()
         .enumerate()
         .map(|(i, count)| {
-            MetadataEntry::new(
-                CommitVersion::new(i as u64 + 1),
-                MetadataRecord::BatchCommitted {
-                    object: key(&format!("planned-{i}")),
-                    spans: vec![CommittedSpan::new(
-                        topic.clone(),
-                        partition,
-                        *count,
-                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
-                        None,
-                    )],
-                },
+            committed(
+                i as u64 + 1,
+                key(&format!("planned-{i}")),
+                vec![CommittedSpan::new(
+                    topic.clone(),
+                    partition,
+                    *count,
+                    ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
+                    None,
+                )],
             )
         })
         .collect();
@@ -384,18 +396,16 @@ pub(crate) fn planned_from_topic(
         .iter()
         .enumerate()
         .map(|(i, count)| {
-            MetadataEntry::new(
-                CommitVersion::new(i as u64 + 1),
-                MetadataRecord::BatchCommitted {
-                    object: key(&format!("planned-{i}")),
-                    spans: vec![CommittedSpan::new(
-                        topic.clone(),
-                        partition,
-                        *count,
-                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
-                        None,
-                    )],
-                },
+            committed(
+                i as u64 + 1,
+                key(&format!("planned-{i}")),
+                vec![CommittedSpan::new(
+                    topic.clone(),
+                    partition,
+                    *count,
+                    ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
+                    None,
+                )],
             )
         })
         .collect();
@@ -408,90 +418,7 @@ pub(crate) fn planned_from_topic(
     planned
 }
 
-/// An index folded from `counts`, one object per entry, in order.
-pub(crate) fn history_index(counts: &[u32]) -> FakeMaterializedIndex {
-    let index = FakeMaterializedIndex::new();
-    let entries: Vec<MetadataEntry> = counts
-        .iter()
-        .enumerate()
-        .map(|(i, count)| {
-            MetadataEntry::new(
-                CommitVersion::new(i as u64 + 1),
-                MetadataRecord::BatchCommitted {
-                    object: key(&format!("obj-{i}")),
-                    spans: vec![CommittedSpan::new(
-                        topic(),
-                        partition(),
-                        *count,
-                        ByteRange::bounded(0, u64::from(*count)).expect("a valid range"),
-                        None,
-                    )],
-                },
-            )
-        })
-        .collect();
-    index.apply(&entries).expect("a valid fold");
-    index
-}
-
-/// A `MaterializedIndex` that counts the walks asked of it.
-///
-/// ⚠️ **Walks, not lookups.** `end_offset` is a map lookup and `find_batches`
-/// is a scan, and the difference is what a sweep over a cold catalog costs.
-#[derive(Debug)]
-pub(crate) struct CountingIndex {
-    inner: FakeMaterializedIndex,
-    walks: AtomicUsize,
-}
-
-impl CountingIndex {
-    /// Wraps an index.
-    pub(crate) const fn over(inner: FakeMaterializedIndex) -> Self {
-        Self {
-            inner,
-            walks: AtomicUsize::new(0),
-        }
-    }
-
-    /// How many `find_batches` calls it has answered.
-    pub(crate) fn walks(&self) -> usize {
-        self.walks.load(Ordering::Relaxed)
-    }
-}
-
-impl MaterializedIndex for CountingIndex {
-    fn apply(&self, entries: &[MetadataEntry]) -> Result<()> {
-        self.inner.apply(entries)
-    }
-
-    fn applied_upto(&self) -> Option<CommitVersion> {
-        self.inner.applied_upto()
-    }
-
-    fn entries(&self) -> usize {
-        self.inner.entries()
-    }
-
-    fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset {
-        self.inner.end_offset(topic, partition)
-    }
-
-    fn find_batches(
-        &self,
-        topic: &TopicId,
-        partition: PartitionId,
-        start: Offset,
-        max_bytes: u64,
-    ) -> Result<Vec<IndexedBatch>> {
-        self.walks.fetch_add(1, Ordering::Relaxed);
-        self.inner.find_batches(topic, partition, start, max_bytes)
-    }
-
-    fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
-        self.inner.manifest(topic, partition)
-    }
-
-    fn clear(&self) {
-        self.inner.clear();
-    }
-}
+// ⚠️ The index-side fixtures live in `indexes.rs` — `support.rs` reached the
+// 500-line limit holding both halves (`code-structure.md` rule 18). Re-exported
+// so every caller keeps the one import path.
+pub(crate) use crate::indexes::{CountingIndex, history_index};

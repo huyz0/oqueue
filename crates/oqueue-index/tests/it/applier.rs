@@ -10,6 +10,7 @@
 // controls, so a panic means the suite is wrong, not the code under test.
 #![allow(clippy::expect_used)]
 
+use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, FakeMetadataLog, MaterializedIndex, MetadataEntry,
     MetadataLog, ObjectKey, Offset, PartitionId, TopicId,
@@ -62,6 +63,7 @@ fn entry(version: u64) -> MetadataEntry {
                 ByteRange::Full,
                 None,
             )],
+            written_at: Timestamp::EPOCH,
         },
     )
 }

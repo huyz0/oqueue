@@ -46,7 +46,7 @@ fuzz_target!(|data: &[u8]| {
         let index = Box::new(oqueue_core::FakeMaterializedIndex::new());
         let epoch = oqueue_core::CoordinatorEpoch::new(1);
         let (coordinator, serving, reader) =
-            oqueue_coordinator::Coordinator::open(log, index, epoch)
+            oqueue_coordinator::Coordinator::open(log, index, epoch, Arc::new(oqueue_core::FakeClock::new()))
                 .await
                 .expect("an empty log opens");
         let store: Arc<dyn oqueue_core::ObjectStore> = Arc::new(oqueue_core::FakeObjectStore::new());

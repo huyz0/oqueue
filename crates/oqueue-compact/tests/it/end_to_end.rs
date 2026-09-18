@@ -14,6 +14,7 @@ use oqueue_compact::{
     COMPACTION_READ_AMP_THRESHOLD, Candidate, PlannedInputs, Planning, merge_round, plan, read_amp,
     sweep,
 };
+use oqueue_core::Timestamp;
 use oqueue_core::{
     BundleBuilder, ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex,
     MaterializedIndex, MetadataEntry, MetadataRecord, ObjectRef, ObjectStore, PushedRecords,
@@ -91,6 +92,7 @@ async fn partition_of_spans(
                         )
                     })
                     .collect(),
+                written_at: Timestamp::EPOCH,
             },
         ));
     }
