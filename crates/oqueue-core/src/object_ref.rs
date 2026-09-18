@@ -9,12 +9,25 @@ use crate::{ByteRange, ObjectKey, Offset, Result};
 /// `M3.md` task 7 budgets ~40 bytes per entry and the size test pins the
 /// inline half of it.
 ///
+/// ⚠️ **The inline half is under half the cost**, which every figure derived
+/// from "~40 bytes" was wrong by until `M5.10` measured it. `ObjectKey` is a
+/// `String`: 24 B here and its bytes on the heap, and a real object key —
+/// `BundleNamer`'s `bundles/{writer}/{sequence:020}` — is 51–54 B. So a
+/// history entry is **94 B** and a tail entry **118 B**.
+/// `crates/oqueue-core/tests/it/index_cost.rs` derives both, and `ADR-0043`
+/// is what they price.
+///
 /// ⚠️ **But per-entry size is not what doc 14 §3's four orders of magnitude
 /// are about, and this index does not yet reach the cheap row.** That table's
 /// two rows differ by *granularity*, not field width: per-(object, partition)
 /// entries arrive at ~4M/s and grow the index at ~160 MB/s, while **per-object
 /// only** entries arrive at ~400/s and grow it at ~16 KB/s, with
 /// partition→range left to the object's own footer.
+///
+/// ⚠️ **Those two rates are doc 14's, at doc 14's 40 B.** At the measured 94 B
+/// they are **376 MB/s** and **37.6 KB/s** — the ratio between the rows is
+/// what the table is about and is unchanged, but neither absolute figure is
+/// the one to size anything from. `index_cost.rs` derives both.
 ///
 /// `IndexState` stores one entry **per (object, partition) span**, which is
 /// the ~4M/s row. Dropping the [`ByteRange`] on demotion cuts what each entry

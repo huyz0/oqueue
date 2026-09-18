@@ -29,18 +29,39 @@ This is that pricing, and then the shape it supports.
 
 ### Quantity 1 — coordinator state
 
-| Shape | Entries | Bytes |
-|---|---|---|
-| Tail, every shape (`TAIL_WINDOW_ENTRIES` = 128 × 1M partitions) | 1.28e8 | **7.2 GB** |
-| History, per `(object, partition)`, 7 days | 2.4e12 | **97 TB** |
-| History, per object, 7 days | 2.4e8 | 9.7 GB |
-| History, one manifest reference per partition | 1e6 | **40 MB** |
+⚠️ **Superseded by `ADR-0043`, whose widths are measured.** This table was
+priced at `size_of` — an `ObjectRef` at 40 B and a `TailEntry` at 56 B — which
+omits the object key's own allocation, and that allocation is larger than the
+struct it hangs off. The real widths are **94 B**, **118 B** and **86 B**, so
+every row below moves and a node sized from the original was provisioned under
+half what it needs. The verdicts do not change: each column still refutes what
+it refuted, which is why this is a correction rather than a re-decision.
+`M5.73`.
 
-⚠️ **The status quo is not 160 MB/s of growth, it is 97 TB of state**, and
+| Shape | Entries | Bytes, as priced | Bytes, measured |
+|---|---|---|---|
+| Tail, every shape (`TAIL_WINDOW_ENTRIES` = 128 × 1M partitions) | 1.28e8 | 7.2 GB | **15.1 GB** |
+| History, per `(object, partition)`, 7 days | 2.4e12 | 97 TB | **225.6 TB** |
+| History, per object, 7 days | 2.4e8 | 9.7 GB | **22.6 GB** |
+| History, one manifest reference per partition | 1e6 | 40 MB | **86 MB** |
+
+⚠️ **Derived, not restated.** Every figure in the right-hand column is
+`the_state_table_adr_0042_priced_at_inline_widths` in
+`crates/oqueue-core/tests/it/index_cost.rs`, which asserts the exact byte
+count so that a change to any of the three types reds a test rather than
+leaving this table wrong a second time.
+
+⚠️ **The status quo is not a growth rate, it is 225.6 TB of state**, and
 that is the fact the whole question turns on: per-`(object, partition)`
-history is not large, it is impossible. ⚠️ **And the tail's 7.2 GB is the
+history is not large, it is impossible. ⚠️ **And the tail's 15.1 GB is the
 term that survives every shape**, at 128 entries per partition — which at 4
 spans/s is **32 seconds** of tail. Nothing about keying moves it.
+
+⚠️ **What this table does *not* price is the state between publications**,
+which `ADR-0043` found is the term that actually bounds a node: un-absorbed
+history is a rate, 376 MB/s, so at the 30-minute sweep this ADR assumes it is
+676.8 GB — 44.8 times the tail. The right-hand column above is the state after
+a sweep; it was read as the state, full stop.
 
 ### Quantity 2 — bytes read on a cold fetch
 
@@ -150,17 +171,21 @@ reference to it.
    exactly what the manifest replaced. A reader asks for both and concatenates
    — the manifest tier from `start`, the index tier from `start` — because a
    fetch that stopped at the boundary would park a consumer there forever.
-5. **The tail is unchanged and unbounded in total.** 7.2 GB at the working
-   set, 32 seconds deep, untouched by any of this. It is `M5.10`'s, and this
-   decision makes that the *only* remaining half of NFR-11 rather than one of
-   two.
+5. **The tail is unchanged and unbounded in total.** 15.1 GB at the working
+   set, 32 seconds deep, untouched by any of this. It is `M5.10`'s.
+   ⚠️ **It is not the only remaining half of NFR-11**, which this decision
+   said until `ADR-0043` priced the third term: un-absorbed history — every
+   reference the fold has taken that no manifest has yet absorbed — is
+   676.8 GB at this ADR's own thirty-minute sweep, and the two tiers cross at
+   40.2 s. Which of them bounds a node is a property of the sweep interval,
+   so a quota built on this sentence would bound the wrong one. `M5.72`.
 
 ## Alternatives considered
 
 - **The three shapes `ADR-0041` refuted.** Each is priced above and each fails
   a column: per-`(object, partition)` on state, per-object-with-anchors on
   cold-read bytes, the composite chain on manifest bytes.
-- **Keep history in the coordinator and bound it by eviction.** 97 TB is not a
+- **Keep history in the coordinator and bound it by eviction.** 225.6 TB is not a
   number eviction reaches, and `M3.11` already found eviction gives back range
   a rebuild cannot restore.
 - **A manifest per topic.** Divides the write rate by partitions-per-topic and
@@ -174,8 +199,11 @@ reference to it.
 - `M5.61`, `M5.62` and `M5.63` are the implementation: the format, the
   coordinator's single reference, and the fetch path with its read count
   asserted.
-- ⚠️ **NFR-11's remaining half is the tail alone**, which `M5.10` owns with a
-  mechanism rather than a ceiling.
+- ⚠️ **NFR-11's remaining half is not the tail alone**, which this said until
+  `ADR-0043` priced un-absorbed history — 676.8 GB at this ADR's own sweep
+  interval against 15.1 GB of tail, crossing at 40.2 s. `M5.10` priced it and
+  refused the mechanism this sentence assumed; `M5.71` and `M5.72` own the
+  accounting and the ceiling, which is over the total.
 - `M5.59`'s ordering gap is answered for *reads*: a fetch reads a partition
   manifest, whose entries carry that partition's offsets, so nothing depends
   on a composite manifest's order. The composite's own ordering claim stays as

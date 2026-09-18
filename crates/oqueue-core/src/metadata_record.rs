@@ -134,7 +134,7 @@ pub enum MetadataRecord {
     /// ⚠️ **The event that makes the index's state bounded** (`ADR-0042`). At
     /// doc 14 §3's working set a partition's history is 4M
     /// `(object, partition)` entries a second over a seven-day retention —
-    /// 97 TB, which is not a large number but an impossible one. What the
+    /// 225.6 TB, which is not a large number but an impossible one. What the
     /// coordinator holds after this event is one reference, and the entries it
     /// replaces are in the object `manifest` names.
     ///

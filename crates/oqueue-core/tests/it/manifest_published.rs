@@ -1,7 +1,7 @@
 //! Publishing a manifest: what the fold does to a partition's history.
 //!
 //! ⚠️ **`ADR-0042`'s state column, made observable.** A partition's seven-day
-//! history at doc 14 §3's working set is 97 TB of entries; what the
+//! history at doc 14 §3's working set is 225.6 TB of entries; what the
 //! coordinator holds after this event is one reference. `IndexState::entries`
 //! is what says so, and these are the tests that hold it to it.
 

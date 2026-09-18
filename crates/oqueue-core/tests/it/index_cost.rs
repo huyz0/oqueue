@@ -108,6 +108,21 @@ fn a_memory_budget_names_a_sweep_interval() {
     let per_second = 4_000_000_usize * (size_of::<ObjectRef>() + REALISTIC_KEY.len());
     assert_eq!(per_second / 1_000_000, 376, "history grows at 376 MB/s");
 
+    // ⚠️ **And doc 14 §3's other row, at the measured width.** Its table
+    // prices these at 160 MB/s and 16 KB/s, which are 40 B per entry — the
+    // inline width. The *ratio* between the rows is what that table is about
+    // and is unchanged; neither absolute figure is one to size anything from.
+    let per_object = 400_usize * (size_of::<ObjectRef>() + REALISTIC_KEY.len());
+    assert_eq!(
+        per_object, 37_600,
+        "per-object entries grow it at 37.6 KB/s"
+    );
+    assert_eq!(
+        per_second / per_object,
+        10_000,
+        "ten thousand times, which is the ratio doc 14 §3's table is about"
+    );
+
     // ⚠️ **Milliseconds, because every coarser unit truncates.** Tenths were
     // tried and 2.6596 s truncated to "2.6" while the table rounds it to 2.7 —
     // the same defect at a finer grain, found in the round that fixed it at

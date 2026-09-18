@@ -2,9 +2,11 @@
 //!
 //! ⚠️ **This is where the index's state goes** (`ADR-0042`). At doc 14 §3's
 //! working set the coordinator cannot hold a partition's history: 4M
-//! `(object, partition)` entries a second over a seven-day retention is 97 TB,
+//! `(object, partition)` entries a second over a seven-day retention is
+//! 225.6 TB,
 //! which is not a large number but an impossible one. What it holds instead is
-//! one reference per partition, to a manifest like this — 40 MB against 97 TB.
+//! one reference per partition, to a manifest like this — 86 MB against
+//! 225.6 TB.
 //!
 //! ⚠️ **Keyed by partition, and that is the whole decision.** A manifest
 //! listing every partition of every object it names is ~1M ranges at that

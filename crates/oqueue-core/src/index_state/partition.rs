@@ -43,7 +43,7 @@ pub(super) struct PartitionIndex {
     ///
     /// ⚠️ **One reference where there were entries**, which is what makes this
     /// state bounded: at doc 14 §3's working set a partition's seven-day
-    /// history is 97 TB of entries and 40 B of this. It covers `[0, upto)` and
+    /// history is 225.6 TB of entries and 86 B of this. It covers `[0, upto)` and
     /// `history` (or the tail, when `history` is empty) begins exactly at
     /// `upto` — the fold refuses anything else.
     pub(super) manifest: Option<(ObjectKey, Offset)>,
