@@ -432,6 +432,7 @@ fn run_contract<I: MaterializedIndex>(make: impl Fn() -> I) {
     crate::paging::an_unknown_length_charges_nothing(&make());
     crate::paging::a_page_is_bounded_by_its_batch_count(&make());
     contract::the_entry_count_survives_a_drop_and_refill(&make());
+    crate::retention::retention_reads_a_partition_s_age_and_start(&make());
 }
 
 #[test]

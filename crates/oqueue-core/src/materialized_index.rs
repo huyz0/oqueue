@@ -2,7 +2,7 @@
 
 use crate::{
     CommitVersion, IndexState, IndexedBatch, MetadataEntry, ObjectKey, Offset, PartitionId, Result,
-    TopicId,
+    TimeSpan, TopicId,
 };
 use std::sync::Mutex;
 
@@ -217,6 +217,18 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
     /// layering this seam exists to prevent.
     fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)>;
 
+    /// The oldest and newest commit time folded for this partition
+    /// (`ADR-0044`).
+    ///
+    /// ⚠️ **`None` means nothing was committed to it**, not "committed at the
+    /// epoch": a retention round reading `EPOCH` for an uncommitted partition
+    /// would reap it on its first sweep. Answered from memory — a round asks
+    /// it of every partition it holds.
+    fn time_span(&self, topic: &TopicId, partition: PartitionId) -> Option<TimeSpan>;
+
+    /// The first readable offset: zero until a trim moves it (`ADR-0044`).
+    fn log_start(&self, topic: &TopicId, partition: PartitionId) -> Offset;
+
     /// Discards everything, returning it to its fresh state.
     ///
     /// ⚠️ Safe **for the writer of this index**, and the reason this trait
@@ -301,6 +313,14 @@ impl MaterializedIndex for FakeMaterializedIndex {
 
     fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
         self.lock().manifest(topic, partition)
+    }
+
+    fn time_span(&self, topic: &TopicId, partition: PartitionId) -> Option<TimeSpan> {
+        self.lock().time_span(topic, partition)
+    }
+
+    fn log_start(&self, topic: &TopicId, partition: PartitionId) -> Offset {
+        self.lock().log_start(topic, partition)
     }
 
     fn clear(&self) {

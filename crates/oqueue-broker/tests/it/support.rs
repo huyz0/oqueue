@@ -65,6 +65,14 @@ impl MaterializedIndex for SharedIndex {
         self.0.manifest(topic, partition)
     }
 
+    fn time_span(&self, topic: &TopicId, partition: PartitionId) -> Option<oqueue_core::TimeSpan> {
+        self.0.time_span(topic, partition)
+    }
+
+    fn log_start(&self, topic: &TopicId, partition: PartitionId) -> Offset {
+        self.0.log_start(topic, partition)
+    }
+
     fn clear(&self) {
         self.0.clear();
     }

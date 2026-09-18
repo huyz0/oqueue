@@ -10,7 +10,8 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    ByteRange, CommitVersion, CommittedSpan, IndexState, MetadataEntry, MetadataRecord, Timestamp,
+    ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, IndexState, MaterializedIndex,
+    MetadataEntry, MetadataRecord, Timestamp,
 };
 
 use crate::range_compacted::{key, offset, partition, topic};
@@ -143,4 +144,34 @@ fn the_projected_path_widens_an_existing_extent() {
         (at(1_000), at(9_000)),
         "the earlier commit is still the oldest"
     );
+}
+
+/// ⚠️ **The fake answers the same questions through the seam** (`ADR-0044`).
+/// `oqueue-index`'s conformance suite runs the case against both
+/// implementations, but this crate's suite is what its own mutation run reads,
+/// and a fake returning `None` for every partition would otherwise pass here
+/// while telling every retention round that nothing had ever been written.
+#[test]
+fn the_fake_answers_a_partition_s_age_and_start_through_the_seam() {
+    let index = FakeMaterializedIndex::new();
+    assert_eq!(index.time_span(&topic(), partition()), None);
+    index
+        .apply(&[commit(1, 0, 4_000), trim(2, 1)])
+        .expect("a commit and a trim inside it");
+    let span = index
+        .time_span(&topic(), partition())
+        .expect("committed to");
+    assert_eq!((span.min(), span.max()), (at(4_000), at(4_000)));
+    assert_eq!(index.log_start(&topic(), partition()), offset(1));
+}
+
+fn trim(version: u64, start: i64) -> MetadataEntry {
+    MetadataEntry::new(
+        CommitVersion::new(version),
+        MetadataRecord::Trimmed {
+            topic: topic(),
+            partition: partition(),
+            start: offset(start),
+        },
+    )
 }

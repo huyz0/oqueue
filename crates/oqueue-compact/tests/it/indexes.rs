@@ -98,6 +98,14 @@ impl MaterializedIndex for CountingIndex {
         self.inner.manifest(topic, partition)
     }
 
+    fn time_span(&self, topic: &TopicId, partition: PartitionId) -> Option<oqueue_core::TimeSpan> {
+        self.inner.time_span(topic, partition)
+    }
+
+    fn log_start(&self, topic: &TopicId, partition: PartitionId) -> Offset {
+        self.inner.log_start(topic, partition)
+    }
+
     fn clear(&self) {
         self.inner.clear();
     }

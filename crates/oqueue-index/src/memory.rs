@@ -2,7 +2,7 @@
 
 use oqueue_core::{
     CommitVersion, IndexState, IndexedBatch, MaterializedIndex, MetadataEntry, ObjectKey, Offset,
-    PartitionId, Result, TopicId,
+    PartitionId, Result, TimeSpan, TopicId,
 };
 use std::sync::Mutex;
 
@@ -96,6 +96,14 @@ impl MaterializedIndex for MemoryIndex {
 
     fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
         self.lock().manifest(topic, partition)
+    }
+
+    fn time_span(&self, topic: &TopicId, partition: PartitionId) -> Option<TimeSpan> {
+        self.lock().time_span(topic, partition)
+    }
+
+    fn log_start(&self, topic: &TopicId, partition: PartitionId) -> Offset {
+        self.lock().log_start(topic, partition)
     }
 
     fn clear(&self) {
