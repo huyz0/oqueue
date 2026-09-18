@@ -11,3 +11,4 @@ mod sequencing;
 mod stamping;
 mod support;
 mod tail;
+mod trim;

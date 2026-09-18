@@ -229,6 +229,51 @@ impl Allocator {
         })
     }
 
+    /// Stages a trim of one partition to `start`, taking a version and no
+    /// offsets (`M5.90`).
+    ///
+    /// ⚠️ **Refused here when it is past the partition's end**, the check the
+    /// fold makes (`M5.19`) made before the journal instead of after it: a
+    /// `Trimmed` the fold refuses is refused identically on every replay, so
+    /// journaling one would leave a log that no index can fold past.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::TrimPastEnd`](oqueue_core::Error::TrimPastEnd) if `start` is
+    /// past the partition's end, and
+    /// [`Error::CommitVersionOverflow`](oqueue_core::Error::CommitVersionOverflow)
+    /// if the version line would leave its range.
+    pub(crate) fn stage_trim(
+        &self,
+        topic: TopicId,
+        partition: PartitionId,
+        start: Offset,
+    ) -> Result<Staged> {
+        let end = self.end_offset(&topic, partition).unwrap_or(Offset::ZERO);
+        if start > end {
+            return Err(oqueue_core::Error::TrimPastEnd {
+                topic: topic.to_string(),
+                partition: partition.get(),
+                start: start.get(),
+                end: end.get(),
+            });
+        }
+        Ok(Staged {
+            entry: MetadataEntry::new(
+                self.next_version,
+                MetadataRecord::Trimmed {
+                    topic,
+                    partition,
+                    start,
+                },
+            ),
+            assignments: Vec::new(),
+            ends: Vec::new(),
+            producer_ends: Vec::new(),
+            next_version: self.next_version.advance(1)?,
+        })
+    }
+
     /// Takes the position [`stage`](Self::stage) computed, once it is durable.
     ///
     /// ⚠️ **Infallible, and that is the design.** Every way this could fail was

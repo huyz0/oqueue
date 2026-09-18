@@ -5,11 +5,11 @@ use crate::commit::CommitAck;
 use crate::error::{CoordinatorError, OpenRejected};
 #[cfg(doc)]
 use crate::serve::REBUILD_PAGE_ENTRIES;
-use crate::serve::{CommitRequest, CoordinatorLoop, Request};
+use crate::serve::{CommitRequest, CoordinatorLoop, Request, TrimRequest};
 use crate::subscribe::{DELTA_BUFFER_ENTRIES, DeltaStream, IndexWatch};
 use oqueue_core::{
     Clock, CommitVersion, CommittedSpan, CoordinatorEpoch, IndexReader, MaterializedIndex,
-    MetadataEntry, MetadataLog, ObjectKey,
+    MetadataEntry, MetadataLog, ObjectKey, Offset, PartitionId, TopicId,
 };
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -273,6 +273,45 @@ impl Coordinator {
             .send(Request::Commit(CommitRequest {
                 object,
                 spans,
+                reply,
+            }))
+            .await
+            .map_err(|_| CoordinatorError::Unavailable)?;
+        answer.await.map_err(|_| CoordinatorError::Unavailable)?
+    }
+
+    /// Journals a trim: `partition`'s records below `start` stop being
+    /// readable (`M5.90`).
+    ///
+    /// ⚠️ **The only way a trim reaches the log**, and retention's only way to
+    /// act (FR-33): a round decides from the index which partitions have
+    /// expired (`ExpiryHeap`), and this is where that decision becomes
+    /// durable. Queued behind the commits already waiting, so it takes the
+    /// next version in the one order everything else does.
+    ///
+    /// ⚠️ **Not cancellation-safe**, as [`commit`](Self::commit) is not: once
+    /// queued it is journaled whether or not the caller still waits.
+    ///
+    /// # Errors
+    ///
+    /// [`CoordinatorError::Unavailable`] if the loop has stopped,
+    /// [`CoordinatorError::Unassignable`] carrying
+    /// [`Error::TrimPastEnd`](oqueue_core::Error::TrimPastEnd) if `start` is
+    /// past the partition's end — refused before the journal, so the log never
+    /// holds a trim its own fold would refuse — and
+    /// [`CoordinatorError::Journal`] if the append was refused.
+    pub async fn trim(
+        &self,
+        topic: TopicId,
+        partition: PartitionId,
+        start: Offset,
+    ) -> Result<CommitVersion, CoordinatorError> {
+        let (reply, answer) = oneshot::channel();
+        self.commits
+            .send(Request::Trim(TrimRequest {
+                topic,
+                partition,
+                start,
                 reply,
             }))
             .await

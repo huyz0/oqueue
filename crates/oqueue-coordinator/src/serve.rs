@@ -17,7 +17,7 @@ use crate::commit::{CommitAck, SpanOutcome};
 use crate::error::CoordinatorError;
 use oqueue_core::{
     Clock, CommitVersion, CommittedSpan, CoordinatorEpoch, MaterializedIndex, MetadataEntry,
-    MetadataLog, ObjectKey,
+    MetadataLog, ObjectKey, Offset, PartitionId, TopicId,
 };
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -36,6 +36,17 @@ pub(crate) enum Request {
     Commit(CommitRequest),
     /// Discard the materialization; the log can refill it.
     DropCache(oneshot::Sender<()>),
+    /// Journal a trim of one partition (`M5.90`).
+    Trim(TrimRequest),
+}
+
+/// A retention round's trim, and where to send its answer.
+#[derive(Debug)]
+pub(crate) struct TrimRequest {
+    pub(crate) topic: TopicId,
+    pub(crate) partition: PartitionId,
+    pub(crate) start: Offset,
+    pub(crate) reply: oneshot::Sender<Result<CommitVersion, CoordinatorError>>,
 }
 
 /// How many entries one page of a rebuild reads.
@@ -105,6 +116,14 @@ impl CoordinatorLoop {
                     // the cancellation case `Coordinator::commit` documents,
                     // and the commit has already happened either way.
                     drop(commit.reply.send(outcome));
+                }
+                Request::Trim(trim) => {
+                    let outcome = self
+                        .serve_trim(trim.topic, trim.partition, trim.start)
+                        .await;
+                    // ⚠️ Ignored on purpose, as a commit's is: the trim is
+                    // journaled or not whether or not anyone still waits.
+                    drop(trim.reply.send(outcome));
                 }
                 Request::DropCache(reply) => {
                     self.index.clear();
@@ -189,6 +208,33 @@ impl CoordinatorLoop {
             })
             .collect();
         Ok(CommitAck::new(version, epoch, assignments, outcomes))
+    }
+
+    /// Stage → journal → apply → publish, the commit path's order, for a record
+    /// that takes a version and no offsets (`M5.90`).
+    ///
+    /// ⚠️ **Through this loop, not beside it**, for the reason every write is:
+    /// the version line is this task's alone, and a trim journaled elsewhere
+    /// would race a commit for the same version.
+    async fn serve_trim(
+        &mut self,
+        topic: TopicId,
+        partition: PartitionId,
+        start: Offset,
+    ) -> Result<CommitVersion, CoordinatorError> {
+        let staged = self
+            .allocator
+            .stage_trim(topic, partition, start)
+            .map_err(CoordinatorError::Unassignable)?;
+        self.log
+            .append(core::slice::from_ref(staged.entry()))
+            .await
+            .map_err(CoordinatorError::Journal)?;
+        let entry = staged.entry().clone();
+        let (version, _) = self.allocator.apply(staged);
+        self.last_committed = Some(version);
+        self.publish(entry).await;
+        Ok(version)
     }
 
     /// Folds the committed entry into the local index, then tells everyone.
