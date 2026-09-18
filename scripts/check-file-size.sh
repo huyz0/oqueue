@@ -99,6 +99,16 @@ declare -A ALLOWLIST=(
 # ⚠️ **No `\b`**, which this repository forbids outright: GNU and BSD grep
 # disagree about it, and a pattern that silently matches nothing is the
 # fail-open every leg here is written against.
+# ⚠️ **`extern crate foo;` and an `extern "C" { … }` block are not items to
+# this pattern, and that is a decision** (`M5.56`). The `extern` branch above
+# exists for `extern "C" fn` — a modifier run before a keyword — and neither
+# of those two has a keyword from the alternation after it: `extern crate foo;`
+# ends there, and a block's contents are indented past the `^` anchor. So a
+# file allowlisted as a list may carry either without losing its exemption,
+# which is the right answer for a `#[link]` shim beside a generated table. ⚠️
+# **`tests/gates/negative.sh` holds it**: two cases plant one of these beside a
+# `pub mod inner;` and assert the count is **two**, so making `extern` count
+# reds them.
 ITEM_RE='^(pub(\([^)]*\))?[[:space:]]+)?((async|unsafe|const|default)[[:space:]]+|extern([[:space:]]+"[^"]*")?[[:space:]]+)*(enum|struct|union|trait|impl|fn|mod|const|static|type|macro_rules)([^A-Za-z0-9_]|$)'
 
 # Counts a `list` file's top-level items, failing if there is not exactly one,

@@ -1358,7 +1358,8 @@ invoke_file_size() {
 # notices; a structural one is outlived when the file stops being a list, and
 # this is what notices. Without this case the exemption is unbounded in the one
 # direction it was written to bound.
-setup_file_size_list_became_a_module() {
+setup_file_size_list_with() {
+  local second="$1"
   local dir; dir="$(new_scratch file-size-list)"
   copy_gate "$dir" check-file-size.sh
   mkdir -p "$dir/crates/oqueue-core/src"
@@ -1374,27 +1375,80 @@ version = "0.1.0"
 edition = "2021"
 EOF
   # The real allowlist entry names this path, so the fixture writes that file:
-  # a list of 501 lines, plus the second item that ends the exemption.
+  # a list of 501 lines, plus **one** second item that ends the exemption.
   {
     printf 'pub enum Error {\n'
     printf '    V%s,\n' {1..500}
     printf '}\n'
-    # ⚠️ **A generic `From` impl, not `impl Error {}`.** Round one of `M5.42`
-    # found the first pattern allowed only `pub`/`pub(...)` before the keyword
-    # and demanded a space right after it, so six forms slipped through --
-    # `impl<T> From<T> for Error`, `unsafe impl`, `async fn`, `pub async fn`,
-    # `pub unsafe fn`, `pub(crate) async fn` -- while the case planted the one
-    # form the pattern did catch. A `From` impl is the most likely thing an
-    # error enum ever grows, so it is what this plants -- with a `pub const`
-    # beside it, which round two found slipping through the *fix*: `const` had
-    # moved into the modifier run and left the keyword alternation.
-    printf 'impl<T> From<T> for Error {}\n'
-    printf 'pub const MAX_LEN: usize = 256;\n'
+    printf '%s\n' "$second"
   } > "$dir/crates/oqueue-core/src/error.rs"
-  (cd "$dir" && git add -A && git commit -q -m "M-1.1: a list that grew an impl")
+  (cd "$dir" && git add -A && git commit -q -m "M-1.1: a list that grew an item")
   printf '%s\n' "$dir"
 }
-invoke_file_size_list_became_a_module() {
+
+# ⚠️ **One form per fixture, and that is `M5.56`.** A single fixture planted
+# `impl<T> From<T> for Error {}` *and* `pub const MAX_LEN: usize = 256;`, and
+# `list_exemption_holds` only asserts the count is not 1 — so restoring round
+# two's regression (dropping `const` from the keyword alternation) still left
+# two items counted and the case still passed. A test that survives the bug it
+# was written for is `testing.md` rule 15's class, one level up from the code.
+# With one form each, the count goes 2 → 1 under the mutation and the case
+# reds.
+#
+# ⚠️ **Every form here is one `M5.42` shipped past.** Round one's pattern
+# allowed only `pub`/`pub(...)` before the keyword and demanded a space right
+# after, so six modifier forms slipped through; round two's fix moved `const`
+# into the modifier run and out of the keyword alternation, so a bare
+# `pub const` slipped through the fix.
+setup_file_size_list_impl_generic() {
+  setup_file_size_list_with 'impl<T> From<T> for Error {}'
+}
+setup_file_size_list_unsafe_impl() {
+  setup_file_size_list_with 'unsafe impl Send for Error {}'
+}
+setup_file_size_list_async_fn() {
+  setup_file_size_list_with 'async fn helper() {}'
+}
+setup_file_size_list_pub_async_fn() {
+  setup_file_size_list_with 'pub async fn helper() {}'
+}
+setup_file_size_list_pub_unsafe_fn() {
+  setup_file_size_list_with 'pub unsafe fn helper() {}'
+}
+setup_file_size_list_pub_crate_async_fn() {
+  setup_file_size_list_with 'pub(crate) async fn helper() {}'
+}
+setup_file_size_list_pub_const() {
+  setup_file_size_list_with 'pub const MAX_LEN: usize = 256;'
+}
+# ⚠️ **`extern "C" fn` puts an ABI string between the modifier and the
+# keyword**, which is the shape the pattern's `extern([[:space:]]+"[^"]*")?`
+# branch exists for and which nothing had ever planted.
+setup_file_size_list_extern_c_fn() {
+  setup_file_size_list_with 'pub extern "C" fn helper() {}'
+}
+# ⚠️ **`extern crate` and an `extern "C"` block are *not* counted**, which the
+# row asked to have decided rather than left implicit. `ITEM_RE`'s `extern`
+# branch exists for `extern "C" fn` — a modifier run before a keyword — and
+# neither of these has a keyword from the alternation after it: `extern crate
+# foo;` ends there, and a block's contents are indented so the `^` anchor
+# misses them. The consequence is that a list file may hold either without
+# losing its exemption, which is the right answer for a `#[link]` shim beside a
+# generated table, and these cases record it as a decision.
+setup_file_size_list_extern_crate() {
+  setup_file_size_list_with 'extern crate foo;
+pub mod inner;'
+}
+setup_file_size_list_extern_block() {
+  setup_file_size_list_with 'extern "C" {
+    fn helper();
+}
+pub mod inner;'
+}
+
+# ⚠️ Named for the gate rather than for one fixture's shape: ten cases share
+# it, eight of which plant no module at all.
+invoke_file_size_list() {
   bash "$1/scripts/check-file-size.sh"
 }
 
@@ -3442,8 +3496,44 @@ run_case "build-index.sh --check"       setup_build_index         invoke_build_i
 run_case "check-requirements-trace.sh"  setup_requirements_trace  invoke_requirements_trace \
   "cites FR-999"
 run_case "check-file-size.sh"           setup_file_size           invoke_file_size
-run_case "check-file-size.sh (a list exemption that became a module)" \
-  setup_file_size_list_became_a_module invoke_file_size_list_became_a_module
+run_case "check-file-size.sh (a list that grew a generic From impl)" \
+  setup_file_size_list_impl_generic invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (a list that grew an unsafe impl)" \
+  setup_file_size_list_unsafe_impl invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (a list that grew an async fn)" \
+  setup_file_size_list_async_fn invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (a list that grew a pub async fn)" \
+  setup_file_size_list_pub_async_fn invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (a list that grew a pub unsafe fn)" \
+  setup_file_size_list_pub_unsafe_fn invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (a list that grew a pub(crate) async fn)" \
+  setup_file_size_list_pub_crate_async_fn invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (a list that grew a pub const)" \
+  setup_file_size_list_pub_const invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (a list that grew an extern \"C\" fn)" \
+  setup_file_size_list_extern_c_fn invoke_file_size_list \
+  "holds 2 top-level item(s)"
+# ⚠️ **These two assert the gate's answer about `extern`, which the row asked
+# for: neither form is an item.** `extern crate foo;` has no keyword from the
+# alternation after it, and an `extern "C" { … }` block's contents are
+# indented, so neither is counted. ⚠️ **The count in the expected message is
+# the assertion.** Each fixture plants a `pub mod inner;` beside the `extern`,
+# which both makes the artifact broken — as `negative.sh` requires — and gives
+# the count a value that discriminates: two items, the enum and the module. If
+# `extern crate foo;` counted it would be three, and the case reds.
+run_case "check-file-size.sh (extern crate is not counted, the module beside it is)" \
+  setup_file_size_list_extern_crate invoke_file_size_list \
+  "holds 2 top-level item(s)"
+run_case "check-file-size.sh (an extern block is not counted, the module beside it is)" \
+  setup_file_size_list_extern_block invoke_file_size_list \
+  "holds 2 top-level item(s)"
 run_case "check-readmes.sh"             setup_readmes             invoke_readmes
 run_case "check-readmes.sh (bin/oqueue)" setup_readmes_bin          invoke_readmes_bin \
   "mimalloc"
