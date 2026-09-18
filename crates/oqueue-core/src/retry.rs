@@ -53,6 +53,15 @@ impl Error {
     /// again, which is a new call this crate did not make, not a retry of
     /// the one that lost.
     #[must_use]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one exhaustive match over `Error`'s variants, which \
+                  `code-structure.md` rule 17 names as the legitimate case and \
+                  `ADR-0040` decides the enum stays flat for: the arms are a \
+                  list, not structure, and splitting the function would mean \
+                  a `_ =>` arm somewhere, which rule 16 bans precisely because \
+                  it absorbs a new variant silently"
+    )]
     pub const fn retry_class(&self) -> RetryClass {
         match self {
             Self::SlowDown | Self::Throttled => RetryClass::Forever,
@@ -96,6 +105,9 @@ impl Error {
             | Self::MalformedCompositeManifest { .. }
             | Self::NotACompositeManifest
             | Self::UnknownCompositeVersion { .. }
+            | Self::MalformedPartitionManifest { .. }
+            | Self::NotAPartitionManifest
+            | Self::UnknownPartitionManifestVersion { .. }
             // Never, and `BundleTailTooShort`'s own docs say why it is here
             // rather than in `Bounded`: the object is healthy and the read was
             // too narrow, so the *same* call fails identically forever. A

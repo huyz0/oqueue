@@ -45,7 +45,9 @@ spans/s is **32 seconds** of tail. Nothing about keying moves it.
 ### Quantity 2 — bytes read on a cold fetch
 
 A partition's history, if it is a list of that partition's objects, is
-`24 B` per entry (an object key reference, an offset, a length):
+~`24 B` per entry (an object key reference, an offset, a length) — ⚠️ **an
+estimate made before the format existed, and `M5.61` measured ~36 B**, which
+moves both figures below up by half and neither column's verdict:
 
 | State | Objects in the partition | Manifest |
 |---|---|---|

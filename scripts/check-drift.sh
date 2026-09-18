@@ -315,6 +315,9 @@ declare -A RUST_BOUNDS=(
   # amplified -- which is why it is pinned rather than bounded on one side.
   # UNDERIVED: `M5.md` calls the 8-16 band synthesis, and `M14` replaces it.
   ["crates/oqueue-compact/src/plan.rs|COMPACTION_READ_AMP_THRESHOLD"]="12"
+  # `ADR-0042`: raising it means more bytes read on every cold fetch, which is
+  # the column that shape was picked on. `M5.61`.
+  ["crates/oqueue-core/src/partition_manifest.rs|PARTITION_MANIFEST_BYTES"]="131_072"
   # The most records one compaction plan may rewrite (`M5.3`). ⚠️ Weakening is
   # *raising*: the budget exists so a plan cannot grow past what one round can
   # finish, and a bigger ceiling is a longer window in which a half-run merge
@@ -529,6 +532,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/composite.rs|COMPOSITE_FORMAT_VERSION"]="the composite manifest format's version number"
   ["crates/oqueue-core/src/composite.rs|COMPOSITE_TRAILER_LEN"]="the trailer's own width, fixed by the format"
+  ["crates/oqueue-core/src/partition_manifest.rs|PARTITION_MANIFEST_VERSION"]="the partition manifest format's version number"
+  ["crates/oqueue-core/src/partition_manifest.rs|PARTITION_MANIFEST_TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
   # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
   ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"

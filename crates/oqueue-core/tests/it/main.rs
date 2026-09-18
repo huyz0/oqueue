@@ -20,6 +20,7 @@ mod metadata_log;
 mod multipart;
 mod object_ref;
 mod op_counts;
+mod partition_manifest;
 mod precondition;
 mod rate_governor;
 mod redaction;

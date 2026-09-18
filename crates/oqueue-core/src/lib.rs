@@ -52,6 +52,7 @@ mod clock;
 mod commit_version;
 mod composite;
 mod coordinator_epoch;
+mod cursor;
 mod error;
 mod fault;
 mod fault_group_metadata_log;
@@ -78,6 +79,7 @@ mod object_ref;
 mod offset;
 mod op_counts;
 mod partition;
+mod partition_manifest;
 mod precondition;
 mod principal;
 mod principal_quota;
@@ -136,6 +138,11 @@ pub use object_ref::{IndexedBatch, ObjectRef, TailEntry};
 pub use offset::Offset;
 pub use op_counts::{CountingObjectStore, OpCounts, Operation};
 pub use partition::PartitionId;
+pub use partition_manifest::{
+    ManifestEntry, PARTITION_MANIFEST_BYTES, PARTITION_MANIFEST_MAGIC,
+    PARTITION_MANIFEST_TRAILER_LEN, PARTITION_MANIFEST_VERSION, PartitionManifest,
+    PartitionManifestBuilder, parse_partition_manifest,
+};
 pub use precondition::Precondition;
 pub use principal::Principal;
 pub use principal_quota::{InFlight, PrincipalQuota};

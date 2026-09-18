@@ -8,6 +8,7 @@
 
 use super::{COMPOSITE_FORMAT_VERSION, COMPOSITE_MAGIC, COMPOSITE_TRAILER_LEN};
 use crate::bundle::RegionAlg;
+use crate::cursor::Cursor;
 use crate::{ByteRange, Error, ObjectKey, PartitionId, Region, Result, TopicId};
 use std::collections::HashSet;
 
@@ -34,62 +35,6 @@ impl Component {
     #[must_use]
     pub fn regions(&self) -> &[Region] {
         &self.regions
-    }
-}
-
-/// A bounds-checked reader over the manifest's bytes.
-///
-/// ⚠️ **One cursor rather than a check per field**, for `bundle_footer.rs`'s
-/// reason: a parser with a bounds test at every read has as many places to get
-/// it wrong as it has fields.
-struct Cursor<'a> {
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl<'a> Cursor<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, at: 0 }
-    }
-
-    fn take(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self
-            .at
-            .checked_add(n)
-            .ok_or(Error::MalformedCompositeManifest { at: self.at })?;
-        let slice = self
-            .bytes
-            .get(self.at..end)
-            .ok_or(Error::MalformedCompositeManifest { at: self.at })?;
-        self.at = end;
-        Ok(slice)
-    }
-
-    fn u16(&mut self) -> Result<u16> {
-        let b = self.take(2)?;
-        Ok(u16::from_be_bytes([b[0], b[1]]))
-    }
-
-    fn u32(&mut self) -> Result<u32> {
-        let b = self.take(4)?;
-        Ok(u32::from_be_bytes([b[0], b[1], b[2], b[3]]))
-    }
-
-    fn u64(&mut self) -> Result<u64> {
-        let b = self.take(8)?;
-        Ok(u64::from_be_bytes([
-            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-        ]))
-    }
-
-    fn byte(&mut self) -> Result<u8> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn string(&mut self, len: usize) -> Result<&'a str> {
-        let at = self.at;
-        let raw = self.take(len)?;
-        core::str::from_utf8(raw).map_err(|_| Error::MalformedCompositeManifest { at })
     }
 }
 
@@ -121,7 +66,9 @@ pub fn parse_composite(bytes: &[u8]) -> Result<Vec<Component>> {
     if bytes[magic_at..] != COMPOSITE_MAGIC {
         return Err(Error::NotACompositeManifest);
     }
-    let mut trailer = Cursor::new(&bytes[trailer_at..]);
+    let mut trailer = Cursor::new(&bytes[trailer_at..], |at| {
+        Error::MalformedCompositeManifest { at }
+    });
     let count = trailer.u32()?;
     let version = trailer.byte()?;
     if version != COMPOSITE_FORMAT_VERSION {
@@ -138,7 +85,9 @@ pub fn parse_composite(bytes: &[u8]) -> Result<Vec<Component>> {
         return Err(Error::MalformedCompositeManifest { at: trailer_at });
     }
 
-    let mut cursor = Cursor::new(&bytes[..trailer_at]);
+    let mut cursor = Cursor::new(&bytes[..trailer_at], |at| {
+        Error::MalformedCompositeManifest { at }
+    });
     let mut components = Vec::new();
     // ⚠️ **The read side refuses a repeated object too**, and for the reason
     // the zero-record check below gives rather than as symmetry for its own
@@ -150,14 +99,14 @@ pub fn parse_composite(bytes: &[u8]) -> Result<Vec<Component>> {
     for _ in 0..count {
         let component = decode_component(&mut cursor)?;
         if !seen.insert(component.object().clone()) {
-            return Err(Error::MalformedCompositeManifest { at: cursor.at });
+            return Err(Error::MalformedCompositeManifest { at: cursor.at() });
         }
         components.push(component);
     }
     // Every byte before the trailer belongs to a component, for the reason the
     // length check above gives.
-    if cursor.at != trailer_at {
-        return Err(Error::MalformedCompositeManifest { at: cursor.at });
+    if cursor.at() != trailer_at {
+        return Err(Error::MalformedCompositeManifest { at: cursor.at() });
     }
     Ok(components)
 }
@@ -180,11 +129,11 @@ fn decode_region(cursor: &mut Cursor<'_>) -> Result<Region> {
     let name_len = cursor.u16()? as usize;
     let topic = TopicId::new(cursor.string(name_len)?)?;
     let raw_partition = cursor.u32()?;
-    let at = cursor.at;
+    let at = cursor.at();
     let partition = PartitionId::new(
         i32::try_from(raw_partition).map_err(|_| Error::MalformedCompositeManifest { at })?,
     )?;
-    let at_count = cursor.at;
+    let at_count = cursor.at();
     let record_count = cursor.u32()?;
     // ⚠️ **A region holding no record is refused here, not only on the write
     // side** (`bundle_footer.rs` makes the same call for the same reason): a

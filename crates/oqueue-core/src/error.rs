@@ -263,6 +263,26 @@ pub enum Error {
         version: u8,
     },
 
+    /// A partition manifest could not be read.
+    #[error("the partition manifest is malformed at byte {at}")]
+    MalformedPartitionManifest {
+        /// How far in the parser got.
+        at: usize,
+    },
+
+    /// The bytes handed to
+    /// [`parse_partition_manifest`](crate::parse_partition_manifest) do not
+    /// end in a partition manifest's magic.
+    #[error("these bytes are not a partition manifest")]
+    NotAPartitionManifest,
+
+    /// A partition manifest names a format version this build does not know.
+    #[error("partition manifest version {version} is not one this build knows")]
+    UnknownPartitionManifestVersion {
+        /// The version read from the trailer.
+        version: u8,
+    },
+
     /// A bundled object's footer names a format version this build does not
     /// know.
     #[error("bundle format version {version} is not one this build knows")]
