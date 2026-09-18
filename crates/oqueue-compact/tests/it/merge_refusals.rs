@@ -281,3 +281,37 @@ async fn the_estimate_predicts_the_run_at_the_budget_s_largest_plan() {
     );
     assert_eq!(estimate.records_rewritten(), outcome.records());
 }
+
+/// ⚠️ **Every input outside the range is a covering of nothing, and a plan
+/// with a range to rewrite must refuse it.** The filter drops each one without
+/// a read — which the case above asserts — and what is left is an empty
+/// covering that reaches `plan.start()` rather than `plan.end()`.
+///
+/// ⚠️ **Measured, and it was unguarded before `M5.12`.** Having the empty case
+/// fall back to `(plan.start(), plan.end())` instead of `(start, start)`
+/// leaves the whole suite green while `merge` writes an object holding nothing
+/// for a plan that was costed on thirteen records — a compaction that retires
+/// thirteen objects and installs one empty one. Its first round found that.
+#[tokio::test]
+async fn a_plan_whose_inputs_all_lie_outside_its_range_is_refused() {
+    let store = Counting::new();
+    let mut refs = Vec::new();
+    for i in 0..3_i64 {
+        let name = format!("far-{i}");
+        write_input(&store, &name, &topic(), 1, 32).await;
+        refs.push(ObjectRef::new(key(&name), offset(500 + i), 1));
+    }
+
+    // ⚠️ **Which refusal, not that one happened.** With the empty case
+    // fabricating `(start, end)` the tiling passes and the merge fails anyway,
+    // one step later, because a bundle holding nothing cannot be sealed — so
+    // `expect_err` alone is satisfied by the defect. `IndexObjectMismatch` is
+    // the tiling's answer; `EmptyBundle` is the writer's.
+    let refused = merge(&store, &planned(13), &refs, &key("out"))
+        .await
+        .expect_err("a covering of nothing does not tile a range of thirteen");
+    assert!(
+        matches!(refused, Error::IndexObjectMismatch),
+        "refused by the tiling, before anything was written: {refused:?}"
+    );
+}

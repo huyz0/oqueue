@@ -41,6 +41,7 @@ use oqueue_core::{
 };
 
 use crate::CompactionPlan;
+use crate::coverage::contiguous_span;
 
 /// Merges the plan's inputs into `output`.
 ///
@@ -156,26 +157,29 @@ fn tiling<'a>(ordered: &[&'a ObjectRef], plan: &CompactionPlan) -> Result<Vec<&'
         }
         // ⚠️ **No separate straddle test, and none survives one.** A dedicated
         // `base < start || object_end > end` refusal was here and cargo-mutants
-        // showed both halves redundant: an input reaching below the start fails
-        // the contiguity test below, because the first tile must begin exactly
-        // at `plan.start()`, and one reaching past the end fails the reach test
-        // after the loop. Both still refuse, with the same error and the same
-        // tests observing it; a branch no input can distinguish is worse than
-        // no branch.
-        let expected = match covering.last() {
-            None => plan.start(),
-            Some(previous) => previous.end_offset()?,
-        };
-        if base != expected {
-            return Err(Error::IndexObjectMismatch);
-        }
+        // showed both halves redundant: **both edges are refused by the single
+        // comparison after this loop**, which requires the covering to span
+        // exactly `[plan.start(), plan.end())`. A branch no input can
+        // distinguish is worse than no branch.
+        //
+        // ⚠️ **Both halves of that comparison are load-bearing, and this
+        // comment said otherwise until `M5.12`'s second round.** It claimed an
+        // input reaching below the start was caught by contiguity — it is not:
+        // contiguity now lives in `contiguous_span`, which never sees
+        // `plan.start()`, so a single ref based at 0 against a plan starting
+        // at 2 spans `(0, 5)` with no gap and meets the end. Only the low
+        // endpoint refuses it. Trimming this to `covered.1 != plan.end()`
+        // rewrites records outside the plan.
         covering.push(reference);
     }
-    let reached = match covering.last() {
-        None => plan.start(),
-        Some(last) => last.end_offset()?,
-    };
-    if reached != plan.end() {
+    // ⚠️ **The contiguity rule is `coverage::contiguous_span`'s**, not a
+    // second copy of it (`M5.12`). This function's own work is the *filter* —
+    // which inputs the plan's range touches at all — and the range it must
+    // then meet exactly. Two notions of what a gap is, one for the inputs and
+    // one for the outputs, is the drift that check has to be free of.
+    let span = contiguous_span(&covering)?;
+    let covered = span.unwrap_or_else(|| (plan.start(), plan.start()));
+    if covered != (plan.start(), plan.end()) {
         return Err(Error::IndexObjectMismatch);
     }
     Ok(covering)

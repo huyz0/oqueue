@@ -4,6 +4,7 @@
 //! is otherwise its own crate, its own link, and its own copy of the debuginfo.
 
 mod compose;
+mod coverage;
 mod end_to_end;
 mod layout;
 mod merge;

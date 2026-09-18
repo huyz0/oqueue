@@ -8,6 +8,7 @@
 
 mod compose;
 mod cost;
+mod coverage;
 mod layout;
 mod merge;
 mod plan;
@@ -16,6 +17,7 @@ mod sweep;
 
 pub use compose::{ComposeOutcome, compose, read_composite};
 pub use cost::{COMPACTION_PLAN_RECORDS_BUDGET, CostEstimate};
+pub use coverage::{contiguous_span, covers};
 pub use layout::{PlannedInputs, merge_round};
 pub use merge::{MergeOutcome, merge};
 pub use plan::{COMPACTION_READ_AMP_THRESHOLD, CompactionPlan, Planning, plan};
