@@ -8,6 +8,7 @@
 
 mod compose;
 mod cost;
+mod gc;
 mod layout;
 mod lifecycle;
 mod merge;
@@ -20,6 +21,7 @@ mod sweep;
 pub use compose::{ComposeOutcome, compose, read_composite};
 pub use cost::{COMPACTION_PLAN_RECORDS_BUDGET, CostEstimate};
 
+pub use gc::{DELETION_DELAY_MS, GcTerms, MAX_CLOCK_SKEW_MS, MAX_IN_FLIGHT_FETCH_MS};
 pub use layout::{PlannedInputs, merge_round};
 pub use lifecycle::{
     DELETE_BATCH_KEYS, DELETION_BACKLOG_KEYS, Lifecycle, QUARANTINE_AFTER_REFUSALS, SweepReport,

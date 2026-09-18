@@ -18,6 +18,9 @@ oqueue-core = { path = "../oqueue-core" }
 # to await a merge against the fake store. `oqueue-store`'s own dev-dependency
 # comment is the precedent; features come from the workspace pin.
 tokio = { workspace = true }
+# ⚠️ `M5.22`: FR-35's invariant test runs under `run_seeded`, M10's
+# deterministic schedule. Dev-only, as in `oqueue-broker`.
+oqueue-testkit = { path = "../oqueue-testkit" }
 
 [lints]
 workspace = true

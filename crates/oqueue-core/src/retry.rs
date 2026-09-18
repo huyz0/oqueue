@@ -137,6 +137,8 @@ impl Error {
             // Never: the records below the start are gone, and asking again
             // does not bring them back. The client resets its own position.
             | Self::BelowLogStart { .. }
+            // Never: the same constants fail the same inequality every time.
+            | Self::GcInequalityViolated { .. }
             // Never: a quota built with its alarm at or above its ceiling is a
             // configuration, and the same configuration is rejected the same
             // way every time.

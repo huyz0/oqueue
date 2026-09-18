@@ -5,6 +5,7 @@
 
 mod compose;
 mod end_to_end;
+mod gc_race;
 mod indexes;
 mod layout;
 mod lifecycle;

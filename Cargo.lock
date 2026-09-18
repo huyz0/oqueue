@@ -1025,6 +1025,7 @@ name = "oqueue-compact"
 version = "0.0.0"
 dependencies = [
  "oqueue-core",
+ "oqueue-testkit",
  "tokio",
 ]
 

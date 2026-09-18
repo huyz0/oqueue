@@ -5,7 +5,7 @@
 
 use crate::support::{committed, key, topic};
 use oqueue_compact::{
-    DELETE_BATCH_KEYS, DELETION_BACKLOG_KEYS, Lifecycle, QUARANTINE_AFTER_REFUSALS,
+    DELETE_BATCH_KEYS, DELETION_BACKLOG_KEYS, GcTerms, Lifecycle, QUARANTINE_AFTER_REFUSALS,
 };
 use oqueue_core::{
     BoxFuture, ByteRange, CommitVersion, CommittedSpan, Error, FakeMaterializedIndex,
@@ -15,6 +15,16 @@ use oqueue_core::{
 use std::sync::Mutex;
 
 const DELAY: i64 = 1_000;
+
+/// A lifecycle over no safety terms, so a test may pick any positive delay.
+fn lifecycle(delay_ms: i64) -> Lifecycle {
+    let none = GcTerms {
+        metadata_staleness_ms: 0,
+        fetch_duration_ms: 0,
+        clock_skew_ms: 0,
+    };
+    Lifecycle::new(delay_ms, none).expect("a positive delay exceeds nothing")
+}
 
 fn at(millis: i64) -> Timestamp {
     Timestamp::from_millis(millis).expect("a valid time")
@@ -106,7 +116,7 @@ fn trim_everything(index: &FakeMaterializedIndex) {
 async fn the_delay_runs_from_the_first_sweep_that_sees_zero() {
     let index = index_naming("obj");
     let store = Refusing::default();
-    let mut lifecycle = Lifecycle::new(DELAY);
+    let mut lifecycle = lifecycle(DELAY);
     lifecycle.release(key("obj"));
 
     let report = lifecycle.sweep(&index, &store, at(0)).await;
@@ -131,7 +141,7 @@ async fn the_delay_runs_from_the_first_sweep_that_sees_zero() {
 async fn a_referenced_object_is_never_deleted() {
     let index = index_naming("pinned");
     let store = Refusing::default();
-    let mut lifecycle = Lifecycle::new(DELAY);
+    let mut lifecycle = lifecycle(DELAY);
     lifecycle.release(key("pinned"));
     for sweep in 0..10 {
         lifecycle
@@ -152,7 +162,7 @@ async fn a_key_refused_repeatedly_is_quarantined_not_retried_forever() {
         refuse: vec![key("stuck")],
         ..Refusing::default()
     };
-    let mut lifecycle = Lifecycle::new(0);
+    let mut lifecycle = lifecycle(1);
     lifecycle.release(key("stuck"));
     lifecycle.release(key("fine"));
     lifecycle.sweep(&index, &store, at(0)).await;
@@ -193,7 +203,7 @@ async fn a_key_refused_fewer_times_than_the_limit_stays_queued() {
         refuse: vec![key("stuck")],
         ..Refusing::default()
     };
-    let mut lifecycle = Lifecycle::new(0);
+    let mut lifecycle = lifecycle(1);
     lifecycle.release(key("stuck"));
     lifecycle.sweep(&index, &store, at(0)).await;
     for sweep in 1..i64::from(QUARANTINE_AFTER_REFUSALS) {
@@ -210,7 +220,7 @@ async fn a_key_refused_fewer_times_than_the_limit_stays_queued() {
 async fn a_replayed_sweep_deletes_nothing_twice() {
     let index = FakeMaterializedIndex::new();
     let store = Refusing::default();
-    let mut lifecycle = Lifecycle::new(0);
+    let mut lifecycle = lifecycle(1);
     lifecycle.release(key("once"));
     lifecycle.release(key("once"));
     lifecycle.sweep(&index, &store, at(0)).await;
@@ -228,7 +238,7 @@ async fn a_replayed_sweep_deletes_nothing_twice() {
 async fn the_backlog_is_bounded_when_deletion_is_slower_than_creation() {
     let index = FakeMaterializedIndex::new();
     let store = Refusing::default();
-    let mut lifecycle = Lifecycle::new(0);
+    let mut lifecycle = lifecycle(1);
     let per_round = 3 * DELETE_BATCH_KEYS;
     let mut minted = 0_usize;
     let mut refused_rounds = 0;
@@ -259,7 +269,7 @@ async fn the_backlog_is_bounded_when_deletion_is_slower_than_creation() {
 /// Admission stops exactly at the bound, not before it.
 #[test]
 fn admission_stops_at_the_backlog_bound() {
-    let mut lifecycle = Lifecycle::new(0);
+    let mut lifecycle = lifecycle(1);
     for n in 0..DELETION_BACKLOG_KEYS - 1 {
         lifecycle.release(key(&format!("k-{n}")));
     }

@@ -213,6 +213,23 @@ pub enum Error {
         log_start: i64,
     },
 
+    /// A deletion delay that does not exceed FR-35's safety bound.
+    ///
+    /// ⚠️ **Refused at startup, never assumed** (`M5.22`). `deletion_delay >
+    /// max_metadata_staleness + max_in_flight_fetch_duration + clock_skew` is
+    /// what lets a reader holding a reference fetch it before the object is
+    /// deleted; a lifecycle built with a shorter delay deletes bytes a reader
+    /// was promised, so it is not built at all.
+    #[error(
+        "a deletion delay of {delay_ms} ms does not exceed the GC safety bound of {bound_ms} ms"
+    )]
+    GcInequalityViolated {
+        /// The delay configured.
+        delay_ms: i64,
+        /// The sum it must exceed.
+        bound_ms: i64,
+    },
+
     /// A fold would have taken the index past its quota.
     ///
     /// ⚠️ **A refusal, never an eviction** (`ADR-0043` decision 3). The

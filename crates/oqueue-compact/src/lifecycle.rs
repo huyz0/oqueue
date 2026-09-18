@@ -6,7 +6,7 @@
 //! still be fetching, so an object waits out a delay counted from the first
 //! moment this lifecycle *saw* its count at zero — never from when it was
 //! released, which may be long before its last slice died. That delay is
-//! FR-35's inequality, whose terms `M5.22` fixes; this module only waits it.
+//! FR-35's inequality, whose terms `gc.rs` fixes and `new` checks.
 //!
 //! ⚠️ **Bounded twice, because a cap alone is not the answer.** A per-round
 //! cap bounds what one sweep issues; it does not bound the queue, which grows
@@ -22,7 +22,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use oqueue_core::{MaterializedIndex, ObjectKey, ObjectStore, Timestamp};
+use oqueue_core::{MaterializedIndex, ObjectKey, ObjectStore, Result, Timestamp};
+
+use crate::GcTerms;
 
 /// The most keys one sweep asks the store to delete.
 ///
@@ -72,16 +74,24 @@ pub struct Lifecycle {
 
 impl Lifecycle {
     /// A lifecycle that waits `delay_ms` after an object's count reaches zero.
-    #[must_use]
-    pub fn new(delay_ms: i64) -> Self {
-        Self {
+    ///
+    /// ⚠️ **The inequality is checked here, at startup** (`M5.22`): a delay
+    /// that does not exceed `terms`' sum is refused rather than run.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::GcInequalityViolated`](oqueue_core::Error::GcInequalityViolated)
+    /// when `delay_ms` does not exceed `terms.bound()`.
+    pub fn new(delay_ms: i64, terms: GcTerms) -> Result<Self> {
+        terms.check(delay_ms)?;
+        Ok(Self {
             delay_ms,
             logical: HashMap::new(),
             queue: VecDeque::new(),
             leaving: HashSet::new(),
             refusals: HashMap::new(),
             quarantined: Vec::new(),
-        }
+        })
     }
 
     /// Records that the index dropped a reference to `object`.

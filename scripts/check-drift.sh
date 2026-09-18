@@ -360,6 +360,16 @@ declare -A RUST_BOUNDS=(
   # is *raising*: a key the store will never delete is retried for longer
   # before anyone is told.
   ["crates/oqueue-compact/src/lifecycle.rs|QUARANTINE_AFTER_REFUSALS"]="5"
+  # FR-35's fetch-duration term (`M5.22`). ⚠️ Weakening is *lowering*: an
+  # understated fetch lets the delay pass a check it fails against the truth.
+  ["crates/oqueue-compact/src/gc.rs|MAX_IN_FLIGHT_FETCH_MS"]="240_000"
+  # FR-35's clock-skew term (`M5.22`). ⚠️ Weakening is *lowering*, for the
+  # same reason as the fetch term above.
+  ["crates/oqueue-compact/src/gc.rs|MAX_CLOCK_SKEW_MS"]="10_000"
+  # How long an unreferenced object waits before deletion (`M5.22`).
+  # ⚠️ Weakening is *lowering*, toward deleting bytes a reader still holds;
+  # `GcTerms::check` refuses it at startup at or below the terms' sum.
+  ["crates/oqueue-compact/src/gc.rs|DELETION_DELAY_MS"]="600_000"
   # How many bytes one part of a bundled object carries (`M5.6`). ⚠️ Weakening
   # is *lowering*: S3 refuses any part but the last below 5 MiB, so a smaller
   # value moves the failure from this crate to the backend, which is the wrong
@@ -751,6 +761,14 @@ declare -A STRUCT_FIELD_BOUNDS=(
   # refused the fully-qualified form. The pin tracks the bytes, so a spelling
   # change has to be recorded here even when the value does not move.
   ["bin/oqueue/src/serve.rs|SERVE_LIMITS|idle_timeout"]="Duration::from_mins(2)"
+  # FR-35's terms as the lifecycle is built with them (`M5.22`). Each names
+  # a constant pinned above or in `oqueue-core`; the pin is on the name, so
+  # swapping one for a smaller literal is a diff this map refuses.
+  ["crates/oqueue-compact/src/gc.rs|CONFIGURED|metadata_staleness_ms"]="MAX_METADATA_STALENESS_MS as i64"
+  # The fetch-duration term, by name (`M5.22`).
+  ["crates/oqueue-compact/src/gc.rs|CONFIGURED|fetch_duration_ms"]="MAX_IN_FLIGHT_FETCH_MS"
+  # The clock-skew term, by name (`M5.22`).
+  ["crates/oqueue-compact/src/gc.rs|CONFIGURED|clock_skew_ms"]="MAX_CLOCK_SKEW_MS"
 )
 struct_violations=0
 while IFS= read -r open_line; do
