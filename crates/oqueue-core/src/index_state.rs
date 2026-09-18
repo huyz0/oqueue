@@ -99,8 +99,30 @@ impl IndexState {
     ///
     /// # Errors
     ///
-    /// [`Error::NonMonotonicCommitVersion`] or [`Error::OffsetOverflow`], with
-    /// the state left untouched in either case.
+    /// Five variants, and **the state is left untouched for every one of
+    /// them** — guarantee 2 is what makes the list worth reading, because a
+    /// caller that retries a rejected batch retries it against the state it
+    /// had before:
+    ///
+    /// - [`Error::NonMonotonicCommitVersion`], a version at or below the one
+    ///   already folded;
+    /// - [`Error::OffsetOverflow`], a partition's next offset past
+    ///   `i64::MAX` — [`Offset`] carries the protocol's `int64` range, not a
+    ///   `u64` one, so the ceiling is half where a reader might place it;
+    /// - [`Error::EmptyRegion`], a [`CommittedSpan`](crate::CommittedSpan) of
+    ///   no records, which would become an [`ObjectRef`] covering no offsets;
+    /// - [`Error::ManifestDoesNotMeetHistory`], a `ManifestPublished` whose
+    ///   `upto` does not meet what is left of the partition;
+    /// - [`Error::IndexObjectMismatch`], a `RangeCompacted` retiring a
+    ///   reference the partition's **history** does not hold — a reference
+    ///   still inside the tail window is refused too, and compaction's age
+    ///   guard is what keeps a swap away from it — or installing a run that
+    ///   does not cover exactly what it retires.
+    ///
+    /// ⚠️ **The list is exhaustive and is meant to stay so.** An applier
+    /// deciding abort-versus-retry matches on these, and doc 21 §4's point is
+    /// that a variant reaching a caller the docs said could not see it is
+    /// indistinguishable from a bug in the caller.
     pub fn apply(&mut self, entries: &[MetadataEntry]) -> Result<()> {
         // ⚠️ Computed into a scratch map first, so a failure part-way through
         // cannot leave a partially folded batch behind — guarantee 2. The
