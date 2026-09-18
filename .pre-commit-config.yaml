@@ -35,6 +35,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-wellformed
+        name: "M5.70: no conflict marker in a tracked file, and every shell script parses"
+        entry: scripts/check-wellformed.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-drift
         name: "non-negotiable 2: no threshold is read from an environment variable"
         entry: scripts/check-drift.sh

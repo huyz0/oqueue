@@ -475,6 +475,74 @@ invoke_drift() {
   bash "$1/scripts/check-drift.sh"
 }
 
+# --- check-wellformed.sh: a marker, and a script that does not parse ---------
+#
+# ⚠️ **`M5.70`, and it is the suite's own near-miss.** `M5.65`'s second round
+# read twelve merge-conflict markers in the *staged* `tests/gates/negative.sh`.
+# `bash -n` on those bytes exits 2, so zero of 175 cases ran — a suite that
+# proves nothing, inside the suite that exists to catch that shape — and the
+# whole pre-commit run was green, because nothing lints or executes a shell
+# script and `check-crate.sh` covers Rust only.
+setup_wellformed_conflict_marker() {
+  local dir; dir="$(new_scratch wellformed-marker)"
+  copy_gate "$dir" check-wellformed.sh
+  {
+    printf 'a paragraph.\n\n'
+    printf '<<<<<<< Updated upstream\n'
+    printf 'one side\n'
+    printf '=======\n'
+    printf 'the other\n'
+    printf '>>>>>>> Stashed changes\n'
+  } > "$dir/notes.md"
+  (cd "$dir" && git add -A && git commit -q -m "M5.70: a conflict left in a file")
+  printf '%s\n' "$dir"
+}
+invoke_wellformed() {
+  bash "$1/scripts/check-wellformed.sh"
+}
+
+# ⚠️ **A script that does not parse is the half a marker scan cannot cover**:
+# a half-applied edit leaves no marker and still runs nothing.
+setup_wellformed_unparsable_script() {
+  # ⚠️ The prefix is a parameter because `new_scratch` names the directory
+  # after it, so two fixtures sharing one would `git init` over each other and
+  # the second commit would find nothing to commit.
+  local dir; dir="$(new_scratch "${1:-wellformed-parse}")"
+  copy_gate "$dir" check-wellformed.sh
+  printf 'if [ -n "$1" ]; then\n  echo yes\n' > "$dir/half.sh"
+  (cd "$dir" && git add -A && git commit -q -m "M5.70: a script missing its fi")
+  printf '%s\n' "$dir"
+}
+
+# ⚠️ **The bytes that land in history are the staged ones.** A script removed
+# from the working tree without the deletion being staged is still in the
+# index and still commits — and the first draft's `[[ -f "$f" ]]` guard
+# skipped exactly that file, printing `ok` and a count larger than the number
+# it had checked. `M5.70`'s first round measured it.
+setup_wellformed_unparsable_but_deleted() {
+  local dir; dir="$(setup_wellformed_unparsable_script wellformed-parse-deleted)"
+  rm -f "$dir/half.sh"
+  printf '%s\n' "$dir"
+}
+
+# ⚠️ **A Markdown setext heading underlines with `=` and is not a conflict.**
+# The `=======` arm is length-exact for this reason, and a converse case is
+# what keeps that true — a gate that refused every `===` line would be
+# unusable in a repository whose docs are Markdown.
+check_wellformed_allows_a_setext_heading() {
+  local dir; dir="$(new_scratch wellformed-setext)"
+  copy_gate "$dir" check-wellformed.sh
+  printf 'A heading\n=========\n\nand its paragraph.\n' > "$dir/notes.md"
+  (cd "$dir" && git add -A && git commit -q -m "M5.70: a setext heading")
+  if bash "$dir/scripts/check-wellformed.sh" >/dev/null 2>&1; then
+    ok "check-wellformed.sh allows a Markdown setext heading"
+  else
+    fail "check-wellformed.sh reads a setext underline as a conflict marker"
+    FAILED_CASES=$((FAILED_CASES + 1))
+  fi
+  TOTAL=$((TOTAL + 1))
+}
+
 # --- check-drift.sh: a pin inserted between a comment and the entry it names -
 #
 # ⚠️ **`M5.65`.** `M5.63` added a comment-and-entry pair to `RUST_BOUNDS`
@@ -3563,6 +3631,16 @@ run_case "check-drift.sh (a _days threshold)" setup_drift_days       invoke_drif
   "threshold made settable"
 run_case "check-drift.sh (a raised Rust bound)" setup_rust_bound     invoke_rust_bound \
   "MAX_READS_PER_REQUEST is '64'"
+run_case "check-wellformed.sh (a conflict marker in a tracked file)" \
+  setup_wellformed_conflict_marker invoke_wellformed \
+  "merge-conflict marker"
+run_case "check-wellformed.sh (a shell script that does not parse)" \
+  setup_wellformed_unparsable_script invoke_wellformed \
+  "does not parse as a shell script"
+run_case "check-wellformed.sh (the same, deleted from the working tree)" \
+  setup_wellformed_unparsable_but_deleted invoke_wellformed \
+  "does not parse as a shell script"
+check_wellformed_allows_a_setext_heading
 run_case "check-drift.sh (a pin under another pin's reason)" \
   setup_drift_pin_under_another_pins_reason invoke_drift_pin_under_another_pins_reason \
   "has no comment of its own"
