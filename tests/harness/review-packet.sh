@@ -355,6 +355,97 @@ check "the diff under review is what is staged there" "$out" \
   "check-ggg-diff.sh: passed"
 rm -rf "$gates"
 
+# ── A gate the packet refuses to run says so, and is not run ───────────────
+#
+# ⚠️ **`M5.76`, and the two halves are separate claims.** Naming a gate in
+# `GATES_NOT_RUN_HERE` has to produce a row — a reviewer cannot tell a gate
+# nobody ran from one nobody thought of — *and* it has to actually not run it,
+# which is the whole point: `check-crate.sh` and `check-coverage.sh` are
+# from-scratch `cargo` builds, ~33 CPU-minutes between them, uncontained on the
+# host that `AGENTS.md` says must never see an unbounded build.
+#
+# ⚠️ **The sentinel is what proves the second half**, and it is written outside
+# the scratch tree because that tree is deleted by the `RETURN` trap before
+# this suite can look at it. A planted `check-crate.sh` that ran would leave
+# the file behind and be reported `**FAILED**`; both are asserted, because
+# either one alone passes for the wrong reason — the row could be printed by a
+# gate that also ran, and the absent sentinel could mean the fixture was never
+# discovered at all. `check-hhh-ran.sh` is the control for that last case: it
+# is discovered from the same directory and must be reported.
+gates="$(scratch)"
+sentinel="$(mktemp -u)"
+cat > "$gates/scripts/check-crate.sh" <<EOF
+#!/usr/bin/env bash
+: > "$sentinel"
+printf 'this gate must never have run\n'
+exit 1
+EOF
+cat > "$gates/scripts/check-hhh-ran.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '  ok  a gate beside it is still discovered
+'
+exit 0
+EOF
+chmod +x "$gates/scripts"/check-*.sh
+out="$(packet "$gates" "a change to review")"
+check "a cargo gate is named rather than run" "$out" \
+  "check-crate.sh: **not run here** — invokes cargo"
+refute "and is not reported as passed" "$out" "check-crate.sh: passed"
+refute "nor as failed, which is what running it would have said" "$out" \
+  "check-crate.sh: **FAILED**"
+check "the gate beside it is still discovered" "$out" "check-hhh-ran.sh: passed"
+if [ -e "$sentinel" ]; then
+  red "FAIL check-crate.sh ran: the packet executed a gate it says it did not"
+  FAIL=$((FAIL + 1))
+  rm -f "$sentinel"
+else
+  green "ok   check-crate.sh left no trace, because it was never executed"
+  PASS=$((PASS + 1))
+fi
+rm -rf "$gates"
+
+# ⚠️ **Every name in that list has to resolve to a gate that exists.** The case
+# above plants its own `check-crate.sh`, so it proves the *mechanism* and
+# nothing about the two real entries: rename `scripts/check-coverage.sh`, or
+# mistype it here, and the entry goes dead, the glob rediscovers the real
+# script under its new name, and the packet silently resumes an uncontained
+# from-scratch build on the host — while this suite stays green. Found by
+# `M5.76`'s first round.
+names="$(awk '/^GATES_NOT_RUN_HERE=\(/ { inside = 1; next }
+              inside && /^\)/ { exit }
+              inside { gsub(/^[[:space:]]*"/, ""); sub(/\|.*/, ""); print }' \
+          "$ROOT/scripts/review.sh")"
+# ⚠️ **The count too, because a partial parse is silent.** An entry written on
+# the `=(` line is skipped by the `next` above while the rest still parse, so
+# `names` is non-empty and the emptiness guard below never fires — and that
+# entry's gate goes unpinned. Comparing against every `|`-bearing line in the
+# block catches the shape rather than the instance. Found by `M5.76`'s second
+# round.
+entries="$(awk '/^GATES_NOT_RUN_HERE=\(/ { inside = 1 }
+                inside && /\|/ { n += 1 }
+                inside && /^\)/ { exit }
+                END { print n + 0 }' "$ROOT/scripts/review.sh")"
+parsed="$(printf '%s\n' $names | grep -c .)"
+if [ "$entries" != "$parsed" ]; then
+  red "FAIL GATES_NOT_RUN_HERE has $entries entries and $parsed parsed -- one is unpinned"
+  FAIL=$((FAIL + 1))
+elif [ -z "$names" ]; then
+  red "FAIL GATES_NOT_RUN_HERE is empty or unparseable -- the list guards nothing"
+  FAIL=$((FAIL + 1))
+else
+  missing=""
+  for name in $names; do
+    [ -f "$ROOT/scripts/$name" ] || missing="$missing $name"
+  done
+  if [ -n "$missing" ]; then
+    red "FAIL GATES_NOT_RUN_HERE names a gate that does not exist:$missing"
+    FAIL=$((FAIL + 1))
+  else
+    green "ok   every gate named as not-run-here is a gate that exists"
+    PASS=$((PASS + 1))
+  fi
+fi
+
 overrides="$(cat "$ROOT/reviews/overrides.md")"
 check "the override file states the cap it guards" "$overrides" "rule 15a"
 if printf '%s' "$overrides" | grep -q "No standing authority is in force"; then

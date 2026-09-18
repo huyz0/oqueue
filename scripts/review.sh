@@ -143,6 +143,51 @@ emit_diff() {
 # and a row that is permanently unrun trains the same blindness a permanently
 # red one does. The suite's wall clock is the commit hook's question and the
 # nightly's, not a reviewer's.
+# ⚠️ **Two gates are named here rather than run, and the reason is
+# containment** (`M5.76`). `check-crate.sh` and `check-coverage.sh` invoke
+# `cargo` — a workspace build, a test run, and an instrumented `llvm-cov`
+# build — and the scratch tree has no `target/` of its own, so each one is a
+# from-scratch build. Measured on this repository, on the materialised tree:
+# `check-coverage.sh` 74.8 s wall and **827 s of CPU**, `check-crate.sh`
+# 120.2 s and **1149 s** — 11.1 and 9.6 cores of the 20 this host has, so
+# roughly half of it for three and a quarter minutes. That is ~195 s and ~33
+# CPU-minutes on **every review packet**. ⚠️ **Not saturation, and the
+# difference matters**: a decision sized from "the host is pinned" would be
+# sized from a figure nothing measured, and what actually bounds an
+# uncontained build on WSL2 is memory rather than cores.
+#
+# ⚠️ **And it happens on the host, which is the part that is not merely slow.**
+# `AGENTS.md` says reviewing stays on the host precisely because `review.sh`
+# needs no toolchain, and says in the same breath that anything invoking
+# `cargo` goes through `scripts/docker-test.sh` — containment, not tidiness: on
+# WSL2 an unbounded build exhausts the VM and takes the session with it. A
+# packet that runs two uncontained from-scratch builds is the one thing that
+# rule forbids, done by the script that exists to check the rules.
+#
+# ⚠️ **Reported, not silently dropped**, which is the difference between this
+# list and `GATES_EXCLUDED` above. An excluded gate leaves no row at all, and a
+# reviewer cannot tell a gate nobody ran from a gate nobody thought of. These
+# two are green in the container on every commit — the hook runs them there —
+# so what the packet owes the reviewer is the statement that it makes no claim
+# about them, and why.
+GATES_NOT_RUN_HERE=(
+  "check-crate.sh|invokes cargo; reviewing stays on the host and an uncontained workspace build is what AGENTS.md's container rule forbids (1149 s of CPU against a scratch tree). The commit hook runs it in the container."
+  "check-coverage.sh|invokes cargo llvm-cov; an instrumented from-scratch build, 827 s of CPU against a scratch tree, uncontained on the host. The commit hook runs it in the container."
+)
+
+# The reason this gate is named rather than run, or empty if it is not in the
+# list above.
+not_run_reason() {
+  local want="$1" entry
+  for entry in "${GATES_NOT_RUN_HERE[@]}"; do
+    if [[ "${entry%%|*}" == "$want" ]]; then
+      printf '%s' "${entry#*|}"
+      return 0
+    fi
+  done
+  return 1
+}
+
 GATES_EXCLUDED=(
   check-commit-msg.sh
   check-reviewed.sh
@@ -311,7 +356,7 @@ report_gate() {
 }
 
 run_gates_on_staged_tree() {
-  local h="$1" tree base excluded g rc=0
+  local h="$1" tree base excluded g rc=0 reason
 
   # Reap orphans from earlier runs, not only this run's tree. An interrupted
   # run leaves its own behind, and the per-hash `rm -rf` below never matches it
@@ -355,6 +400,10 @@ run_gates_on_staged_tree() {
       [[ "$base" == "$x" ]] && excluded=1
     done
     (( excluded )) && continue
+    if reason="$(not_run_reason "$base")"; then
+      printf -- '- %s: **not run here** — %s\n' "$base" "$reason"
+      continue
+    fi
     report_gate "$base" bash "$g" || rc=1
   done
 
@@ -506,9 +555,16 @@ context)
   printf 'Run against the staged bytes, not the working tree. Do not re-check a\n'
   printf 'gate that passed — attention spent there is attention not spent on\n'
   printf 'what only a reader can catch.\n\n'
-  printf '⚠️ **not run here** is neither a pass nor a failure. Reviewing runs on\n'
-  printf 'the host and some gates need a toolchain only the container has, so\n'
-  printf 'those are reported unrun with the reason rather than reported green.\n'
+  printf '⚠️ **not run here** is neither a pass nor a failure, and it covers\n'
+  printf 'three different things — read each row'"'"'s reason, because they are not\n'
+  printf 'worth the same. A gate may have *run* and found nothing of its own to\n'
+  printf 'check (no .rs file staged, say), which is a satisfied gate rather than\n'
+  printf 'a hole. A gate may need a toolchain this host has not got. And two —\n'
+  printf '`check-crate.sh` and `check-coverage.sh` — are deliberately not\n'
+  printf 'invoked: the toolchain is here, but they are from-scratch cargo builds\n'
+  printf 'and reviewing runs on the host, where AGENTS.md forbids an uncontained\n'
+  printf 'build. Those two are green in the container on every commit, because\n'
+  printf 'the commit hook runs them there.\n\n'
   printf 'A packet that printed a verdict it never obtained would be telling a\n'
   printf 'reviewer the tree is checked where it is not.\n\n'
   gate_failed=0
