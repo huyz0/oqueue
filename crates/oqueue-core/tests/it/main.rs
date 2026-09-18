@@ -10,6 +10,7 @@ mod composite;
 mod coordinator;
 mod fault;
 mod footer_tail;
+mod index_cost;
 mod index_growth;
 mod index_reader;
 mod invariants;
