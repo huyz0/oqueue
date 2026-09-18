@@ -300,6 +300,12 @@ declare -A RUST_BOUNDS=(
   # faster than the policy's own retry-budget arithmetic assumes, and
   # lowering it makes the two curves diverge the other way. A change here is
   # a decision about `ADR-0008`'s translation, not a tuning knob.
+  # How many links of a partition-manifest chain one fetch follows before
+  # refusing (`M5.63`, `ADR-0042` point 2). A ceiling on GETs per read, so
+  # raising it is the weakening direction: NFR-30's "bounded GETs" is what it
+  # buys, and a chain is data a writer produced -- a cycle in one is a read
+  # that never returns. Lowering it refuses history a correct writer wrote.
+  ["crates/oqueue-broker/src/read/manifest.rs|MAX_MANIFEST_HOPS"]="16"
   ["crates/oqueue-store/src/retry.rs|BACKOFF_BASE"]="2.0"
   # How many records a compacted object is written to hold -- the denominator
   # read amplification is measured against (`M5.1`, `ADR-0036`). Raising it

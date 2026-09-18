@@ -487,6 +487,10 @@ impl MaterializedIndex for CountingIndex {
         self.inner.find_batches(topic, partition, start, max_bytes)
     }
 
+    fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
+        self.inner.manifest(topic, partition)
+    }
+
     fn clear(&self) {
         self.inner.clear();
     }

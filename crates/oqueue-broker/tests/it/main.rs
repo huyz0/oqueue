@@ -13,6 +13,8 @@ mod cross_principal;
 mod faults;
 mod generated;
 mod invariants;
+mod manifest_counts;
+mod manifest_reads;
 mod matrix;
 mod metadata_cost;
 mod overlap;

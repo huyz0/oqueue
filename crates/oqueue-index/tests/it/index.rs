@@ -84,7 +84,8 @@ pub fn sized_commit(version: u64, records: u32, bytes: u64) -> MetadataEntry {
 mod contract {
     use super::{commit, commit_on, offset, partition, topic};
     use oqueue_core::{
-        CommitVersion, Error, MaterializedIndex, MetadataEntry, MetadataRecord, Offset,
+        CommitVersion, Error, MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset,
+        TAIL_WINDOW_ENTRIES,
     };
 
     /// A fresh index has folded nothing and knows no partition.
@@ -339,6 +340,68 @@ mod contract {
             "and a refill reproduces it exactly"
         );
     }
+
+    /// ⚠️ **`ADR-0042`'s read column, and the one thing the index knows about
+    /// a manifest.** A partition with no publication answers `None` — a
+    /// reader that took `Some` from that would spend a GET on an object no
+    /// compaction wrote. After one, it answers the key and how far it covers,
+    /// and `find_batches` names nothing below that offset, because the entries
+    /// it would have named are what the manifest replaced.
+    pub(super) fn a_publication_is_where_the_manifest_is_and_how_far_it_covers<
+        I: MaterializedIndex,
+    >(
+        index: &I,
+    ) {
+        assert_eq!(
+            index.manifest(&topic("orders"), partition(0)),
+            None,
+            "a partition nothing published for has no manifest"
+        );
+
+        let objects = TAIL_WINDOW_ENTRIES + 2;
+        let log: Vec<MetadataEntry> = (0..objects)
+            .map(|which| {
+                commit_on(
+                    u64::try_from(which).expect("a small count") + 1,
+                    "orders",
+                    0,
+                    1,
+                )
+            })
+            .collect();
+        index.apply(&log).expect("a plain log folds");
+        let upto = offset(2);
+        index
+            .apply(&[MetadataEntry::new(
+                CommitVersion::new(u64::try_from(objects).expect("a small count") + 1),
+                MetadataRecord::ManifestPublished {
+                    topic: topic("orders"),
+                    partition: partition(0),
+                    manifest: ObjectKey::new("m").expect("a valid key"),
+                    upto,
+                },
+            )])
+            .expect("a manifest meeting a boundary is folded");
+
+        assert_eq!(
+            index.manifest(&topic("orders"), partition(0)),
+            Some((ObjectKey::new("m").expect("a valid key"), upto)),
+            "the key it published, and how far it covers"
+        );
+        assert_eq!(
+            index.manifest(&topic("orders"), partition(1)),
+            None,
+            "and only for the partition it named"
+        );
+        assert!(
+            index
+                .find_batches(&topic("orders"), partition(0), offset(0), u64::MAX)
+                .expect("a folded partition")
+                .iter()
+                .all(|batch| batch.reference().base_offset() >= upto),
+            "the index names nothing the manifest covers"
+        );
+    }
 }
 
 /// Runs every case against one implementation. Each case gets a fresh index —
@@ -357,6 +420,7 @@ fn run_contract<I: MaterializedIndex>(make: impl Fn() -> I) {
     contract::an_epoch_change_moves_no_offset(&make());
     contract::an_empty_apply_is_a_no_op(&make());
     contract::dropping_and_refilling_reproduces_the_index(&make());
+    contract::a_publication_is_where_the_manifest_is_and_how_far_it_covers(&make());
     crate::paging::a_fetch_at_the_high_watermark_finds_no_batches(&make());
     crate::paging::an_unknown_partition_finds_no_batches(&make());
     crate::paging::a_page_runs_from_start_to_the_end_of_the_log(&make());

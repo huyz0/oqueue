@@ -1,7 +1,8 @@
 //! The offset→object index seam: a cache, never the source of truth.
 
 use crate::{
-    CommitVersion, IndexState, IndexedBatch, MetadataEntry, Offset, PartitionId, Result, TopicId,
+    CommitVersion, IndexState, IndexedBatch, MetadataEntry, ObjectKey, Offset, PartitionId, Result,
+    TopicId,
 };
 use std::sync::Mutex;
 
@@ -197,6 +198,25 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
         max_bytes: u64,
     ) -> Result<Vec<IndexedBatch>>;
 
+    /// The manifest naming this partition's older history, and how far it
+    /// covers — `ADR-0042`'s read column.
+    ///
+    /// `None` for a partition no compaction has published one for, which is
+    /// every partition until one does. `Some((key, upto))` means the objects
+    /// holding `[0, upto)` are named by that manifest and by nothing this
+    /// index still holds: [`find_batches`](Self::find_batches) returns nothing
+    /// below `upto`, because the entries it would have returned are what the
+    /// manifest replaced. A reader below `upto` GETs the manifest, binary-
+    /// searches it, and issues one ranged GET — two reads cold, one once the
+    /// manifest is held, three across a chain hop.
+    ///
+    /// ⚠️ **It reads, it does not resolve.** The manifest is an object and
+    /// this seam is synchronous by contract (see above), so what comes back is
+    /// where to look rather than what is there. Resolving it inside the index
+    /// would put object-storage reads behind a local fold, which is the
+    /// layering this seam exists to prevent.
+    fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)>;
+
     /// Discards everything, returning it to its fresh state.
     ///
     /// ⚠️ Safe **for the writer of this index**, and the reason this trait
@@ -277,6 +297,10 @@ impl MaterializedIndex for FakeMaterializedIndex {
         max_bytes: u64,
     ) -> Result<Vec<IndexedBatch>> {
         self.lock().find_batches(topic, partition, start, max_bytes)
+    }
+
+    fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
+        self.lock().manifest(topic, partition)
     }
 
     fn clear(&self) {

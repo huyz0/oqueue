@@ -154,3 +154,41 @@ fn the_fake_delegates_its_read_side_too() {
     );
     assert_eq!(page[1].known_len(), Some(10));
 }
+
+/// ⚠️ **It passes the manifest through** — `ADR-0042` point 4, and the one
+/// thing a reader needs before it can read a compacted history at all. A
+/// handle answering `None` here would have every fetch below the boundary find
+/// nothing and report an empty partition, which is the silent wrongness this
+/// project is written against.
+#[test]
+fn the_handle_reports_the_manifest_the_index_holds() {
+    let index = Arc::new(FakeMaterializedIndex::new());
+    let reader = IndexReader::new(Arc::clone(&index) as Arc<dyn MaterializedIndex>);
+    assert_eq!(
+        reader.manifest(&topic("secret-tenant-topic"), partition()),
+        None
+    );
+
+    let objects = 130_u64;
+    let log: Vec<MetadataEntry> = (1..=objects).map(|version| commit(version, 1, 8)).collect();
+    index.apply(&log).expect("a plain log folds");
+    let upto = Offset::new(2).expect("a valid offset");
+    let manifest = ObjectKey::new("m").expect("a valid key");
+    index
+        .apply(&[MetadataEntry::new(
+            CommitVersion::new(objects + 1),
+            MetadataRecord::ManifestPublished {
+                topic: topic("secret-tenant-topic"),
+                partition: partition(),
+                manifest: manifest.clone(),
+                upto,
+            },
+        )])
+        .expect("a manifest meeting a boundary");
+
+    assert_eq!(
+        reader.manifest(&topic("secret-tenant-topic"), partition()),
+        Some((manifest, upto)),
+        "the handle answers what the index holds"
+    );
+}

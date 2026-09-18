@@ -18,10 +18,57 @@
 use oqueue_broker::{Cluster, Sequencing, WriterId};
 use oqueue_coordinator::Coordinator;
 use oqueue_core::{
-    CoordinatorEpoch, CountingObjectStore, FakeMaterializedIndex, FakeMetadataLog, FakeObjectStore,
-    FaultMetadataLog, ObjectStore,
+    CommitVersion, CoordinatorEpoch, CountingObjectStore, FakeMaterializedIndex, FakeMetadataLog,
+    FakeObjectStore, FaultMetadataLog, IndexedBatch, MaterializedIndex, MetadataEntry, ObjectKey,
+    ObjectStore, Offset, PartitionId, Result, TopicId,
 };
 use std::sync::Arc;
+
+/// The coordinator's index, kept reachable by the test that handed it over.
+///
+/// ⚠️ **A wrapper rather than an `Arc` the trait is implemented for.**
+/// `MaterializedIndex` takes `&self` throughout and `FakeMaterializedIndex`
+/// holds its state behind a `Mutex`, so sharing one is sound — but a blanket
+/// impl for `Arc<T>` in this crate's tests would be a second way to satisfy
+/// the seam, and one delegating newtype is the narrower thing.
+#[derive(Debug)]
+struct SharedIndex(Arc<FakeMaterializedIndex>);
+
+impl MaterializedIndex for SharedIndex {
+    fn apply(&self, entries: &[MetadataEntry]) -> Result<()> {
+        self.0.apply(entries)
+    }
+
+    fn applied_upto(&self) -> Option<CommitVersion> {
+        self.0.applied_upto()
+    }
+
+    fn entries(&self) -> usize {
+        self.0.entries()
+    }
+
+    fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset {
+        self.0.end_offset(topic, partition)
+    }
+
+    fn find_batches(
+        &self,
+        topic: &TopicId,
+        partition: PartitionId,
+        start: Offset,
+        max_bytes: u64,
+    ) -> Result<Vec<IndexedBatch>> {
+        self.0.find_batches(topic, partition, start, max_bytes)
+    }
+
+    fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
+        self.0.manifest(topic, partition)
+    }
+
+    fn clear(&self) {
+        self.0.clear();
+    }
+}
 
 /// The store an integration test can count operations against.
 pub type TestStore = CountingObjectStore<FakeObjectStore>;
@@ -40,6 +87,16 @@ pub type TestLog = FaultMetadataLog<FakeMetadataLog>;
 pub struct Broker {
     pub cluster: Arc<Cluster>,
     pub store: Arc<TestStore>,
+    /// The coordinator's own index, so a test can fold an entry the
+    /// coordinator itself never writes.
+    ///
+    /// ⚠️ **`ManifestPublished` is the case this exists for** (`M5.63`). The
+    /// coordinator folds only what it journals, and `M5.62` recorded that no
+    /// production code emits a publication yet — the compaction that will is
+    /// `M5.13`'s. A test of the read path cannot wait for the writer, and
+    /// reaching the index through the log would be waiting for a tail nothing
+    /// runs.
+    pub index: Arc<FakeMaterializedIndex>,
     /// The metadata log behind the coordinator, so a test can refuse a commit.
     pub log: Arc<TestLog>,
     serving: tokio::task::JoinHandle<()>,
@@ -55,10 +112,11 @@ impl Drop for Broker {
 pub async fn broker(topics: &[&str]) -> Broker {
     let store = Arc::new(CountingObjectStore::new(FakeObjectStore::new()));
     let log = Arc::new(FaultMetadataLog::new(FakeMetadataLog::new()));
-    let index = Box::new(FakeMaterializedIndex::new());
+    let index = Arc::new(FakeMaterializedIndex::new());
+    let shared_index = Box::new(SharedIndex(Arc::clone(&index)));
     let (coordinator, serving, reader) = Coordinator::open(
         Arc::clone(&log) as Arc<dyn oqueue_core::MetadataLog>,
-        index,
+        shared_index,
         CoordinatorEpoch::new(1),
     )
     .await
@@ -88,6 +146,7 @@ pub async fn broker(topics: &[&str]) -> Broker {
     Broker {
         cluster: Arc::new(cluster),
         store,
+        index,
         log,
         serving: tokio::spawn(serving.run()),
     }

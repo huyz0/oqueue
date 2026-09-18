@@ -1,6 +1,8 @@
 //! What a reader is given: the index, minus every way to write to it.
 
-use crate::{CommitVersion, IndexedBatch, MaterializedIndex, Offset, PartitionId, Result, TopicId};
+use crate::{
+    CommitVersion, IndexedBatch, MaterializedIndex, ObjectKey, Offset, PartitionId, Result, TopicId,
+};
 use std::sync::Arc;
 
 /// A read-only handle on an index somebody else writes.
@@ -91,6 +93,17 @@ impl IndexReader {
         max_bytes: u64,
     ) -> Result<Vec<IndexedBatch>> {
         self.index.find_batches(topic, partition, start, max_bytes)
+    }
+
+    /// The manifest naming this partition's older history, and how far it
+    /// covers.
+    ///
+    /// See [`MaterializedIndex::manifest`]: below the offset it returns,
+    /// [`find_batches`](Self::find_batches) names nothing, because the entries
+    /// it would have named are what the manifest replaced.
+    #[must_use]
+    pub fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
+        self.index.manifest(topic, partition)
     }
 }
 

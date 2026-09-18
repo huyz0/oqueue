@@ -24,11 +24,13 @@
 //! that name promises is `M7`'s**, and the function says why it is a
 //! passthrough in a broker whose index is the coordinator's own.
 
+mod batch;
+mod manifest;
+
 use crate::cluster::Cluster;
 use crate::fetch::Allowance;
-use crate::region::slice_region;
 use oqueue_codec::batch::rewrite_base_offset;
-use oqueue_core::{ByteRange, Error, IndexedBatch, ObjectKey, Offset, PartitionId, TopicId};
+use oqueue_core::{ByteRange, Error, ObjectKey, Offset, PartitionId, TopicId};
 use std::collections::HashMap;
 
 impl Cluster {
@@ -54,12 +56,39 @@ impl Cluster {
         spend: &mut Spend<'_>,
     ) -> Result<Read, ReadFailure> {
         let allowance = spend.allowance;
-        let page = self
-            .index()
-            .find_batches(topic, partition, start, allowance.bytes)
-            .map_err(|error| ReadFailure { error, fetched: 0 })?;
-        let mut records: Vec<u8> = Vec::new();
+        // ⚠️ **The manifest tier comes first, and the index cannot name it.**
+        // Below the offset a published manifest covers, `find_batches` returns
+        // nothing — the entries it would have returned are what the manifest
+        // replaced (`ADR-0042`) — so a fetch there is answered by reading the
+        // manifest object. It costs one GET and buys *ranged* reads for a tier
+        // that otherwise costs a whole object each to resolve a footer.
         let mut fetched: u64 = 0;
+        // ⚠️ **A partition with nothing to spend touches the store not at
+        // all**, which the loop below achieves by breaking before its first
+        // fetch — so resolving a manifest above it would be the one GET a
+        // spent budget could not stop. `M5.63`'s first round.
+        let can_fetch = allowance.bytes != 0 || allowance.may_overshoot;
+        let mut page = match self.index().manifest(topic, partition) {
+            Some((key, upto)) if start < upto && can_fetch => {
+                let resolved = self.manifest_batches(&key, start, upto, spend).await;
+                fetched += resolved.cost;
+                resolved
+                    .batches
+                    .map_err(|error| ReadFailure { error, fetched })?
+            }
+            _ => Vec::new(),
+        };
+        // ⚠️ **Both tiers, not one or the other.** A fetch starting inside the
+        // manifest and running past it must cross into what the index still
+        // names, or a consumer reading forward stops at the boundary and
+        // re-fetches the same offset forever. `find_batches` answers from
+        // `start` and names nothing below `upto`, so the two lists abut.
+        page.extend(
+            self.index()
+                .find_batches(topic, partition, start, allowance.bytes)
+                .map_err(|error| ReadFailure { error, fetched })?,
+        );
+        let mut records: Vec<u8> = Vec::new();
         for batch in page {
             // ⚠️ **The budget is spent as it is learned, not priced up front.**
             // `find_batches` bounds what it can *price*, and a history entry
@@ -140,97 +169,6 @@ impl Cluster {
             records.append(&mut blob);
         }
         Ok(Read { records, fetched })
-    }
-
-    /// One batch's bytes, and what fetching them cost the request.
-    ///
-    /// ⚠️ **A cache hit costs nothing**, which is the whole bound: nothing
-    /// dedups a client's partition list, so the objects behind it must be
-    /// fetched once per request however many entries name them.
-    ///
-    /// ⚠️ **A history batch charges the *whole object*.** The slice handed back
-    /// is one partition's region of a bundle covering every partition that
-    /// flush wrote, so charging the slice would let a read pull sixty-four
-    /// whole bundles off the store to answer with a megabyte — the cost
-    /// `ADR-0022`'s paging rule cannot see, and the one this budget exists to
-    /// bound.
-    async fn one_batch(
-        &self,
-        batch: &IndexedBatch,
-        topic: &TopicId,
-        partition: PartitionId,
-        spend: &mut Spend<'_>,
-    ) -> Fetched {
-        match batch {
-            IndexedBatch::Inline(entry) => {
-                // ⚠️ **A tail read's fetch and its records are the same
-                // bytes** on the success path — the range asked for *is* the
-                // batch — so the caller's `max` of the two is unchanged by
-                // what this reports. ⚠️ **On the failure path they are not**,
-                // which is why it reports the fetch rather than nothing; the
-                // comment here said "no separate fetch cost" until `M3.37`,
-                // eighteen lines above the code that computes one.
-                let (blob, missed) = spend
-                    .objects
-                    .get(self, batch.reference().object(), entry.bytes())
-                    .await;
-                // ⚠️ **Nothing *counted* here.** A store failure was already
-                // counted by `get`, on the miss; a tail read's *parse* failure
-                // happens in the caller, after the stamp, which is where it is
-                // counted — and only if this was a miss.
-                //
-                // ⚠️ **But it is charged, and the charge is not zero.** The
-                // range asked for *is* the batch, so on the success path this
-                // number and the records returned are the same and the caller's
-                // `max` of the two is unchanged. On the *failure* path they are
-                // not: the bytes came off the store and the records did not, so
-                // reporting zero would let a read that pulled a whole batch and
-                // could not stamp it cost the request nothing — the tail tier's
-                // version of the defect `M3.26` fixed on the history tier.
-                let cost = if missed {
-                    blob.as_ref().map_or(0, |bytes| bytes.len() as u64)
-                } else {
-                    0
-                };
-                Fetched { blob, cost, missed }
-            }
-            IndexedBatch::Footer(object) => {
-                let (whole, missed) = spend
-                    .objects
-                    .get(self, object.object(), ByteRange::Full)
-                    .await;
-                match whole {
-                    Ok(whole) => {
-                        let cost = if missed { whole.len() as u64 } else { 0 };
-                        let sliced = slice_region(&whole, topic, partition);
-                        // ⚠️ **A bundle that arrived and would not parse is a
-                        // failure of this request too.** The store was healthy,
-                        // so `get` counted nothing — and without this a frame
-                        // naming K malformed bundles escapes the failure cap
-                        // entirely, which is the only bound a read that
-                        // fetched-then-failed is subject to. ⚠️ **On the miss
-                        // only**: the cap counts distinct objects, and a
-                        // partition that took the same bad bundle out of the
-                        // cache issued no GET — counting it would let one
-                        // corrupt object shared by eight topics refuse six
-                        // healthy partitions behind it.
-                        if missed && sliced.is_err() {
-                            spend.objects.note_failure();
-                        }
-                        Fetched {
-                            blob: sliced,
-                            cost,
-                            missed,
-                        }
-                    }
-                    Err(error) => Fetched {
-                        blob: Err(error),
-                        cost: 0,
-                        missed,
-                    },
-                }
-            }
-        }
     }
 
     /// [`read`](Self::read), with the 404 rule around it.
@@ -333,7 +271,7 @@ pub struct FetchedObjects {
 /// corrupt bundle refuses the healthy partitions behind it.
 struct Fetched {
     blob: Result<Vec<u8>, Error>,
-    cost: u64,
+    pub(super) cost: u64,
     missed: bool,
 }
 

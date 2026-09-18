@@ -13,7 +13,7 @@
 use oqueue_compact::{Planning, plan, read_amp};
 use oqueue_core::{
     CommitVersion, FakeMaterializedIndex, MAX_BATCHES_PER_PAGE, MaterializedIndex, MetadataEntry,
-    Offset, PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
+    ObjectKey, Offset, PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
 };
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -62,6 +62,10 @@ impl MaterializedIndex for CountingIndex {
     ) -> oqueue_core::Result<Vec<oqueue_core::IndexedBatch>> {
         self.queries.fetch_add(1, Ordering::Relaxed);
         self.inner.find_batches(topic, partition, start, max_bytes)
+    }
+
+    fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
+        self.inner.manifest(topic, partition)
     }
 
     fn clear(&self) {

@@ -103,7 +103,21 @@ reference to it.
    PUTs and GETs; a partition manifest collapses *coordinator state*. Neither
    substitutes for the other, and `ADR-0041`'s third shape failed by trying to
    make one do both.
-4. **The tail is unchanged and unbounded in total.** 7.2 GB at the working
+4. **The seam says where, the reader reads.** `MaterializedIndex` gains one
+   method, `manifest(topic, partition) -> Option<(ObjectKey, Offset)>`, and
+   nothing else: the key and how far it covers. It does **not** gain a way to
+   resolve one. That seam is synchronous by contract because every
+   implementation of it is a local fold, and resolving a manifest means a GET
+   — so putting it behind the index would put object-storage reads inside the
+   thing whose whole job is to say which objects to read. `M5.63` reads it in
+   `oqueue-broker`, where the other tiers' reads already are.
+
+   ⚠️ **Below `upto`, `find_batches` names nothing**, and that is what makes
+   the two tiers abut rather than overlap: the entries it would have named are
+   exactly what the manifest replaced. A reader asks for both and concatenates
+   — the manifest tier from `start`, the index tier from `start` — because a
+   fetch that stopped at the boundary would park a consumer there forever.
+5. **The tail is unchanged and unbounded in total.** 7.2 GB at the working
    set, 32 seconds deep, untouched by any of this. It is `M5.10`'s, and this
    decision makes that the *only* remaining half of NFR-11 rather than one of
    two.

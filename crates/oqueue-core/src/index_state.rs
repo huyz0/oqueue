@@ -322,6 +322,20 @@ impl IndexState {
         self.entries
     }
 
+    /// The manifest naming this partition's older history, and how far it
+    /// covers.
+    ///
+    /// ⚠️ **The one thing about a manifest this index knows.** It holds the
+    /// key and the offset, never the entries — that is `ADR-0042`'s point: a
+    /// partition's seven-day history at doc 14 §3's working set is 97 TB of
+    /// entries and 40 B of this. What the entries say is in the object, and
+    /// reading it is the reader's, not the fold's.
+    #[must_use]
+    pub fn manifest(&self, topic: &TopicId, partition: PartitionId) -> Option<(ObjectKey, Offset)> {
+        self.partition(topic, partition)
+            .and_then(|slot| slot.manifest.clone())
+    }
+
     /// Returns it to its fresh state.
     pub fn clear(&mut self) {
         self.applied_upto = None;

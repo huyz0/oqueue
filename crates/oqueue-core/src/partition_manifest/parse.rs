@@ -42,15 +42,29 @@ impl PartitionManifest {
     /// — or newer than it, in which case it is in the tail.
     #[must_use]
     pub fn find(&self, offset: Offset) -> Option<&ManifestEntry> {
+        self.entries.get(self.position(offset)?)
+    }
+
+    /// Where in [`entries`](Self::entries) that entry is.
+    ///
+    /// ⚠️ **The same search, returning the index rather than the entry**,
+    /// because a reader serving a fetch wants the entries *from* there: a
+    /// manifest names a partition's history in order, and one offset resolves
+    /// to a run of objects rather than to one. Deriving it by comparing
+    /// addresses against the slice was the alternative, and an index is what
+    /// the search already computed.
+    #[must_use]
+    pub fn position(&self, offset: Offset) -> Option<usize> {
         let at = self
             .entries
             .partition_point(|entry| entry.base_offset() <= offset);
-        let entry = self.entries.get(at.checked_sub(1)?)?;
+        let at = at.checked_sub(1)?;
+        let entry = self.entries.get(at)?;
         // `end_offset` can only fail on an entry the fold produced wrongly,
         // and a failure there means "not in this manifest", which is the
         // safe answer: the caller follows the chain and finds nothing.
         match entry.end_offset() {
-            Ok(end) if offset < end => Some(entry),
+            Ok(end) if offset < end => Some(at),
             _ => None,
         }
     }

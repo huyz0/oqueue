@@ -9,8 +9,9 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    ByteRange, CommitVersion, CommittedSpan, Error, IndexState, MetadataEntry, MetadataRecord,
-    ObjectKey, Offset, PartitionId, TAIL_WINDOW_ENTRIES, TopicId,
+    ByteRange, CommitVersion, CommittedSpan, Error, FakeMaterializedIndex, IndexState,
+    MaterializedIndex, MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId,
+    TAIL_WINDOW_ENTRIES, TopicId,
 };
 
 fn topic() -> TopicId {
@@ -365,4 +366,66 @@ fn republishing_the_same_boundary_is_accepted() {
         .apply(&[publish(version + 2, 64)])
         .expect("and again in its own batch");
     assert_eq!(paged.entries(), batched.entries());
+}
+
+/// ⚠️ **What the index knows about a manifest, and all it knows** — the
+/// accessor `M5.62` deferred and `ADR-0042` point 4 records. A reader below
+/// the offset it returns finds nothing in `find_batches`, because the entries
+/// it would have found are what the manifest replaced; the key is where to
+/// look instead.
+#[test]
+fn the_index_reports_the_manifest_and_how_far_it_covers() {
+    let objects = 2 + TAIL_WINDOW_ENTRIES;
+    let version = u64::try_from(objects).expect("a small count");
+    let mut index = IndexState::default();
+    assert_eq!(
+        index.manifest(&topic(), partition()),
+        None,
+        "a partition nothing published for has no manifest"
+    );
+
+    let log: Vec<MetadataEntry> = (0..objects)
+        .map(|which| commit(u64::try_from(which).expect("a small count") + 1, which, 1))
+        .collect();
+    index.apply(&log).expect("a plain log folds");
+    index
+        .apply(&[publish(version + 1, 2)])
+        .expect("a manifest meeting a boundary");
+
+    assert_eq!(
+        index.manifest(&topic(), partition()),
+        Some((key("manifest"), offset(2))),
+        "the key it published, and how far it covers"
+    );
+    assert_eq!(
+        index.manifest(&topic(), PartitionId::new(1).expect("a valid partition")),
+        None,
+        "and only for the partition it named"
+    );
+}
+
+/// ⚠️ **The seam reports it too**, which is a separate claim from the fold
+/// doing so: `FakeMaterializedIndex` is what every crate downstream of this
+/// one tests against (`contracts.md` rule 9), and a fake that answered `None`
+/// here would have every one of them testing a read path no broker takes.
+#[test]
+fn the_fake_reports_the_manifest_the_fold_holds() {
+    let objects = 2 + TAIL_WINDOW_ENTRIES;
+    let version = u64::try_from(objects).expect("a small count");
+    let index = FakeMaterializedIndex::new();
+    assert_eq!(index.manifest(&topic(), partition()), None);
+
+    let log: Vec<MetadataEntry> = (0..objects)
+        .map(|which| commit(u64::try_from(which).expect("a small count") + 1, which, 1))
+        .collect();
+    index.apply(&log).expect("a plain log folds");
+    index
+        .apply(&[publish(version + 1, 2)])
+        .expect("a manifest meeting a boundary");
+
+    assert_eq!(
+        index.manifest(&topic(), partition()),
+        Some((key("manifest"), offset(2))),
+        "the seam answers what the fold holds"
+    );
 }
