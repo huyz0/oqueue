@@ -11,6 +11,7 @@ mod merge;
 mod merge_refusals;
 mod naming;
 mod read_amp;
+mod retention;
 mod support;
 mod sweep;
 mod trimmed;

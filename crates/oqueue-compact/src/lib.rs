@@ -13,6 +13,7 @@ mod merge;
 mod namer;
 mod plan;
 mod read_amp;
+mod retention;
 mod sweep;
 
 pub use compose::{ComposeOutcome, compose, read_composite};
@@ -23,4 +24,5 @@ pub use merge::{MergeOutcome, merge};
 pub use namer::CompactionNamer;
 pub use plan::{COMPACTION_READ_AMP_THRESHOLD, CompactionPlan, Planning, plan};
 pub use read_amp::{COMPACTED_OBJECT_RECORDS, ReadAmp, read_amp};
+pub use retention::{DEFAULT_RETENTION_MS, ExpiryHeap};
 pub use sweep::{COMPACTION_SWEEP_INTERVAL, Candidate, Sweep, sweep};

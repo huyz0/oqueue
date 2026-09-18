@@ -340,6 +340,14 @@ declare -A RUST_BOUNDS=(
   # Raising it is a different failure -- amplified ranges sit longer -- so it is
   # pinned rather than bounded on one side.
   ["crates/oqueue-compact/src/sweep.rs|COMPACTION_SWEEP_INTERVAL"]="Duration::from_mins(30)"
+  # How long a partition's data is kept after its newest commit (`M5.18`).
+  # ⚠️ **Weakening is *lowering*, and it is the dangerous direction**: a
+  # shorter retention trims acknowledged data a client was told it would
+  # keep, which is loss rather than cost. Raising it keeps more than a client
+  # asked for, which is cost. Pinned, because Kafka's own 168 hours is what a
+  # client that never configured retention expects, and per-topic retention
+  # is configuration rather than a new value here.
+  ["crates/oqueue-compact/src/retention.rs|DEFAULT_RETENTION_MS"]="604_800_000"
   # How many bytes one part of a bundled object carries (`M5.6`). ⚠️ Weakening
   # is *lowering*: S3 refuses any part but the last below 5 MiB, so a smaller
   # value moves the failure from this crate to the backend, which is the wrong
