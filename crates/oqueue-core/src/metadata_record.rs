@@ -1,6 +1,8 @@
 //! What one entry in the metadata log is.
 
-use crate::{ByteRange, CoordinatorEpoch, ObjectKey, PartitionId, ProducerIdentity, TopicId};
+use crate::{
+    ByteRange, CoordinatorEpoch, ObjectKey, Offset, PartitionId, ProducerIdentity, TopicId,
+};
 
 /// One `(topic, partition)`'s share of a committed object.
 ///
@@ -126,6 +128,39 @@ pub enum MetadataRecord {
         /// What it added, per `(topic, partition)`. One object bundles many,
         /// which is what makes FR-32's one-PUT-across-N-topics flush possible.
         spans: Vec<CommittedSpan>,
+    },
+    /// A partition's history below `upto` now lives in a manifest.
+    ///
+    /// ⚠️ **The event that makes the index's state bounded** (`ADR-0042`). At
+    /// doc 14 §3's working set a partition's history is 4M
+    /// `(object, partition)` entries a second over a seven-day retention —
+    /// 97 TB, which is not a large number but an impossible one. What the
+    /// coordinator holds after this event is one reference, and the entries it
+    /// replaces are in the object `manifest` names.
+    ///
+    /// ⚠️ **A delta, like every record here**, and that is what lets it be
+    /// replayed: applying it twice is applying it once, because it names an
+    /// absolute boundary rather than "drop the oldest N".
+    ///
+    /// ⚠️ **Compaction writes this and produce never does.** Doc 14 §7's
+    /// friction 4 measures ~15 successful conditional writes/s per key on S3
+    /// and ~1/s on GCS; one of these per partition per compaction round is
+    /// three orders under the tighter of the two, and a produce-path writer
+    /// would be three orders over it.
+    ManifestPublished {
+        /// The topic whose partition this is about.
+        topic: TopicId,
+        /// The partition.
+        partition: PartitionId,
+        /// The object holding the manifest.
+        manifest: ObjectKey,
+        /// The offset just past the last record the manifest covers.
+        ///
+        /// ⚠️ **Exclusive, and it must meet what is left.** The fold refuses a
+        /// manifest that does not end exactly where the partition's remaining
+        /// history begins: below that boundary is records nothing can serve,
+        /// above it is records served twice.
+        upto: Offset,
     },
     /// The log passed to a new coordinator incarnation.
     ///

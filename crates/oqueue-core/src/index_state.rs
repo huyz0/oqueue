@@ -20,11 +20,15 @@ use crate::{
     CommitVersion, CommittedSpan, Error, IndexedBatch, MetadataEntry, MetadataRecord, ObjectKey,
     ObjectRef, Offset, PartitionId, Result, TailEntry, TopicId,
 };
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 mod page;
+mod partition;
+mod publication;
 pub use page::MAX_BATCHES_PER_PAGE;
 use page::Page;
+use partition::PartitionIndex;
+use publication::Publication;
 
 /// How many entries a partition keeps in the tail tier, byte ranges inline.
 ///
@@ -44,65 +48,6 @@ use page::Page;
 ///
 /// It is a constant rather than a knob, per `AGENTS.md` non-negotiable 2.
 pub const TAIL_WINDOW_ENTRIES: usize = 128;
-
-/// One partition's two tiers, and the offset they fold to.
-///
-/// ⚠️ **Two collections rather than one of a two-variant enum.** An enum is as
-/// large as its widest variant, so a history entry would pay for the tail's
-/// inline [`ByteRange`](crate::ByteRange) whether or not it carried one.
-/// Separate collections keep an [`ObjectRef`] at its ~40-byte inline budget.
-///
-/// ⚠️ This is the two-tier *shape* and not yet the coarse index doc 15 §7
-/// resolves doc 10 #8 to: entries are still keyed per (object, partition), so
-/// the count is doc 14 §3's ~4M/s row however lean each one is. See
-/// [`ObjectRef`] for what closing that would take.
-///
-/// ⚠️ `Default` by hand rather than derived: `Offset` deliberately has no
-/// `Default`, because "the zero offset" and "no offset" are different claims
-/// and a derive would quietly pick one. A fresh partition genuinely starts at
-/// [`Offset::ZERO`], and saying so here is the only place that choice is made.
-#[derive(Debug)]
-struct PartitionIndex {
-    /// Where the next record lands — the fold of every span's count.
-    end_offset: Offset,
-    /// The hot window: byte ranges inline, so a tail read is one GET.
-    tail: VecDeque<TailEntry>,
-    /// Everything older: refs only, ranges resolved from each object's own
-    /// footer at 1–3 GETs.
-    history: Vec<ObjectRef>,
-}
-
-impl Default for PartitionIndex {
-    fn default() -> Self {
-        Self {
-            end_offset: Offset::ZERO,
-            tail: VecDeque::new(),
-            history: Vec::new(),
-        }
-    }
-}
-
-impl PartitionIndex {
-    /// Pushes a newly committed object onto the tail, demoting whatever falls
-    /// out of the window.
-    ///
-    /// ⚠️ **Demotion moves an entry between tiers and never removes one**,
-    /// which is what lets [`IndexState`] maintain its count by adding one per
-    /// span folded rather than recounting a map on every fold.
-    /// ⚠️ `if`, not `while`: entries arrive one at a time, so at most one can
-    /// fall out of the window per push. A loop here would be an unbounded one
-    /// whose bound is a comparison — and a mutation flipping that comparison
-    /// turns it into a hang rather than a failure, which is a worse way to
-    /// find out.
-    fn push(&mut self, entry: TailEntry) {
-        self.tail.push_back(entry);
-        if self.tail.len() > TAIL_WINDOW_ENTRIES
-            && let Some(evicted) = self.tail.pop_front()
-        {
-            self.history.push(evicted.demote());
-        }
-    }
-}
 
 /// The state every in-memory materialization keeps, and the fold over it.
 ///
@@ -142,6 +87,7 @@ impl IndexState {
         // cannot leave a partially folded batch behind — guarantee 2. The
         // scratch holds only the partitions this batch touches.
         let mut previous = self.applied_upto;
+        let mut published: Vec<Publication<'_>> = Vec::new();
         // Staged as (running end offset, entries this batch adds), so a
         // failure part-way through commits neither — guarantee 2.
         let mut staged: HashMap<(&TopicId, PartitionId), (Offset, Vec<TailEntry>)> = HashMap::new();
@@ -163,10 +109,25 @@ impl IndexState {
                         self.stage_span(&mut staged, object, span)?;
                     }
                 }
+                MetadataRecord::ManifestPublished {
+                    topic,
+                    partition,
+                    manifest,
+                    upto,
+                } => published.push(Publication::staged(
+                    topic, *partition, manifest, *upto, &staged,
+                )),
                 // An event about the log, not about any partition.
                 MetadataRecord::EpochChanged { .. } => {}
             }
         }
+
+        // ⚠️ **Checked before anything is mutated**, guarantee 2, and that is
+        // why publication is staged rather than applied as it is read: a
+        // manifest that does not meet what is left must leave the index
+        // untouched, and it cannot know what is left until this batch's spans
+        // are staged too.
+        self.admissible(&published, &staged)?;
 
         // ⚠️ The only mutation of `self` in this method, and it is after every
         // fallible step — guarantee 2. The clone happens here, on the write
@@ -184,6 +145,7 @@ impl IndexState {
                 self.entries += 1;
             }
         }
+        self.absorb_published(published);
         self.applied_upto = previous;
         Ok(())
     }

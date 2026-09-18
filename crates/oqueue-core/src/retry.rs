@@ -105,6 +105,7 @@ impl Error {
             | Self::MalformedCompositeManifest { .. }
             | Self::NotACompositeManifest
             | Self::UnknownCompositeVersion { .. }
+            | Self::ManifestDoesNotMeetHistory { .. }
             | Self::MalformedPartitionManifest { .. }
             | Self::NotAPartitionManifest
             | Self::UnknownPartitionManifestVersion { .. }

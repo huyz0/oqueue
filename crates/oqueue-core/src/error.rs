@@ -263,6 +263,20 @@ pub enum Error {
         version: u8,
     },
 
+    /// A published manifest does not meet the history it replaces.
+    ///
+    /// ⚠️ **A gap is records nothing can serve and an overlap is records
+    /// served twice**, and a reader binary-searching a manifest cannot tell
+    /// either from a healthy one — so the fold refuses the event rather than
+    /// applying it and leaving the index to be wrong later (`ADR-0042`).
+    #[error("a manifest covering up to {upto} does not meet history at {expected}")]
+    ManifestDoesNotMeetHistory {
+        /// Where the manifest says it ends.
+        upto: i64,
+        /// Where the partition's remaining records begin.
+        expected: i64,
+    },
+
     /// A partition manifest could not be read.
     #[error("the partition manifest is malformed at byte {at}")]
     MalformedPartitionManifest {

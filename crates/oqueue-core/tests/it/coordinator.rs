@@ -451,7 +451,9 @@ fn a_commit_record_carries_spans_and_the_object_it_came_from() {
             assert_eq!(spans.len(), 1);
             assert_eq!(spans[0].record_count(), 3);
         }
-        MetadataRecord::EpochChanged { .. } => panic!("constructed a BatchCommitted"),
+        MetadataRecord::EpochChanged { .. } | MetadataRecord::ManifestPublished { .. } => {
+            panic!("constructed a BatchCommitted")
+        }
     }
 }
 
@@ -465,7 +467,9 @@ fn an_epoch_change_is_its_own_record() {
     };
     match record {
         MetadataRecord::EpochChanged { epoch } => assert_eq!(epoch.get(), 7),
-        MetadataRecord::BatchCommitted { .. } => panic!("constructed an EpochChanged"),
+        MetadataRecord::BatchCommitted { .. } | MetadataRecord::ManifestPublished { .. } => {
+            panic!("constructed an EpochChanged")
+        }
     }
 }
 
