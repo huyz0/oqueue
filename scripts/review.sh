@@ -178,6 +178,63 @@ staged_hash() {
 # the whole Rust source tree. `mktemp -d` put it in RAM and left it there on an
 # interrupted run, with nothing to reap it; `target/tmp` is reclaimed by
 # `cargo clean` and by rule 20's age sweep.
+# Runs one gate and says what actually happened to it.
+#
+# ⚠️ **Three outcomes, not two, and the third is the point of `M5.55`.** A gate
+# that cannot run here exits **zero** — `lib.sh`'s `skip` prints a line and the
+# gate `finish`es clean — so a packet with two outcomes reported it as
+# **passed**. That is a verdict the packet never obtained, printed to a
+# reviewer as one it did: the exact converse shape `M0.17` closed, arrived at
+# from the other side.
+#
+# ⚠️ **Reviewing stays on the host** (`AGENTS.md`), and the host has no
+# guarantee of `cargo-llvm-cov` or a nightly toolchain — so "could not run
+# here" is the ordinary case for two or three gates in this list rather than an
+# anomaly. Saying so is what lets a reviewer spend attention on what is
+# genuinely unchecked instead of on a gate the container is green on.
+#
+# ⚠️ **A skip line and no `ok` line**, not a skip line alone. `check-budget.sh`
+# prints `skip suite budget (…)` on a run that did check everything else, and
+# calling that "not run" would understate it in the other direction. What no
+# `ok` means is that the gate reached none of its own checks.
+#
+# ⚠️ **Both patterns allow leading whitespace, and that is load-bearing.**
+# `lib.sh` prints `ok` as `'%s  ok %s %s'` — two spaces before the word — so an
+# anchored `/^ok /` matches nothing any gate emits, and every gate that skipped
+# a leg after passing several checks was reported as having run none.
+# `check-conformance-matrix.sh` is the measured case: two `ok` lines, then two
+# `skip image pins` lines. Found by `M5.55`'s first round, in the packet that
+# round was reading.
+report_gate() {
+  local label="$1" out grc=0 reason
+  shift
+  out="$("$@" 2>&1)" || grc=$?
+  if (( grc != 0 )); then
+    printf -- '- %s: **FAILED**\n' "$label"
+    return 1
+  fi
+  # ⚠️ `awk`, and it strips its own ANSI: `lib.sh` colours `skip` when stdout is
+  # a terminal, and a `grep '^skip '` misses the coloured form. `sed
+  # 's/\x1b...//'` was the alternative and `\x1b` is a GNU extension
+  # (`portability.md` rule 21) — the same escape-class trap `M5.51` hit with
+  # `\t`.
+  reason="$(awk '
+    { line = $0; gsub(/\033\[[0-9;]*m/, "", line) }
+    line ~ /^[[:space:]]*ok /   { saw_ok = 1 }
+    line ~ /^[[:space:]]*skip / && !skipped {
+      sub(/^[[:space:]]*skip /, "", line)
+      skipped = line
+    }
+    END { if (!saw_ok && skipped != "") print skipped }
+  ' <<< "$out")"
+  if [[ -n "$reason" ]]; then
+    printf -- '- %s: **not run here** — %s\n' "$label" "$reason"
+  else
+    printf -- '- %s: passed\n' "$label"
+  fi
+  return 0
+}
+
 run_gates_on_staged_tree() {
   local h="$1" tree base excluded g rc=0
 
@@ -200,7 +257,14 @@ run_gates_on_staged_tree() {
     printf -- '- ⚠️ could not materialise the staged tree; no gate was run\n'
     return 1
   fi
-  printf 'not a git repository — planted by review.sh so a git-using gate fails\n' \
+  # ⚠️ **Planted so a git-using gate cannot read the *real* tree**, which is
+  # what it is for — a gate run here must see the staged bytes or nothing.
+  # ⚠️ **It does not make such a gate fail**, which this comment claimed until
+  # `M5.55` measured it: a gate that finds no tracked files `skip`s and exits
+  # zero. Ten of them do, and the packet called every one of them passed.
+  # `M5.67` is the row for making them run; this file's job is to stop saying
+  # they did.
+  printf 'not a git repository — planted by review.sh so no gate reads the real tree\n' \
     > "$tree/.git"
 
   for g in "$tree"/scripts/check-*.sh; do
@@ -211,21 +275,11 @@ run_gates_on_staged_tree() {
       [[ "$base" == "$x" ]] && excluded=1
     done
     (( excluded )) && continue
-    if bash "$g" >/dev/null 2>&1; then
-      printf -- '- %s: passed\n' "$base"
-    else
-      printf -- '- %s: **FAILED**\n' "$base"
-      rc=1
-    fi
+    report_gate "$base" bash "$g" || rc=1
   done
 
   if [[ -f "$tree/scripts/build-index.sh" ]]; then
-    if bash "$tree/scripts/build-index.sh" --check >/dev/null 2>&1; then
-      printf -- '- build-index.sh --check: passed\n'
-    else
-      printf -- '- build-index.sh --check: **FAILED**\n'
-      rc=1
-    fi
+    report_gate 'build-index.sh --check' bash "$tree/scripts/build-index.sh" --check || rc=1
   fi
 
   return $rc   # the RETURN trap removes the tree
@@ -368,10 +422,15 @@ context)
   printf 'They route attention; every deterministic gate runs regardless.\n'
   printf '%s\n\n' "$lens_out"
 
-  printf '## Deterministic gates that already passed\n\n'
-  printf 'Run against the staged bytes, not the working tree. Do not re-check\n'
-  printf 'these — attention spent here is attention not spent on what only a\n'
-  printf 'reader can catch.\n\n'
+  printf '## Deterministic gates, and what each one actually did\n\n'
+  printf 'Run against the staged bytes, not the working tree. Do not re-check a\n'
+  printf 'gate that passed — attention spent there is attention not spent on\n'
+  printf 'what only a reader can catch.\n\n'
+  printf '⚠️ **not run here** is neither a pass nor a failure. Reviewing runs on\n'
+  printf 'the host and some gates need a toolchain only the container has, so\n'
+  printf 'those are reported unrun with the reason rather than reported green.\n'
+  printf 'A packet that printed a verdict it never obtained would be telling a\n'
+  printf 'reviewer the tree is checked where it is not.\n\n'
   gate_failed=0
   run_gates_on_staged_tree "$h" || gate_failed=1
   printf '\n'

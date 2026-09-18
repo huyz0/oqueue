@@ -253,6 +253,60 @@ fi
 # ⚠️ Both directions, the discipline `AGENTS.md` uses for its own "every script
 # exists" paragraph: a grant recorded while the file still says none is in
 # force is a contradiction, and so is a signed line with no grant above it.
+# ── A gate that cannot run here is not a gate that passed ───────────────────
+#
+# ⚠️ **`M5.55`, and the shape is a silent success rather than a failure.**
+# `lib.sh`'s `skip` prints a line and the gate exits **zero**, so a packet that
+# knew only pass and fail reported a gate that never ran as green. A reviewer
+# reading that has been told the tree is checked where it is not — `M0.17`'s
+# rule, reached from the other side.
+#
+# Three planted gates, because the classification has three outcomes and each
+# one has to be observed: one that skips without running anything, one that
+# skips a leg but reports an `ok` for what it did check, and one that fails.
+#
+# ⚠️ **The `ok` line carries `lib.sh`'s own two leading spaces**, and a fixture
+# without them is what let the first draft ship an anchor matching nothing:
+# `lib.sh`'s `ok()` is `printf '%s  ok %s %s'`, so a planted gate printing a
+# bare `ok ` tests a format no gate produces and the suite stays green while
+# every real gate takes the broken branch. Found by `M5.55`'s first round.
+gates="$(scratch)"
+mkdir -p "$gates/scripts"
+cat > "$gates/scripts/check-aaa-unrunnable.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'skip coverage (cargo-llvm-cov not installed)\n'
+exit 0
+EOF
+cat > "$gates/scripts/check-bbb-partly.sh" <<'EOF'
+#!/usr/bin/env bash
+printf '  ok  the part that did run\n'
+printf 'skip the part that did not\n'
+exit 0
+EOF
+cat > "$gates/scripts/check-ccc-broken.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'FAIL something real\n'
+exit 1
+EOF
+cat > "$gates/scripts/check-ddd-after.sh" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$gates/scripts"/check-*.sh
+out="$(packet "$gates" "a change to review")"
+check "a gate that could not run says so" "$out" \
+  "check-aaa-unrunnable.sh: **not run here** — coverage (cargo-llvm-cov not installed)"
+refute "and is not reported as passed" "$out" "check-aaa-unrunnable.sh: passed"
+check "a gate that ran and skipped one leg is a pass" "$out" "check-bbb-partly.sh: passed"
+check "a gate that failed says so" "$out" "check-ccc-broken.sh: **FAILED**"
+# ⚠️ **The alphabetical name is the assertion.** `check-ddd-after.sh` sorts
+# after the failing one, so its line proves the list did not stop at the
+# failure -- which is what the packet did when this was written.
+check "a failure does not stop the list" "$out" "check-ddd-after.sh: passed"
+check "the packet says what an unrun gate is worth" "$out" \
+  "neither a pass nor a failure"
+rm -rf "$gates"
+
 overrides="$(cat "$ROOT/reviews/overrides.md")"
 check "the override file states the cap it guards" "$overrides" "rule 15a"
 if printf '%s' "$overrides" | grep -q "No standing authority is in force"; then
