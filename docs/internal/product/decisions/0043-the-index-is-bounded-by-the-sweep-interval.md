@@ -17,13 +17,13 @@ mechanism rather than assume one.
 chosen.** Priced at doc 14 §3's working set, what holds the coordinator's index
 is how long a reference waits before a manifest absorbs it — the sweep
 interval — and at 30 minutes, the figure `ADR-0042` prices against, that term
-is forty-four times the tail and two orders of magnitude larger than any node
+is 44.8 times the tail and two orders of magnitude larger than any node
 can hold. ⚠️ **But the two tiers cross at forty seconds**, and two of the three intervals
 this ADR goes on to tabulate sit below that — so which tier is larger is a
 property of the interval chosen rather than a fact about the tiers. The row is
 right that the tail is real and that no keying fixes it; what it is wrong about
 is that the tail is therefore *the* thing to build a mechanism for, since at
-the interval `ADR-0042` assumed the other tier is forty-four times larger. Both
+the interval `ADR-0042` assumed the other tier is 44.8 times larger. Both
 halves are true at different intervals, and the first round of review is what
 separated them.
 
@@ -57,25 +57,25 @@ than the struct. Every figure below uses the totals.
 
 | Tier | Entries | Bytes | Bounded by |
 |---|---|---|---|
-| Tail | 128 × 1M = **128M** | **15 GB** | `TAIL_WINDOW_ENTRIES`, a constant |
+| Tail | 128 × 1M = **128M** | **15.1 GB** | `TAIL_WINDOW_ENTRIES`, a constant |
 | History, un-absorbed | 4M/s × T | **376 MB/s × T** | the sweep interval T |
 | Manifest references | 1 × 1M = **1M** | **86 MB** | partitions, by construction |
 
 At `ADR-0042`'s own 30-minute sweep, the middle row is 4M/s × 1800 s = **7.2
-billion entries, 677 GB** — forty-four times the tail, and not a number any
+billion entries, 676.8 GB** — 44.8 times the tail, and not a number any
 node holds.
 
 ⚠️ **That ratio is a statement about 1800 seconds, not about the tiers.** The
 tail is a steady state and un-absorbed history is an accumulation, so comparing
 them is only meaningful at a stated interval. They are equal at
 
-    15.1 GB ÷ 376 MB/s = **40 s**
+    15.1 GB ÷ 376 MB/s = **40.2 s**
 
 and the two smaller intervals the table below recommends sit under it while the
-largest does not — at 85 s history is 32 GB against 15 GB of tail, and at 21 s
+largest does not — at 85 s history is 32 GB against 15.1 GB of tail, and at 21 s
 it is 8 GB against the same 15. Which tier is larger is a property of the
 interval chosen, which is the whole point. At the 8 GB row the
-node holds 8 GB of history against a permanent 15 GB of tail — so a quota that
+node holds 8 GB of history against a permanent 15.1 GB of tail — so a quota that
 bounded history alone would let that node reach 23 GB without firing, which is
 decision 1's own "quiet for the right reason" failure landing on the other
 tier. `the_two_tiers_cross_at_forty_seconds` derives it.
@@ -97,9 +97,9 @@ The steady-state index is growth rate × time-to-absorption. History grows at
 | Budget for un-absorbed history | Sweep interval it implies |
 |---|---|
 | 1 GB | 2.7 s |
-| 8 GB | 21 s |
-| 32 GB | 85 s |
-| 677 GB | 1800 s (`ADR-0042`'s figure) |
+| 8 GB | 21.3 s |
+| 32 GB | 85.1 s |
+| 676.8 GB | 1800 s (`ADR-0042`'s figure) |
 
 ⚠️ **Two orders of magnitude from where the plan had it.** `M5.64` found the
 same interval making `ADR-0042`'s read-cost column exceeded — five chained
@@ -136,7 +136,7 @@ against a read-amplification threshold alone.** Concretely:
    refuses new growth and names the partition. `M5.72` is that mode.
 4. ⚠️ **The tail's levers are named and none is chosen here.** The row proposed
    demoting an idle partition's tail into the chain. Priced, that buys
-   118 B → 94 B per entry — **3.0 GB of 15.1 GB**, which is three times the
+   118 B → 94 B per entry — **3.1 GB of 15.1 GB**, which is three times the
    1 GB history budget in the table above and is not the rounding error a
    first draft of this ADR called it. It is also not free: it needs a notion of
    idleness the fold does not have. The other lever is node-scoping, which is
@@ -152,7 +152,7 @@ against a read-amplification threshold alone.** Concretely:
 - **Shrink `TAIL_WINDOW_ENTRIES`.** Halving it saves 7.5 GB and doubles the
   fetches that must resolve a footer, which is a threshold moved in its
   weakening direction for the read column (`AGENTS.md` non-negotiable 2 names
-  the direction). It also does nothing about the 677 GB.
+  the direction). It also does nothing about the 676.8 GB.
 - **A disk-backed index** (doc 10 #12's engine choice). It changes what "holds"
   means rather than what the index costs, and the arithmetic above is what
   would size it. Still open, still `M6`'s.
@@ -169,10 +169,13 @@ against a read-amplification threshold alone.** Concretely:
 - ⚠️ **`ADR-0042`'s state column is superseded, not merely extended**, and
   every row of it moves. It priced an `ObjectRef` at 40 B and a `TailEntry` at
   56 B — inline widths, omitting the object key's own allocation — so its
-  tail 7.2 GB is 15 GB here, its per-`(object, partition)` 97 TB is 226 TB, its
-  per-object 9.7 GB is 22.8 GB, and its 40 MB of manifest references is 86 MB.
+  tail 7.2 GB is 15.1 GB here, its per-`(object, partition)` 97 TB is
+  225.6 TB, its per-object 9.7 GB is 22.6 GB, and its 40 MB of manifest
+  references is 86 MB.
   A node sized from that table is provisioned under half what it needs.
-  `M5.73` corrects the table there; this ADR is where the widths are derived.
+  `M5.73` corrects the table there; this ADR is where the widths are derived,
+  and `the_state_table_adr_0042_priced_at_inline_widths` is where these four
+  figures come from rather than being quoted (`M5.74`).
 - `M5.71` (per-tier accounting), `M5.72` (the quota, its alarm and its degraded
   mode) and `M5.73` (`ADR-0042`'s stale state table) carry the rest. `M5.10` ships the pricing and this
   decision, which is the shape `M5.9`/`ADR-0041` set for exactly this
