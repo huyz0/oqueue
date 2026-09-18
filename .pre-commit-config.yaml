@@ -105,6 +105,13 @@ repos:
         stages: [pre-commit]
         pass_filenames: false
         always_run: true
+      - id: check-milestone-exit
+        name: "M5.84: a milestone that has started has its exit condition on disk and its plan on the page"
+        entry: scripts/check-milestone-exit.sh
+        language: system
+        stages: [pre-commit]
+        pass_filenames: false
+        always_run: true
       - id: check-milestone-handoff
         name: "M4.73: a milestone marked complete has handed on the rows it left open"
         entry: scripts/check-milestone-handoff.sh

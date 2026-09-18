@@ -5245,6 +5245,97 @@ run_case "check-mutants-baseline.sh (a shard that never reported)" \
   setup_baseline_missing_shard invoke_baseline_missing_shard \
   "shard file(s) in surv, expected 2"
 
+# --- check-milestone-exit.sh: a milestone with no exit test -----------------
+#
+# The gate `M5.84` added, and the loop it ends. `milestone/SKILL.md` drives
+# `until completion condition exits 0`; `roadmap.md` names that condition per
+# milestone; and for the whole of `M5` the named script did not exist — it was
+# `M5.27`, a `todo` row inside the milestone it was supposed to terminate. A
+# loop whose exit test cannot be evaluated does not stop, so it fell back to
+# "keep going until nothing is `todo`", which a review of the work defeats by
+# filing a row. Measured: `M5` planned 20, decomposed 38, reached 85.
+#
+# ⚠️ **Five cases, because the gate has five ways to report success over a
+# milestone it did not check**, and every one of them was reachable in a
+# draft: the condition absent, the condition present but not executable, the
+# `Tasks` cell replaced by a pointer to the list the work grows, a row whose
+# state cell the gate cannot read, and a table whose columns have moved so no
+# row parses at all. The last two are the ones that fail *quietly* — they
+# narrow what the gate looks at rather than what it says.
+_exit_fixture() {
+  local cond="$1" tasks="$2" state="${3:-in progress}" mode="${4:-755}"
+  local dir; dir="$(_next_scratch milestone-exit)"
+  copy_gate "$dir" check-milestone-exit.sh
+  mkdir -p "$dir/docs/internal/product" "$dir/scripts/gates"
+  cat > "$dir/docs/internal/product/backlog.md" <<'BL'
+| M-1.1 | a row that landed | some criterion | done |
+| M-1.2 | a row still open | some criterion | todo |
+BL
+  {
+    printf '## Milestones\n\n'
+    printf '| # | Milestone | What | Kind | Depends | Tasks | Gate | State |\n'
+    printf '|---|---|---|---|---|---|---|---|\n'
+    printf '| 1 | [M-1](milestones/M-1.md) | the milestone under test | functional | - | %s | %s | %s |\n' \
+      "$tasks" "$cond" "$state"
+  } > "$dir/docs/internal/product/roadmap.md"
+  if [[ "$cond" == *m-1-complete.sh* && "$mode" != absent ]]; then
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/scripts/gates/m-1-complete.sh"
+    chmod "$mode" "$dir/scripts/gates/m-1-complete.sh"
+  fi
+  # ⚠️ **Committed, because the gate reads the index rather than the worktree**
+  # — a gate on the commit path answers a question about what is being
+  # committed, and a fixture that only wrote files would test nothing.
+  (cd "$dir" && git add -A && git commit -qm "M-1.1: seed the fixture")
+  printf '%s\n' "$dir"
+}
+invoke_exit() {
+  bash "$1/scripts/check-milestone-exit.sh"
+}
+
+setup_exit_missing() {
+  _exit_fixture '`scripts/gates/m-1-complete.sh`' 2 'in progress' absent
+}
+run_case "check-milestone-exit.sh (a started milestone whose completion condition is not on disk)" \
+  setup_exit_missing invoke_exit \
+  "completion condition scripts/gates/m-1-complete.sh is not on disk"
+
+setup_exit_not_executable() {
+  _exit_fixture '`scripts/gates/m-1-complete.sh`' 2 'in progress' 644
+}
+run_case "check-milestone-exit.sh (a completion condition that is not executable)" \
+  setup_exit_not_executable invoke_exit \
+  "is not executable in the index"
+
+setup_exit_pointer() {
+  _exit_fixture '`scripts/gates/m-1-complete.sh`' 'see `backlog.md`' 'in progress'
+}
+run_case "check-milestone-exit.sh (a started milestone whose planned count was erased)" \
+  setup_exit_pointer invoke_exit \
+  "rather than the planned count"
+
+setup_exit_unknown_state() {
+  _exit_fixture '`scripts/gates/m-1-complete.sh`' 2 'underway'
+}
+run_case "check-milestone-exit.sh (a state cell the gate cannot read is not a milestone it may skip)" \
+  setup_exit_unknown_state invoke_exit \
+  "which is none of"
+
+# ⚠️ **The table-level case, and it is the one a draft got wrong.** Dropping
+# the leading `#` column is an ordinary edit to a Markdown table nobody thinks
+# of as a gate input; before `M5.84`'s second round it made every row fail the
+# numeric test at once, `started` stayed 0, and the gate printed
+# "no milestone has started yet" and exited 0 over a tree with ten started
+# milestones and a pointer in every `Tasks` cell.
+setup_exit_unparsable_table() {
+  local dir; dir="$(_exit_fixture '`scripts/gates/m-1-complete.sh`' 'see `backlog.md`' 'in progress')"
+  sed -i -E 's/^\| 1 \| (\[M-1\])/| \1/' "$dir/docs/internal/product/roadmap.md"
+  (cd "$dir" && git add -A && git commit -qm "M-1.2: the columns move")
+  printf '%s\n' "$dir"
+}
+run_case "check-milestone-exit.sh (a table whose columns moved is not an empty table)" \
+  setup_exit_unparsable_table invoke_exit \
+  "this gate could read"
+
 # --- check-milestone-handoff.sh: a milestone that closed over its own rows ---
 #
 # The gate `M4.73` added, and the loop it ends: `milestone-review` turns every

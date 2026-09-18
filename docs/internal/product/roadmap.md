@@ -62,18 +62,28 @@ for compaction re-sealing, so renumbering would strand both the decision log
 and that line. M9 through M15 were added when planning end to end showed the
 original ten did not reach a shippable v1. Sequence:
 
+⚠️ **`Tasks` is the count planned before the milestone opened**, kept so that
+growth against it stays legible — `check-milestone-exit.sh` fails a started
+milestone whose cell has been replaced by a pointer to the backlog, which is
+what happened to all ten of them and is why nobody could see that every
+milestone so far has overrun its plan by 1.4x to 5.2x. ⚠️ **`M-1`'s 48 carries
+a ⚠️ because it is not a plan**: its row was created by `M-1.40`, while `M-1`
+was already running, so 48 is the last count the cell held rather than a number
+set before the work. The other nine are each the cell's value in the commit
+before that milestone's opening commit replaced it.
+
 | # | ID | Milestone | Kind | Depends on | Tasks | Completion condition | State |
 |---|---|---|---|---|---|---|---|
-| 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | see `backlog.md` ⚠️ | `scripts/gates/m-1-complete.sh` | complete |
-| 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | see `backlog.md` ⚠️ | `scripts/gates/m0-complete.sh` | complete |
-| 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | see `backlog.md` ⚠️ | `scripts/gates/m1-complete.sh` | complete |
-| 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | see `backlog.md` ⚠️ | `scripts/gates/m2-complete.sh` | complete |
-| 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | see `backlog.md` ⚠️ | `scripts/gates/m3-complete.sh` | complete |
-| 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | see `backlog.md` ⚠️ | `scripts/gates/m10-complete.sh` | complete |
-| 7 | [M9](milestones/M9.md) | Authentication, authorization, tenant isolation | feature | M2, M3 | see `backlog.md` ⚠️ | `scripts/gates/m9-complete.sh` | complete |
-| 8 | [M4](milestones/M4.md) | Consumer groups | functional | M3, M9 | see `backlog.md` ⚠️ | `scripts/gates/m4-complete.sh` | complete |
-| 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | see `backlog.md` ⚠️ | `scripts/gates/m11-complete.sh` | complete |
-| 10 | [M5](milestones/M5.md) | Compaction and retention | functional | M3, M10 | see `backlog.md` ⚠️ | `scripts/gates/m5-complete.sh` | in progress |
+| 1 | [M-1](milestones/M-1.md) | AI development system | AI-native development support | — | 48 ⚠️ | `scripts/gates/m-1-complete.sh` | complete |
+| 2 | [M0](milestones/M0.md) | Workspace, contracts, and quality gates | crate delivery | M-1 | 18 | `scripts/gates/m0-complete.sh` | complete |
+| 3 | [M1](milestones/M1.md) | Object store seam and conformance suite | crate delivery | M0 | 18 | `scripts/gates/m1-complete.sh` | complete |
+| 4 | [M2](milestones/M2.md) | Kafka wire protocol: produce and fetch | functional | M0 | 18 | `scripts/gates/m2-complete.sh` | complete |
+| 5 | [M3](milestones/M3.md) | Coordinator: offset sequencing and the index | functional | M1, M2 | 19 | `scripts/gates/m3-complete.sh` | complete |
+| 6 | [M10](milestones/M10.md) | Deterministic simulation and fault injection | AI-native development support | M3 | 14 | `scripts/gates/m10-complete.sh` | complete |
+| 7 | [M9](milestones/M9.md) | Authentication, authorization, tenant isolation | feature | M2, M3 | 16 | `scripts/gates/m9-complete.sh` | complete |
+| 8 | [M4](milestones/M4.md) | Consumer groups | functional | M3, M9 | 18 | `scripts/gates/m4-complete.sh` | complete |
+| 9 | [M11](milestones/M11.md) | Idempotent producers | functional | M3 | 12 | `scripts/gates/m11-complete.sh` | complete |
+| 10 | [M5](milestones/M5.md) | Compaction and retention | functional | M3, M10 | 20 | `scripts/gates/m5-complete.sh` | in progress |
 | 11 | [M6](milestones/M6.md) | Recovery and failover | non-functional | M3, M10 | 16 | `scripts/gates/m6-complete.sh` | not started |
 | 12 | [M7](milestones/M7.md) | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | not started |
 | 13 | [M8](milestones/M8.md) | Encryption: BYOK and the FIPS build | feature | M3, M5, M9 | 18 | `scripts/gates/m8-complete.sh` | not started |
@@ -367,7 +377,7 @@ because the requirement they check has no number.
 ⚠️ **M0 was the fourth and no longer is.** Both of its gate constants are
 measured: NFR-55's per-crate coverage floor at 85% (`M0.15`, lowest crate
 carrying logic 91.63%) and NFR-56's pre-commit budget at 10 s (`M0.16`, suite
-measured at 2.27 s across 14 hooks — 15 once the budget gate itself joined them, 16 next, 17 at `M1.21`, 18 at `M11.9`'s `check-idempotence-enabled`, 19 at `M9.11`'s `check-topic-list-scope`, 20 at `M9.14`'s `check-secrets`, 21 at `M4.11`'s `check-fencing-seam` — which was never written down here either — 22 at `M4.27`'s `check-backlog-rows`, and **23 today** at the `pre-commit` stage (`M4.73`'s `check-milestone-handoff`) — `m0-complete.sh` asserts this sentence's number too, at the boundary). ⚠️ Both are **floors** — the workspace they
+measured at 2.27 s across 14 hooks — 15 once the budget gate itself joined them, 16 next, 17 at `M1.21`, 18 at `M11.9`'s `check-idempotence-enabled`, 19 at `M9.11`'s `check-topic-list-scope`, 20 at `M9.14`'s `check-secrets`, 21 at `M4.11`'s `check-fencing-seam` — which was never written down here either — 22 at `M4.27`'s `check-backlog-rows`, 23 at `M4.73`'s `check-milestone-handoff`, 24 at `M5.70`'s `check-wellformed`, and **25 today** at the `pre-commit` stage (`M5.84`'s `check-milestone-exit`) — `m0-complete.sh` asserts this sentence's number too, at the boundary). ⚠️ Both are **floors** — the workspace they
 were measured on compiles no async runtime and no cloud SDK, which `M1` changes
 — and neither is resolved by raising the literal when it is first breached.
 

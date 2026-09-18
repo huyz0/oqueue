@@ -25,6 +25,26 @@ Runs a milestone to completion without a human between tasks.
    ⚠️ **This is the only step that reads a plan.** The loop below runs on the
    backlog, because a plan is a hypothesis.
 
+## ⚠️ Write the completion gate first
+
+**Before any other row is worked**, the milestone's completion condition must
+exist as a runnable script — `roadmap.md` names it per milestone, and the loop
+below is written `until completion condition exits 0`. ⚠️ **A loop whose exit
+test cannot be evaluated does not stop.** It falls back to the only other
+reading available, *keep going until nothing is `todo`*, which the outer-loop
+section below explains is not a terminating condition at all.
+
+⚠️ **This is not hypothetical and it is not rare.** `M5`'s completion gate was
+`M5.27`, a `todo` row inside `M5`; for the milestone's whole life the exit test
+was a file that did not exist. It was decomposed into 38 rows against a plan of
+20 and reached 85. Every milestone before it overran too — 1.4x to 5.2x — and
+`scripts/check-milestone-exit.sh` is what now fails a milestone that starts
+without its exit test, or that erases its planned count.
+
+⚠️ **The gate is written red.** Its legs fail until the milestone's
+requirements are met, and while they are red *they are the statement of what is
+left* — read those, not the row count.
+
 ## The loop
 
 ```
@@ -38,6 +58,21 @@ until completion condition exits 0:
                          minors recorded, not fixed-and-re-reviewed — and a
                          minor worth scheduling becomes a backlog row in the
                          *next* commit, never a staged one in this
+                         ⚠️ and it is dispositioned when it is FILED, not at
+                         the boundary — by `milestone-review`'s test, unchanged:
+                         it reopens THIS milestone only if acting on it changes
+                         something a Kafka client, an operator or another tenant
+                         observes, or fixes a gate that cannot fail where a
+                         standard says it must. Otherwise it is a row against
+                         the NEXT milestone — carrying a deferral's two
+                         obligations, roadmap.md's "Deferred into a later
+                         milestone" table and the receiving milestone's plan —
+                         or, if it is not a defect at all or its outcome is a
+                         decision rather than work, it is argued in
+                         baselines/review.txt. Those are milestone-review's
+                         three dispositions, unchanged. Filing everything in
+                         the current milestone is how M5 took 26 review rows
+                         into the milestone being measured
     commit             → subject names the task ID
     tick the backlog   → with the commit reference
 ```
