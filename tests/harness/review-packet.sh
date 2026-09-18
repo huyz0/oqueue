@@ -292,6 +292,50 @@ cat > "$gates/scripts/check-ddd-after.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 0
 EOF
+# ⚠️ **`M5.67`: a gate that reads the repository must reach its own check.**
+# The scratch tree used to carry a planted `.git` *file*, so `git ls-files`
+# returned nothing, nine gates skipped, and the packet called every one of them
+# green. These two plant the two questions those gates actually ask — what is
+# tracked, and what `HEAD` was — and assert the answers arrive.
+cat > "$gates/scripts/check-eee-tracked.sh" <<'EOF'
+#!/usr/bin/env bash
+# `lib.sh` resolves `REPO_ROOT` from its own location and every gate works from
+# there, so a fixture that stayed in the caller's directory would be asking the
+# question of the wrong repository -- and would pass however broken the
+# scratch tree was.
+cd "$(dirname "$0")/.." || exit 1
+if [ -n "$(git ls-files 2>/dev/null)" ]; then
+  printf '  ok  it can see the staged tree\n'
+  exit 0
+fi
+printf 'skip nothing is tracked here\n'
+EOF
+cat > "$gates/scripts/check-fff-head.sh" <<'EOF'
+#!/usr/bin/env bash
+cd "$(dirname "$0")/.." || exit 1
+if git rev-parse --verify HEAD >/dev/null 2>&1; then
+  printf '  ok  it can diff against HEAD\n'
+  exit 0
+fi
+printf 'skip no HEAD yet\n'
+EOF
+# ⚠️ **The staged bytes, not the committed ones.** A scratch repository whose
+# index matched `HEAD` would let every diff-reading gate pass by checking
+# nothing — the failure this replaced, wearing a different hat. ⚠️ **Asserted
+# by a planted gate rather than by the suite**, because the scratch tree is
+# deleted by `run_gates_on_staged_tree`'s `RETURN` trap: a check afterwards can
+# only reach the *fixture* repository, whose index the fixture itself just
+# wrote, and would pass however wrong the scratch one was. `M5.67`'s first
+# round found the version that did exactly that.
+cat > "$gates/scripts/check-ggg-diff.sh" <<'EOF'
+#!/usr/bin/env bash
+cd "$(dirname "$0")/.." || exit 1
+if git diff --cached --name-only 2>/dev/null | grep -qx 'file.txt'; then
+  printf '  ok  the staged diff is the one under review\n'
+  exit 0
+fi
+printf 'skip nothing is staged against HEAD here\n'
+EOF
 chmod +x "$gates/scripts"/check-*.sh
 out="$(packet "$gates" "a change to review")"
 check "a gate that could not run says so" "$out" \
@@ -305,6 +349,10 @@ check "a gate that failed says so" "$out" "check-ccc-broken.sh: **FAILED**"
 check "a failure does not stop the list" "$out" "check-ddd-after.sh: passed"
 check "the packet says what an unrun gate is worth" "$out" \
   "neither a pass nor a failure"
+check "a gate can read the staged tree" "$out" "check-eee-tracked.sh: passed"
+check "and can diff against HEAD" "$out" "check-fff-head.sh: passed"
+check "the diff under review is what is staged there" "$out" \
+  "check-ggg-diff.sh: passed"
 rm -rf "$gates"
 
 overrides="$(cat "$ROOT/reviews/overrides.md")"

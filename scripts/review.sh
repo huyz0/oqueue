@@ -136,12 +136,20 @@ emit_diff() {
 # trains the next reviewer to ignore the one place a genuinely broken gate
 # would show. The nightly is where it runs; `tests/gates/negative.sh` is
 # where it is watched failing.
+#
+# ⚠️ **`check-budget.sh` is excluded because it measures a run, not a tree**
+# (`M5.67`). Its input is `target/timings/suite.tsv`, which `target/` keeps out
+# of every tree this materialises, so it can only ever report itself unrun —
+# and a row that is permanently unrun trains the same blindness a permanently
+# red one does. The suite's wall clock is the commit hook's question and the
+# nightly's, not a reviewer's.
 GATES_EXCLUDED=(
   check-commit-msg.sh
   check-reviewed.sh
   check-milestone-review.sh
   check-mutants.sh
   check-mutants-baseline.sh
+  check-budget.sh
 )
 
 staged_hash() {
@@ -178,6 +186,73 @@ staged_hash() {
 # the whole Rust source tree. `mktemp -d` put it in RAM and left it there on an
 # interrupted run, with nothing to reap it; `target/tmp` is reclaimed by
 # `cargo clean` and by rule 20's age sweep.
+# Makes the scratch tree a repository the gates can actually read.
+#
+# ⚠️ **`M5.67`, and the defect it closes is a false green.** The tree used to
+# carry a planted `.git` *file* — enough to stop a gate reading the real tree,
+# which was the point, but a gate that then finds nothing tracked calls
+# `lib.sh`'s `skip` and exits **zero**. Nine of the twenty-two gates did
+# exactly that, and until `M5.55` taught the packet to tell a skip from a pass
+# every one of them was reported to every reviewer as green while checking
+# nothing. Reporting them honestly was `M5.55`; giving them something to read
+# is this.
+#
+# ⚠️ **An alternates file, not a clone.** `git init` plus
+# `objects/info/alternates` pointing at the real object store costs no copy and
+# no pack transfer, which matters because this runs on every packet. What it
+# buys is `HEAD`: the two gates that diff against it — `check-core-contract`
+# and `check-tests-kept` — need the parent commit's objects reachable, and
+# `git add -A` then makes the index differ from `HEAD` by exactly the staged
+# diff, which is the comparison they are written against.
+#
+# ⚠️ **A failure here is reported, never swallowed.** A scratch tree that is
+# not a repository leaves every git-reading gate skipping, and the caller says
+# so — the whole point of this task is that an unreadable tree must not look
+# like a clean one.
+stage_as_repository() {
+  local tree="$1" objects head
+  objects="$(cd "$REPO_ROOT" && git rev-parse --git-path objects 2>/dev/null)" || return 1
+  [[ -d "$objects" ]] || return 1
+  case "$objects" in
+    /*) ;;
+    *) objects="$REPO_ROOT/$objects" ;;
+  esac
+  rm -f "$tree/.git"
+  clean_git init -q "$tree" || return 1
+  printf '%s\n' "$objects" > "$tree/.git/objects/info/alternates" || return 1
+  # ⚠️ **`HEAD` is set only if the real repository has one.** A tree with no
+  # commits yet is the bootstrap case, and a gate that says "no HEAD yet" there
+  # is telling the truth rather than failing.
+  if head="$(cd "$REPO_ROOT" && git rev-parse --verify HEAD 2>/dev/null)"; then
+    clean_git -C "$tree" update-ref HEAD "$head" || return 1
+  fi
+  # `add -A` against the checked-out staged bytes, so `git diff --cached` here
+  # is the diff under review.
+  #
+  # ⚠️ **`--force`, so the materialised `.gitignore` cannot remove a path.**
+  # Every file here came from `git checkout-index`, so every one of them is
+  # tracked — but a path that is tracked *and* ignored would be skipped by a
+  # plain `add`, and would then read as a staged deletion to every diff-reading
+  # gate. There are none today; `--force` is what keeps that true of tomorrow
+  # rather than of today.
+  clean_git -C "$tree" add -A --force || return 1
+}
+
+# `git`, with the caller's git environment removed.
+#
+# ⚠️ **Because an inherited variable here writes to the *real* repository.**
+# With `GIT_INDEX_FILE` set, `git -C "$tree" add -A` writes the scratch tree's
+# entries into the real index, pointing at blobs in the scratch object store —
+# and the `RETURN` trap then deletes those objects, leaving the change under
+# review unreadable. With `GIT_DIR` set, `git init "$tree"` re-initialises the
+# real repository and creates nothing at `$tree` at all. Both return zero, so
+# neither trips the failure branch. Measured in `M5.67`'s first round.
+clean_git() {
+  env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_OBJECT_DIRECTORY \
+      -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_NAMESPACE \
+      git "$@" 2>/dev/null
+}
+
 # Runs one gate and says what actually happened to it.
 #
 # ⚠️ **Three outcomes, not two, and the third is the point of `M5.55`.** A gate
@@ -257,15 +332,20 @@ run_gates_on_staged_tree() {
     printf -- '- ⚠️ could not materialise the staged tree; no gate was run\n'
     return 1
   fi
-  # ⚠️ **Planted so a git-using gate cannot read the *real* tree**, which is
-  # what it is for — a gate run here must see the staged bytes or nothing.
-  # ⚠️ **It does not make such a gate fail**, which this comment claimed until
-  # `M5.55` measured it: a gate that finds no tracked files `skip`s and exits
-  # zero. Ten of them do, and the packet called every one of them passed.
-  # `M5.67` is the row for making them run; this file's job is to stop saying
-  # they did.
-  printf 'not a git repository — planted by review.sh so no gate reads the real tree\n' \
-    > "$tree/.git"
+  if ! stage_as_repository "$tree"; then
+    # ⚠️ **The barrier goes back up, and that is not optional.** `$tree` lives
+    # under `target/`, inside the repository being reviewed, so a scratch tree
+    # with no `.git` of its own has git walk *up* and find the real one — and
+    # every gate would then check the working tree instead of the staged
+    # bytes, reporting a verdict about the wrong thing while looking green. A
+    # `.git` file is not a repository, so a git-reading gate finds nothing and
+    # says so, which is the honest degradation.
+    rm -rf "$tree/.git"
+    printf 'not a git repository — planted by review.sh so no gate reads the real tree\n' \
+      > "$tree/.git"
+    printf -- '- ⚠️ the scratch tree could not be made a repository, so every\n'
+    printf -- '  git-reading gate below reports itself **not run here**\n'
+  fi
 
   for g in "$tree"/scripts/check-*.sh; do
     [[ -f "$g" ]] || continue
