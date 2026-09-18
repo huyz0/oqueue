@@ -1,4 +1,5 @@
-//! Applying a batch's effects to a copy, in log order, before any of it lands.
+//! Reading a batch into its own scratch, and applying it to a copy in log
+//! order before any of it lands.
 //!
 //! ⚠️ **One walk, not a check pass mirroring an apply pass.** Publication and
 //! the compaction swap were each checked against the *pre-batch* index and
@@ -22,7 +23,10 @@
 
 use std::collections::HashMap;
 
-use crate::{Error, ObjectKey, ObjectRef, Offset, PartitionId, Result, TailEntry, TopicId, covers};
+use crate::{
+    CommittedSpan, Error, ObjectKey, ObjectRef, Offset, PartitionId, Result, TailEntry, TopicId,
+    covers,
+};
 
 use super::{IndexState, partition::PartitionIndex};
 
@@ -65,6 +69,57 @@ pub(super) type StagedSpans<'a> = HashMap<(&'a TopicId, PartitionId), (Offset, V
 pub(super) type Projected<'a> = HashMap<(&'a TopicId, PartitionId), PartitionIndex>;
 
 impl IndexState {
+    /// Stages one span's contribution, without touching `self`.
+    ///
+    /// ⚠️ The base offset comes from the **staged** running value first and
+    /// only then from what is already committed, which is what makes a
+    /// partition appearing twice in one batch accumulate rather than restart.
+    /// `M3.8` commits every N ≥ 1,000 entries, so that is its ordinary case.
+    pub(super) fn stage_span<'a>(
+        &self,
+        staged: &mut HashMap<(&'a TopicId, PartitionId), (Offset, Vec<TailEntry>)>,
+        object: &ObjectKey,
+        span: &'a CommittedSpan,
+    ) -> Result<()> {
+        // ⚠️ **A span of no records is refused** (`M5.77`). It would become an
+        // `ObjectRef` covering no offsets, which `M5.13` made *un-retirable*:
+        // `contiguous_span` refuses any set containing one, so no
+        // `RangeCompacted` can ever name it and the entry is permanent. It
+        // would also sort into history ahead of the real object at its base
+        // offset, where a fetch resuming there skips an acknowledged record —
+        // the defect `M5.13`'s third round measured on the installing side.
+        //
+        // ⚠️ **No flush produces one** — `BundleBuilder::push` refuses a
+        // zero-count region — and that is exactly why this is here: the
+        // index's job is to refuse a malformed log, not to trust the writer,
+        // which is the standard every other check in this fold is held to.
+        if span.record_count() == 0 {
+            return Err(Error::EmptyRegion);
+        }
+        let key = (span.topic(), span.partition());
+        let base = staged
+            .get(&key)
+            .map(|(end, _)| *end)
+            .or_else(|| {
+                self.partitions
+                    .get(span.topic())
+                    .and_then(|parts| parts.get(&span.partition()))
+                    .map(|p| p.end_offset)
+            })
+            .unwrap_or(Offset::ZERO);
+        // ⚠️ `Offset::add`, not `+`: a wrapped offset is smaller than the one
+        // before it, and every later comparison is then wrong.
+        let next = base.add(i64::from(span.record_count()))?;
+        let entry = TailEntry::new(
+            ObjectRef::new(object.clone(), base, span.record_count()),
+            span.bytes(),
+        );
+        let slot = staged.entry(key).or_insert((base, Vec::new()));
+        slot.0 = next;
+        slot.1.push(entry);
+        Ok(())
+    }
+
     /// Applies the batch's effects to copies, refusing the whole batch if any
     /// one of them cannot be applied.
     ///
@@ -166,4 +221,16 @@ fn apply_effect(slot: &mut PartitionIndex, effect: &Effect<'_>) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// How many of this partition's entries the batch has staged so far.
+///
+/// ⚠️ **So far, not in total.** An effect sees the commits before it in the
+/// log and no others; a commit after it is not part of the state it was
+/// written against. `M5.62`'s fourth round measured what counting the whole
+/// batch does.
+pub(super) fn precedes(staged: &StagedSpans<'_>, topic: &TopicId, partition: PartitionId) -> usize {
+    staged
+        .get(&(topic, partition))
+        .map_or(0, |(_, entries)| entries.len())
 }

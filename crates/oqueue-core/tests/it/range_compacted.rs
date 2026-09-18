@@ -388,3 +388,49 @@ fn a_swap_naming_a_reference_its_own_batch_left_in_the_tail_is_refused() {
         .expect_err("the newest object is still in the tail");
     assert!(matches!(refused, Error::IndexObjectMismatch));
 }
+
+/// ⚠️ **A committed span of no records is refused** (`M5.77`). It would become
+/// a reference covering no offsets — which `M5.13` made permanent, since
+/// `contiguous_span` refuses any set containing one and no `RangeCompacted`
+/// could then name it — and it would sort into history ahead of the real
+/// object at its base offset, where a fetch resuming there skips an
+/// acknowledged record.
+///
+/// ⚠️ **No flush produces one**, and that is why this is here: the index
+/// refuses a malformed log rather than trusting the writer, which is the
+/// standard every other check in the fold is held to.
+#[test]
+fn a_committed_span_of_no_records_is_refused() {
+    let mut index = IndexState::default();
+    index.apply(&[commit(1, 0, 3)]).expect("a real commit");
+    let before = index.entries();
+    let end = index.end_offset(&topic(), partition());
+
+    // ⚠️ **A non-empty byte range with a zero record count**, because
+    // `ByteRange::bounded` refuses a zero-length one — so the malformed shape
+    // this plants is a region holding bytes and claiming no records, which is
+    // the one a footer could carry.
+    let empty_span = MetadataEntry::new(
+        CommitVersion::new(2),
+        MetadataRecord::BatchCommitted {
+            object: key("obj-1"),
+            spans: vec![CommittedSpan::new(
+                topic(),
+                partition(),
+                0,
+                ByteRange::bounded(0, 32).expect("a valid range"),
+                None,
+            )],
+        },
+    );
+    let refused = index
+        .apply(&[empty_span])
+        .expect_err("a span of no records is not a span");
+    assert!(matches!(refused, Error::EmptyRegion));
+    assert_eq!(index.entries(), before, "nothing was applied");
+    assert_eq!(
+        index.end_offset(&topic(), partition()),
+        end,
+        "and the partition did not move"
+    );
+}

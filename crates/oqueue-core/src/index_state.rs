@@ -17,8 +17,8 @@
 //! `records`/`records::count` split just took.
 
 use crate::{
-    CommitVersion, CommittedSpan, Error, IndexedBatch, MetadataEntry, MetadataRecord, ObjectKey,
-    ObjectRef, Offset, PartitionId, Result, TailEntry, TopicId,
+    CommitVersion, Error, IndexedBatch, MetadataEntry, MetadataRecord, ObjectKey, ObjectRef,
+    Offset, PartitionId, Result, TailEntry, TopicId,
 };
 use std::collections::HashMap;
 
@@ -28,7 +28,7 @@ mod projection;
 pub use page::MAX_BATCHES_PER_PAGE;
 use page::Page;
 use partition::PartitionIndex;
-use projection::{Effect, Staged, StagedSpans};
+use projection::{Effect, Staged, StagedSpans, precedes};
 
 /// How many entries a partition keeps in the tail tier, byte ranges inline.
 ///
@@ -219,42 +219,6 @@ impl IndexState {
         Ok(())
     }
 
-    /// Stages one span's contribution, without touching `self`.
-    ///
-    /// ⚠️ The base offset comes from the **staged** running value first and
-    /// only then from what is already committed, which is what makes a
-    /// partition appearing twice in one batch accumulate rather than restart.
-    /// `M3.8` commits every N ≥ 1,000 entries, so that is its ordinary case.
-    fn stage_span<'a>(
-        &self,
-        staged: &mut HashMap<(&'a TopicId, PartitionId), (Offset, Vec<TailEntry>)>,
-        object: &ObjectKey,
-        span: &'a CommittedSpan,
-    ) -> Result<()> {
-        let key = (span.topic(), span.partition());
-        let base = staged
-            .get(&key)
-            .map(|(end, _)| *end)
-            .or_else(|| {
-                self.partitions
-                    .get(span.topic())
-                    .and_then(|parts| parts.get(&span.partition()))
-                    .map(|p| p.end_offset)
-            })
-            .unwrap_or(Offset::ZERO);
-        // ⚠️ `Offset::add`, not `+`: a wrapped offset is smaller than the one
-        // before it, and every later comparison is then wrong.
-        let next = base.add(i64::from(span.record_count()))?;
-        let entry = TailEntry::new(
-            ObjectRef::new(object.clone(), base, span.record_count()),
-            span.bytes(),
-        );
-        let slot = staged.entry(key).or_insert((base, Vec::new()));
-        slot.0 = next;
-        slot.1.push(entry);
-        Ok(())
-    }
-
     /// The highest version folded in.
     #[must_use]
     pub const fn applied_upto(&self) -> Option<CommitVersion> {
@@ -411,18 +375,6 @@ impl IndexState {
         self.partitions.clear();
         self.entries = 0;
     }
-}
-
-/// How many of this partition's entries the batch has staged so far.
-///
-/// ⚠️ **So far, not in total.** An effect sees the commits before it in the
-/// log and no others; a commit after it is not part of the state it was
-/// written against. `M5.62`'s fourth round measured what counting the whole
-/// batch does.
-fn precedes(staged: &StagedSpans<'_>, topic: &TopicId, partition: PartitionId) -> usize {
-    staged
-        .get(&(topic, partition))
-        .map_or(0, |(_, entries)| entries.len())
 }
 
 #[cfg(test)]
