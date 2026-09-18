@@ -125,7 +125,9 @@ pub use group_metadata_record::GroupMetadataRecord;
 pub use group_protocol::{Candidate, Elected, elect};
 pub use group_state::{AssignmentEpoch, GenerationId, GroupEvent, GroupState, MemberEpoch};
 pub use index_reader::IndexReader;
-pub use index_state::{IndexState, MAX_BATCHES_PER_PAGE, TAIL_WINDOW_ENTRIES, Tiers};
+pub use index_state::{
+    IndexQuota, IndexState, MAX_BATCHES_PER_PAGE, Pressure, TAIL_WINDOW_ENTRIES, Tiers,
+};
 pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use key_layout::KeyLayout;
 pub use materialized_index::{FakeMaterializedIndex, MaterializedIndex};

@@ -126,6 +126,44 @@ pub enum Error {
         delta: i64,
     },
 
+    /// A fold would have taken the index past its quota.
+    ///
+    /// ⚠️ **A refusal, never an eviction** (`ADR-0043` decision 3). The
+    /// alternative is dropping entries, which gives back range a rebuild
+    /// cannot restore — a replay reproduces the same count and sheds the same
+    /// entries again, so the degraded mode's own recovery would be a loop that
+    /// cannot converge. Refusing leaves a log a replay reaches identically.
+    ///
+    /// ⚠️ **It names a partition because a total cannot be acted on.** The one
+    /// named is the batch's largest contributor, which is where an operator
+    /// looks first; the tier that moved is
+    /// [`IndexState::tiers`](crate::IndexState::tiers).
+    #[error(
+        "folding would take the index to {would_be} entries, over its ceiling of {ceiling}; \
+         the largest contributor in this batch is {topic}-{partition}"
+    )]
+    IndexQuotaExceeded {
+        /// The topic of the batch's largest contributor.
+        topic: String,
+        /// Its partition.
+        partition: i32,
+        /// The count the fold would have reached.
+        would_be: usize,
+        /// The count it may not pass.
+        ceiling: usize,
+    },
+
+    /// A quota was built with no room between its alarm and its ceiling.
+    #[error(
+        "an index quota needs a non-zero ceiling above its alarm, got alarm {alarm_at} and ceiling {ceiling}"
+    )]
+    InvalidIndexQuota {
+        /// The ceiling asked for.
+        ceiling: usize,
+        /// The alarm asked for.
+        alarm_at: usize,
+    },
+
     /// A timestamp was negative.
     #[error("timestamp must not be negative, got {got}")]
     NegativeTimestamp {

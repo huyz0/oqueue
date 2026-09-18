@@ -25,11 +25,13 @@ use std::collections::HashMap;
 mod page;
 mod partition;
 mod projection;
+mod quota;
 mod tiers;
 pub use page::MAX_BATCHES_PER_PAGE;
 use page::Page;
 use partition::PartitionIndex;
 use projection::{Effect, Staged, StagedSpans, precedes};
+pub use quota::{IndexQuota, Pressure};
 pub use tiers::Tiers;
 
 /// How many entries a partition keeps in the tail tier, byte ranges inline.
@@ -86,13 +88,13 @@ struct Batch<'a> {
 pub struct IndexState {
     applied_upto: Option<CommitVersion>,
     partitions: HashMap<TopicId, HashMap<PartitionId, PartitionIndex>>,
-    /// What each tier holds — maintained, never counted.
-    ///
-    /// ⚠️ **Three counts rather than one** (`M5.71`, `ADR-0043` decision 1).
-    /// The quota is still over the total, because the two large terms cross at
-    /// a 40.2-second sweep and bounding either alone lets the other run; what
-    /// the split buys is saying *which* tier moved when it does.
+    /// What each tier holds — maintained, never counted; `tiers.rs` says why
+    /// three counts rather than one, and `quota.rs` why the ceiling is still
+    /// over their sum.
     tiers: Tiers,
+    /// The ceiling the fold refuses to cross, if one is set — `None` by
+    /// default, and `quota.rs` says why that is not a disabled safety check.
+    quota: Option<IndexQuota>,
 }
 
 impl IndexState {
@@ -106,7 +108,7 @@ impl IndexState {
     ///
     /// # Errors
     ///
-    /// Five variants, and **the state is left untouched for every one of
+    /// Six variants, and **the state is left untouched for every one of
     /// them** — guarantee 2 is what makes the list worth reading, because a
     /// caller that retries a rejected batch retries it against the state it
     /// had before:
@@ -120,6 +122,9 @@ impl IndexState {
     ///   no records, which would become an [`ObjectRef`] covering no offsets;
     /// - [`Error::ManifestDoesNotMeetHistory`], a `ManifestPublished` whose
     ///   `upto` does not meet what is left of the partition;
+    /// - [`Error::IndexQuotaExceeded`], a batch whose net growth would take
+    ///   the index past the ceiling [`with_quota`](Self::with_quota) set, if
+    ///   one was set at all;
     /// - [`Error::IndexObjectMismatch`], a `RangeCompacted` retiring a
     ///   reference the partition's **history** does not hold — a reference
     ///   still inside the tail window is refused too, and compaction's age
@@ -155,6 +160,7 @@ impl IndexState {
         // fold rather than a second description of it, which is what stopped
         // the two from disagreeing. `projection.rs` says what that cost.
         let projected = self.project(&effects, &staged)?;
+        self.check_quota(&staged, &projected)?;
 
         // ⚠️ The only mutation of `self` in this method, and it is after every
         // fallible step — guarantee 2. The clone happens here, on the write
@@ -367,46 +373,6 @@ impl IndexState {
         self.partitions
             .get(topic)
             .and_then(|parts| parts.get(&partition))
-    }
-
-    /// How many entries this index holds, across every partition and all
-    /// three tiers — the tail, un-absorbed history, and one per published
-    /// manifest.
-    ///
-    /// ⚠️ **The number NFR-11 is about, and M3 only measures it** (`M3.11`).
-    /// A node's metadata cost has to be proportional to the partitions *active
-    /// on it*, and this index is keyed per `(object, partition)` — doc 14 §3's
-    /// ~4M entries/s row — so it grows with everything the node has ever seen.
-    /// Enforcing a ceiling on *this* keying cannot be made to work: eviction
-    /// gives back range a rebuild cannot restore, because replaying the log
-    /// reproduces the same count and sheds the same entries again. The coarse
-    /// per-object keying is what makes a bound feasible, and `roadmap.md`
-    /// defers it to `M5`, which receives the enforcement with it.
-    ///
-    /// ⚠️ **A running count, not a traversal.** It is read wherever growth is
-    /// watched, and a walk of the partition map is O(partitions) — on the
-    /// coordinator's ack path, that is the one task every producer on the
-    /// shard queues behind.
-    #[must_use]
-    pub const fn entries(&self) -> usize {
-        self.tiers.total()
-    }
-
-    /// The same entries, attributed to the tier holding them.
-    ///
-    /// ⚠️ **What [`entries`](Self::entries) cannot say** (`ADR-0043`
-    /// decision 1). The three tiers grow by different laws — the tail is
-    /// bounded by [`TAIL_WINDOW_ENTRIES`] per partition, a manifest reference
-    /// is one per partition, and un-absorbed history is a rate bounded only by
-    /// the compaction sweep interval — so a total that has risen says nothing
-    /// about what to do. This says which term moved, and
-    /// [`Tiers::bytes`] says what it costs.
-    ///
-    /// ⚠️ **Still O(1), and still not a walk of the map**: these are
-    /// maintained by the fold, for the reason `entries` is.
-    #[must_use]
-    pub const fn tiers(&self) -> Tiers {
-        self.tiers
     }
 
     /// The manifest naming this partition's older history, and how far it

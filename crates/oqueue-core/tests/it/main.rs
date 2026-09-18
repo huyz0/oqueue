@@ -14,6 +14,7 @@ mod fault;
 mod footer_tail;
 mod index_cost;
 mod index_growth;
+mod index_quota;
 mod index_reader;
 mod invariants;
 mod key;

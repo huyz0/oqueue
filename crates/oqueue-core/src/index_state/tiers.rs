@@ -17,6 +17,7 @@
 //! the tiers need separately is *attribution*: which one moved, so an alarm
 //! says what to do about it.
 
+use super::IndexState;
 use crate::{ObjectKey, ObjectRef, Offset, TailEntry};
 use core::mem::size_of;
 use core::ops::{Add, Sub};
@@ -99,5 +100,47 @@ impl Sub for Tiers {
             history: self.history.saturating_sub(other.history),
             manifests: self.manifests.saturating_sub(other.manifests),
         }
+    }
+}
+
+impl IndexState {
+    /// How many entries this index holds, across every partition and all
+    /// three tiers — the tail, un-absorbed history, and one per published
+    /// manifest.
+    ///
+    /// ⚠️ **The number NFR-11 is about, and M3 only measures it** (`M3.11`).
+    /// A node's metadata cost has to be proportional to the partitions *active
+    /// on it*, and this index is keyed per `(object, partition)` — doc 14 §3's
+    /// ~4M entries/s row — so it grows with everything the node has ever seen.
+    /// Enforcing a ceiling on *this* keying cannot be made to work: eviction
+    /// gives back range a rebuild cannot restore, because replaying the log
+    /// reproduces the same count and sheds the same entries again. The coarse
+    /// per-object keying is what makes a bound feasible, and `roadmap.md`
+    /// defers it to `M5`, which receives the enforcement with it.
+    ///
+    /// ⚠️ **A running count, not a traversal.** It is read wherever growth is
+    /// watched, and a walk of the partition map is O(partitions) — on the
+    /// coordinator's ack path, that is the one task every producer on the
+    /// shard queues behind.
+    #[must_use]
+    pub const fn entries(&self) -> usize {
+        self.tiers.total()
+    }
+
+    /// The same entries, attributed to the tier holding them.
+    ///
+    /// ⚠️ **What [`entries`](Self::entries) cannot say** (`ADR-0043`
+    /// decision 1). The three tiers grow by different laws — the tail is
+    /// bounded by [`TAIL_WINDOW_ENTRIES`](crate::TAIL_WINDOW_ENTRIES) per partition, a manifest reference
+    /// is one per partition, and un-absorbed history is a rate bounded only by
+    /// the compaction sweep interval — so a total that has risen says nothing
+    /// about what to do. This says which term moved, and
+    /// [`Tiers::bytes`] says what it costs.
+    ///
+    /// ⚠️ **Still O(1), and still not a walk of the map**: these are
+    /// maintained by the fold, for the reason `entries` is.
+    #[must_use]
+    pub const fn tiers(&self) -> Tiers {
+        self.tiers
     }
 }

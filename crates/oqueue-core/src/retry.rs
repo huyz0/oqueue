@@ -64,7 +64,15 @@ impl Error {
     )]
     pub const fn retry_class(&self) -> RetryClass {
         match self {
-            Self::SlowDown | Self::Throttled => RetryClass::Forever,
+            // ⚠️ `IndexQuotaExceeded` sits with the throttles rather than with
+            // the malformed inputs: the fold was well formed and the index was
+            // full, and what relieves it is the coordinator publishing a
+            // manifest — which happens on its own, on the sweep interval
+            // `ADR-0043` decision 1 makes the real lever. A bounded ladder
+            // would give up while the condition was still clearing.
+            Self::SlowDown | Self::Throttled | Self::IndexQuotaExceeded { .. } => {
+                RetryClass::Forever
+            }
             Self::Transient => RetryClass::Bounded,
             Self::ObjectNotFound { .. }
             | Self::EmptyTopicId
@@ -118,6 +126,10 @@ impl Error {
             | Self::EmptyBundle
             | Self::IndexObjectMismatch
             | Self::EmptyRegion
+            // Never: a quota built with its alarm at or above its ceiling is a
+            // configuration, and the same configuration is rejected the same
+            // way every time.
+            | Self::InvalidIndexQuota { .. }
             | Self::UnboundedRegion
             | Self::BundleTooLarge
             | Self::MalformedWriterId
