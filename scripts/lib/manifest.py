@@ -175,3 +175,99 @@ def runtime_deps(toml_path):
             if key is not None:
                 deps.add(key)
     return deps
+
+
+def _array_entries(text, state):
+    """Feed one line of a flow array into `state`, yielding the strings it
+    closes over.
+
+    ⚠️ **A character scan, not a `split(",")`.** The split form dropped
+    `members = ["crates/*"]  # every crate` — `_lines` strips whole-line
+    comments only, so the chunk ended in a comment rather than in `]`, the
+    quote test failed and the entry vanished. A dropped entry here is a *silent
+    skip* in every gate that asks whether the workspace claims a crate, which
+    is the exact failure `M5.58` exists to close; it came back inside the fix
+    and review measured it.
+
+    `state` is a one-element list holding whether the array is still open.
+    """
+    out = []
+    i = 0
+    while i < len(text):
+        ch = text[i]
+        if ch in "\"'":
+            quote = ch
+            i += 1
+            value = []
+            while i < len(text) and text[i] != quote:
+                value.append(text[i])
+                i += 1
+            # An unterminated string is a manifest Cargo would refuse; taking
+            # what there is and moving on keeps this a parser rather than a
+            # validator.
+            out.append("".join(value))
+            i += 1
+            continue
+        if ch == "]":
+            state[0] = False
+            return out
+        # ⚠️ A `#` outside a string ends the line, and inside one it does not —
+        # which is why the quote arm above consumes its own characters.
+        if ch == "#":
+            return out
+        i += 1
+    return out
+
+
+def workspace_members(toml_path):
+    """The `[workspace] members` patterns, verbatim.
+
+    ⚠️ **Patterns, not paths.** `members = ["crates/*"]` is ordinary and is
+    what `M5.58` was about: a gate that greps the manifest's *text* for a crate
+    name is switched off by a tidy-up nobody associates with it. Resolving them
+    is `workspace_claims` below; this is the parse.
+
+    ⚠️ Flow form only, because that is the form Cargo writes and this
+    repository uses. A `[workspace.members]` table is not valid TOML for this
+    key, so there is no second spelling to miss.
+    """
+    members = []
+    in_workspace = False
+    state = [False]
+    for s in _lines(toml_path):
+        header = _header_path(s)
+        if header is not None:
+            segments, is_array = header
+            in_workspace = not is_array and segments == ["workspace"]
+            state[0] = False
+            continue
+        if not in_workspace:
+            continue
+        if not state[0]:
+            if _key_of(s) != "members":
+                continue
+            state[0] = True
+            s = s.split("=", 1)[1]
+        members.extend(_array_entries(s, state))
+    return members
+
+
+def workspace_claims(root, name):
+    """Whether the workspace rooted at `root` has a member package called
+    `name`, with every member pattern resolved.
+
+    ⚠️ **The resolved list, not the manifest's text** (`M5.58`). A member
+    entry is a directory, so the package's real name is in *its* manifest —
+    which is what makes `members = ["crates/*"]` and
+    `members = ["crates/oqueue-compact"]` answer the same question, as they
+    must.
+    """
+    from pathlib import Path
+
+    root = Path(root)
+    for pattern in workspace_members(root / "Cargo.toml"):
+        for path in sorted(root.glob(pattern)):
+            manifest = path / "Cargo.toml"
+            if manifest.is_file() and package_name(manifest) == name:
+                return True
+    return False

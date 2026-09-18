@@ -355,6 +355,62 @@ EXECUTOR_FILES=(
   # here, in a diff, which is the property the named-exception form buys.
   "crates/oqueue-compact/src/compose.rs"
 )
+# Whether the workspace rooted here has a member package of this name, with
+# every `members` pattern expanded. `scripts/lib/manifest.py` owns the parse,
+# because a second reading of a manifest is a second thing to keep correct --
+# `M1.32`'s own reason for that module.
+#
+# ⚠️ **Three-valued, like `scan_one_planning_file`'s grep and for the same
+# reason.** 0 claims it, 1 does not, 2 could not tell -- and a caller that
+# folded the third into the second would skip the whole leg whenever the
+# manifest could not be read, which is the silent-skip this task exists to
+# close, one level in. No `Cargo.toml` at all is **1**, not 2: a scratch tree
+# with no workspace is the ordinary case `M5.57` restored, and failing there
+# reds every converse fixture in `negative.sh`.
+workspace_claims() {
+  # ⚠️ Exported here, as `check-layering.sh` and `check-readmes.sh` do: a
+  # heredoc has no `__file__` to resolve `scripts/lib` against, and an unset
+  # variable would make python raise — which this function would read as "the
+  # workspace does not claim it" and silently skip the whole leg. The failure
+  # this task exists to close, one level in.
+  export OQUEUE_SCRIPTS_DIR="$REPO_ROOT/scripts"
+  python3 - "$1" <<'MANIFEST_PY'
+import os
+import sys
+
+try:
+    # ⚠️ **Inside the `try`, all of it.** The import and the environment lookup
+    # sat above it until `M5.58`'s second round, so `ModuleNotFoundError` from
+    # a missing `scripts/lib/manifest.py` and `KeyError` from an unset
+    # `OQUEUE_SCRIPTS_DIR` never reached the handler: python exited 1, the
+    # caller read "the workspace does not claim it", and the leg skipped a
+    # violating tree in silence. Measured — with the module removed, the gate
+    # printed ok and exited 0 on a planner naming a store. Reachable from
+    # `negative.sh` itself, whose `copy_gate` copies the lib with `|| true`.
+    sys.path.insert(0, os.environ["OQUEUE_SCRIPTS_DIR"] + "/lib")
+    from manifest import workspace_claims
+
+    if not os.path.isfile("Cargo.toml"):
+        sys.exit(1)
+    sys.exit(0 if workspace_claims(".", sys.argv[1]) else 1)
+except SystemExit:
+    raise
+except BaseException as why:  # noqa: BLE001
+    # ⚠️ **Every exception, not `OSError`.** A non-UTF-8 manifest raises
+    # `UnicodeDecodeError`, which is a `ValueError`; an absolute member pattern
+    # raises `NotImplementedError` from `Path.glob`; a missing module raises
+    # `ModuleNotFoundError`. None is an `OSError`, so all three exited 1 and
+    # the caller read "the workspace does not claim it" — the silent skip this
+    # task closes, reinstated inside the fix twice.
+    #
+    # ⚠️ `KeyboardInterrupt` lands here too and becomes a 2, which fails the
+    # gate loudly rather than skipping it. That is the safe direction: an
+    # interrupted check is not a passed one.
+    print(f"cannot read the workspace manifest: {why!r}", file=sys.stderr)
+    sys.exit(2)
+MANIFEST_PY
+}
+
 # ⚠️ **A substring, deliberately, and no `\b`.** Four types in `oqueue-core`
 # end in this name -- the seam itself, the fake beside it, and the chunked,
 # merging and counting wrappers -- so a word-boundary match on the bare
@@ -417,7 +473,21 @@ scan_trigger() {
   # *allows* something, which is how a false positive hides. So the question is
   # not "does the directory exist" but "does the workspace claim this crate",
   # and only the mismatch between those two fails.
-  if ! grep -q 'oqueue-compact' Cargo.toml 2>/dev/null; then
+  # ⚠️ **The resolved member list, not the manifest's text** (`M5.58`). The
+  # grep this replaces was switched off by `members = ["crates/*"]` — an
+  # ordinary tidy-up nobody associates with this gate — and a violating tree
+  # then exited 0 with no line about the planning leg at all. A gate a manifest
+  # edit can turn off is the shape `M10.24` found in a hook and `M5.47` found
+  # in a scope.
+  local claimed=0
+  workspace_claims oqueue-compact || claimed=$?
+  if (( claimed >= 2 )); then
+    fail "cannot tell whether the workspace claims oqueue-compact"
+    note "a manifest this gate cannot read is not a workspace without that crate"
+    trigger_violations=$((trigger_violations + 1))
+    return 0
+  fi
+  if (( claimed == 1 )); then
     return 0
   fi
   if [[ ! -d "$PLANNING_DIR" ]]; then

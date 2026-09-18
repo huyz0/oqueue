@@ -924,6 +924,86 @@ EOF
   fi
 }
 
+# --- check-sans-io.sh: the no-store leg, and a glob that used to silence it -
+#
+# ⚠️ **`M5.58`.** The leg that forbids a planning file from naming a store
+# first asks whether the workspace claims `oqueue-compact` — and it used to ask
+# by grepping the root `Cargo.toml` for that string, so `members = ["crates/*"]`
+# turned the whole leg off. An ordinary tidy-up, associated with this gate by
+# nobody. The fixture writes exactly that manifest, so a gate that reads the
+# text rather than the resolved members exits 0 on it.
+setup_sans_io_planning_under_a_glob() {
+  local dir; dir="$(new_scratch sans-io-planning-glob)"
+  copy_gate "$dir" check-sans-io.sh
+  mkdir -p "$dir/crates/oqueue-compact/src"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+EOF
+  cat > "$dir/crates/oqueue-compact/Cargo.toml" <<'EOF'
+[package]
+name = "oqueue-compact"
+version = "0.1.0"
+edition = "2021"
+EOF
+  cat > "$dir/crates/oqueue-compact/src/plan.rs" <<'EOF'
+use oqueue_core::ObjectStore;
+
+pub fn plan(store: &dyn ObjectStore) -> usize {
+    let _ = store;
+    0
+}
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M5.58: a planner that names a store")
+  printf '%s\n' "$dir"
+}
+invoke_sans_io_planning_under_a_glob() {
+  bash "$1/scripts/check-sans-io.sh"
+}
+
+# ⚠️ **The same tree with a comment on the members line** (`M5.58`'s first
+# round). `_lines` strips whole-line comments only, so the first fix's
+# `split(",")` parse saw a chunk ending in a comment rather than in `]`, the
+# entry vanished, and the leg skipped exactly where the grep it replaced did.
+# A dropped member is a silent skip in every gate that asks what the workspace
+# claims.
+setup_sans_io_planning_under_a_commented_glob() {
+  local dir; dir="$(setup_sans_io_planning_under_a_glob)"
+  cat > "$dir/Cargo.toml" <<'EOF'
+[workspace]
+members = ["crates/*"]  # every crate, no exceptions
+resolver = "2"
+EOF
+  (cd "$dir" && git add -A && git commit -q -m "M5.58: a comment on the members line")
+  printf '%s\n' "$dir"
+}
+
+# ⚠️ **A gate whose own helper is missing is not a workspace without that
+# crate either** (`M5.58`'s second round). The import and the environment
+# lookup sat above the `try`, so `ModuleNotFoundError` exited 1 and the caller
+# read it as "not claimed" — the gate printed ok on a violating tree.
+# ⚠️ **Reachable from this suite**: `copy_gate` copies `scripts/lib/*.py` with
+# `|| true`, so a gate that gained a python helper and a fixture that did not
+# copy it is exactly this shape.
+setup_sans_io_planning_without_the_parser() {
+  local dir; dir="$(setup_sans_io_planning_under_a_glob)"
+  rm -f "$dir/scripts/lib/manifest.py"
+  printf '%s\n' "$dir"
+}
+
+# ⚠️ **A manifest the gate cannot read is not a workspace without that crate.**
+# `_lines` decodes UTF-8, so these bytes raise `UnicodeDecodeError` — a
+# `ValueError`, not an `OSError` — which the first fix let exit 1 and the
+# caller read as "not claimed". The leg then skipped a violating tree in
+# silence, which is the third time the same shape came back inside its own fix.
+setup_sans_io_planning_unreadable_manifest() {
+  local dir; dir="$(setup_sans_io_planning_under_a_glob)"
+  printf '[workspace]\nmembers = ["\xff\xfe"]\n' > "$dir/Cargo.toml"
+  (cd "$dir" && git add -A && git commit -q -m "M5.58: a manifest that is not UTF-8")
+  printf '%s\n' "$dir"
+}
+
 # ⚠️ **The broker is exempt from `CLOCK_RE` and not from `REAL_CLOCK_RE`**
 # (`M10.5`), which is the half a scan of the other crates cannot reach: the
 # broker legitimately holds timers, and what it may not hold is a clock a
@@ -3466,6 +3546,18 @@ run_case "seed-sweep.sh (a failing seed becomes an artifact)" \
 run_case "seed-sweep.sh (a tree that does not build blames no seed)" \
   setup_seed_sweep_blames_the_build invoke_seed_sweep_blames_the_build \
   "no seed is implicated"
+run_case "check-sans-io.sh (a planner naming a store, under a glob member list)" \
+  setup_sans_io_planning_under_a_glob invoke_sans_io_planning_under_a_glob \
+  "planning half names a store"
+run_case "check-sans-io.sh (the same, with a comment on the members line)" \
+  setup_sans_io_planning_under_a_commented_glob invoke_sans_io_planning_under_a_glob \
+  "planning half names a store"
+run_case "check-sans-io.sh (a manifest it cannot read is not a workspace without the crate)" \
+  setup_sans_io_planning_unreadable_manifest invoke_sans_io_planning_under_a_glob \
+  "cannot tell whether the workspace claims"
+run_case "check-sans-io.sh (a missing manifest parser is not a workspace without the crate)" \
+  setup_sans_io_planning_without_the_parser invoke_sans_io_planning_under_a_glob \
+  "cannot tell whether the workspace claims"
 run_case "check-sans-io.sh (a runtime clock in shipped code)" \
   setup_sans_io_virtual_clock_in_src invoke_sans_io_virtual_clock_in_src \
   "a real clock read"
