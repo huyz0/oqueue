@@ -354,6 +354,10 @@ EXECUTOR_FILES=(
   # an executor for the same reason `merge` is -- and `M5.8` had to add it
   # here, in a diff, which is the property the named-exception form buys.
   "crates/oqueue-compact/src/compose.rs"
+  # ⚠️ The object lifecycle deletes what the index stopped naming (`M5.21`),
+  # so it names the store's delete by design; deciding *what* is due reads
+  # only the index, and that half stays sans-I/O inside the same file.
+  "crates/oqueue-compact/src/lifecycle.rs"
 )
 # Whether the workspace rooted here has a member package of this name, with
 # every `members` pattern expanded. `scripts/lib/manifest.py` owns the parse,

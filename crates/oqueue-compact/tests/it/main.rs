@@ -7,6 +7,7 @@ mod compose;
 mod end_to_end;
 mod indexes;
 mod layout;
+mod lifecycle;
 mod merge;
 mod merge_refusals;
 mod naming;

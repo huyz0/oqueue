@@ -9,6 +9,7 @@
 mod compose;
 mod cost;
 mod layout;
+mod lifecycle;
 mod merge;
 mod namer;
 mod plan;
@@ -20,6 +21,9 @@ pub use compose::{ComposeOutcome, compose, read_composite};
 pub use cost::{COMPACTION_PLAN_RECORDS_BUDGET, CostEstimate};
 
 pub use layout::{PlannedInputs, merge_round};
+pub use lifecycle::{
+    DELETE_BATCH_KEYS, DELETION_BACKLOG_KEYS, Lifecycle, QUARANTINE_AFTER_REFUSALS, SweepReport,
+};
 pub use merge::{MergeOutcome, merge};
 pub use namer::CompactionNamer;
 pub use plan::{COMPACTION_READ_AMP_THRESHOLD, CompactionPlan, Planning, plan};

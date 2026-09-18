@@ -348,6 +348,18 @@ declare -A RUST_BOUNDS=(
   # client that never configured retention expects, and per-topic retention
   # is configuration rather than a new value here.
   ["crates/oqueue-compact/src/retention.rs|DEFAULT_RETENTION_MS"]="604_800_000"
+  # The most keys one lifecycle sweep asks the store to delete (`M5.21`).
+  # ⚠️ S3's own `DeleteObjects` ceiling: raising it past 1,000 makes one
+  # sweep's batch a request S3 refuses whole; lowering it only slows deletion.
+  ["crates/oqueue-compact/src/lifecycle.rs|DELETE_BATCH_KEYS"]="1_000"
+  # The deletion backlog at which the lifecycle stops admitting new garbage
+  # (`M5.21`). ⚠️ Weakening is *raising*: the bound is what keeps the queue
+  # from growing without limit once creation outruns deletion.
+  ["crates/oqueue-compact/src/lifecycle.rs|DELETION_BACKLOG_KEYS"]="100_000"
+  # Consecutive refusals before a key is quarantined (`M5.21`). ⚠️ Weakening
+  # is *raising*: a key the store will never delete is retried for longer
+  # before anyone is told.
+  ["crates/oqueue-compact/src/lifecycle.rs|QUARANTINE_AFTER_REFUSALS"]="5"
   # How many bytes one part of a bundled object carries (`M5.6`). ⚠️ Weakening
   # is *lowering*: S3 refuses any part but the last below 5 MiB, so a smaller
   # value moves the failure from this crate to the backend, which is the wrong
