@@ -8,7 +8,7 @@
 //! things that can happen to it: a push, a demotion, and a manifest absorbing
 //! its history.
 
-use crate::{ObjectKey, ObjectRef, Offset, TailEntry};
+use crate::{ObjectKey, ObjectRef, Offset, TailEntry, Tiers};
 use core::cmp::Ordering;
 use std::collections::VecDeque;
 
@@ -134,9 +134,13 @@ impl PartitionIndex {
     /// Pushes a newly committed object onto the tail, demoting whatever falls
     /// out of the window.
     ///
-    /// ⚠️ **Demotion moves an entry between tiers and never removes one**,
-    /// which is what lets [`IndexState`] maintain its count by adding one per
-    /// span folded rather than recounting a map on every fold.
+    /// ⚠️ **Demotion moves an entry between tiers and never removes one.** The
+    /// total therefore rises by exactly one per push, but the *tiers* do not —
+    /// a push at a full window leaves the tail where it was and adds to
+    /// history. `IndexState`'s accounting takes this partition's
+    /// [`tiers`](Self::tiers) before and after a batch's pushes for that
+    /// reason (`M5.71`), so a change here that removed an entry rather than
+    /// moving it is a change to what that arithmetic means.
     /// ⚠️ `if`, not `while`: entries arrive one at a time, so at most one can
     /// fall out of the window per push. A loop here would be an unbounded one
     /// whose bound is a comparison — and a mutation flipping that comparison
@@ -175,13 +179,20 @@ impl PartitionIndex {
         self.history.sort_by_key(ObjectRef::base_offset);
     }
 
-    /// How many entries the two tiers and the manifest reference hold.
+    /// What this partition holds, per tier.
     ///
-    /// ⚠️ **Counted, and only here.** `IndexState` maintains its total rather
+    /// ⚠️ **Counted, and only here.** `IndexState` maintains its totals rather
     /// than walking the map, but a partition the batch *replaced* wholesale
-    /// has no delta to add — so the total moves by this partition's count
-    /// before and after, which is the one place a walk is the cheap answer.
-    pub(super) fn entries(&self) -> usize {
-        self.history.len() + self.tail.len() + usize::from(self.manifest.is_some())
+    /// has no delta to add — so the totals move by this partition's counts
+    /// before and after. ⚠️ **Not a walk**, despite reading like one: all
+    /// three terms are a collection's `len()` or an `Option`'s discriminant,
+    /// so this is O(1) and calling it twice per touched partition is what
+    /// keeps the maintenance O(1) too.
+    pub(super) fn tiers(&self) -> Tiers {
+        Tiers {
+            tail: self.tail.len(),
+            history: self.history.len(),
+            manifests: usize::from(self.manifest.is_some()),
+        }
     }
 }

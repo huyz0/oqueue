@@ -33,3 +33,4 @@ mod redaction;
 mod retry;
 mod store;
 mod store_streaming;
+mod tiers;

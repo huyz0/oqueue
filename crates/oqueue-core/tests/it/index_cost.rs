@@ -15,7 +15,7 @@
 #![allow(clippy::expect_used)]
 
 use core::mem::size_of;
-use oqueue_core::{BundleNamer, ByteRange, ObjectKey, ObjectRef, Offset, TailEntry};
+use oqueue_core::{BundleNamer, ByteRange, ObjectKey, ObjectRef, Offset, TailEntry, Tiers};
 
 /// A representative object key, at the wide end of `BundleNamer`'s range —
 /// see `partition_manifest.rs`'s own `REALISTIC_KEY` for why the wide end is
@@ -60,6 +60,39 @@ fn an_index_entry_costs_its_struct_plus_its_object_key() {
     assert_eq!(history, 94, "a history entry");
     assert_eq!(tail, 118, "a tail entry");
     assert_eq!(manifest, 86, "a manifest reference");
+
+    // ⚠️ **And the function the quota reads prices each tier at the same
+    // width** (`M5.71`). `Tiers::bytes` recomputes these from `size_of`
+    // rather than importing them, so without this the two derivations could
+    // drift apart silently — which is `M5.64`'s failure with one more file in
+    // it. One entry of each tier, so a wrong width shows as itself.
+    assert_eq!(
+        Tiers {
+            tail: 1,
+            history: 0,
+            manifests: 0
+        }
+        .bytes(REALISTIC_KEY.len()),
+        tail
+    );
+    assert_eq!(
+        Tiers {
+            tail: 0,
+            history: 1,
+            manifests: 0
+        }
+        .bytes(REALISTIC_KEY.len()),
+        history
+    );
+    assert_eq!(
+        Tiers {
+            tail: 0,
+            history: 0,
+            manifests: 1
+        }
+        .bytes(REALISTIC_KEY.len()),
+        manifest
+    );
 }
 
 /// ⚠️ **The finding `M5.10` exists to record**: at doc 14 §3's working set and

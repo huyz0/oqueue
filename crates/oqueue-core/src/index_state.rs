@@ -25,10 +25,12 @@ use std::collections::HashMap;
 mod page;
 mod partition;
 mod projection;
+mod tiers;
 pub use page::MAX_BATCHES_PER_PAGE;
 use page::Page;
 use partition::PartitionIndex;
 use projection::{Effect, Staged, StagedSpans, precedes};
+pub use tiers::Tiers;
 
 /// How many entries a partition keeps in the tail tier, byte ranges inline.
 ///
@@ -84,8 +86,13 @@ struct Batch<'a> {
 pub struct IndexState {
     applied_upto: Option<CommitVersion>,
     partitions: HashMap<TopicId, HashMap<PartitionId, PartitionIndex>>,
-    /// How many entries the tiers hold in total — maintained, never counted.
-    entries: usize,
+    /// What each tier holds — maintained, never counted.
+    ///
+    /// ⚠️ **Three counts rather than one** (`M5.71`, `ADR-0043` decision 1).
+    /// The quota is still over the total, because the two large terms cross at
+    /// a 40.2-second sweep and bounding either alone lets the other run; what
+    /// the split buys is saying *which* tier moved when it does.
+    tiers: Tiers,
 }
 
 impl IndexState {
@@ -165,10 +172,17 @@ impl IndexState {
                 .entry(partition)
                 .or_default();
             slot.end_offset = end;
+            // ⚠️ **Before and after, not one per entry.** A push demotes at
+            // most one entry out of the window, so a commit can move the tail
+            // and history by different amounts — the arithmetic that knew a
+            // span was worth exactly one entry could not say which tier got
+            // it. Both calls are `len()`s, so this stays O(1) per partition.
+            let before = slot.tiers();
             for entry in entries {
                 slot.push(entry);
-                self.entries += 1;
             }
+            let after = slot.tiers();
+            self.tiers = self.tiers + after - before;
         }
         for ((topic, partition), slot) in projected {
             // ⚠️ **The total moves by this partition's own count**, because a
@@ -178,8 +192,8 @@ impl IndexState {
             // copy.
             let before = self
                 .partition(topic, partition)
-                .map_or(0, PartitionIndex::entries);
-            self.entries = self.entries + slot.entries() - before;
+                .map_or_else(Tiers::default, PartitionIndex::tiers);
+            self.tiers = self.tiers + slot.tiers() - before;
             self.partitions
                 .entry(topic.clone())
                 .or_default()
@@ -355,8 +369,9 @@ impl IndexState {
             .and_then(|parts| parts.get(&partition))
     }
 
-    /// How many entries this index holds, across every partition and both
-    /// tiers.
+    /// How many entries this index holds, across every partition and all
+    /// three tiers — the tail, un-absorbed history, and one per published
+    /// manifest.
     ///
     /// ⚠️ **The number NFR-11 is about, and M3 only measures it** (`M3.11`).
     /// A node's metadata cost has to be proportional to the partitions *active
@@ -374,7 +389,24 @@ impl IndexState {
     /// shard queues behind.
     #[must_use]
     pub const fn entries(&self) -> usize {
-        self.entries
+        self.tiers.total()
+    }
+
+    /// The same entries, attributed to the tier holding them.
+    ///
+    /// ⚠️ **What [`entries`](Self::entries) cannot say** (`ADR-0043`
+    /// decision 1). The three tiers grow by different laws — the tail is
+    /// bounded by [`TAIL_WINDOW_ENTRIES`] per partition, a manifest reference
+    /// is one per partition, and un-absorbed history is a rate bounded only by
+    /// the compaction sweep interval — so a total that has risen says nothing
+    /// about what to do. This says which term moved, and
+    /// [`Tiers::bytes`] says what it costs.
+    ///
+    /// ⚠️ **Still O(1), and still not a walk of the map**: these are
+    /// maintained by the fold, for the reason `entries` is.
+    #[must_use]
+    pub const fn tiers(&self) -> Tiers {
+        self.tiers
     }
 
     /// The manifest naming this partition's older history, and how far it
@@ -395,7 +427,7 @@ impl IndexState {
     pub fn clear(&mut self) {
         self.applied_upto = None;
         self.partitions.clear();
-        self.entries = 0;
+        self.tiers = Tiers::default();
     }
 }
 
