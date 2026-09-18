@@ -19,6 +19,7 @@ mod index_reader;
 mod invariants;
 mod key;
 mod key_layout;
+mod liveness;
 mod manifest_paging;
 mod manifest_published;
 mod materialized_index;

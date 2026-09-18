@@ -28,6 +28,7 @@ use crate::{
     TopicId, covers,
 };
 
+use super::liveness::RefChange;
 use super::{IndexState, partition::PartitionIndex};
 
 /// What one record does to one partition, beyond appending to its tail.
@@ -157,8 +158,10 @@ impl IndexState {
         &self,
         effects: &[Staged<'a>],
         staged: &StagedSpans<'a>,
-    ) -> Result<Projected<'a>> {
+    ) -> Result<(Projected<'a>, Vec<RefChange>)> {
         let mut projected: Projected<'a> = HashMap::new();
+        // What the effects do to each object's reference count (`ADR-0045`).
+        let mut changes: Vec<RefChange> = Vec::new();
         // How many of each partition's staged entries the projection has
         // already taken, so an effect sees the commits before it and no more.
         let mut taken: HashMap<(&TopicId, PartitionId), usize> = HashMap::new();
@@ -171,7 +174,13 @@ impl IndexState {
             });
             let already = taken.entry(key).or_insert(0);
             catch_up(slot, staged.get(&key), already, effect.precedes)?;
-            apply_effect(slot, effect.topic, effect.partition, &effect.effect)?;
+            apply_effect(
+                slot,
+                effect.topic,
+                effect.partition,
+                &effect.effect,
+                &mut changes,
+            )?;
         }
         // The commits *after* the last effect, so an installed projection is
         // the whole batch rather than its prefix.
@@ -189,7 +198,7 @@ impl IndexState {
                 slot.observe(*when);
             }
         }
-        Ok(projected)
+        Ok((projected, changes))
     }
 }
 
@@ -243,6 +252,7 @@ fn apply_effect(
     topic: &TopicId,
     partition: PartitionId,
     effect: &Effect<'_>,
+    changes: &mut Vec<RefChange>,
 ) -> Result<()> {
     match effect {
         Effect::Published { manifest, upto } => {
@@ -259,7 +269,19 @@ fn apply_effect(
         Effect::Swapped {
             retiring,
             installing,
-        } => apply_swap(slot, topic, partition, retiring, installing)?,
+        } => {
+            apply_swap(slot, topic, partition, retiring, installing)?;
+            changes.extend(
+                retiring
+                    .iter()
+                    .map(|r| RefChange::Dropped(r.object().clone())),
+            );
+            changes.extend(
+                installing
+                    .iter()
+                    .map(|r| RefChange::Added(r.object().clone())),
+            );
+        }
         Effect::Trimmed { start } => {
             // ⚠️ **Past the end is refused, not clamped.** The next produce
             // would land below a start that far out — acknowledged and
@@ -272,7 +294,7 @@ fn apply_effect(
                     end: slot.end_offset.get(),
                 });
             }
-            slot.trim(*start);
+            changes.extend(slot.trim(*start).into_iter().map(RefChange::Dropped));
         }
     }
     Ok(())

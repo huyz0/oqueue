@@ -18,10 +18,11 @@
 
 use crate::{
     CommitVersion, Error, IndexedBatch, MetadataEntry, MetadataRecord, ObjectKey, ObjectRef,
-    Offset, PartitionId, Result, TailEntry, TimeSpan, TopicId,
+    Offset, PartitionId, Result, TimeSpan, TopicId,
 };
 use std::collections::HashMap;
 
+mod liveness;
 mod page;
 mod partition;
 mod projection;
@@ -111,6 +112,8 @@ pub struct IndexState {
     /// The ceiling the fold refuses to cross, if one is set — `None` by
     /// default, and `quota.rs` says why that is not a disabled safety check.
     quota: Option<IndexQuota>,
+    /// How many entries name each object (`ADR-0045`); `liveness.rs`.
+    references: liveness::References,
 }
 
 impl IndexState {
@@ -185,8 +188,9 @@ impl IndexState {
         // ⚠️ **Applied to copies first**, guarantee 2 — and the check *is* the
         // fold rather than a second description of it, which is what stopped
         // the two from disagreeing. `projection.rs` says what that cost.
-        let projected = self.project(&effects, &staged)?;
+        let (projected, mut changes) = self.project(&effects, &staged)?;
         self.check_quota(&staged, &projected)?;
+        liveness::stage(&staged, &mut changes);
 
         // ⚠️ The only mutation of `self` in this method, and it is after every
         // fallible step — guarantee 2. The clone happens here, on the write
@@ -232,6 +236,7 @@ impl IndexState {
                 .or_default()
                 .insert(partition, slot);
         }
+        self.references.apply(changes);
         self.applied_upto = previous;
         Ok(())
     }
@@ -301,33 +306,6 @@ impl IndexState {
     pub fn end_offset(&self, topic: &TopicId, partition: PartitionId) -> Offset {
         self.partition(topic, partition)
             .map_or(Offset::ZERO, |p| p.end_offset)
-    }
-
-    /// The partition's tail window: entries carrying inline byte ranges, so
-    /// reading one is a single GET.
-    ///
-    /// ⚠️ **No production caller, and deliberately so.** A fetch goes through
-    /// [`find_batches`](Self::find_batches), which pages and prices; this hands
-    /// back the whole window so the suite can assert what demotion did to it.
-    /// It clones — up to [`TAIL_WINDOW_ENTRIES`] entries with an
-    /// [`ObjectKey`](crate::ObjectKey) each — which is fine off the read path
-    /// and worth saying in a type that refuses a tuple key to avoid one clone.
-    #[must_use]
-    pub fn tail(&self, topic: &TopicId, partition: PartitionId) -> Vec<TailEntry> {
-        self.partition(topic, partition)
-            .map(|p| p.tail.iter().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// How many entries the partition has demoted to the history tier.
-    ///
-    /// ⚠️ A count rather than the entries themselves: resolving one needs the
-    /// object's own footer, which is the read path `M3.8` builds and not this
-    /// type's to perform.
-    #[must_use]
-    pub fn history_len(&self, topic: &TopicId, partition: PartitionId) -> usize {
-        self.partition(topic, partition)
-            .map_or(0, |p| p.history.len())
     }
 
     /// The objects a fetch from `start` must read — the fold's own answer to
@@ -432,6 +410,7 @@ impl IndexState {
         self.applied_upto = None;
         self.partitions.clear();
         self.tiers = Tiers::default();
+        self.references.clear();
     }
 }
 

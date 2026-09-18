@@ -106,6 +106,10 @@ impl MaterializedIndex for MemoryIndex {
         self.lock().log_start(topic, partition)
     }
 
+    fn references(&self, object: &ObjectKey) -> usize {
+        self.lock().references(object)
+    }
+
     fn clear(&self) {
         self.lock().clear();
     }

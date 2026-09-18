@@ -76,6 +76,10 @@ impl MaterializedIndex for CountingIndex {
         self.inner.log_start(topic, partition)
     }
 
+    fn references(&self, object: &ObjectKey) -> usize {
+        self.inner.references(object)
+    }
+
     fn clear(&self) {
         self.inner.clear();
     }

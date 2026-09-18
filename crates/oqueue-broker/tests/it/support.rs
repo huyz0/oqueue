@@ -73,6 +73,10 @@ impl MaterializedIndex for SharedIndex {
         self.0.log_start(topic, partition)
     }
 
+    fn references(&self, object: &ObjectKey) -> usize {
+        self.0.references(object)
+    }
+
     fn clear(&self) {
         self.0.clear();
     }

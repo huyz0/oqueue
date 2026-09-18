@@ -71,3 +71,40 @@ pub fn retention_reads_a_partition_s_age_and_start<I: MaterializedIndex>(index: 
         "a partition nothing was committed to has no age"
     );
 }
+
+/// ⚠️ **What a deleter asks, through the seam** (`ADR-0045`): a trim drops
+/// the entry and with it the object's last reference.
+pub fn liveness_counts_the_entries_naming_an_object<I: MaterializedIndex>(index: &I) {
+    let key = |name: &str| ObjectKey::new(name).expect("a valid key");
+    let commit = |version: u64| {
+        MetadataEntry::new(
+            CommitVersion::new(version),
+            MetadataRecord::BatchCommitted {
+                object: key(&format!("live-{version}")),
+                spans: vec![oqueue_core::CommittedSpan::new(
+                    topic("orders"),
+                    partition(0),
+                    10,
+                    oqueue_core::ByteRange::Full,
+                    None,
+                )],
+                written_at: Timestamp::EPOCH,
+            },
+        )
+    };
+    index.apply(&[commit(1), commit(2)]).expect("two commits");
+    assert_eq!(index.references(&key("live-1")), 1);
+    index
+        .apply(&[MetadataEntry::new(
+            CommitVersion::new(3),
+            MetadataRecord::Trimmed {
+                topic: topic("orders"),
+                partition: partition(0),
+                start: offset(10),
+            },
+        )])
+        .expect("a trim past the first");
+    assert_eq!(index.references(&key("live-1")), 0);
+    assert_eq!(index.references(&key("live-2")), 1);
+    assert_eq!(index.references(&key("never-written")), 0);
+}

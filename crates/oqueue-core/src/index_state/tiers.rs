@@ -18,7 +18,7 @@
 //! says what to do about it.
 
 use super::IndexState;
-use crate::{ObjectKey, ObjectRef, Offset, TailEntry};
+use crate::{ObjectKey, ObjectRef, Offset, PartitionId, TailEntry, TopicId};
 use core::mem::size_of;
 use core::ops::{Add, Sub};
 
@@ -104,6 +104,33 @@ impl Sub for Tiers {
 }
 
 impl IndexState {
+    /// The partition's tail window: entries carrying inline byte ranges, so
+    /// reading one is a single GET.
+    ///
+    /// ⚠️ **No production caller, and deliberately so.** A fetch goes through
+    /// [`find_batches`](Self::find_batches), which pages and prices; this hands
+    /// back the whole window so the suite can assert what demotion did to it.
+    /// It clones — up to [`TAIL_WINDOW_ENTRIES`](crate::TAIL_WINDOW_ENTRIES) entries with an
+    /// [`ObjectKey`](crate::ObjectKey) each — which is fine off the read path
+    /// and worth saying in a type that refuses a tuple key to avoid one clone.
+    #[must_use]
+    pub fn tail(&self, topic: &TopicId, partition: PartitionId) -> Vec<TailEntry> {
+        self.partition(topic, partition)
+            .map(|p| p.tail.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// How many entries the partition has demoted to the history tier.
+    ///
+    /// ⚠️ A count rather than the entries themselves: resolving one needs the
+    /// object's own footer, which is the read path `M3.8` builds and not this
+    /// type's to perform.
+    #[must_use]
+    pub fn history_len(&self, topic: &TopicId, partition: PartitionId) -> usize {
+        self.partition(topic, partition)
+            .map_or(0, |p| p.history.len())
+    }
+
     /// How many entries this index holds, across every partition and all
     /// three tiers — the tail, un-absorbed history, and one per published
     /// manifest.

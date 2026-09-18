@@ -229,6 +229,12 @@ pub trait MaterializedIndex: Send + Sync + core::fmt::Debug {
     /// The first readable offset: zero until a trim moves it (`ADR-0044`).
     fn log_start(&self, topic: &TopicId, partition: PartitionId) -> Offset;
 
+    /// How many index entries name `object` (`ADR-0045`). Zero is the
+    /// precondition for deleting it; ⚠️ an object absorbed into a partition
+    /// manifest never reaches zero, because this index does not read
+    /// manifests and so cannot know the manifest stopped naming it.
+    fn references(&self, object: &ObjectKey) -> usize;
+
     /// Discards everything, returning it to its fresh state.
     ///
     /// ⚠️ Safe **for the writer of this index**, and the reason this trait
@@ -321,6 +327,10 @@ impl MaterializedIndex for FakeMaterializedIndex {
 
     fn log_start(&self, topic: &TopicId, partition: PartitionId) -> Offset {
         self.lock().log_start(topic, partition)
+    }
+
+    fn references(&self, object: &ObjectKey) -> usize {
+        self.lock().references(object)
     }
 
     fn clear(&self) {

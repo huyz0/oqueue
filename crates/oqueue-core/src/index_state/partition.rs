@@ -182,14 +182,28 @@ impl PartitionIndex {
     /// ⚠️ **Removes references, never objects.** What it drops is an entry in
     /// this index; whether the object behind it can be deleted is a question
     /// about every *other* partition in it, which is liveness's (`M5.20`).
-    pub(super) fn trim(&mut self, start: Offset) {
+    /// Returns the object behind every entry it dropped, one per entry, so
+    /// the fold can count down what still names each object (`ADR-0045`).
+    pub(super) fn trim(&mut self, start: Offset) -> Vec<ObjectKey> {
         if start <= self.log_start {
-            return;
+            return Vec::new();
         }
         let dead = |end: Result<Offset, crate::Error>| end.is_ok_and(|end| end <= start);
-        self.history.retain(|entry| !dead(entry.end_offset()));
-        self.tail
-            .retain(|entry| !dead(entry.reference().end_offset()));
+        let mut dropped = Vec::new();
+        self.history.retain(|entry| {
+            let keep = !dead(entry.end_offset());
+            if !keep {
+                dropped.push(entry.object().clone());
+            }
+            keep
+        });
+        self.tail.retain(|entry| {
+            let keep = !dead(entry.reference().end_offset());
+            if !keep {
+                dropped.push(entry.reference().object().clone());
+            }
+            keep
+        });
         if self
             .manifest
             .as_ref()
@@ -198,6 +212,7 @@ impl PartitionIndex {
             self.manifest = None;
         }
         self.log_start = start;
+        dropped
     }
 
     /// Folds a batch's commit time into this partition's extent.
