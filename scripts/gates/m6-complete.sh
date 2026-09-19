@@ -95,6 +95,14 @@ leg() {
 leg "FR-51/NFR-20 (a coordinator killed under load loses nothing)" \
   a_killed_coordinator_loses_no_acknowledged_record \
   "needs a durable metadata log (ADR-0046) and a restart that replays it"
+# ⚠️ **The chaos leg the completion condition asks for** (`M6.17`, M6's
+# closing review): a node boots while another leads, the leader writes more
+# and prunes, the lease changes hands, and every acknowledgement survives with
+# no offset reused. The kill test above has one coordinator at a time; this is
+# where two contend.
+leg "FR-51 (a leadership change over a pruned log loses nothing)" \
+  a_successor_that_booted_early_loses_nothing \
+  "needs the coordinator to replay under each new lease term before writing"
 leg "task 13 (a coordinator whose lease expired fences itself)" \
   a_paused_coordinator_fences_itself \
   "needs the coordinator lease and its self-fencing poll"

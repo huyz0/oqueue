@@ -39,8 +39,9 @@ pub(crate) struct Built {
     /// The coordinator's loop, which replays its log before serving.
     pub(crate) serving: oqueue_coordinator::CoordinatorLoop,
     pub(crate) retention: oqueue_broker::Retention,
-    /// The metadata log, for the checkpoint cadence.
-    pub(crate) log: Arc<oqueue_core::ObjectStoreMetadataLog>,
+    /// The coordinator's current view of the metadata log, for the
+    /// checkpoint cadence (`M6.17`).
+    pub(crate) log: oqueue_broker::CurrentLog,
     /// The shard's leadership lease the loop is fenced by (`M6.7`).
     pub(crate) lease: Arc<oqueue_core::ObjectStoreLease>,
 }
@@ -65,7 +66,10 @@ pub(crate) async fn build_cluster(
         oqueue_core::CoordinatorEpoch::new(1),
         Arc::clone(&clock),
     );
-    let serving = serving.fenced_by(Arc::clone(&lease));
+    let current: oqueue_broker::CurrentLog = Arc::new(std::sync::Mutex::new(Arc::clone(&durable)));
+    let serving = serving
+        .fenced_by(Arc::clone(&lease))
+        .reopening_with(reopener(&store, &current));
     // FR-33: retention runs on time alone, over its own follower index.
     let retention = oqueue_broker::Retention::new(
         coordinator.clone(),
@@ -96,7 +100,7 @@ pub(crate) async fn build_cluster(
         cluster,
         serving,
         retention,
-        log: durable,
+        log: current,
         lease,
     })
 }
@@ -136,4 +140,23 @@ fn deferred_logs(
             "groups/0",
         )),
     )
+}
+
+/// Opens a current view of the metadata log each time the coordinator starts
+/// leading, and publishes it for the checkpoint cadence (`M6.17`).
+fn reopener(
+    store: &Arc<dyn ObjectStore>,
+    current: &oqueue_broker::CurrentLog,
+) -> oqueue_coordinator::Reopen {
+    let (store, current) = (Arc::clone(store), Arc::clone(current));
+    Box::new(move || {
+        let (store, current) = (Arc::clone(&store), Arc::clone(&current));
+        Box::pin(async move {
+            let log = Arc::new(oqueue_core::ObjectStoreMetadataLog::open(store, "meta/0").await?);
+            *current
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::clone(&log);
+            Ok(log as Arc<dyn oqueue_core::MetadataLog>)
+        })
+    })
 }

@@ -67,7 +67,7 @@ mod writer_id;
 /// second, long enough that an unreachable store costs one request a second.
 pub const DEGRADED_RETRY: core::time::Duration = core::time::Duration::from_secs(1);
 
-pub use checkpoint::{CHECKPOINT_JOURNAL_BYTES, CHECKPOINT_PAUSE, checkpoints};
+pub use checkpoint::{CHECKPOINT_JOURNAL_BYTES, CHECKPOINT_PAUSE, CurrentLog, checkpoints};
 pub use cluster::{Cluster, FlushError, Seams, Sequencing};
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, serve_connection};
 pub use dispatch::Dispatcher;

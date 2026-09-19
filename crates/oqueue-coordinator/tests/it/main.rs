@@ -5,6 +5,7 @@
 
 mod assignment;
 mod cache;
+mod chaos;
 mod deferred;
 mod fencing;
 mod follower;

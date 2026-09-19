@@ -102,74 +102,31 @@ pub struct CoordinatorLoop {
     /// Whether the log still has to be replayed before anything is served
     /// (`Coordinator::open_deferred`, `M6.10`).
     pub(crate) pending_replay: bool,
+    /// How to open a current view of the log, for a loop that must replay
+    /// again when it starts leading (`M6.17`).
+    pub(crate) reopen: Option<Reopener>,
+    /// The lease term the allocator was last replayed under; a write under
+    /// any other term replays afresh first (`M6.17`).
+    pub(crate) replayed_term: Option<u64>,
 }
 
+/// A [`Reopen`], held by the loop; `Debug` says only that there is one.
+pub(crate) struct Reopener(Reopen);
+
+impl core::fmt::Debug for Reopener {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Reopener")
+    }
+}
+
+/// Opens a current view of the shard's log (`CoordinatorLoop::reopening_with`).
+pub type Reopen = Box<
+    dyn Fn() -> oqueue_core::BoxFuture<'static, oqueue_core::Result<Arc<dyn MetadataLog>>>
+        + Send
+        + Sync,
+>;
+
 impl CoordinatorLoop {
-    /// Fences every write on `lease`: a commit or trim arriving while it is
-    /// not held is refused with [`CoordinatorError::Fenced`] (`M6.7`).
-    #[must_use]
-    pub fn fenced_by(mut self, lease: Arc<ObjectStoreLease>) -> Self {
-        self.lease = Some(lease);
-        self
-    }
-
-    /// Whether this loop may write *now* — no lease, or one still held.
-    fn leads(&self) -> bool {
-        self.lease.as_ref().is_none_or(|lease| lease.is_held())
-    }
-
-    /// Replays the log first if [`Coordinator::open_deferred`] left it to
-    /// the loop, awaiting `pause()` between failed attempts, then serves as
-    /// [`run`](Self::run) does.
-    ///
-    /// ⚠️ **The pause comes from the runner** because this crate reads no
-    /// clock of its own (`AGENTS.md` non-negotiable 5): the broker passes a
-    /// timer, a test passes whatever it wants to step.
-    ///
-    /// [`Coordinator::open_deferred`]: crate::Coordinator::open_deferred
-    pub async fn run_retrying<P, F>(mut self, mut pause: P)
-    where
-        P: FnMut() -> F,
-        F: Future<Output = ()>,
-    {
-        while !self.try_replay().await {
-            pause().await;
-        }
-        self.run().await;
-    }
-
-    /// Replays the log if a deferred open left it pending; whether the loop
-    /// may now serve.
-    async fn try_replay(&mut self) -> bool {
-        if !self.pending_replay {
-            return true;
-        }
-        let Ok((allocator, last)) = crate::coordinator::replay(&*self.log, &*self.index).await
-        else {
-            return false;
-        };
-        self.allocator = allocator;
-        self.last_committed = last;
-        self.pending_replay = false;
-        self.publish_applied();
-        true
-    }
-
-    /// Whether this loop may write *now*: replayed, and holding its lease if
-    /// it has one.
-    ///
-    /// ⚠️ **An unreplayed loop never writes**: its allocator is empty, and a
-    /// commit served from it would reuse every offset the log already holds.
-    async fn may_write(&mut self) -> Result<(), CoordinatorError> {
-        if !self.try_replay().await {
-            return Err(CoordinatorError::Unavailable);
-        }
-        if !self.leads() {
-            return Err(CoordinatorError::Fenced);
-        }
-        Ok(())
-    }
-
     /// Serves commits until every [`Coordinator`](crate::Coordinator) handle has
     /// been dropped.
     ///
@@ -269,10 +226,7 @@ impl CoordinatorLoop {
             if !self.leads() {
                 return Err(CoordinatorError::Fenced);
             }
-            self.log
-                .append(core::slice::from_ref(staged.entry()))
-                .await
-                .map_err(CoordinatorError::Journal)?;
+            self.journal(staged.entry()).await?;
             let entry = staged.entry().clone();
             let (version, assignments) = self.allocator.apply(staged);
             self.last_committed = Some(version);
@@ -314,10 +268,7 @@ impl CoordinatorLoop {
         if !self.leads() {
             return Err(CoordinatorError::Fenced);
         }
-        self.log
-            .append(core::slice::from_ref(staged.entry()))
-            .await
-            .map_err(CoordinatorError::Journal)?;
+        self.journal(staged.entry()).await?;
         let entry = staged.entry().clone();
         let (version, _) = self.allocator.apply(staged);
         self.last_committed = Some(version);
@@ -433,3 +384,5 @@ impl CoordinatorLoop {
         self.published.send_replace(self.index.applied_upto());
     }
 }
+
+mod leadership;

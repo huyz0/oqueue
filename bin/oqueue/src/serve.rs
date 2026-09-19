@@ -68,7 +68,10 @@ pub(crate) fn serve(
         tokio::spawn(built.retention.run());
         // ⚠️ Not watched either, for the same reason: a stopped cadence only
         // makes the next cold start slower (`M6.4`).
-        tokio::spawn(oqueue_broker::checkpoints(built.log));
+        tokio::spawn(oqueue_broker::checkpoints(
+            built.log,
+            Arc::clone(&built.lease),
+        ));
         // ⚠️ Nor the lease keeper: without it the loop fences itself when the
         // lease lapses, which refuses writes and loses nothing (`M6.7`).
         tokio::spawn(oqueue_broker::keep_lease(built.lease));

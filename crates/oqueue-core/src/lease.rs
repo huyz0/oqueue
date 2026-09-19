@@ -19,9 +19,13 @@
 //! clock — by which time the holder's local deadline, never later than that
 //! expiry on a clock at most the skew apart, has passed on its.
 //!
-//! ⚠️ **The lease is not what makes the log single-writer**: the log's own
-//! create-only segments are (`ADR-0046` point 2). The lease bounds how long a
-//! deposed coordinator keeps *trying*.
+//! ⚠️ **Neither the lease nor the log's create-only segments fences alone**
+//! (`M6.17`, amending `ADR-0046` point 2). The segments refuse two writers
+//! racing for one *live* key; pruning deletes keys, and a deleted key is
+//! absent again, so a writer whose view predates a prune is not refused by
+//! them. What closes that is the coordinator replaying from a freshly opened
+//! view under each lease term before it writes — the lease decides who may
+//! write, and the replay makes sure it writes where the log actually ends.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -45,7 +49,11 @@ pub const LEASE_RENEW_MS: i64 = 3_333;
 /// ⚠️ **UNDERIVED**, and deliberately below `oqueue-compact`'s 10 s GC skew:
 /// a lease that waited ten seconds more would double failover time to cover
 /// a skew NTP-disciplined hosts do not have. A host outside it can overlap a
-/// successor by the difference — which the log's own fence still refuses.
+/// successor by the difference. ⚠️ **That overlap is unfenced once a prune
+/// lands inside it**: the successor replays under its new term before
+/// writing (`M6.17`), but the skewed old holder does not, and a key the
+/// successor's checkpoint deleted is absent again for the old holder's
+/// create-only write. The skew bound is an assumption this relies on.
 pub const LEASE_SKEW_MS: i64 = 1_000;
 
 const MAGIC: [u8; 4] = *b"OQLS";

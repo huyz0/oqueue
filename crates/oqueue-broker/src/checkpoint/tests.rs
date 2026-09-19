@@ -29,8 +29,10 @@ async fn a_checkpoint_follows_the_journal_not_the_clock() {
     );
     log.append(&[entry(0)]).await.expect("appends");
     let one = log.unsnapshotted_bytes();
+    let current = Arc::new(std::sync::Mutex::new(Arc::clone(&log)));
     let task = tokio::spawn(checkpoints_at(
-        Arc::clone(&log),
+        current,
+        None,
         one * 3,
         Duration::from_secs(1),
     ));
@@ -57,4 +59,34 @@ async fn a_checkpoint_follows_the_journal_not_the_clock() {
         store.get(&first, ByteRange::Full).await.is_err(),
         "and it pruned"
     );
+}
+
+/// ⚠️ **Only the leader checkpoints** (`M6.17`): with a lease this node does
+/// not hold, the cadence leaves the journal alone however much has piled up.
+#[tokio::test(start_paused = true)]
+async fn a_node_without_the_lease_does_not_checkpoint() {
+    let store: Arc<dyn ObjectStore> = Arc::new(FakeObjectStore::new());
+    let log = Arc::new(
+        ObjectStoreMetadataLog::open(Arc::clone(&store), "meta/0")
+            .await
+            .expect("opens"),
+    );
+    log.append(&[entry(0)]).await.expect("appends");
+    let clock = Arc::new(oqueue_core::FakeClock::new());
+    let lease = Arc::new(oqueue_core::ObjectStoreLease::new(
+        Arc::clone(&store),
+        "meta/0",
+        "never-acquired",
+        clock,
+    ));
+    let current = Arc::new(std::sync::Mutex::new(Arc::clone(&log)));
+    let task = tokio::spawn(checkpoints_at(
+        current,
+        Some(lease),
+        1,
+        Duration::from_secs(1),
+    ));
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    assert!(log.unsnapshotted_bytes() > 0, "nothing was checkpointed");
+    task.abort();
 }

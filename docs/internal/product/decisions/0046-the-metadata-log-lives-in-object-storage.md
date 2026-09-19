@@ -34,9 +34,21 @@ coordinators; `ADR-0020` rejected a separately hosted metadata service (doc 15
 2. **The conditional write is the fence.** Two coordinators that both believe
    they lead race for the same next `seq`; one PUT succeeds and the other is
    refused, and a refused append is a coordinator that must stop serving.
-   The lease (M6 task 13) bounds how long a deposed leader keeps *trying*; it
-   is not what makes the log single-writer.
-3. **Group commit is what makes this affordable.** `CoordinatorLoop` drains
+   The lease (M6 task 13) bounds how long a deposed leader keeps *trying*.
+   ⚠️ **Amended by `M6.17`: once pruning exists (point 4), the conditional
+   write alone is not the fence.** A pruned segment key is absent again, so a
+   writer whose view predates the prune is not refused — M6's closing review
+   found a node that booted while another led, took the lease later, and
+   wrote at a deleted key behind the new base, reusing acknowledged offsets.
+   The coordinator now replays from a freshly opened view under each lease
+   term before its first write, and a refused append forces that replay.
+   ⚠️ **And a refused append does not stop the coordinator** as this point
+   first said; it answers `Journal` and replays before its next write.
+3. **Group commit is what makes this affordable** — ⚠️ **once it is built,
+   which M6 did not do**: `M6.2` was handed on at M6's close, `run` still
+   journals one request per append, and every acknowledgement pays one object
+   write today, which NFR-1 carries until it lands. What follows is the
+   design, not the current behaviour. `CoordinatorLoop` drains
    every queued request into one `append` (M6 task 7b), so the object-storage
    write is paid once per window, not once per commit. ⚠️ **It is still paid on
    the produce-ack path**, and that is this decision's cost: one object PUT is

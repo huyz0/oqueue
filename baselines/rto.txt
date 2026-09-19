@@ -11,6 +11,10 @@
 # Object-storage latency and the lease wait (LEASE_TTL_MS + LEASE_SKEW_MS)
 # dominate a real failover; M14 measures against real storage.
 #
+# ⚠️ `bin/oqueue` runs no standby (M6.8): the binary's own failover today is
+# a cold rebuild plus the lease wait, and hot_standby_us describes the library
+# path a multi-node deployment (M7) would use.
+#
 # `m6-complete.sh` requires both keys below to be present.
 measured_on: 2026-09-19
 hot_standby_us: 2259

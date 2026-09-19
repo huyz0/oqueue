@@ -193,6 +193,8 @@ impl Coordinator {
                 last_committed: last,
                 lease: None,
                 pending_replay,
+                reopen: None,
+                replayed_term: None,
             },
             IndexReader::new(index),
         )
