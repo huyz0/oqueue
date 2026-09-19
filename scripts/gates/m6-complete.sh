@@ -103,6 +103,12 @@ leg "FR-51/NFR-20 (a coordinator killed under load loses nothing)" \
 leg "FR-51 (a leadership change over a pruned log loses nothing)" \
   a_successor_that_booted_early_loses_nothing \
   "needs the coordinator to replay under each new lease term before writing"
+# ⚠️ **And with an append in flight across the handover** (`M6.19`, `M6.20`):
+# the leg above hands over between commits, so it could not see an append
+# held past the lease landing at a key the successor's checkpoint deleted.
+leg "FR-51 (an append that outlives its lease is not acknowledged)" \
+  an_append_that_outlives_its_lease_is_not_acknowledged \
+  "needs the loop to re-check its lease after the journal append returns"
 leg "task 13 (a coordinator whose lease expired fences itself)" \
   a_paused_coordinator_fences_itself \
   "needs the coordinator lease and its self-fencing poll"

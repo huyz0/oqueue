@@ -1,0 +1,20 @@
+{
+  "commits": [
+    "8a9212564aac67787ee775e4bff90ee8ccf06c3e",
+    "bb1bd2940dede498128e5fe3a9533c07a4e47c80"
+  ],
+  "findings": [
+    {
+      "evidence": "Compare scripts/gates/m6-complete.sh:98-105 (the only chaos leg is a_successor_that_booted_early_loses_nothing) with crates/oqueue-coordinator/tests/it/chaos.rs:202-260 (the M6.19 test). baselines/review.txt entry d2732bffb5a8 says the rest of the chaos-leg finding 'is M6.19's', and reviews/milestone-M6-56bc9a71c10ea035.json finding 356eac4101c0 cites M6.19. M6.17 set the precedent: it added its own chaos test to the gate as a named leg. M6.19 added none.",
+      "id": "eaacbab43cf0",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "The completion gate does not run the test that closes the chaos-leg finding. M6.19 wrote chaos::an_append_that_outlives_its_lease_is_not_acknowledged, but scripts/gates/m6-complete.sh names only a_successor_that_booted_early_loses_nothing for the leadership-change leg. Round two ruled that test unable to catch the in-flight-append loss. So m6-complete.sh stays green if the M6.19 test is renamed, ignored or removed, and the data-loss path M6.19 fixed has no evidence in the completion condition.",
+      "task_id": "M6.20"
+    }
+  ],
+  "milestone": "M6",
+  "recorded_at": "2026-09-19T08:02:20Z",
+  "reviewer": "independent milestone-review agent (Claude Opus 5); did not drive M6",
+  "verdict": "changes-requested"
+}
