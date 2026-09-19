@@ -101,14 +101,7 @@ async fn measure(
     let allocations = crate::allocations();
     let out = reply(dispatcher, frame).await;
     let allocations = crate::allocations() - allocations;
-    let after = catalog.calls();
-    let catalog = Calls {
-        lookup: after.lookup - calls.lookup,
-        lookup_id: after.lookup_id - calls.lookup_id,
-        create: after.create - calls.create,
-        list: after.list - calls.list,
-        listed: after.listed - calls.listed,
-    };
+    let catalog = catalog.calls().since(calls);
     let cost = Cost {
         reply_bytes: out.len(),
         topic_lookups: cluster.topic_lookups() - lookups,
@@ -212,6 +205,20 @@ async fn metadata_cost_is_flat_between_one_and_ten_million_topics() {
             topics(&large_out),
             "{shape:?}: the same topics, with the same ids, at both sizes"
         );
+        // A scoped answer holds exactly the named or granted topics, so a
+        // fixture that failed to authenticate cannot compare equal to itself.
+        if let Shape::Named | Shape::Granted = shape {
+            let held = topics(&large_out);
+            assert_eq!(
+                held.len(),
+                usize::try_from(NAMED).expect("fits"),
+                "{shape:?}"
+            );
+            assert!(
+                held.iter().all(|t| t.2 == 0),
+                "{shape:?}: every topic resolved"
+            );
+        }
         // Paged once and bounded, whatever the catalog holds: a node that
         // listed every name and truncated would show here, where
         // `topic_lookups` alone could not see it.

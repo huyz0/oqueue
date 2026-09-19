@@ -158,6 +158,19 @@ pub struct Calls {
     pub listed: u64,
 }
 
+impl Calls {
+    /// The calls made between `before` and `self`.
+    pub const fn since(self, before: Self) -> Self {
+        Self {
+            lookup: self.lookup - before.lookup,
+            lookup_id: self.lookup_id - before.lookup_id,
+            create: self.create - before.create,
+            list: self.list - before.list,
+            listed: self.listed - before.listed,
+        }
+    }
+}
+
 /// `C`, with every call counted.
 #[derive(Debug)]
 pub struct Counted<C> {

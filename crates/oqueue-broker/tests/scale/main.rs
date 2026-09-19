@@ -18,6 +18,7 @@
 mod catalog;
 mod memory;
 mod metadata;
+mod produce;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};
 use std::alloc::System;

@@ -28,9 +28,18 @@ const TOLERANCE: i128 = 1024;
 
 const PRODUCE_VERSION: i16 = 13;
 
-/// A node over `catalog`, shared by every scale test, with the coordinator loop serving it.
+/// A node over `catalog`, shared by every scale test, with the coordinator
+/// loop serving it.
 pub async fn node(
     catalog: Arc<dyn oqueue_core::TopicCatalog>,
+) -> (Arc<Cluster>, tokio::task::JoinHandle<()>) {
+    node_over(catalog, Arc::new(FakeObjectStore::new())).await
+}
+
+/// [`node`], writing to `store`.
+pub async fn node_over(
+    catalog: Arc<dyn oqueue_core::TopicCatalog>,
+    store: Arc<dyn ObjectStore>,
 ) -> (Arc<Cluster>, tokio::task::JoinHandle<()>) {
     let log: Arc<dyn oqueue_core::MetadataLog> = Arc::new(FakeMetadataLog::new());
     let (coordinator, serving, reader) = Coordinator::open(
@@ -41,7 +50,6 @@ pub async fn node(
     )
     .await
     .expect("an empty log opens");
-    let store: Arc<dyn ObjectStore> = Arc::new(FakeObjectStore::new());
     let cluster = Cluster::new(
         "h",
         1,
@@ -61,7 +69,7 @@ pub async fn node(
 }
 
 /// One small batch to partition 0 of `name`, through the real produce path.
-async fn produce(dispatcher: &Dispatcher, cluster: &Cluster, name: &str) {
+pub async fn produce(dispatcher: &Dispatcher, cluster: &Cluster, name: &str) {
     let mut partition = PartitionProduceData::default();
     partition.index = 0;
     partition.records = Some(bytes::Bytes::from(batch()));
