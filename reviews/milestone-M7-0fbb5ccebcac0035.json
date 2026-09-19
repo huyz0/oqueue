@@ -1,0 +1,27 @@
+{
+  "commits": [
+    "649a2ece4b88f48525b043b89260b62dab8737f5"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/roadmap.md rows at lines 297 (flush must not span shards), 298 (shard identity on a SessionWatermark), 314 (404 index refresh), 315 (parked fetch) and 319 (agent/coordinator partition) have Into = 'M7 (from M3|M10)' and each says 'M7.md task 17x receives it'. Row 284 hands 17a, 17b, 17c, 17d and the 404 refresh to M15, and M15.md 'Received from M7' lists them. Compare how the table records a re-route elsewhere: row 285's Into cell 'M7 (from M6) \u2014 M7.0 re-derives ... go on to M15', row 290 'M15 (was M1)'. A reader following row 297 or 298 lands on a milestone the same table marks complete. Likewise docs/internal/product/milestones/M7.md lines 168-169 say M6.2/M6.16/M6.18 became M7.8/M7.10/M7.9 but not that M7.11 then handed those three to M15. No gate checks this; the fix is annotating the five Into cells (e.g. 'M15 (was M7, re-routed by M7.11)') and one sentence in M7.md.",
+      "id": "b6e37345a2e2",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Five deferral rows still name M7 as their receiver after M7 closed and handed them to M15, without the re-route annotation the table uses elsewhere.",
+      "task_id": ""
+    },
+    {
+      "evidence": "docs/internal/product/decisions/0049-the-catalog-is-looked-up-not-held.md point 1: 'Every object key that is per-shard ... is derived from the id the map returns' next to '... nothing calls ShardMap yet \u2014 bin/oqueue uses shard 0 as a constant'. Keys are derived from a MetadataShardId (compose.rs const SHARD), not from a ShardMap answer. The paragraph also runs the amendment and the '\u26a0\ufe0f M7 runs one shard' sentence together on one line. M7.12 will rewrite this point, so no separate task.",
+      "id": "498e5236e05e",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "ADR-0049 point 1's amendment leaves the original sentence standing, so the point still opens by claiming every per-shard key is derived from the id the map returns, and then says nothing calls the map.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M7",
+  "recorded_at": "2026-09-19T17:51:51Z",
+  "reviewer": "claude-opus-5 (independent milestone reviewer, round two)",
+  "verdict": "pass"
+}
