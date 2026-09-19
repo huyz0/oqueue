@@ -1,0 +1,51 @@
+{
+  "commits": [
+    "94c4c692904070927572c21d0201892962e8aa42",
+    "5924d30d343652ce2862b171225dcbc41d3c058d",
+    "9604db0e085cde0b2c1f4c492153b0934b5fa5f7",
+    "65039900cc5b305697f03d0b31a149416fe85517",
+    "9f28f40baa4b38d96c30b7b7c5b2db482b0c1c08",
+    "16ef956cfc13def89fc89103864d14780676fd9d",
+    "dd5c4a537eae7e98b71d9f8c49dd9a3b1999e24b",
+    "c592920cd0331531e84a096b5a1a9c50482c6551",
+    "f643e13f67f16d1f2d0a8c6a9647b29e01cc7155"
+  ],
+  "findings": [
+    {
+      "evidence": "Compare docs/internal/product/decisions/0049-the-catalog-is-looked-up-not-held.md point 1 ('every per-shard key (meta/<shard>, groups/<shard>, catalog/<shard>) is derived from the id the map returns, so moving a topic later rewrites one map entry and no key') with crates/oqueue-core/src/catalog/stored.rs, where a topic's entry and id objects live at catalog/<shard>/topic/<hex> and catalog/<shard>/id/<hex>. A topic moved to shard 7 has to be looked up under catalog/7/, where it does not exist, so moving it means copying catalog objects. Also, ShardMap::shard_of takes a TopicId, so an id-addressed request (Produce v13, Fetch v13+, which go through Cluster::topic_name_by_id -> TopicCatalog::lookup_id) cannot be routed to a shard before its name is known: with more than one shard, lookup_id has no shard to ask. `grep -rn ShardMap bin crates` finds only crates/oqueue-core/src/shard.rs and its re-export in lib.rs; bin/oqueue/src/compose.rs uses a `const SHARD = MetadataShardId::ZERO` and never consults a map. M15 receives rebalance (roadmap.md deferral row for 'M7's provisional tasks ADR-0049 does not build') on a premise that does not hold. Proposed task M7.12 (does not exist yet): amend ADR-0049 point 1 to say where a topic's catalog entry lives relative to its shard (either a shard-independent catalog prefix or an explicit copy-on-move), and how an id resolves to a shard, and carry that note into M15.md's received rebalance task; or delete ShardMap until something calls it.",
+      "id": "705d89a6778e",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "ADR-0049 point 1's premise that moving a topic 'rewrites one map entry and no key' is false once M7.3 put the catalog entry under the shard's own prefix, and ShardMap, the lookup M7.1 built to carry that premise, has no caller anywhere.",
+      "task_id": "M7.12"
+    },
+    {
+      "evidence": "crates/oqueue-broker/src/cluster.rs lines 75-82 ('the full catalog size per topic_names call ... a full scan (O(topics that exist))') vs crates/oqueue-broker/src/cluster/topics.rs Cluster::topic_names, which charges names.len() bounded by limit (MAX_UNSCOPED_TOPICS) and states it is O(limit).",
+      "id": "2f19593e8858",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "The topic_lookups field doc still describes topic_names as a full-catalog scan charged the whole catalog size, which M7.4 removed.",
+      "task_id": ""
+    },
+    {
+      "evidence": "crates/oqueue-core/src/catalog/stored.rs uses MalformedMetadataSegment { at } for a bad catalog entry, a mismatched name, an unparseable id object, a non-hex listed key, and a lost-race find that returned nothing; crates/oqueue-core/src/error.rs line 438 renders it as 'the metadata-log segment is malformed at byte {at}'. error-handling.md asks for messages an operator can act on; this one sends them to the wrong object.",
+      "id": "ba8302a9ae50",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "Catalog corruption is reported as Error::MalformedMetadataSegment, whose message tells an operator a metadata-log segment is malformed.",
+      "task_id": ""
+    },
+    {
+      "evidence": "ADR-0049 point 3 says 'one create-only object per topic (catalog/<shard>/topic/<name> ...)'. crates/oqueue-core/src/catalog/stored.rs module doc, and the M7.3 backlog row, say two objects with keys topic/<hex of the name> and id/<hex of the id>, id written first. The ADR's Contract section was amended for M7.3a but point 3 was not updated for M7.3.",
+      "id": "7b2454e9d25c",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "ADR-0049 point 3 describes the catalog as one object per topic keyed by the raw name; the implementation writes two objects per topic under hex-encoded keys.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M7",
+  "recorded_at": "2026-09-19T17:47:40Z",
+  "reviewer": "claude-opus-5 (independent milestone reviewer)",
+  "verdict": "changes-requested"
+}

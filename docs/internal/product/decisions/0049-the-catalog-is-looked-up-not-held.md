@@ -26,17 +26,22 @@ open is how much of that M7 builds to meet its gate, and how the gate measures
 1. **A topic's shard is a lookup, not a hash in a key.** `MetadataShardId`
    names a shard; a `ShardMap` answers topic → shard. Every object key that is
    per-shard (`meta/<shard>`, `groups/<shard>`, `catalog/<shard>`) is derived
-   from the id the map returns, so moving a topic later rewrites one map entry
-   and no key. ⚠️ **M7 runs one shard**: the map answers shard 0 for every
+   from the id the map returns. ⚠️ **Amended by M7's closing review**: that
+   does not make a move free. A topic's catalog objects sit under its shard's
+   prefix, so moving it copies them; an id-addressed request carries no name
+   for `ShardMap::shard_of`; and nothing calls `ShardMap` yet — `bin/oqueue`
+   uses shard 0 as a constant. Settling where a moved topic's entry lives and
+   how an id finds its shard is `M7.12`, handed to M15 with rebalance. ⚠️ **M7 runs one shard**: the map answers shard 0 for every
    topic. Rebalance, a second coordinator, and the safety rules a second shard
    makes reachable (`M7.md` 17a, 17b, 17d) are handed on — see point 6.
 2. **The catalog is a seam, `TopicCatalog`, in `oqueue-core`**: look up a
    topic by name, by id, and create it if absent. The broker reads through it
    and holds no map of the whole catalog; what a node keeps is the entries of
    topics it has served, bounded by what it serves.
-3. **The object-store catalog writes one create-only object per topic**
-   (`catalog/<shard>/topic/<name>`, and `catalog/<shard>/id/<uuid>` for
-   id-addressed requests). Creating a topic writes those and provisions
+3. **The object-store catalog writes two create-only objects per topic**
+   (`catalog/<shard>/topic/<hex of the name>`, and `catalog/<shard>/id/<hex
+   id>` for id-addressed requests, written first — amended by `M7.3`: hex so
+   any name is a valid key and key order is name order). Creating a topic writes those and provisions
    nothing — no coordinator, task, timer or log. A topic's UUID is derived
    from its name, so two nodes creating the same topic race to write the same
    bytes and either answer is right. ⚠️ **This makes a deleted-and-recreated

@@ -77,9 +77,9 @@ pub struct Cluster {
     /// cost-test proxy for NFR-12 (`docs/internal/standards/testing.md` rule
     /// 11 forbids asserting on wall-clock duration, so this is what a test
     /// asserting "CPU independent of catalog size" actually counts): one per
-    /// `partition_count` call, and the full catalog size per `topic_names`
-    /// call — the two shapes of cost a `Metadata` handler can have, targeted
-    /// (O(topics a caller resolves)) and a full scan (O(topics that exist)).
+    /// `partition_count` call, and one per name a `topic_names` call returns
+    /// — bounded by its limit since `M7.4`, never by the catalog. ⚠️ It
+    /// counts names, not catalog calls; the scale tests count those.
     topic_lookups: AtomicU64,
     /// The consumer-group state machine's own seam (`M4.2`, `ADR-0034`) —
     /// `ADR-0033`'s "every group resolves to this node" made real: one
