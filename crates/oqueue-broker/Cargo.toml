@@ -60,6 +60,12 @@ kafka-protocol = { version = "0.18.0", default-features = false, features = ["br
 bytes = "1"
 # duplex-driven T1 tests: no real socket below bin/oqueue.
 tokio = { version = "1", features = ["io-util", "sync", "rt", "rt-multi-thread", "macros", "time", "test-util"] }
+# `M7.5`: live heap bytes for `tests/scale`'s NFR-10/11 test (`ADR-0049` point
+# 5). A counting `GlobalAlloc` needs `unsafe impl`, which non-negotiable 7
+# keeps out of this crate; this one wraps `System` in pure Rust, no C
+# toolchain and no dependencies of its own. Set as the allocator of that one
+# test binary only, never of a library.
+stats_alloc = "0.1"
 
 [lints]
 workspace = true

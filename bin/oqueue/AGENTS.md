@@ -39,7 +39,9 @@ place a concrete type is chosen" property rests entirely on review.
    the macros here only before that point. Nothing initialises `tracing` yet.
 3. ⚠️ **Setting a global allocator anywhere but here.** A library that sets one
    imposes it on every consumer with no way to opt out. ADR-0007. Nothing gates
-   this; `grep -rn global_allocator crates/` should stay empty.
+   this; `grep -rn global_allocator crates/*/src` should stay empty. A test
+   binary is not a library (`crates/oqueue-broker/tests/scale`, `M7.5`): nothing
+   links it, so the counting allocator it sets is imposed on no one.
 4. ⚠️ **Assuming `cargo build --workspace` covers aarch64.** It does not link
    there — no cross-linker until `M13`.
 5. ⚠️ **Assuming the `heap-profiling` build is *run* by anything.** Every gate
