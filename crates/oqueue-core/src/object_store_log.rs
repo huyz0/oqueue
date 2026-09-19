@@ -10,8 +10,10 @@
 //!
 //! ⚠️ **Opened without LIST** (`mission.md`): read the base object, then GET
 //! segments forward from it until one is absent. The entries are held in
-//! memory once read, so `read_from` costs no request; how many there are is
-//! bounded by pruning below the newest snapshot (`M6.5`).
+//! memory once read, so `read_from` costs no request. ⚠️ **How many there
+//! are is not bounded**: pruning bounds the segment GETs an open costs, but a
+//! snapshot holds every entry and this log keeps them all in memory, so both
+//! grow with the log's age — `M6.18`, handed on at M6's close.
 //!
 //! ⚠️ **An append whose PUT landed but whose answer was lost is reported as a
 //! failure and is nonetheless durable.** Every object store has this ambiguity.

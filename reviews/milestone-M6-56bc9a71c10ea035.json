@@ -1,0 +1,35 @@
+{
+  "commits": [
+    "060d6cdf9fe62a50034e8fd49cf6053d0f4e9aa0"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-coordinator/src/serve.rs:222-233 (no leads() after journal; stale fence comment at :224-225) vs crates/oqueue-coordinator/src/serve/leadership.rs journal(); crates/oqueue-core/src/object_store_log.rs checkpoint deletes old_base..seq",
+      "id": "7ba4d3e2f870",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "A deposed leader can still acknowledge a write that lands in a pruned slot. serve() checks leads() before journal() but not after the append returns. If a PUT is delayed past the holder's deadline (the pause M10.8 models), the successor can open, write and checkpoint before it lands. The segment key is deleted by then, so the IfAbsent PUT succeeds behind the new base and the old leader applies and acks it. That is the same loss mechanism M6.17 closed for a stale boot view, reached here through an in-flight append. The comment at the journal step still says 'What the append itself takes is covered by the log's own create-only fence', which M6.17 withdrew from lease.rs and ADR-0046 as false. Fix: re-check leads() after the append returns and refuse the ack if the lease lapsed during it. An append that finished before the deadline landed before any successor could open (the successor waits expiry plus skew), so that check closes the window.",
+      "task_id": "M6.19"
+    },
+    {
+      "evidence": "crates/oqueue-coordinator/tests/it/chaos.rs:101-165; scripts/gates/m6-complete.sh:98-105; baselines/review.txt:93; docs/internal/product/milestones/M6.md completion condition",
+      "id": "356eac4101c0",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "baselines/review.txt records the chaos-leg finding as fixed by a_successor_that_booted_early_loses_nothing, but that test is a scripted, sequential interleaving: one commit at a time, a fake clock, no concurrent load, no kill, and no M10 pause. M6.md's leg asks for kills under load, with the same suite injecting pauses that expire a lease. The test does compose two contending coordinators with pruning and an ack audit, which is real progress. But the one case a pause under load would reach (finding 1) is outside it, so the leg still cannot fail on it.",
+      "task_id": "M6.19"
+    },
+    {
+      "evidence": "crates/oqueue-coordinator/src/serve/leadership.rs refold(); baselines/rto.txt",
+      "id": "c01fb648cf85",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "refold re-reads the whole log from version ZERO on every new term and on every fence refusal, so the cost of a leadership change grows with history. This is the same O(history) growth as M6.18, and the M6.18 row should name it. baselines/rto.txt's hot_standby_us also does not include this refold, which a real handover now pays.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M6",
+  "recorded_at": "2026-09-19T07:45:59Z",
+  "reviewer": "independent milestone-review agent (Claude); did not drive M6 or M6.17",
+  "verdict": "changes-requested"
+}

@@ -1,0 +1,59 @@
+{
+  "commits": [
+    "ccfd49685008cbf223b1a2f951d43d5ce7798e5b",
+    "23979ca879e49c94e1bea749e4ed11efdd2051c3",
+    "854ff613194f8e8635a16d580621836a49d4428d",
+    "14eae4ad442d2820a3981927d9e849901e68e19d",
+    "e6207dc3bd8a261408c5b8e540da38ff4ed386d9",
+    "a08d6764de8dd87a73d15a3c47eea0addfde17e2",
+    "9c82741a1d0973a66355f61bd6a4aa8cf94f8633",
+    "92f5dfb2028351c8a74db99e314e6eecc0fe8270",
+    "d2315fe0c2ab1e374a429904d92f53bf58a53837"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-coordinator/src/serve.rs:159-170 (try_replay before leads) and :135-156 (pending_replay set false once, never reset); crates/oqueue-core/src/object_store_log.rs:171-176 (checkpoint deletes old_base..seq) vs :211-218 (append IfAbsent at cached next_seq, never refreshed on error); crates/oqueue-core/src/lease.rs:22-24,47-48; docs/internal/product/decisions/0046-the-metadata-log-lives-in-object-storage.md point 2; bin/oqueue/src/serve.rs:64 + compose.rs:62-68; crates/oqueue-coordinator/src/standby.rs:62-64 admits 'an open log does not see another process's appends'",
+      "id": "80a0ec2c79ca",
+      "kind": "contradiction",
+      "severity": "blocking",
+      "summary": "A node that replays the log while another holds the lease, then later acquires the lease, serves from a stale in-memory view. The loop replays once, at boot, before it checks the lease (run_retrying/may_write call try_replay before leads()), and nothing re-reads the log or the allocator on a new term. Its appends target a stale next_seq. If that segment still exists, every commit fails with Journal forever and writes never resume without a restart, which breaks FR-51's 'no manual intervention'. If the old leader has checkpointed since, Segments::checkpoint has deleted that key, so the IfAbsent PUT succeeds behind the new base. The commit is acked at offsets the predecessor already assigned, and no later open reads it: acknowledged data is lost and offsets are reused. This is reachable with the shipped binary whenever two processes overlap on one store, e.g. a rolling restart. The lease doc says 'the log's own fence still refuses' and ADR-0046 point 2 says the conditional write makes the log single-writer. Pruning in M6.4 voids both claims, and M6.7's lease leans on them.",
+      "task_id": ""
+    },
+    {
+      "evidence": "docs/internal/product/milestones/M6.md completion condition; crates/oqueue-coordinator/tests/it/recovery.rs:74-128; crates/oqueue-store/tests/it/sim/lease_pause.rs:55-107; crates/oqueue-coordinator/tests/it/fencing.rs:39-86; scripts/gates/m6-complete.sh leg list",
+      "id": "d2732bffb5a8",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "The completion condition's chaos leg is not met by the tests it names. M6.md requires 'a chaos test kills nodes under load' and says 'the same suite injects pauses long enough to expire a lease'. a_killed_coordinator_loses_no_acknowledged_record aborts a tokio task over FakeObjectStore, whose put has no await point, so the kill can never land between a PUT landing and its ack (the ambiguous case object_store_log.rs itself names). Only one coordinator runs at a time and there is no successor contending. The pause leg (a_lease_paused_past_its_ttl_fences_its_holder) exercises ObjectStoreLease alone, with no coordinator, no log and no load. The coordinator-level fencing test steps a FakeClock. Nothing composes a paused leader, a successor writing and an ack audit, which is exactly the composition in which the blocking finding above lives. Every leg passes while that defect ships.",
+      "task_id": ""
+    },
+    {
+      "evidence": "crates/oqueue-core/src/object_store_log.rs:12-14 (claim) vs :139-151,163-170 (encode state.entries, entries untouched) and :414-421 (walk decodes the full snapshot); ADR-0046 point 4 'The snapshot holds entries'",
+      "id": "3f0bc215b8c4",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "The claim that pruning bounds the log's in-memory entries is false. A snapshot is every entry ever written: checkpoint encodes state.entries, and nothing removes entries from memory after a checkpoint. Open decodes the whole history into a Vec. So snapshot size, checkpoint write volume, process memory and cold-start fold time all grow as O(history) without bound, and trims never shrink them. The operator-visible effect is that memory and cold-rebuild RTO grow with the age of the cluster. baselines/rto.txt's cold_rebuild_us is a point on a curve that nothing bounds.",
+      "task_id": "M6.18"
+    },
+    {
+      "evidence": "docs/internal/product/decisions/0046-the-metadata-log-lives-in-object-storage.md Status + points 2-3; docs/internal/product/backlog.md M6.2 row (todo); crates/oqueue-coordinator/src/serve.rs:272-275 (Journal error, loop continues); scripts/gates/m6-complete.sh (no group-commit leg)",
+      "id": "ecebd944315f",
+      "kind": "contradiction",
+      "severity": "major",
+      "summary": "ADR-0046 rests on things that were not built. Point 3 says group commit (M6.2) 'is what makes this affordable', and point 2 says a refused append is a coordinator that 'must stop serving'. M6.2 is todo, so every produce ack now pays one object PUT per commit, against NFR-1's 500 ms p99. On a refused append the loop returns CoordinatorError::Journal and goes on serving, retrying the same sequence number; it never stops. The ADR was taken without the user's answer and was 'reversible until M6's first implementation commit lands', so that window has closed while its precondition is still unbuilt. m6-complete.sh has no leg for M6.2, so the milestone can close with the cost live.",
+      "task_id": "M6.2"
+    },
+    {
+      "evidence": "crates/oqueue-coordinator/src/standby.rs; docs/internal/product/backlog.md M6.8 row; baselines/rto.txt",
+      "id": "c9dd690726ff",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "Hot standby and promotion (M6.8), and with them the NFR-22 hot_standby_us number, exist only as a library: bin/oqueue never runs a Standby, and the backlog defers it to M7. baselines/rto.txt records hot_standby_us without saying the shipped binary has no hot-standby path; an operator's failover is a cold rebuild plus the lease wait.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M6",
+  "recorded_at": "2026-09-19T07:43:50Z",
+  "reviewer": "independent milestone-review agent (Claude); did not drive M6 and was not given the driver's transcript",
+  "verdict": "changes-requested"
+}
