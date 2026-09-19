@@ -567,6 +567,9 @@ declare -A RUST_BOUNDS=(
   # `M7.2`: names one catalog `list` page asks for in `Cluster::topic_names` —
   # the work one catalog call may do, not a correctness bound.
   ["crates/oqueue-broker/src/cluster/topics.rs|LIST_PAGE"]="1000"
+  # `M7.4`: the topics an unscoped all-topics `Metadata` lists. ⚠️ **Weakens
+  # by rising** — the work one unauthenticated request may cost a node.
+  ["crates/oqueue-broker/src/metadata.rs|MAX_UNSCOPED_TOPICS"]="1000"
 )
 # ⚠️ **`M10.18a`: no more file-wide exemptions.** This used to be
 # `NOT_A_BOUND_FILE`, a *file* on the left of `=`, and `M3.42`'s finding was

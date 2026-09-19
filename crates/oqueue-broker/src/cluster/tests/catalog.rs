@@ -37,3 +37,22 @@ async fn the_cache_holds_only_topics_this_node_served() {
     assert_eq!(cluster.partition_count("b").await, Some(1));
     assert_eq!(cluster.cached_topics(), 1);
 }
+
+/// ⚠️ **A limit past one catalog page is met exactly** (`M7.4`): the last page
+/// asks only for what is still wanted.
+#[tokio::test(start_paused = true)]
+async fn a_listing_past_one_page_stops_at_its_limit() {
+    let catalog = Arc::new(FakeTopicCatalog::new());
+    for i in 0..2_500 {
+        catalog
+            .create(&topic(&format!("t{i:05}")), 1)
+            .await
+            .expect("created");
+    }
+    let cluster = cluster_still_loading()
+        .await
+        .with_catalog(Arc::clone(&catalog) as Arc<dyn TopicCatalog>);
+    let names = cluster.topic_names(1_500).await;
+    assert_eq!(names.len(), 1_500);
+    assert_eq!(names.last().map(String::as_str), Some("t01499"));
+}

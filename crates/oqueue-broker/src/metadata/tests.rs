@@ -234,3 +234,33 @@ async fn the_advertised_identity_is_the_configured_one() {
 /// `M9.9`'s own tests: an explicitly-named topic, scoped through
 /// `TopicGrants`, once a credential source makes authorization live.
 mod authorization;
+
+/// An unscoped all-topics answer after creating `catalog` topics: how many it
+/// listed, and the catalog lookups it cost.
+async fn unscoped_answer(catalog: usize) -> (usize, u64) {
+    let fixture = fixture(&[]).await;
+    let cluster = &fixture.cluster;
+    for i in 0..catalog {
+        assert!(cluster.ensure_topic(&format!("t{i:06}")).await);
+    }
+    let body = request_bytes(12, None, false);
+    let before = cluster.topic_lookups();
+    let out = answered(cluster, prelude(12), &body).await;
+    let lookups = cluster.topic_lookups() - before;
+    (decode(&out, 12).topics.len(), lookups)
+}
+
+/// ⚠️ **An unscoped all-topics answer is bounded** (`M7.4`, `ADR-0049` point
+/// 4): past `MAX_UNSCOPED_TOPICS` it lists exactly the bound, and what it
+/// costs stops growing with the catalog.
+#[tokio::test]
+async fn an_unscoped_all_topics_answer_is_bounded() {
+    let max = super::MAX_UNSCOPED_TOPICS;
+    let (listed_under, _) = unscoped_answer(max - 1).await;
+    assert_eq!(listed_under, max - 1, "below the bound, everything");
+    let (listed, lookups) = unscoped_answer(max + 5).await;
+    assert_eq!(listed, max, "past it, exactly the bound");
+    let (listed_double, lookups_double) = unscoped_answer(2 * max).await;
+    assert_eq!(listed_double, max);
+    assert_eq!(lookups, lookups_double, "cost flat as the catalog doubles");
+}

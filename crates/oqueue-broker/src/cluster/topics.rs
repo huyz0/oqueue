@@ -54,25 +54,25 @@ impl Cluster {
         Some(self.remember(&entry))
     }
 
-    /// Every topic name, sorted — `Metadata` with no filter asks for all.
+    /// Up to `limit` topic names, in name order — what an unscoped `Metadata`
+    /// with no filter is answered with (`ADR-0049` point 4).
     ///
-    /// ⚠️ **O(catalog), not O(what a caller keeps)** — this pages through
-    /// every entry, unlike [`Cluster::partition_count`]'s one targeted
-    /// lookup. `topic_lookups` counts this proportionally to catalog size for
-    /// exactly that reason: a caller that resolves a scoped set of names via
-    /// `partition_count` per name costs O(that set); a caller that calls this
-    /// and filters afterward is the O(catalog) anti-pattern `M9.10`'s own
-    /// `all_topics_names` exists to avoid, and `M9.17`'s cost test needs a
-    /// proxy that tells the two apart. ⚠️ A catalog error ends the listing
-    /// early, with what was paged so far.
-    pub async fn topic_names(&self) -> Vec<String> {
+    /// ⚠️ **Bounded by `limit`, never by the catalog** (`M7.4`): it pages
+    /// until it holds `limit` names or the catalog runs out, so its cost is
+    /// O(`limit`) whatever the catalog holds. `topic_lookups` counts each name
+    /// returned — `M9.17`'s proxy, which now stays flat past the bound.
+    /// ⚠️ A catalog error ends the listing early, with what was paged so far.
+    pub async fn topic_names(&self, limit: usize) -> Vec<String> {
         let mut names: Vec<String> = Vec::new();
         let mut after: Option<TopicId> = None;
-        loop {
-            let Ok(page) = self.catalog.list(after.as_ref(), LIST_PAGE).await else {
+        while names.len() < limit {
+            let want = LIST_PAGE.min(limit - names.len());
+            let Ok(page) = self.catalog.list(after.as_ref(), want).await else {
                 break;
             };
-            let full = page.len() == LIST_PAGE;
+            // An empty page ends the walk whatever was asked for, so no
+            // request for nothing can spin.
+            let full = !page.is_empty() && page.len() == want;
             names.extend(page.iter().map(|t| t.as_str().to_owned()));
             after = page.into_iter().last();
             if !full {

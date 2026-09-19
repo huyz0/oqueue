@@ -57,7 +57,7 @@ else
 fi
 
 # ── 0c. Every call site of it, workspace-wide production code ──────────────
-# `src/` only -- a test setting up a fixture or asserting against the
+# `src/` only, and not a `src/` test module (`M7.4`) -- a test setting up a fixture or asserting against the
 # registry directly is not "answering a client request" and is exempt by
 # scope, the same way `check-sans-io.sh`'s REAL_CLOCK pattern scopes itself
 # to the files whose claim it is actually making.
@@ -65,7 +65,8 @@ mapfile -t call_sites < <(
   grep -rn '\.topic_names(' \
     --include='*.rs' \
     crates/*/src/ bin/*/src/ 2>/dev/null |
-    grep -v "^${CLUSTER_SEAM}:${def_line}:" || true
+    grep -v "^${CLUSTER_SEAM}:${def_line}:" |
+    grep -vE '/tests/|/tests\.rs:' || true
 )
 
 if (( ${#call_sites[@]} == 0 )); then

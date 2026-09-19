@@ -155,6 +155,11 @@ async fn resolve_all(
     resolved
 }
 
+/// How many topics an unscoped all-topics `Metadata` lists (`ADR-0049` point
+/// 4, `M7.4`). ⚠️ **Weakens by rising**: it is the work one unauthenticated
+/// request may make a node do, and the answer's size.
+pub const MAX_UNSCOPED_TOPICS: usize = 1000;
+
 /// The topic names a null-topic-array ("every topic") request answers with
 /// — `M9.10`'s own gate, the silent-omission half of `M9.1`'s verified
 /// Kafka finding.
@@ -173,7 +178,7 @@ async fn resolve_all(
 /// unreachable past `M9.7`'s own gate.
 async fn all_topics_names(cluster: &Cluster, authz: &AuthzContext<'_>) -> Vec<String> {
     if !authz.credentials_configured {
-        return cluster.topic_names().await;
+        return cluster.topic_names(MAX_UNSCOPED_TOPICS).await;
     }
     let Some(principal) = authz.principal else {
         return Vec::new();
