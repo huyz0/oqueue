@@ -379,6 +379,15 @@ declare -A RUST_BOUNDS=(
   # The pause after each checkpoint check (`M6.4`). ⚠️ Weakening is *raising*:
   # the tail overshoots the trigger by up to a pause's worth of appends.
   ["crates/oqueue-broker/src/checkpoint.rs|CHECKPOINT_PAUSE"]="Duration::from_secs(10)"
+  # How long a coordinator lease is valid after the renewal that granted it
+  # (`M6.7`). ⚠️ Weakening is *raising*: it is the floor of failover time.
+  ["crates/oqueue-core/src/lease.rs|LEASE_TTL_MS"]="10_000"
+  # How often a holder renews (`M6.7`). ⚠️ Weakening is *raising*: past half
+  # the TTL, one failed renewal lets the lease lapse under a live holder.
+  ["crates/oqueue-core/src/lease.rs|LEASE_RENEW_MS"]="3_333"
+  # The clock skew the lease assumes (`M6.7`). ⚠️ Weakening is *lowering*: a
+  # challenger then takes over while a skewed holder still thinks it leads.
+  ["crates/oqueue-core/src/lease.rs|LEASE_SKEW_MS"]="1_000"
   # How many bytes one part of a bundled object carries (`M5.6`). ⚠️ Weakening
   # is *lowering*: S3 refuses any part but the last below 5 MiB, so a smaller
   # value moves the failure from this crate to the backend, which is the wrong
@@ -591,6 +600,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/group_segment.rs|FORMAT"]="the group-log segment format's version number (`M6.6`)"
   ["crates/oqueue-core/src/group_segment.rs|TAG_OFFSET"]="a record tag in the group segment format, fixed once written"
   ["crates/oqueue-core/src/group_segment.rs|TAG_TRANSITION"]="a record tag in the group segment format, fixed once written"
+  ["crates/oqueue-core/src/lease.rs|SEARCH_PROBES"]="twice the probes a 64-bit bisection needs -- a loop bound, not a policy"
+  ["crates/oqueue-core/src/object_store_log/base.rs|SEARCH_PROBES"]="twice the probes a 64-bit bisection needs -- a loop bound, not a policy"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
   # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
   ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"

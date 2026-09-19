@@ -17,7 +17,7 @@ use crate::commit::{CommitAck, SpanOutcome};
 use crate::error::CoordinatorError;
 use oqueue_core::{
     Clock, CommitVersion, CommittedSpan, CoordinatorEpoch, MaterializedIndex, MetadataEntry,
-    MetadataLog, ObjectKey, Offset, PartitionId, TopicId,
+    MetadataLog, ObjectKey, ObjectStoreLease, Offset, PartitionId, TopicId,
 };
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
@@ -96,9 +96,25 @@ pub struct CoordinatorLoop {
     pub(crate) last_committed: Option<CommitVersion>,
     /// Stamps each commit with the moment the log took it (`M5.86`).
     pub(crate) clock: Arc<dyn Clock>,
+    /// The leadership lease every write is checked against, when there is
+    /// one (`M6.7`).
+    pub(crate) lease: Option<Arc<ObjectStoreLease>>,
 }
 
 impl CoordinatorLoop {
+    /// Fences every write on `lease`: a commit or trim arriving while it is
+    /// not held is refused with [`CoordinatorError::Fenced`] (`M6.7`).
+    #[must_use]
+    pub fn fenced_by(mut self, lease: Arc<ObjectStoreLease>) -> Self {
+        self.lease = Some(lease);
+        self
+    }
+
+    /// Whether this loop may write *now* — no lease, or one still held.
+    fn leads(&self) -> bool {
+        self.lease.as_ref().is_none_or(|lease| lease.is_held())
+    }
+
     /// Serves commits until every [`Coordinator`](crate::Coordinator) handle has
     /// been dropped.
     ///
@@ -111,16 +127,23 @@ impl CoordinatorLoop {
         while let Some(request) = self.requests.recv().await {
             match request {
                 Request::Commit(commit) => {
-                    let outcome = self.serve(commit.object, commit.spans).await;
+                    let outcome = if self.leads() {
+                        self.serve(commit.object, commit.spans).await
+                    } else {
+                        Err(CoordinatorError::Fenced)
+                    };
                     // ⚠️ Ignored on purpose: a caller that stopped waiting is
                     // the cancellation case `Coordinator::commit` documents,
                     // and the commit has already happened either way.
                     drop(commit.reply.send(outcome));
                 }
                 Request::Trim(trim) => {
-                    let outcome = self
-                        .serve_trim(trim.topic, trim.partition, trim.start)
-                        .await;
+                    let outcome = if self.leads() {
+                        self.serve_trim(trim.topic, trim.partition, trim.start)
+                            .await
+                    } else {
+                        Err(CoordinatorError::Fenced)
+                    };
                     // ⚠️ Ignored on purpose, as a commit's is: the trim is
                     // journaled or not whether or not anyone still waits.
                     drop(trim.reply.send(outcome));
@@ -184,6 +207,13 @@ impl CoordinatorLoop {
             // ⚠️ Journaled before the allocator takes the position, so a
             // refusal leaves the line exactly where it was. The reverse
             // order would leave a gap that nothing later could fill.
+            // ⚠️ **Checked again at the journal step** (`M6.7`'s review): the
+            // admission check can be a long queue wait old, and a lease that
+            // lapsed in between must not journal. What the append itself
+            // takes is covered by the log's own create-only fence.
+            if !self.leads() {
+                return Err(CoordinatorError::Fenced);
+            }
             self.log
                 .append(core::slice::from_ref(staged.entry()))
                 .await
@@ -226,6 +256,9 @@ impl CoordinatorLoop {
             .allocator
             .stage_trim(topic, partition, start)
             .map_err(CoordinatorError::Unassignable)?;
+        if !self.leads() {
+            return Err(CoordinatorError::Fenced);
+        }
         self.log
             .append(core::slice::from_ref(staged.entry()))
             .await

@@ -5,6 +5,7 @@
 
 mod assignment;
 mod cache;
+mod fencing;
 mod follower;
 mod idempotence;
 mod recovery;

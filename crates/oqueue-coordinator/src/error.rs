@@ -27,6 +27,7 @@ use oqueue_core::{Error, MaterializedIndex};
 /// | [`Unassignable`](Self::Unassignable) | Never — the arithmetic will not change. |
 /// | [`Journal`](Self::Journal) | The inner error's class decides. |
 /// | [`Unreplayable`](Self::Unreplayable) | Never — the same log refuses the same way. |
+/// | [`Fenced`](Self::Fenced) | Never here — another coordinator leads; the client retries against it. |
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CoordinatorError {
     /// The coordinator's serializing loop is no longer accepting commits.
@@ -72,6 +73,17 @@ pub enum CoordinatorError {
         #[source]
         source: Error,
     },
+
+    /// This coordinator's lease has lapsed on its own clock, or a successor
+    /// has taken it (`M6.7`).
+    ///
+    /// ⚠️ **Checked when a request is taken and again just before the
+    /// journal append**, so a coordinator that may have been superseded
+    /// journals nothing it had not already sent. An append already in flight
+    /// when the lease lapses is stopped by the log's own create-only fence
+    /// (`ADR-0046` point 2), not by this check.
+    #[error("this coordinator no longer holds its lease")]
+    Fenced,
 }
 
 /// A refused [`open`](crate::Coordinator::open), and the index it was given.

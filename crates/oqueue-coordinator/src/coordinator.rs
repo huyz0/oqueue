@@ -152,6 +152,7 @@ impl Coordinator {
                 deltas,
                 published,
                 last_committed: last,
+                lease: None,
             },
             IndexReader::new(index),
         ))

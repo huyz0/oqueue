@@ -14,6 +14,9 @@ use crate::{ByteRange, Error, ObjectKey, ObjectStore, Result};
 /// The bytes a base object begins with.
 const BASE_MAGIC: [u8; 4] = *b"OQMB";
 
+/// The most probes one bisection may take before it is called a bug.
+const SEARCH_PROBES: u32 = 128;
+
 /// Where a log begins: its lowest live segment, and the snapshot of
 /// everything before it.
 pub(super) struct Base {
@@ -107,7 +110,12 @@ pub(super) async fn read_base(
             delta: absent,
         })?;
     }
-    while absent - present > 1 {
+    // ⚠️ **Bounded**, as the lease's search is: 64 probes bisect a 64-bit
+    // space, and one that has not converged by 128 fails rather than spins.
+    for _ in 0..SEARCH_PROBES {
+        if absent - present <= 1 {
+            return Ok((Some(present), found));
+        }
         let middle = present + (absent - present) / 2;
         match probe(store, prefix, middle).await? {
             Some(base) => {
@@ -117,5 +125,5 @@ pub(super) async fn read_base(
             None => absent = middle,
         }
     }
-    Ok((Some(present), found))
+    Err(Error::MalformedMetadataSegment { at: 0 })
 }
