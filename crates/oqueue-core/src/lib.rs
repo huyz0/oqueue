@@ -139,7 +139,7 @@ pub use index_reader::IndexReader;
 pub use index_state::{
     IndexQuota, IndexState, MAX_BATCHES_PER_PAGE, Pressure, TAIL_WINDOW_ENTRIES, Tiers,
 };
-pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
+pub use key::{DEK_BYTES, Dek, FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use key_layout::KeyLayout;
 pub use lease::{LEASE_RENEW_MS, LEASE_SKEW_MS, LEASE_TTL_MS, ObjectStoreLease};
 pub use maintenance_store::MaintenanceStore;

@@ -11,9 +11,10 @@
 # Every `struct`/`enum` field declaration (`name: Type`, one per line — this
 # codebase's own consistent style) whose name matches a secret-shaped
 # pattern: `password`, `passwd`, `passphrase`, `secret`, `token`, `bearer`,
-# `credential`, `proof`, or `auth_bytes` by name (word-boundary, substring
+# `credential`, `proof`, `dek`, `auth_bytes`, or `key_material` by name (word-boundary, substring
 # match on the field name itself, not the type). A match whose type text
-# does not contain `Redacted` fails. `oqueue_core::Redacted<T>`'s own
+# does not contain one of the safe carriers (`Redacted`, `Dek`,
+# `WrappedKey` — see `SAFE_CARRIERS` below for why each one qualifies) fails. `oqueue_core::Redacted<T>`'s own
 # invariant — neither `Debug` nor `Display` can reach `T`, by a missing
 # bound rather than an override — is what makes wrapping sufficient; a
 # struct with a `Redacted` field may derive `Debug` safely (`Redacted`'s own
@@ -98,6 +99,14 @@ exempt = {l for l in os.environ["EXEMPT_KEYS"].splitlines() if l}
 SECRET_ROOTS = (
     "password", "passwd", "passphrase", "secret", "bearer", "credential",
     "proof", "token",
+    # `M8.1`: the first plaintext key material in the codebase. `dek` as a
+    # component catches `dek`, `dek_bytes`, `wrapped_dek` and `cached_dek`
+    # alike. ⚠️ **`key` is deliberately not a root** — `key_id`, `key_layout`,
+    # `object_key` and `partition_key` are ordinary names throughout this
+    # codebase and a bare `key` root would flag nearly all of them, which is
+    # the same flood the `bytes` note below rejects. `key_material` is caught
+    # by exact substring instead, beside `auth_bytes`.
+    "dek",
 )
 # ⚠️ `bytes` is **not** a root — this is a Kafka broker; `record_bytes`,
 # `batch_bytes`, `header_bytes` and the like are ordinary field names
@@ -108,13 +117,38 @@ SECRET_ROOTS = (
 
 
 def name_is_secret_shaped(name: str) -> bool:
-    if "auth_bytes" in name:
+    if "auth_bytes" in name or "key_material" in name:
         return True
     return any(
         part.startswith(root)
         for part in name.split("_")
         for root in SECRET_ROOTS
     )
+
+
+# ⚠️ **Three safe carriers, not one** (`M8.1`). `Redacted<T>` is the original
+# and the one `security.md` rule 7's carve-out names. `Dek` — `oqueue-core`'s
+# plaintext data encryption key — earns the same standing for a stronger
+# reason: it holds its bytes privately, its `Debug` is a fixed string with no
+# route to them at any specifier, and it additionally zeroizes on drop
+# (rule 8), which `Redacted` does not. `WrappedKey` holds *ciphertext* and
+# holds it inside a `Redacted` one level down, so a field carrying one is not
+# exposing material either.
+#
+# ⚠️ **Whole words, not substrings** (`M8.1`'s review): `Redacted` is not a
+# plausible part of an unrelated type's name, but `Dek` is the prefix of
+# nearly every type M8 adds — `DekEntry`, `DekCache`, `CachedDek` — and a
+# substring match would have passed `dek: DekEntry` holding `[u8; 32]` behind
+# a derived `Debug`, in the very milestone that introduces such types. A
+# carrier still counts wherever it appears as a word, so `Arc<Dek>` and
+# `Option<Redacted<Vec<u8>>>` are safe as before. ⚠️ A type *alias* hiding one
+# of these is as invisible here as it always was.
+SAFE_CARRIERS = ("Redacted", "Dek", "WrappedKey")
+SAFE_CARRIER_RE = re.compile(r"\b(?:" + "|".join(SAFE_CARRIERS) + r")\b")
+
+
+def type_is_safe(field_type: str) -> bool:
+    return SAFE_CARRIER_RE.search(field_type) is not None
 
 
 ITEM_OPEN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(struct|enum)\s+\w")
@@ -157,7 +191,11 @@ for path in files:
         for m in FIELD_RE.finditer(stripped):
             name, field_type = m.group(1), m.group(2)
             key = f"{path}|{name}"
-            if name_is_secret_shaped(name) and "Redacted" not in field_type and key not in exempt:
+            if (
+                name_is_secret_shaped(name)
+                and not type_is_safe(field_type)
+                and key not in exempt
+            ):
                 problems.append(f"{path}:{lineno}: {stripped.strip()}")
         if depth <= 0:
             in_item = False
@@ -182,11 +220,13 @@ scanned="$(grep -c '^COUNT ' <<< "$out" || true)"
 count="$(grep '^COUNT ' <<< "$out" | head -1 | sed 's/^COUNT //')"
 
 if (( ${#problems[@]} > 0 )); then
-  fail "${#problems[@]} secret-shaped field(s) not wrapped in Redacted"
+  fail "${#problems[@]} secret-shaped field(s) carry material nothing redacts"
   for p in "${problems[@]}"; do
     note "$p"
   done
   note "wrap the field's type in oqueue_core::Redacted<T>, security.md rules 6-7"
+  note "⚠️ key material belongs in oqueue_core::Dek instead: Redacted hides a"
+  note "   value from Debug but does not zeroize it on drop, which rule 8 asks for"
 else
   ok "check-secrets.sh: no unredacted secret-shaped field found (${count:-0} file(s) scanned)"
 fi

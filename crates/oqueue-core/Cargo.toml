@@ -19,6 +19,14 @@ license.workspace = true
 # `error-handling.md` rule 3: each crate defines its error enum with thiserror.
 # Proc macro, no C toolchain, no runtime cost — verified with `cargo tree`.
 thiserror.workspace = true
+# `security.md` rule 8: `Dek` wipes its bytes on drop, and `Redacted<T>` can
+# be wiped explicitly where `T: Zeroize`. Pure Rust, no C toolchain — verified
+# with `cargo tree`. (`M8.1`.)
+zeroize.workspace = true
+# `security.md`'s timing-oracle concern: comparing two secrets must not leak
+# their contents through how long it takes. Pure Rust, no C toolchain —
+# verified with `cargo tree`. (`M8.1`.)
+subtle.workspace = true
 
 [dev-dependencies]
 # `testing.md` rule 20 (property tests over example tests) and doc 18 §5.6,

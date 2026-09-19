@@ -155,6 +155,9 @@ impl Error {
             | Self::TooManyParts { .. }
             | Self::ObjectTooLarge { .. }
             | Self::PreconditionFailed { .. }
+            // Never: key material of the wrong length is the wrong length on
+            // every attempt.
+            | Self::DekLength { .. }
             | Self::Permanent => RetryClass::Never,
         }
     }

@@ -65,6 +65,21 @@ license = "Apache-2.0"
 thiserror = "2"
 # Property testing. `testing.md` rule 20; doc 18 §5.6 makes it mandatory per PR.
 proptest = "1"
+# Wiping key material on drop. `security.md` rule 8 ("key material is
+# zeroized on drop") names no crate; this is the one the Rust ecosystem
+# standardised on, and `ring` — already in this workspace's graph through
+# `object_store`'s `ring` feature — depends on it, so it resolves nothing
+# new. ⚠️ Pure Rust, no `build.rs`, no C toolchain (`cargo tree -p zeroize`
+# shows only the optional `zeroize_derive` proc macro, which this project
+# does not enable): doc 20 §1's budget is untouched. `oqueue-core` takes it
+# directly for `Dek` (`M8.1`).
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+# Constant-time comparison of secret bytes. `Redacted`'s own documentation
+# has named its non-constant-time `PartialEq` as an `M8` obligation since
+# `M0.6`, and `security.md`'s no-timing-oracle instinct is the reason.
+# ⚠️ Same footprint argument as `zeroize`: pure Rust, no build script,
+# already in `Cargo.lock` transitively through `ring`.
+subtle = { version = "2", default-features = false }
 # The global allocator, set in `bin/oqueue` only. ADR-0007. ⚠️ Pulls a C
 # toolchain — permitted by NFR-42 ("cargo and a C compiler"), recorded here
 # because `AGENTS.md` forbids it happening without a reason.

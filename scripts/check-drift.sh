@@ -594,6 +594,7 @@ declare -A NOT_A_BOUND=(
   # `M10.20`: moved from `records.rs` to its own `records/count.rs` when
   # `count_records` (the only reader of this constant) got its own file.
   ["crates/oqueue-codec/src/records/count.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
+  ["crates/oqueue-core/src/key.rs|DEK_BYTES"]="AES-256's key width, fixed by the algorithm ADR-0050 chose -- a different value is a different cipher, not a weaker setting of this one"
   ["crates/oqueue-core/src/bundle.rs|BUNDLE_FORMAT_VERSION"]="this object format's version number"
   ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/composite.rs|COMPOSITE_FORMAT_VERSION"]="the composite manifest format's version number"

@@ -3,9 +3,10 @@
 // Sites are on values this test constructed from literals it controls.
 #![allow(clippy::expect_used)]
 
-use oqueue_core::{Error, FakeKeyProvider, KeyId, KeyProvider, Redacted};
+use oqueue_core::{Dek, Error, FakeKeyProvider, KeyId, KeyProvider, Redacted};
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// ⚠️ No async runtime. Correct only because every future here completes on its
 /// first poll — the fake does no I/O and registers no waker.
@@ -142,4 +143,119 @@ fn a_key_id_that_is_a_prefix_of_another_does_not_alias() {
 
     let wrapped_under_short = block_on(provider.wrap(&short, &dek)).expect("wrap");
     assert!(block_on(provider.unwrap(&long, &wrapped_under_short)).is_err());
+}
+
+// ── `Dek`: M8.1, security.md rules 6-8 ──────────────────────────────────────
+
+/// ⚠️ **What this proves and what it does not.** It calls [`Zeroize::zeroize`]
+/// — the same function `Dek`'s `Drop` body calls, and the only one — and
+/// asserts the bytes it owned are now zero. It therefore proves the wiping
+/// *operation* is real and reaches all 32 bytes.
+///
+/// ⚠️ It does **not** observe memory after the drop. Reading a dropped value's
+/// storage is undefined behaviour in safe Rust and unreachable without
+/// `unsafe`, which `AGENTS.md` non-negotiable 7 forbids in this crate, so no
+/// test here can watch the freed bytes. The link from "zeroize wipes" to
+/// "drop wipes" is carried by two other things instead: the `Drop` impl's one
+/// statement, and `assert_dek_is_zeroize_on_drop` below, which fails to
+/// *compile* if `Dek` stops implementing [`ZeroizeOnDrop`].
+#[test]
+fn zeroizing_a_dek_leaves_no_byte_of_key_material_in_the_bytes_it_owned() {
+    let mut dek = Dek::new([0xA5; 32]);
+    assert_eq!(dek.expose(), &[0xA5; 32]);
+
+    dek.zeroize();
+
+    assert_eq!(dek.expose(), &[0u8; 32]);
+}
+
+/// The compile-time half of the claim above: `Dek` promises wiping on drop in
+/// the type system, not only in a comment.
+#[test]
+fn assert_dek_is_zeroize_on_drop() {
+    const fn requires_zeroize_on_drop<T: ZeroizeOnDrop>() {}
+    requires_zeroize_on_drop::<Dek>();
+}
+
+/// A `Dek` built from a correctly sized slice carries those bytes.
+#[test]
+fn a_dek_from_a_thirty_two_byte_slice_holds_those_bytes() {
+    let bytes: Vec<u8> = (0..32).collect();
+    let dek = Dek::from_slice(&bytes).expect("32 bytes");
+    assert_eq!(&dek.expose()[..], &bytes[..]);
+    assert_eq!(oqueue_core::DEK_BYTES, 32);
+}
+
+/// Wrong lengths are refused, and the refusal names the length only.
+#[test]
+fn a_dek_from_a_wrong_length_slice_is_refused_without_naming_the_bytes() {
+    for len in [0_usize, 16, 31, 33, 64] {
+        let bytes = vec![0xEE_u8; len];
+        let err = Dek::from_slice(&bytes).expect_err("wrong length");
+        assert_eq!(err, Error::DekLength { got: len });
+        assert_eq!(
+            format!("{err}"),
+            format!("a data encryption key must be 32 bytes, got {len}")
+        );
+        assert_eq!(format!("{err:?}"), format!("DekLength {{ got: {len} }}"));
+    }
+}
+
+/// ⚠️ Pinned, not screened — `redaction.rs`'s header says why.
+#[test]
+fn dek_renderings_are_exactly_these_and_nothing_else() {
+    let dek = Dek::new([0xDE; 32]);
+
+    assert_eq!(format!("{dek:?}"), "Dek(<redacted>)");
+    assert_eq!(format!("{dek:#?}"), "Dek(<redacted>)");
+    assert_eq!(format!("{dek:x?}"), "Dek(<redacted>)");
+    assert_eq!(format!("{dek:X?}"), "Dek(<redacted>)");
+    assert_eq!(format!("{dek:+?}"), "Dek(<redacted>)");
+    assert_eq!(format!("{dek:>40?}"), "Dek(<redacted>)");
+}
+
+/// Constant-time equality answers the ordinary questions correctly.
+#[test]
+fn constant_time_equality_answers_the_same_questions_ordinary_equality_would() {
+    let a = Dek::new([7; 32]);
+    let b = Dek::new([7; 32]);
+    assert!(a.ct_eq(&b));
+    assert!(a.ct_eq(&a));
+
+    // Differing in the first byte, and in the last: neither position is
+    // special to the comparison.
+    let mut first = [7_u8; 32];
+    first[0] = 8;
+    let mut last = [7_u8; 32];
+    last[31] = 8;
+    assert!(!a.ct_eq(&Dek::new(first)));
+    assert!(!a.ct_eq(&Dek::new(last)));
+}
+
+/// `Redacted`'s own equality, now constant-time, still answers correctly —
+/// including for unequal lengths, which it reports as unequal.
+#[test]
+fn redacted_equality_answers_correctly_for_equal_and_unequal_contents() {
+    let a = Redacted::new(vec![1_u8, 2, 3]);
+    assert_eq!(a, Redacted::new(vec![1_u8, 2, 3]));
+    assert_ne!(a, Redacted::new(vec![1_u8, 2, 4]));
+    assert_ne!(a, Redacted::new(vec![1_u8, 2, 3, 4]));
+    assert_ne!(a, Redacted::new(Vec::new()));
+    assert_eq!(
+        Redacted::new(String::from("s")),
+        Redacted::new(String::from("s"))
+    );
+}
+
+/// `Redacted` wipes on request. ⚠️ Same honest limit as the `Dek` test above:
+/// this proves the operation, not a post-drop observation — and `Redacted`
+/// deliberately does **not** wipe on drop, which its own documentation states.
+#[test]
+fn zeroizing_a_redacted_vec_empties_it() {
+    let mut r = Redacted::new(vec![0xA5_u8; 32]);
+    r.zeroize();
+    assert!(
+        r.expose().is_empty(),
+        "Vec<u8>::zeroize clears as well as wipes"
+    );
 }

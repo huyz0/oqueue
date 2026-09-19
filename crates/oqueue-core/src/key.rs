@@ -1,6 +1,8 @@
 //! The key-management seam: wrap and unwrap, and nothing else.
 
 use crate::{BoxFuture, Redacted, Result};
+use subtle::ConstantTimeEq as _;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Names a key in whatever KMS holds it.
 ///
@@ -83,6 +85,115 @@ impl WrappedKey {
         &self.0
     }
 }
+
+/// The length of a [`Dek`], in bytes: AES-256 takes a 256-bit key.
+///
+/// ⚠️ **A property of the algorithm, not a tunable.** ADR-0050 fixes the
+/// envelope on AES-GCM with a 256-bit DEK; a shorter key is a different
+/// algorithm, not a configuration of this one.
+pub const DEK_BYTES: usize = 32;
+
+/// A plaintext data encryption key: 32 bytes of AES-256 key material.
+///
+/// This is the live key `KeyProvider::unwrap` hands back and the thing
+/// ADR-0006 guarantee 4 calls "the caller's to zeroize". It is that caller's
+/// type.
+///
+/// # What it guarantees
+///
+/// ⚠️ **Zeroized on drop** (`security.md` rule 8). `Drop` wipes the array
+/// through [`Zeroize`], and the type implements [`ZeroizeOnDrop`] to say so in
+/// the type system. ⚠️ What that does *not* guarantee is that no other copy
+/// survives: a `Dek` built from a slice leaves the caller's slice alone, and a
+/// value moved in memory may leave the source bytes behind — only the bytes
+/// this value owns at the moment it drops are wiped. `security.md` rule 9 (key
+/// material never lands on disk) is a separate obligation this type cannot
+/// discharge.
+///
+/// ⚠️ **No `Clone`, deliberately.** Every clone is another plaintext copy with
+/// its own lifetime and its own chance to outlive its use, and nothing in the
+/// envelope scheme needs one: a DEK is unwrapped into one owner, used, and
+/// dropped. Code that thinks it needs a second copy wants a second
+/// `unwrap`, or a borrow.
+///
+/// ⚠️ **No derived `PartialEq`.** A bytewise compare of key material is a
+/// timing oracle. [`Dek::ct_eq`] is the only equality, and it is constant-time.
+///
+/// ⚠️ **`Debug` prints a fixed string**, as [`Redacted`] does, and takes no
+/// route to the bytes — FR-44, `security.md` rules 6-7.
+pub struct Dek([u8; DEK_BYTES]);
+
+impl Dek {
+    /// Takes ownership of 32 bytes of key material.
+    #[must_use]
+    pub const fn new(bytes: [u8; DEK_BYTES]) -> Self {
+        Self(bytes)
+    }
+
+    /// Copies key material out of a slice.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::Error::DekLength`] if `bytes` is not [`DEK_BYTES`] long.
+    /// ⚠️ The error carries the *length*, never the bytes.
+    pub fn from_slice(bytes: &[u8]) -> Result<Self> {
+        let array: [u8; DEK_BYTES] =
+            bytes
+                .try_into()
+                .map_err(
+                    |_: core::array::TryFromSliceError| crate::Error::DekLength {
+                        got: bytes.len(),
+                    },
+                )?;
+        Ok(Self(array))
+    }
+
+    /// The key bytes, for the AEAD and nothing else.
+    ///
+    /// ⚠️ Named as [`Redacted::expose`] is, and for the same reason: every call
+    /// is a place where key material leaves its wrapper, and that is a review
+    /// question. The returned borrow must not be copied into anything that
+    /// outlives the `Dek`, or rule 8's guarantee is defeated by the copy rather
+    /// than by this type.
+    #[must_use]
+    pub const fn expose(&self) -> &[u8; DEK_BYTES] {
+        &self.0
+    }
+
+    /// Whether two keys are the same, in time independent of *where* they
+    /// differ.
+    ///
+    /// ⚠️ Constant-time in the contents, via [`subtle`]. The lengths are equal
+    /// by construction, so there is no length side channel either.
+    #[must_use]
+    pub fn ct_eq(&self, other: &Self) -> bool {
+        self.0.ct_eq(&other.0).into()
+    }
+}
+
+/// ⚠️ Prints a fixed string; no route to the bytes at any format specifier,
+/// exactly as [`Redacted`]'s own `Debug` does.
+impl core::fmt::Debug for Dek {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Dek(<redacted>)")
+    }
+}
+
+impl Zeroize for Dek {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+impl Drop for Dek {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
+
+/// ⚠️ A marker, not an implementation: [`Drop`] above is what does the wiping.
+/// It exists so a caller can *require* the property in a bound.
+impl ZeroizeOnDrop for Dek {}
 
 /// Wraps and unwraps data encryption keys.
 ///

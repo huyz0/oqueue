@@ -4,8 +4,9 @@
 
 The types, IDs, errors, and trait seams every other crate in the workspace is
 written against. It is the one crate everything depends on, and the one crate
-that depends on **no other crate in the workspace**. Externally it takes exactly
-one dependency, `thiserror`, for the reason under *Upstream*.
+that depends on **no other crate in the workspace**. Externally it takes three
+dependencies — `thiserror`, `zeroize` and `subtle` — for the reasons under
+*Upstream*.
 
 ## Why does it exist?
 
@@ -30,12 +31,22 @@ star topology holds only if its centre is a leaf. `check-layering.sh` enforces
 the direction of every other crate's dependencies; this crate having none is
 what makes depth 2 achievable at all.
 
-Externally, exactly one:
+Externally, three, each pure Rust with no build script and no C toolchain
+(`cargo tree -p oqueue-core -e normal` is the check):
 
 - `thiserror` — `error-handling.md` rule 3 requires each crate to define its
   error enum with it, and `M0.5` brought the first one. A proc macro, so no C toolchain. ⚠️ The
   runtime graph is `thiserror` alone: `proc-macro2`, `quote`, `syn` and
   `unicode-ident` are host-only, nested under `thiserror-impl`.
+- `zeroize` — `security.md` rule 8: key material is zeroized on drop, and
+  `M8.1`'s `Dek` is the first key material in the workspace. Also gives
+  `Redacted<T>` an explicit `Zeroize` for `T: Zeroize`, which is the most that
+  generic wrapper can offer (its own docs say why). Already in `Cargo.lock`
+  through `ring`, so it resolves nothing new.
+- `subtle` — constant-time comparison of secret bytes. `Redacted`'s `PartialEq`
+  was bytewise and named its own timing leak as an `M8` obligation; `M8.1`
+  closed it, and `Dek::ct_eq` rests on the same crate. Also already in
+  `Cargo.lock` through `ring`.
 
 `proptest` is a **dev**-dependency, for the invariant tests, so it is absent
 from the list above and from the shipped graph. ⚠️ `check-layering.sh` and

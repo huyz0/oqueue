@@ -1046,7 +1046,9 @@ name = "oqueue-core"
 version = "0.0.0"
 dependencies = [
  "proptest",
+ "subtle",
  "thiserror",
+ "zeroize",
 ]
 
 [[package]]

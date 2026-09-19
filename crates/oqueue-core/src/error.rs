@@ -327,6 +327,17 @@ pub enum Error {
     #[error("key id is empty")]
     EmptyKeyId,
 
+    /// Key material presented as a data encryption key was the wrong length.
+    ///
+    /// ⚠️ **Carries the length, never the bytes** — the same discipline
+    /// [`Error::SecretRejected`] settled on in `M0.11`: a length is a fact an
+    /// operator can act on, and is not the material.
+    #[error("a data encryption key must be {} bytes, got {got}", crate::DEK_BYTES)]
+    DekLength {
+        /// How many bytes were offered.
+        got: usize,
+    },
+
     /// The configured key provider does not encrypt.
     ///
     /// ⚠️ Returned by `oqueue-crypto`'s no-op provider rather than silently
