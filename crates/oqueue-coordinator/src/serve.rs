@@ -222,11 +222,12 @@ impl CoordinatorLoop {
             // ⚠️ **Checked again at the journal step** (`M6.7`'s review): the
             // admission check can be a long queue wait old, and a lease that
             // lapsed in between must not journal. What the append itself
-            // takes is covered by the log's own create-only fence.
+            // takes is checked after it returns (`M6.19`).
             if !self.leads() {
                 return Err(CoordinatorError::Fenced);
             }
             self.journal(staged.entry()).await?;
+            self.still_leads_after_append()?;
             let entry = staged.entry().clone();
             let (version, assignments) = self.allocator.apply(staged);
             self.last_committed = Some(version);
@@ -269,6 +270,7 @@ impl CoordinatorLoop {
             return Err(CoordinatorError::Fenced);
         }
         self.journal(staged.entry()).await?;
+        self.still_leads_after_append()?;
         let entry = staged.entry().clone();
         let (version, _) = self.allocator.apply(staged);
         self.last_committed = Some(version);

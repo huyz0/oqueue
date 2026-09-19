@@ -30,6 +30,7 @@ async fn node(
     store: &Arc<dyn ObjectStore>,
     clock: &Arc<FakeClock>,
     name: &str,
+    reopen: Reopen,
 ) -> (
     Coordinator,
     CoordinatorLoop,
@@ -56,9 +57,7 @@ async fn node(
     )
     .await
     .expect("replays at boot");
-    let serving = serving
-        .fenced_by(Arc::clone(&lease))
-        .reopening_with(reopener(store));
+    let serving = serving.fenced_by(Arc::clone(&lease)).reopening_with(reopen);
     assert!(
         format!("{serving:?}").contains("Reopener"),
         "the loop says it can reopen, and nothing more"
@@ -103,13 +102,13 @@ async fn a_successor_that_booted_early_loses_nothing() {
     ));
     let mut acked = Vec::new();
 
-    let (a, a_loop, _a_reader, a_lease, _a_log) = node(&store, &clock, "a").await;
+    let (a, a_loop, _a_reader, a_lease, _a_log) = node(&store, &clock, "a", reopener(&store)).await;
     assert!(a_lease.acquire().await.expect("a leads"));
     let a_serving = tokio::spawn(a_loop.run());
     commit_all(&a, 0..10, &mut acked).await;
 
     // B boots now, replaying A's first ten, while A still leads.
-    let (b, b_loop, _b_reader, b_lease, _b_log) = node(&store, &clock, "b").await;
+    let (b, b_loop, _b_reader, b_lease, _b_log) = node(&store, &clock, "b", reopener(&store)).await;
     let b_serving = tokio::spawn(b_loop.run());
     assert_eq!(
         b.commit(object(500), vec![span(1)]).await.err(),
@@ -146,9 +145,120 @@ async fn a_successor_that_booted_early_loses_nothing() {
     );
 
     // Every acknowledgement survives, read from the store alone.
-    let (_c, _c_loop, fresh, _c_lease, _c_log) = node(&store, &clock, "c").await;
+    let (_c, _c_loop, fresh, _c_lease, _c_log) = node(&store, &clock, "c", reopener(&store)).await;
     assert_served(&fresh, &acked);
     assert_eq!(fresh.end_offset(&topic(), partition()).get(), 21);
+    drop((a, b));
+    a_serving.await.expect("the loop ends");
+    b_serving.await.expect("the loop ends");
+}
+
+type Held = oqueue_core::FaultMetadataLog<ObjectStoreMetadataLog>;
+type Slot = Arc<std::sync::Mutex<Option<Arc<Held>>>>;
+
+/// A reopener whose views can be told to stall; the latest lands in `slot`.
+fn holding(store: &Arc<dyn ObjectStore>, slot: &Slot) -> Reopen {
+    let (store, slot) = (Arc::clone(store), Arc::clone(slot));
+    Box::new(move || {
+        let (store, slot) = (Arc::clone(&store), Arc::clone(&slot));
+        Box::pin(async move {
+            let log = Arc::new(oqueue_core::FaultMetadataLog::new(
+                ObjectStoreMetadataLog::open(store, "meta/0").await?,
+            ));
+            *slot.lock().expect("unpoisoned") = Some(Arc::clone(&log));
+            Ok(log as Arc<dyn MetadataLog>)
+        })
+    })
+}
+
+/// One producer per object in `range`, all at once, so the loop journals
+/// under contention.
+async fn concurrently(
+    coordinator: &Arc<Coordinator>,
+    range: core::ops::Range<usize>,
+    acked: &mut Vec<(ObjectKey, i64)>,
+) {
+    let producers: Vec<_> = range
+        .map(|i| {
+            let coordinator = Arc::clone(coordinator);
+            tokio::spawn(async move { (i, coordinator.commit(object(i), vec![span(1)]).await) })
+        })
+        .collect();
+    for producer in producers {
+        let (i, ack) = producer.await.expect("the producer ends");
+        let ack = ack.expect("the leader commits");
+        acked.push((object(i), ack.base_offset(&topic(), partition())));
+    }
+}
+
+/// Checkpoints `store`'s log through a view opened now, pruning its segments.
+async fn checkpoint(store: &Arc<dyn ObjectStore>) {
+    let current = ObjectStoreMetadataLog::open(Arc::clone(store), "meta/0")
+        .await
+        .expect("a current view");
+    assert!(current.checkpoint().await.expect("checkpoints"));
+}
+
+/// ⚠️ **An append that returns after its lease lapsed is not acknowledged**
+/// (`M6.19`, M6's second closing round). A's append stalls past its deadline;
+/// B takes the lease, writes, and checkpoints, deleting the segment key A is
+/// about to write. A's create-only write then lands there, behind the new
+/// base, where no open reads — so A must refuse the acknowledgement.
+#[tokio::test]
+async fn an_append_that_outlives_its_lease_is_not_acknowledged() {
+    let store: Arc<dyn ObjectStore> = Arc::new(FakeObjectStore::new());
+    let clock = Arc::new(FakeClock::starting_at(
+        Timestamp::from_millis(1_700_000_000_000).expect("a valid time"),
+    ));
+    let held: Slot = Arc::default();
+    let mut acked = Vec::new();
+
+    let (a, a_loop, _a_reader, a_lease, _a_log) =
+        node(&store, &clock, "a", holding(&store, &held)).await;
+    assert!(a_lease.acquire().await.expect("a leads"));
+    let a_serving = tokio::spawn(a_loop.run());
+    let a = Arc::new(a);
+    concurrently(&a, 0..5, &mut acked).await;
+
+    // A's next append stalls inside the journal step, before storing.
+    let log = held
+        .lock()
+        .expect("unpoisoned")
+        .clone()
+        .expect("A reopened");
+    log.set_faults(oqueue_core::LogFaults {
+        hold_append: true,
+        ..Default::default()
+    });
+    let stalled = {
+        let a = Arc::clone(&a);
+        tokio::spawn(async move { a.commit(object(5), vec![span(1)]).await })
+    };
+    while log.parked() == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    // Its lease lapses; B takes over, writes, and checkpoints.
+    clock
+        .advance(LEASE_TTL_MS + LEASE_SKEW_MS)
+        .expect("the clock moves");
+    let (b, b_loop, _b_reader, b_lease, _b_log) = node(&store, &clock, "b", reopener(&store)).await;
+    assert!(b_lease.acquire().await.expect("B takes over"));
+    let b_serving = tokio::spawn(b_loop.run());
+    commit_all(&b, 6..7, &mut acked).await;
+    checkpoint(&store).await;
+
+    // A's append now lands; its acknowledgement must be refused.
+    log.release();
+    assert_eq!(
+        stalled.await.expect("the commit ends").err(),
+        Some(CoordinatorError::Fenced),
+        "an append that returned after the lease lapsed is not acknowledged"
+    );
+
+    let (_c, _c_loop, fresh, _c_lease, _c_log) = node(&store, &clock, "c", reopener(&store)).await;
+    assert_served(&fresh, &acked);
+    assert_eq!(fresh.end_offset(&topic(), partition()).get(), 6);
     drop((a, b));
     a_serving.await.expect("the loop ends");
     b_serving.await.expect("the loop ends");

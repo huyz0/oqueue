@@ -127,6 +127,25 @@ impl CoordinatorLoop {
         }
     }
 
+    /// Refuses the acknowledgement of an append that returned after this
+    /// loop's lease lapsed (`M6.19`, M6's second closing round).
+    ///
+    /// ⚠️ **The append may be durable, and it may be lost**: a successor
+    /// opens no earlier than the old expiry plus the skew, writes, and
+    /// checkpoints, and a checkpoint deletes segment keys — so an append
+    /// held past the deadline can land at a deleted key, behind the new base,
+    /// where no open reads. One that returned *before* the deadline was
+    /// visible to any successor. So the lease is checked again here, and a
+    /// lapsed one gets no acknowledgement and no allocator step; the next
+    /// term replays afresh.
+    pub(super) fn still_leads_after_append(&mut self) -> Result<(), CoordinatorError> {
+        if self.leads() {
+            return Ok(());
+        }
+        self.replayed_term = None;
+        Err(CoordinatorError::Fenced)
+    }
+
     /// Whether this loop may write *now* — no lease, or one still held.
     pub(super) fn leads(&self) -> bool {
         self.lease.as_ref().is_none_or(|lease| lease.is_held())
