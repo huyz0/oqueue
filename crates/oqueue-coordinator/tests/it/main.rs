@@ -7,6 +7,7 @@ mod assignment;
 mod cache;
 mod follower;
 mod idempotence;
+mod recovery;
 mod sequencing;
 mod stamping;
 mod support;

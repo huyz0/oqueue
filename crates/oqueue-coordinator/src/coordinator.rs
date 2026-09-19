@@ -85,10 +85,15 @@ impl Coordinator {
     ///
     /// # Errors
     ///
-    /// [`OpenRejected`], carrying [`CoordinatorError::ReplayRequired`] if `log`
-    /// already holds entries — see that variant for why this refuses rather
-    /// than resumes — or [`CoordinatorError::Journal`] if the log cannot be
-    /// read at all.
+    /// [`OpenRejected`], carrying [`CoordinatorError::Journal`] if the log
+    /// cannot be read, or [`CoordinatorError::Unreplayable`] if it holds an
+    /// entry the replay cannot fold.
+    ///
+    /// ⚠️ **A non-empty log is replayed, not refused** (`M6.3`): every entry
+    /// is folded into the allocator — offsets, the version line, producer
+    /// sequence state — and the index, by the arithmetic that served it, before
+    /// this returns. Until snapshots land (`M6.4`, `M6.5`) the replay is the
+    /// whole log.
     ///
     /// ⚠️ **A refusal hands `index` back** (`M3.34`). Taking it by value is
     /// what makes the sole-writer rule structural, and it is also what makes a
@@ -117,31 +122,10 @@ impl Coordinator {
         epoch: CoordinatorEpoch,
         clock: Arc<dyn Clock>,
     ) -> Result<(Self, CoordinatorLoop, IndexReader), OpenRejected> {
-        let last = match log.last_version().await {
-            Ok(last) => last,
-            Err(error) => {
-                return Err(OpenRejected::new(CoordinatorError::Journal(error), index));
-            }
+        let (allocator, last) = match replay(&*log, &*index).await {
+            Ok(replayed) => replayed,
+            Err(error) => return Err(OpenRejected::new(error, index)),
         };
-        if let Some(last) = last {
-            return Err(OpenRejected::new(
-                CoordinatorError::ReplayRequired {
-                    last_version: last.get(),
-                },
-                index,
-            ));
-        }
-        // ⚠️ **Cleared, not trusted.** The log has just been checked empty, so
-        // an index arriving with a version folded into it holds one from some
-        // *other* line — a rotated log, a re-shard, or doc 10 #12's disk
-        // engine outliving the process. Seeding the watch from it would have
-        // `IndexWatch` answer `true` at once for every `AtLeast(v)` below that
-        // version and serve a reader offsets from a different line believing
-        // they are fresh, which is hazard H2 through the mechanism built to
-        // prevent it. Clearing is the operation this seam guarantees is always
-        // safe, and it makes the invariant true by construction rather than by
-        // a check that has to be remembered.
-        index.clear();
         // ⚠️ The `Box` becomes an `Arc` **here**, inside the seam — `ADR-0024`.
         // A caller that had constructed the `Arc` would have kept one, and an
         // `Arc<dyn MaterializedIndex>` carries `apply` and `clear`. Moving a
@@ -150,7 +134,7 @@ impl Coordinator {
         let index: Arc<dyn MaterializedIndex> = Arc::from(index);
         let (commits, requests) = mpsc::channel(COMMIT_QUEUE_DEPTH);
         let (deltas, listener) = broadcast::channel(DELTA_BUFFER_ENTRIES);
-        let (published, applied) = watch::channel(None);
+        let (published, applied) = watch::channel(last);
         Ok((
             Self {
                 epoch,
@@ -162,12 +146,12 @@ impl Coordinator {
                 log,
                 index: Arc::clone(&index),
                 epoch,
-                allocator: Allocator::new(),
+                allocator,
                 clock,
                 requests,
                 deltas,
                 published,
-                last_committed: None,
+                last_committed: last,
             },
             IndexReader::new(index),
         ))
@@ -367,4 +351,65 @@ impl Coordinator {
             .map_err(|_| CoordinatorError::Unavailable)?;
         answer.await.map_err(|_| CoordinatorError::Unavailable)
     }
+}
+
+/// Folds the whole log into a fresh allocator and `index` (`M6.3`).
+///
+/// ⚠️ **Paged**, [`REBUILD_PAGE_ENTRIES`] at a time, so a long log costs
+/// bounded memory per page rather than one read of everything.
+///
+/// ⚠️ **`index` is cleared only once the first page has been read**, and
+/// cleared again on any later failure. An index arriving with a version folded
+/// into it holds one from some other line — a rotated log, a re-shard, a disk
+/// engine outliving the process — so it is never trusted; but a first read
+/// that fails transiently leaves it exactly as it came in, so the caller can
+/// retry with it (`M3.34`). A failure after the clear hands back an empty
+/// index, never a partly replayed one.
+async fn replay(
+    log: &dyn MetadataLog,
+    index: &dyn MaterializedIndex,
+) -> Result<(Allocator, Option<CommitVersion>), CoordinatorError> {
+    let first = log
+        .read_from(CommitVersion::ZERO, crate::serve::REBUILD_PAGE_ENTRIES)
+        .await
+        .map_err(CoordinatorError::Journal)?;
+    index.clear();
+    let replayed = fold_pages(log, index, first).await;
+    if replayed.is_err() {
+        index.clear();
+    }
+    replayed
+}
+
+async fn fold_pages(
+    log: &dyn MetadataLog,
+    index: &dyn MaterializedIndex,
+    mut page: Vec<MetadataEntry>,
+) -> Result<(Allocator, Option<CommitVersion>), CoordinatorError> {
+    let mut allocator = Allocator::new();
+    let mut last = None;
+    while let Some(tail) = page.last() {
+        let unreplayable = |version: CommitVersion| {
+            move |source| CoordinatorError::Unreplayable {
+                version: version.get(),
+                source,
+            }
+        };
+        for entry in &page {
+            allocator
+                .replay(entry)
+                .map_err(unreplayable(entry.version()))?;
+        }
+        index.apply(&page).map_err(unreplayable(tail.version()))?;
+        last = Some(tail.version());
+        let from = tail
+            .version()
+            .advance(1)
+            .map_err(unreplayable(tail.version()))?;
+        page = log
+            .read_from(from, crate::serve::REBUILD_PAGE_ENTRIES)
+            .await
+            .map_err(CoordinatorError::Journal)?;
+    }
+    Ok((allocator, last))
 }

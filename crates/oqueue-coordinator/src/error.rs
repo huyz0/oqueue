@@ -26,7 +26,7 @@ use oqueue_core::{Error, MaterializedIndex};
 /// | [`Unavailable`](Self::Unavailable) | Never — this coordinator is done. |
 /// | [`Unassignable`](Self::Unassignable) | Never — the arithmetic will not change. |
 /// | [`Journal`](Self::Journal) | The inner error's class decides. |
-/// | [`ReplayRequired`](Self::ReplayRequired) | Never — a startup fault, not a request fault. |
+/// | [`Unreplayable`](Self::Unreplayable) | Never — the same log refuses the same way. |
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CoordinatorError {
     /// The coordinator's serializing loop is no longer accepting commits.
@@ -58,26 +58,19 @@ pub enum CoordinatorError {
     Journal(#[source] Error),
 
     /// The log handed to [`Coordinator::open`](crate::Coordinator::open)
-    /// already holds entries.
+    /// holds an entry the replay cannot fold (`M6.3`).
     ///
-    /// ⚠️ **Refused rather than resumed, and that is the honest failure.** A
-    /// coordinator opened over a non-empty log would restart both its version
-    /// line and every partition's offset line at zero, which the log's
-    /// monotonicity check would catch and a partition's offsets would not —
-    /// the second is silent duplication. ⚠️ **`M6` is what lifts this**, per
-    /// `ADR-0020` point 6 and `M6.md` tasks 8-9 (cold start from a snapshot
-    /// plus a bounded replay tail; warm restart replaying only
-    /// `committed − applied_upto`) — **not `M3.8`**, whose replay is the
-    /// *index*'s and leaves the allocator's offset lines untouched. Until M6
-    /// lands, this is a refusal at startup rather than wrong offsets at run
-    /// time.
-    #[error(
-        "the metadata log already holds entries up to version {last_version}; \
-         replay is required before positions can be assigned"
-    )]
-    ReplayRequired {
-        /// The highest version already in the log.
-        last_version: u64,
+    /// ⚠️ **Refused rather than served around.** A replay that skipped an
+    /// entry would resume the offset line short of where the log says it
+    /// reached, and the next commit would reuse offsets already acknowledged —
+    /// silent duplication, which a refusal at startup is always better than.
+    #[error("the metadata log cannot be replayed at version {version}: {source}")]
+    Unreplayable {
+        /// The entry the replay stopped at.
+        version: u64,
+        /// Why the fold refused it.
+        #[source]
+        source: Error,
     },
 }
 
@@ -99,12 +92,10 @@ pub enum CoordinatorError {
 /// [`Journal`](CoordinatorError::Journal)**, whose inner error decides whether
 /// to retry: a transient log read is the one refusal where the right next move
 /// is the *same call again*, and a caller cannot make it without the index.
-/// ⚠️ **Not [`ReplayRequired`](CoordinatorError::ReplayRequired)**, though the
-/// index comes back there too — that one is `Never`-retryable, and `open`
-/// clears unconditionally on success, so an index replayed into and handed
-/// back would be wiped. `M6` lifts the refusal and owns that interaction;
-/// until then the returned index is for the caller's own use, not for feeding
-/// back in.
+/// ⚠️ **Not [`Unreplayable`](CoordinatorError::Unreplayable)**, though the
+/// index comes back there too — that one is `Never`-retryable, and the index
+/// comes back *cleared*, because a replay that stopped partway had folded
+/// part of the log into it.
 #[derive(Debug)]
 pub struct OpenRejected {
     error: CoordinatorError,

@@ -229,6 +229,45 @@ impl Allocator {
         })
     }
 
+    /// Folds one entry already in the log, as the commit that wrote it did
+    /// (`M6.3`).
+    ///
+    /// ⚠️ **The same `stage` and `apply` the live path runs**, so a replayed
+    /// line cannot drift from the one that was served: offsets, the version
+    /// line, and producer sequence state all come back by the arithmetic that
+    /// produced them. A version above the next one is taken as the next —
+    /// the log is monotonic, not necessarily contiguous — and one below it is
+    /// a log this allocator has already folded past.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NonMonotonicCommitVersion`](oqueue_core::Error::NonMonotonicCommitVersion)
+    /// for an entry below the next version; whatever `stage` refuses for a
+    /// commit the live path would have refused.
+    pub(crate) fn replay(&mut self, entry: &MetadataEntry) -> Result<()> {
+        if entry.version() < self.next_version {
+            return Err(oqueue_core::Error::NonMonotonicCommitVersion {
+                expected_above: self.next_version.get().saturating_sub(1),
+                got: entry.version().get(),
+            });
+        }
+        self.next_version = entry.version();
+        match entry.record() {
+            MetadataRecord::BatchCommitted {
+                object,
+                spans,
+                written_at,
+            } => {
+                let staged = self.stage(object.clone(), spans.clone(), *written_at)?;
+                self.apply(staged);
+            }
+            // ⚠️ Every other record takes a version and moves no offset — a
+            // trim included, whose validity the index's own fold checks.
+            _ => self.next_version = self.next_version.advance(1)?,
+        }
+        Ok(())
+    }
+
     /// Stages a trim of one partition to `start`, taking a version and no
     /// offsets (`M5.90`).
     ///

@@ -166,8 +166,13 @@ async fn a_coordinator_that_has_stopped_refuses_rather_than_answering() {
     );
 }
 
+/// ⚠️ **A second coordinator continues the line** (`M6.3`): opened over a
+/// log that already holds entries, it replays them into its allocator and its
+/// index, so the next commit takes the next offset and the next version —
+/// neither restarted at zero, which would silently reuse acknowledged
+/// offsets. And a stale index handed in is cleared, not trusted.
 #[tokio::test]
-async fn opening_over_a_log_that_already_holds_entries_refuses() {
+async fn opening_over_a_log_that_already_holds_entries_continues_its_line() {
     let log = Arc::new(FakeMetadataLog::new());
     let (coordinator, driver) = start(log.clone()).await;
     coordinator
@@ -177,49 +182,46 @@ async fn opening_over_a_log_that_already_holds_entries_refuses() {
     drop(coordinator);
     driver.await.expect("the loop ends");
 
-    // A second coordinator over the same log would restart its offset line at
-    // zero, which is silent duplication rather than a failure. ⚠️ **`M6` is
-    // what lifts this, not `M3.8`** — `CoordinatorError::ReplayRequired`'s own
-    // doc says so: `M3.8`'s replay is the *index*'s and leaves the allocator's
-    // offset lines untouched, which is the duplication this refuses to allow.
-    let index = FakeMaterializedIndex::new();
-    index
+    let stale = FakeMaterializedIndex::new();
+    stale
         .apply(&[MetadataEntry::new(
-            CommitVersion::ZERO,
+            CommitVersion::new(40),
             oqueue_core::MetadataRecord::EpochChanged {
                 epoch: CoordinatorEpoch::ZERO,
             },
         )])
-        .expect("a fold this test can look for afterwards");
-
-    let rejected = Coordinator::open(
+        .expect("a fold from some other line");
+    let (successor, serving, reader) = Coordinator::open(
         log,
-        Box::new(index),
+        Box::new(stale),
         CoordinatorEpoch::ZERO,
         Arc::new(oqueue_core::FakeClock::new()),
     )
     .await
-    .expect_err("a non-empty log refuses");
-
+    .expect("a non-empty log is replayed, not refused");
+    let driver = tokio::spawn(serving.run());
     assert_eq!(
-        rejected.error(),
-        &CoordinatorError::ReplayRequired { last_version: 0 }
-    );
-    // ⚠️ **And the index comes back**, unmodified (`M3.34`). `open` takes it by
-    // value so the caller keeps no writable handle, which also means a plain
-    // `Err` would destroy it. ⚠️ **What the caller does with it is its own
-    // business**: feeding it back into `open` is not the remedy — the clear on
-    // the success path would wipe anything replayed into it, and `M6` owns
-    // that interaction. What this asserts is that the caller still *has* it.
-    let returned = rejected.into_index();
-    assert_eq!(
-        returned.applied_upto(),
+        reader.applied_upto(),
         Some(CommitVersion::ZERO),
-        "the refusal cleared an index it was only supposed to hand back"
+        "the index holds the replayed log, not the stale line"
     );
+    assert_eq!(
+        reader.end_offset(&topic(), partition()),
+        oqueue_core::Offset::new(2).expect("a valid offset")
+    );
+
+    let ack = successor
+        .commit(object(1), vec![span(1)])
+        .await
+        .expect("the next commit lands");
+    assert_eq!(ack.version(), CommitVersion::new(1));
+    assert_eq!(ack.base_offset(&topic(), partition()), 2);
+
+    drop(successor);
+    driver.await.expect("the loop ends");
 }
 
-/// ⚠️ **A transient log read is the case this matters for.** `ReplayRequired`
+/// ⚠️ **A transient log read is the case this matters for.** `Unreplayable`
 /// is `Never`-retryable, so a caller holding it changes course; a `Journal`
 /// error wrapping [`Error::Transient`] is the one where the right move is to
 /// *try again* — and a caller cannot, if the attempt consumed its index.

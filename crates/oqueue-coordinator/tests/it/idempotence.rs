@@ -13,10 +13,10 @@
 #![allow(clippy::expect_used)]
 
 use crate::support::{object, partition, span, start, topic};
-use oqueue_coordinator::{Coordinator, CoordinatorError, RejectReason, SpanOutcome};
+use oqueue_coordinator::{RejectReason, SpanOutcome};
 use oqueue_core::{
-    ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, FakeMaterializedIndex,
-    FakeMetadataLog, MetadataLog, ProducerEpoch, ProducerId, ProducerIdentity,
+    ByteRange, CommitVersion, CommittedSpan, FakeMetadataLog, MetadataLog, ProducerEpoch,
+    ProducerId, ProducerIdentity,
 };
 use std::sync::Arc;
 
@@ -258,48 +258,43 @@ async fn a_retry_after_a_span_with_no_producer_is_still_deduplicated() {
         .expect("the loop ends when its last handle drops");
 }
 
-/// ⚠️ **And nothing rebuilds producer state from the log**, which is the
-/// premise `M5.49` was filed on and the reason `ADR-0038` exists: a second
-/// coordinator over a non-empty log refuses rather than folding it, so FR-14's
-/// window is the live coordinator's own memory — bounded by
-/// `MAX_TRACKED_PRODUCERS` — and compaction cannot erase what no path reads.
-/// Building the replay path `ReplayRequired` names fails this test, which is
-/// where `ADR-0038`'s two obligations have to be kept.
-///
-/// ⚠️ **`M11.7`, `ADR-0031` point 5's `CoordinatorEpoch` half.** A second
-/// coordinator is what a zombie *coordinator* scenario needs to exist at
-/// all — and `Coordinator::open` already refuses one over any non-empty
-/// log, unconditionally, before it could ever answer a sequence check any
-/// more than it could assign an offset. `M6` is what elects a genuine
-/// replacement (`coordinator_epoch.rs`'s own doc); until then, a log
-/// carrying producer-sequence history is refused open exactly the same as
-/// one carrying only offsets — the same `ReplayRequired` this file's own
-/// `opening_over_a_log_that_already_holds_entries_refuses` already proves,
-/// checked here against a log a producer-bearing commit actually built —
-/// which is what makes it the one that would notice a replay path folding
-/// that history instead.
+/// ⚠️ **A second coordinator rebuilds producer sequence state from the log**
+/// (`M6.3`), which is what `ADR-0038` rests on: the log carries a producer's
+/// identity, and a replay that folds it from the beginning brings FR-14's
+/// window back. A retry of the last sequence after the restart is answered as
+/// the replay it is, at the offset the first coordinator gave it — not
+/// committed twice.
 #[tokio::test]
-async fn a_log_carrying_producer_sequence_history_refuses_a_second_coordinator_too() {
+async fn a_second_coordinator_rebuilds_producer_sequence_history() {
     let log = Arc::new(FakeMetadataLog::new());
     let (coordinator, driver) = start(log.clone()).await;
-    coordinator
+    let first = coordinator
         .commit(object(0), vec![producer_span(1, 0, 2)])
         .await
         .expect("the commit lands");
     drop(coordinator);
     driver.await.expect("the loop ends");
 
-    let rejected = Coordinator::open(
-        log,
-        Box::new(FakeMaterializedIndex::new()),
-        CoordinatorEpoch::ZERO,
-        Arc::new(oqueue_core::FakeClock::new()),
-    )
-    .await
-    .expect_err("a non-empty log refuses a second coordinator, sequence history or not");
-
+    let (successor, driver) = start(log.clone()).await;
+    let retry = successor
+        .commit(object(1), vec![producer_span(1, 0, 2)])
+        .await
+        .expect("a retry is an ordinary answer");
+    assert_eq!(retry.outcomes(), first.outcomes(), "answered as a replay");
     assert_eq!(
-        rejected.error(),
-        &CoordinatorError::ReplayRequired { last_version: 0 }
+        log.read_from(CommitVersion::ZERO, 16)
+            .await
+            .expect("the log reads back")
+            .len(),
+        1,
+        "the retry never reached the journal"
     );
+    let next = successor
+        .commit(object(2), vec![producer_span(1, 1, 1)])
+        .await
+        .expect("the next sequence commits");
+    assert_eq!(next.base_offset(&topic(), partition()), 2);
+
+    drop(successor);
+    driver.await.expect("the loop ends");
 }

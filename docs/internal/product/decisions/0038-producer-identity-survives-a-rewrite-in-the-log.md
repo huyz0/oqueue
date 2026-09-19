@@ -14,6 +14,8 @@ information is structurally unrecoverable once it has been merged. The finding
 concluded that FR-14 — which is `done` — stops holding the moment compaction
 commits.
 
+⚠️ **Amended by `M6.3` (2026-09-19): the replay now exists.** `Coordinator::open` over a non-empty log folds it from the beginning into the allocator, producer state included, and `a_second_coordinator_rebuilds_producer_sequence_history` replaces the test that pinned the refusal described below. Obligation 2 — a snapshot that carries producer state — is `M6.4`'s. The rest of this section is the state this ADR was written in.
+
 ⚠️ **The mechanism the finding named does not exist, and that is this ADR's
 first job.** It said "`M11.3`'s allocator rebuilds `producer_state` by folding
 the metadata log's producer fields". Nothing rebuilds it. `Coordinator::open`

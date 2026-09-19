@@ -196,7 +196,7 @@ pub enum MetadataRecord {
     /// span holds records from several input spans with several identities —
     /// so a swap that edited those events would satisfy every other criterion
     /// on that row and destroy the only thing `ADR-0038` rests on. It bites
-    /// when `M6` builds the replay path `ReplayRequired` names.
+    /// now: `M6.3`'s replay folds these events into producer state.
     ///
     /// ⚠️ **Compaction must never affect correctness, only efficiency.** The
     /// fold refuses a swap whose outputs do not cover its inputs exactly
