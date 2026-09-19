@@ -96,6 +96,7 @@ mod read_mode;
 mod redacted;
 mod result;
 mod retry;
+mod shard;
 mod staleness;
 mod store;
 #[cfg(test)]
@@ -166,6 +167,7 @@ pub use read_mode::ReadMode;
 pub use redacted::Redacted;
 pub use result::Result;
 pub use retry::{RetryClass, RetryDecision, RetryPolicy};
+pub use shard::{MetadataShardId, ShardMap};
 pub use staleness::{CacheState, MAX_METADATA_STALENESS_MS, RefreshReason, SessionWatermark};
 pub use store::{BoxFuture, FakeMultipartWriter, FakeObjectStore, MultipartWriter, ObjectStore};
 pub use time_span::TimeSpan;

@@ -105,6 +105,9 @@ pub(crate) async fn build_cluster(
     })
 }
 
+/// The one metadata shard a node runs until rebalance lands (`ADR-0049` point 1).
+const SHARD: oqueue_core::MetadataShardId = oqueue_core::MetadataShardId::ZERO;
+
 /// This node's handle on the shard's lease, tried once now so a healthy boot
 /// leads at once; the keeper `serve` spawns retries until it holds the lease
 /// and renews it after (`M6.7`, `M6.10`).
@@ -115,7 +118,7 @@ async fn lease_for(
 ) -> Arc<oqueue_core::ObjectStoreLease> {
     let lease = Arc::new(oqueue_core::ObjectStoreLease::new(
         Arc::clone(store),
-        "meta/0",
+        SHARD.metadata_prefix(),
         writer.as_str(),
         Arc::clone(clock),
     ));
@@ -133,11 +136,11 @@ fn deferred_logs(
     (
         Arc::new(oqueue_core::ObjectStoreMetadataLog::deferred(
             Arc::clone(store),
-            "meta/0",
+            SHARD.metadata_prefix(),
         )),
         Arc::new(oqueue_core::ObjectStoreGroupMetadataLog::deferred(
             Arc::clone(store),
-            "groups/0",
+            SHARD.groups_prefix(),
         )),
     )
 }
@@ -152,7 +155,9 @@ fn reopener(
     Box::new(move || {
         let (store, current) = (Arc::clone(&store), Arc::clone(&current));
         Box::pin(async move {
-            let log = Arc::new(oqueue_core::ObjectStoreMetadataLog::open(store, "meta/0").await?);
+            let log = Arc::new(
+                oqueue_core::ObjectStoreMetadataLog::open(store, SHARD.metadata_prefix()).await?,
+            );
             *current
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::clone(&log);
