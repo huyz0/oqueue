@@ -22,7 +22,7 @@
 
 mod base;
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use base::{Base, base_key, read_base};
 
@@ -255,8 +255,53 @@ impl<F: SegmentFormat> Segments<F> {
     }
 }
 
+/// A segment log opened on first use (`M6.10`): building one touches no
+/// store, so a node whose store is unreachable at boot still gets a log, and
+/// every operation opens it until one open succeeds.
+struct Lazy<F: SegmentFormat> {
+    store: Arc<dyn ObjectStore>,
+    prefix: String,
+    opened: OnceLock<Segments<F>>,
+}
+
+impl<F: SegmentFormat> Lazy<F> {
+    const fn new(store: Arc<dyn ObjectStore>, prefix: String) -> Self {
+        Self {
+            store,
+            prefix,
+            opened: OnceLock::new(),
+        }
+    }
+
+    /// The opened log, opening it now if no earlier call has.
+    ///
+    /// ⚠️ **Two racing first calls may both open**, and the second's result is
+    /// discarded: opening only reads, so the only cost is the duplicate GETs.
+    async fn get(&self) -> Result<&Segments<F>> {
+        if let Some(opened) = self.opened.get() {
+            return Ok(opened);
+        }
+        let opened = Segments::open(Arc::clone(&self.store), self.prefix.clone()).await?;
+        let _ = self.opened.set(opened);
+        self.opened
+            .get()
+            .ok_or(Error::MalformedMetadataSegment { at: 0 })
+    }
+
+    fn describe(&self, name: &str, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self.opened.get() {
+            Some(opened) => opened.describe(name, f),
+            None => f
+                .debug_struct(name)
+                .field("prefix", &self.prefix)
+                .field("opened", &false)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
 /// A metadata log whose segments are objects under one prefix.
-pub struct ObjectStoreMetadataLog(Segments<Metadata>);
+pub struct ObjectStoreMetadataLog(Lazy<Metadata>);
 
 /// ⚠️ Renders the count and the prefix, never the records — the rule every
 /// `MetadataLog` in this crate follows.
@@ -279,7 +324,17 @@ impl ObjectStoreMetadataLog {
     /// be read whole; and [`Error::NonMonotonicCommitVersion`] if the segments
     /// do not form one increasing line.
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: impl Into<String>) -> Result<Self> {
-        Ok(Self(Segments::open(store, prefix.into()).await?))
+        let log = Self::deferred(store, prefix);
+        log.0.get().await?;
+        Ok(log)
+    }
+
+    /// The log under `prefix`, opened on its first use rather than now
+    /// (`M6.10`): a node whose store is unreachable at boot still starts, and
+    /// each operation retries the open until one succeeds.
+    #[must_use]
+    pub fn deferred(store: Arc<dyn ObjectStore>, prefix: impl Into<String>) -> Self {
+        Self(Lazy::new(store, prefix.into()))
     }
 
     /// Writes a snapshot of every live entry and prunes what it replaces;
@@ -290,7 +345,7 @@ impl ObjectStoreMetadataLog {
     /// The store's error, or [`Error::PreconditionFailed`] when this log is no
     /// longer the tail — another writer has appended since it last looked.
     pub async fn checkpoint(&self) -> Result<bool> {
-        self.0.checkpoint().await
+        self.0.get().await?.checkpoint().await
     }
 
     /// Segment bytes appended since the last checkpoint: the trigger a
@@ -298,13 +353,16 @@ impl ObjectStoreMetadataLog {
     /// not the wall clock (`M6.md` task 6).
     #[must_use]
     pub fn unsnapshotted_bytes(&self) -> u64 {
-        self.0.lock().unsnapshotted_bytes
+        self.0
+            .opened
+            .get()
+            .map_or(0, |opened| opened.lock().unsnapshotted_bytes)
     }
 }
 
 impl MetadataLog for ObjectStoreMetadataLog {
     fn append<'a>(&'a self, entries: &'a [MetadataEntry]) -> BoxFuture<'a, Result<()>> {
-        Box::pin(self.0.append(entries))
+        Box::pin(async move { self.0.get().await?.append(entries).await })
     }
 
     fn read_from(
@@ -312,18 +370,18 @@ impl MetadataLog for ObjectStoreMetadataLog {
         start: CommitVersion,
         max_entries: usize,
     ) -> BoxFuture<'_, Result<Vec<MetadataEntry>>> {
-        Box::pin(async move { Ok(self.0.read_from(start, max_entries)) })
+        Box::pin(async move { Ok(self.0.get().await?.read_from(start, max_entries)) })
     }
 
     fn last_version(&self) -> BoxFuture<'_, Result<Option<CommitVersion>>> {
-        Box::pin(async move { Ok(self.0.last_version()) })
+        Box::pin(async move { Ok(self.0.get().await?.last_version()) })
     }
 }
 
 /// A group metadata log whose segments are objects under one prefix
 /// (`M6.6`): committed consumer offsets and group transitions, durable the
 /// way the metadata log is (`ADR-0046`).
-pub struct ObjectStoreGroupMetadataLog(Segments<Group>);
+pub struct ObjectStoreGroupMetadataLog(Lazy<Group>);
 
 /// ⚠️ Renders the count and the prefix, never a group or an offset.
 impl core::fmt::Debug for ObjectStoreGroupMetadataLog {
@@ -339,13 +397,23 @@ impl ObjectStoreGroupMetadataLog {
     ///
     /// As [`ObjectStoreMetadataLog::open`].
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: impl Into<String>) -> Result<Self> {
-        Ok(Self(Segments::open(store, prefix.into()).await?))
+        let log = Self::deferred(store, prefix);
+        log.0.get().await?;
+        Ok(log)
+    }
+
+    /// The log under `prefix`, opened on its first use rather than now
+    /// (`M6.10`): a node whose store is unreachable at boot still starts, and
+    /// each operation retries the open until one succeeds.
+    #[must_use]
+    pub fn deferred(store: Arc<dyn ObjectStore>, prefix: impl Into<String>) -> Self {
+        Self(Lazy::new(store, prefix.into()))
     }
 }
 
 impl GroupMetadataLog for ObjectStoreGroupMetadataLog {
     fn append<'a>(&'a self, entries: &'a [GroupMetadataEntry]) -> BoxFuture<'a, Result<()>> {
-        Box::pin(self.0.append(entries))
+        Box::pin(async move { self.0.get().await?.append(entries).await })
     }
 
     fn read_from(
@@ -353,11 +421,11 @@ impl GroupMetadataLog for ObjectStoreGroupMetadataLog {
         start: CommitVersion,
         max_entries: usize,
     ) -> BoxFuture<'_, Result<Vec<GroupMetadataEntry>>> {
-        Box::pin(async move { Ok(self.0.read_from(start, max_entries)) })
+        Box::pin(async move { Ok(self.0.get().await?.read_from(start, max_entries)) })
     }
 
     fn last_version(&self) -> BoxFuture<'_, Result<Option<CommitVersion>>> {
-        Box::pin(async move { Ok(self.0.last_version()) })
+        Box::pin(async move { Ok(self.0.get().await?.last_version()) })
     }
 }
 

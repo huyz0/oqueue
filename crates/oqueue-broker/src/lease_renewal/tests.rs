@@ -43,3 +43,22 @@ async fn a_renewed_lease_is_held_across_many_ttls_and_the_task_ends_when_it_is_l
     assert!(task.is_finished(), "the task ends once the lease is lost");
     assert!(!lease.is_held());
 }
+
+/// `keep_lease` takes a free lease on its own, and keeps it.
+#[tokio::test(start_paused = true)]
+async fn the_keeper_takes_a_free_lease_and_keeps_it() {
+    let store: Arc<dyn ObjectStore> = Arc::new(FakeObjectStore::new());
+    let clock = Arc::new(FakeClock::starting_at(
+        Timestamp::from_millis(1_700_000_000_000).expect("a valid time"),
+    ));
+    let lease = Arc::new(ObjectStoreLease::new(
+        Arc::clone(&store),
+        "meta/0",
+        "a",
+        Arc::clone(&clock) as _,
+    ));
+    let task = tokio::spawn(super::keep_lease(Arc::clone(&lease)));
+    tokio::task::yield_now().await;
+    assert!(lease.is_held(), "a free lease is taken without waiting");
+    task.abort();
+}

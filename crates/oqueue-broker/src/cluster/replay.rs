@@ -14,6 +14,8 @@
 //! for a name that would otherwise need to be `replay_and_transitions.rs`.
 
 use super::Cluster;
+use oqueue_core::{GroupCoordinator, GroupMetadataLog};
+use std::sync::Arc;
 use std::time::Duration;
 
 /// How many times [`Cluster::wait_until_replayed`] polls before giving up
@@ -192,4 +194,57 @@ impl Cluster {
             .as_ref()
             .is_some_and(|handle| !handle.is_finished())
     }
+}
+
+/// Replays committed offsets and group transitions from the group log, opens
+/// the replay gate once both have landed, then serves group transitions.
+pub(super) async fn replay_groups(
+    committed_offsets: Arc<crate::offset_commit::CommittedOffsets>,
+    replay_gate: Arc<crate::replay_gate::ReplayGate>,
+    group_transitions_task: crate::group_transitions::GroupTransitionsTask,
+    group_coordinator: Arc<dyn GroupCoordinator>,
+    group_metadata_log: Arc<dyn GroupMetadataLog>,
+) {
+    // ⚠️ **Retried until both land, each at most once** (`M6.10`):
+    // a group log whose store is unreachable at boot fails its
+    // first read, and giving up there left the group APIs loading
+    // forever. The halves are retried separately because one that
+    // succeeded must not be folded twice — replayed transitions
+    // are events, not idempotent writes. A lazily opened log fails
+    // at its open, before anything is folded; once open, its reads
+    // are from memory.
+    // ⚠️ **Readiness stays all-or-nothing**: the gate opens only
+    // once both halves have replayed, so no answer trusts half.
+    // ⚠️ **Only what can clear is retried**: an error its own
+    // `RetryClass` calls `Never` — a log that will refuse the same
+    // way every time — ends the task with the gate shut, as it did
+    // before `M6.10`.
+    let permanent = |result: &oqueue_core::Result<()>| matches!(result, Err(error) if error.retry_class() == oqueue_core::RetryClass::Never);
+    let (mut offsets_done, mut transitions_done) = (false, false);
+    loop {
+        if !offsets_done {
+            let replayed = committed_offsets.replay().await;
+            if permanent(&replayed) {
+                return;
+            }
+            offsets_done = replayed.is_ok();
+        }
+        if !transitions_done {
+            let replayed = group_transitions_task
+                .replay(group_coordinator.as_ref(), group_metadata_log.as_ref())
+                .await;
+            if permanent(&replayed) {
+                return;
+            }
+            transitions_done = replayed.is_ok();
+        }
+        if offsets_done && transitions_done {
+            break;
+        }
+        tokio::time::sleep(crate::DEGRADED_RETRY).await;
+    }
+    replay_gate.mark_ready();
+    group_transitions_task
+        .serve(group_coordinator, group_metadata_log)
+        .await;
 }

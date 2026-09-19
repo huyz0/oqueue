@@ -32,27 +32,40 @@ use std::sync::Arc;
 /// that stays up, accepts connections, and answers every produce
 /// `LEADER_NOT_AVAILABLE` forever while no supervisor restarts it, because it
 /// never exits and says nothing.
+/// What composing a broker produces: the cluster, and the tasks `serve`
+/// spawns and owns beside it.
+pub(crate) struct Built {
+    pub(crate) cluster: oqueue_broker::Cluster,
+    /// The coordinator's loop, which replays its log before serving.
+    pub(crate) serving: oqueue_coordinator::CoordinatorLoop,
+    pub(crate) retention: oqueue_broker::Retention,
+    /// The metadata log, for the checkpoint cadence.
+    pub(crate) log: Arc<oqueue_core::ObjectStoreMetadataLog>,
+    /// The shard's leadership lease the loop is fenced by (`M6.7`).
+    pub(crate) lease: Arc<oqueue_core::ObjectStoreLease>,
+}
+
 pub(crate) async fn build_cluster(
     host: String,
     port: i32,
     store: Arc<dyn ObjectStore>,
-) -> std::io::Result<(
-    oqueue_broker::Cluster,
-    oqueue_coordinator::CoordinatorLoop,
-    oqueue_broker::Retention,
-    Arc<oqueue_core::ObjectStoreMetadataLog>,
-)> {
-    let (durable, group_metadata_log) = open_logs(&store).await?;
+) -> std::io::Result<Built> {
+    // ⚠️ **Nothing here waits on the store** (`M6.10`): both logs open on
+    // first use and the coordinator replays inside its loop, so a node whose
+    // store is unreachable still boots, answers what it can, and recovers
+    // when the store does, with no restart.
+    let (durable, group_metadata_log) = deferred_logs(&store);
     let log: Arc<dyn oqueue_core::MetadataLog> = Arc::clone(&durable) as _;
     let clock: Arc<dyn oqueue_core::Clock> = Arc::new(crate::wall_clock::WallClock);
-    let index = Box::new(oqueue_index::MemoryIndex::new());
-    let epoch = oqueue_core::CoordinatorEpoch::new(1);
-    let (coordinator, serving, reader) =
-        oqueue_coordinator::Coordinator::open(Arc::clone(&log), index, epoch, Arc::clone(&clock))
-            .await
-            .map_err(|error| {
-                std::io::Error::other(format!("the coordinator would not open: {error}"))
-            })?;
+    let writer = oqueue_broker::WriterId::mint();
+    let lease = lease_for(&store, &writer, &clock).await;
+    let (coordinator, serving, reader) = oqueue_coordinator::Coordinator::open_deferred(
+        Arc::clone(&log),
+        Box::new(oqueue_index::MemoryIndex::new()),
+        oqueue_core::CoordinatorEpoch::new(1),
+        Arc::clone(&clock),
+    );
+    let serving = serving.fenced_by(Arc::clone(&lease));
     // FR-33: retention runs on time alone, over its own follower index.
     let retention = oqueue_broker::Retention::new(
         coordinator.clone(),
@@ -75,32 +88,52 @@ pub(crate) async fn build_cluster(
             group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
             group_metadata_log,
         },
-        &oqueue_broker::WriterId::mint(),
+        &writer,
     )
     .await
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?;
-    Ok((cluster, serving, retention, durable))
+    Ok(Built {
+        cluster,
+        serving,
+        retention,
+        log: durable,
+        lease,
+    })
 }
 
-/// The metadata log and the group log, both from `store` (`ADR-0046`).
-async fn open_logs(
+/// This node's handle on the shard's lease, tried once now so a healthy boot
+/// leads at once; the keeper `serve` spawns retries until it holds the lease
+/// and renews it after (`M6.7`, `M6.10`).
+async fn lease_for(
     store: &Arc<dyn ObjectStore>,
-) -> std::io::Result<(
+    writer: &oqueue_broker::WriterId,
+    clock: &Arc<dyn oqueue_core::Clock>,
+) -> Arc<oqueue_core::ObjectStoreLease> {
+    let lease = Arc::new(oqueue_core::ObjectStoreLease::new(
+        Arc::clone(store),
+        "meta/0",
+        writer.as_str(),
+        Arc::clone(clock),
+    ));
+    let _ = lease.acquire().await;
+    lease
+}
+
+/// Both logs over `store`, opened on first use (`ADR-0046`, `M6.10`).
+fn deferred_logs(
+    store: &Arc<dyn ObjectStore>,
+) -> (
     Arc<oqueue_core::ObjectStoreMetadataLog>,
     Arc<dyn oqueue_core::GroupMetadataLog>,
-)> {
-    let opened = |what: &str, error: oqueue_core::Error| {
-        std::io::Error::other(format!("the {what} would not open: {error}"))
-    };
-    let durable = Arc::new(
-        oqueue_core::ObjectStoreMetadataLog::open(Arc::clone(store), "meta/0")
-            .await
-            .map_err(|error| opened("metadata log", error))?,
-    );
-    let group_metadata_log: Arc<dyn oqueue_core::GroupMetadataLog> = Arc::new(
-        oqueue_core::ObjectStoreGroupMetadataLog::open(Arc::clone(store), "groups/0")
-            .await
-            .map_err(|error| opened("group metadata log", error))?,
-    );
-    Ok((durable, group_metadata_log))
+) {
+    (
+        Arc::new(oqueue_core::ObjectStoreMetadataLog::deferred(
+            Arc::clone(store),
+            "meta/0",
+        )),
+        Arc::new(oqueue_core::ObjectStoreGroupMetadataLog::deferred(
+            Arc::clone(store),
+            "groups/0",
+        )),
+    )
 }

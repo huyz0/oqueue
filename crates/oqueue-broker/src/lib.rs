@@ -60,12 +60,19 @@ mod testing;
 pub mod tls;
 mod writer_id;
 
+/// How long a degraded node waits between attempts to reach what it could
+/// not reach at boot — its metadata log, its group log (`M6.10`).
+///
+/// ⚠️ **UNDERIVED**: short enough that recovery follows the store within a
+/// second, long enough that an unreachable store costs one request a second.
+pub const DEGRADED_RETRY: core::time::Duration = core::time::Duration::from_secs(1);
+
 pub use checkpoint::{CHECKPOINT_JOURNAL_BYTES, CHECKPOINT_PAUSE, checkpoints};
 pub use cluster::{Cluster, FlushError, Seams, Sequencing};
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, serve_connection};
 pub use dispatch::Dispatcher;
 pub use fetch::{Allowance, MAX_PARK_MS};
-pub use lease_renewal::renew_lease;
+pub use lease_renewal::{keep_lease, renew_lease};
 pub use read::MAX_FAILED_FETCHES_PER_REQUEST;
 pub use retention::{RETENTION_ROUND_INTERVAL, Retention};
 pub use sasl_authenticate::{PlainCredential, PlainCredentials};

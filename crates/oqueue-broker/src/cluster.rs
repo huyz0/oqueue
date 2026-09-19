@@ -249,30 +249,13 @@ impl Cluster {
         let replay_gate = Arc::new(crate::replay_gate::ReplayGate::new());
         let (group_transitions, group_transitions_task) =
             crate::group_transitions::GroupTransitions::new();
-        let replay_task = tokio::spawn({
-            let committed_offsets = Arc::clone(&committed_offsets);
-            let replay_gate = Arc::clone(&replay_gate);
-            let group_coordinator = Arc::clone(&seams.group_coordinator);
-            let group_metadata_log = Arc::clone(&seams.group_metadata_log);
-            async move {
-                let (offsets_replayed, transitions_replayed) = tokio::join!(
-                    committed_offsets.replay(),
-                    group_transitions_task
-                        .replay(group_coordinator.as_ref(), group_metadata_log.as_ref()),
-                );
-                // ⚠️ **All-or-nothing readiness** — a half-replayed
-                // `Cluster` (offsets caught up, group state not, or the
-                // reverse) is a worse ambiguity than staying uniformly
-                // `COORDINATOR_LOAD_IN_PROGRESS`: neither replay's own
-                // caller could tell which half a given answer trusted.
-                if offsets_replayed.is_ok() && transitions_replayed.is_ok() {
-                    replay_gate.mark_ready();
-                    group_transitions_task
-                        .serve(group_coordinator, group_metadata_log)
-                        .await;
-                }
-            }
-        });
+        let replay_task = tokio::spawn(replay::replay_groups(
+            Arc::clone(&committed_offsets),
+            Arc::clone(&replay_gate),
+            group_transitions_task,
+            Arc::clone(&seams.group_coordinator),
+            Arc::clone(&seams.group_metadata_log),
+        ));
         Ok(Self {
             node_id: 0,
             host: host.into(),

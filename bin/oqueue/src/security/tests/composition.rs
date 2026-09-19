@@ -373,10 +373,10 @@ async fn every_configured_source_reaches_the_dispatcher() {
     // `testing::fixture` is `#[cfg(test)]` and so not reachable from here.
     let store: std::sync::Arc<dyn oqueue_core::ObjectStore> =
         std::sync::Arc::new(oqueue_core::FakeObjectStore::new());
-    let (cluster, _serving, _retention, _log) =
-        crate::compose::build_cluster("h".to_owned(), 1, store)
-            .await
-            .expect("an empty fixture composes");
+    let cluster = crate::compose::build_cluster("h".to_owned(), 1, store)
+        .await
+        .expect("an empty fixture composes")
+        .cluster;
     let security = from_sources(
         Some(tls()),
         Some("alice:secret\n"),

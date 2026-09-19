@@ -406,3 +406,5 @@ fn offset_fetch(cluster: &Cluster, group: &str) -> i16 {
         .expect("decodes")
         .error_code
 }
+
+mod degraded_replay;

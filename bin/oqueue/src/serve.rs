@@ -46,7 +46,7 @@ pub(crate) fn serve(
         let listener = tokio::net::TcpListener::bind(addr).await?;
         let local = listener.local_addr()?;
         let (advertised_host, advertised_port) = advertised_identity(advertise, local)?;
-        let (cluster, serving, retention, log) = crate::compose::build_cluster(
+        let built = crate::compose::build_cluster(
             advertised_host,
             advertised_port,
             Arc::clone(&wiring.store),
@@ -56,14 +56,23 @@ pub(crate) fn serve(
             eprintln!("{warning}");
         }
         // ⚠️ Spawned *here*, where something watches it — see `build_cluster`.
-        let serving = tokio::spawn(serving.run());
+        // It replays its log first, retrying on a timer while the store is
+        // unreachable (`M6.10`).
+        let serving = tokio::spawn(
+            built
+                .serving
+                .run_retrying(|| tokio::time::sleep(oqueue_broker::DEGRADED_RETRY)),
+        );
         // ⚠️ Not watched, deliberately: retention stopping delays deletion and
         // loses no acknowledged record, so it is no reason to stop serving.
-        tokio::spawn(retention.run());
+        tokio::spawn(built.retention.run());
         // ⚠️ Not watched either, for the same reason: a stopped cadence only
         // makes the next cold start slower (`M6.4`).
-        tokio::spawn(oqueue_broker::checkpoints(log));
-        let cluster = Arc::new(cluster);
+        tokio::spawn(oqueue_broker::checkpoints(built.log));
+        // ⚠️ Nor the lease keeper: without it the loop fences itself when the
+        // lease lapses, which refuses writes and loses nothing (`M6.7`).
+        tokio::spawn(oqueue_broker::keep_lease(built.lease));
+        let cluster = Arc::new(built.cluster);
         println!(
             "oqueue {} ({:?}, {})",
             env!("CARGO_PKG_VERSION"),
@@ -370,11 +379,11 @@ mod tests {
     #[tokio::test]
     async fn the_accept_loop_notices_a_dead_coordinator_rather_than_serving_past_it() {
         let store: Arc<dyn ObjectStore> = Arc::new(oqueue_core::FakeObjectStore::new());
-        let (cluster, serving, _retention, _log) =
-            crate::compose::build_cluster("h".to_owned(), 1, store)
-                .await
-                .expect("an empty fixture composes");
-        let serving = tokio::spawn(serving.run());
+        let built = crate::compose::build_cluster("h".to_owned(), 1, store)
+            .await
+            .expect("an empty fixture composes");
+        let cluster = built.cluster;
+        let serving = tokio::spawn(built.serving.run());
 
         // ⚠️ **Aborted, not left to finish on its own** — an idle coordinator
         // loop never returns, so this is the only way to reach the failure

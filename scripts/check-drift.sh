@@ -379,6 +379,9 @@ declare -A RUST_BOUNDS=(
   # The pause after each checkpoint check (`M6.4`). ⚠️ Weakening is *raising*:
   # the tail overshoots the trigger by up to a pause's worth of appends.
   ["crates/oqueue-broker/src/checkpoint.rs|CHECKPOINT_PAUSE"]="Duration::from_secs(10)"
+  # How long a degraded node waits between attempts to reach its logs
+  # (`M6.10`). ⚠️ Weakening is *raising*: recovery lags the store by it.
+  ["crates/oqueue-broker/src/lib.rs|DEGRADED_RETRY"]="core::time::Duration::from_secs(1)"
   # How long a coordinator lease is valid after the renewal that granted it
   # (`M6.7`). ⚠️ Weakening is *raising*: it is the floor of failover time.
   ["crates/oqueue-core/src/lease.rs|LEASE_TTL_MS"]="10_000"

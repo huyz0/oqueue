@@ -24,5 +24,22 @@ pub async fn renew_lease(lease: Arc<ObjectStoreLease>) {
     }
 }
 
+/// Takes `lease` whenever it is free, renews it for as long as it is held,
+/// and goes back to trying when it is lost — the whole of a node's claim on
+/// leadership (`M6.10`).
+///
+/// ⚠️ **A node that cannot take the lease still runs**: it tries again every
+/// [`DEGRADED_RETRY`](crate::DEGRADED_RETRY), and its coordinator refuses
+/// writes meanwhile, so a store unreachable at boot, or another leader, is a
+/// wait and never a crash.
+pub async fn keep_lease(lease: Arc<ObjectStoreLease>) {
+    loop {
+        if lease.is_held() || matches!(lease.acquire().await, Ok(true)) {
+            renew_lease(Arc::clone(&lease)).await;
+        }
+        tokio::time::sleep(crate::DEGRADED_RETRY).await;
+    }
+}
+
 #[cfg(test)]
 mod tests;

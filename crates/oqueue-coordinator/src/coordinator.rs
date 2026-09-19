@@ -126,6 +126,43 @@ impl Coordinator {
             Ok(replayed) => replayed,
             Err(error) => return Err(OpenRejected::new(error, index)),
         };
+        Ok(Self::assemble(
+            log,
+            index,
+            epoch,
+            clock,
+            (allocator, last, false),
+        ))
+    }
+
+    /// A coordinator whose log is replayed by its loop, not before this
+    /// returns (`M6.10`, `M6.md` task 14).
+    ///
+    /// ⚠️ **No hard dependency at boot**: a node whose log store is
+    /// unreachable still gets a handle, a loop and a reader, and comes up
+    /// degraded — reads answer from an index that is empty until the replay
+    /// lands, and commits queue behind it. The loop retries the replay on the
+    /// pause its runner supplies ([`CoordinatorLoop::run_retrying`]) and
+    /// serves once one succeeds, with no restart.
+    #[must_use]
+    pub fn open_deferred(
+        log: Arc<dyn MetadataLog>,
+        index: Box<dyn MaterializedIndex>,
+        epoch: CoordinatorEpoch,
+        clock: Arc<dyn Clock>,
+    ) -> (Self, CoordinatorLoop, IndexReader) {
+        Self::assemble(log, index, epoch, clock, (Allocator::new(), None, true))
+    }
+
+    fn assemble(
+        log: Arc<dyn MetadataLog>,
+        index: Box<dyn MaterializedIndex>,
+        epoch: CoordinatorEpoch,
+        clock: Arc<dyn Clock>,
+        // The allocator, the last folded version, and whether a replay is
+        // still owed — what `open` computed, or what `open_deferred` defers.
+        (allocator, last, pending_replay): (Allocator, Option<CommitVersion>, bool),
+    ) -> (Self, CoordinatorLoop, IndexReader) {
         // ⚠️ The `Box` becomes an `Arc` **here**, inside the seam — `ADR-0024`.
         // A caller that had constructed the `Arc` would have kept one, and an
         // `Arc<dyn MaterializedIndex>` carries `apply` and `clear`. Moving a
@@ -135,7 +172,7 @@ impl Coordinator {
         let (commits, requests) = mpsc::channel(COMMIT_QUEUE_DEPTH);
         let (deltas, listener) = broadcast::channel(DELTA_BUFFER_ENTRIES);
         let (published, applied) = watch::channel(last);
-        Ok((
+        (
             Self {
                 epoch,
                 commits,
@@ -153,9 +190,10 @@ impl Coordinator {
                 published,
                 last_committed: last,
                 lease: None,
+                pending_replay,
             },
             IndexReader::new(index),
-        ))
+        )
     }
 
     /// Follows the tail of this shard's log.
@@ -366,7 +404,10 @@ impl Coordinator {
 /// that fails transiently leaves it exactly as it came in, so the caller can
 /// retry with it (`M3.34`). A failure after the clear hands back an empty
 /// index, never a partly replayed one.
-async fn replay(
+// ⚠️ `pub(crate)` inside a private module: `serve.rs`'s deferred replay calls
+// it, and `unreachable_pub` denies the `pub` this lint asks for.
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) async fn replay(
     log: &dyn MetadataLog,
     index: &dyn MaterializedIndex,
 ) -> Result<(Allocator, Option<CommitVersion>), CoordinatorError> {
