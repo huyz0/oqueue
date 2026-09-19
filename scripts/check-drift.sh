@@ -564,6 +564,9 @@ declare -A RUST_BOUNDS=(
   # is sized to bound the memory one page costs, on the path a dropped cache
   # takes back to service.
   ["crates/oqueue-coordinator/src/serve.rs|REBUILD_PAGE_ENTRIES"]="1024"
+  # `M7.2`: names one catalog `list` page asks for in `Cluster::topic_names` —
+  # the work one catalog call may do, not a correctness bound.
+  ["crates/oqueue-broker/src/cluster/topics.rs|LIST_PAGE"]="1000"
 )
 # ⚠️ **`M10.18a`: no more file-wide exemptions.** This used to be
 # `NOT_A_BOUND_FILE`, a *file* on the left of `=`, and `M3.42`'s finding was

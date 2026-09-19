@@ -160,7 +160,11 @@ pub async fn repeated_fetch(
     request.min_bytes = 1;
     request.max_bytes = max_bytes;
     let mut t = FetchTopic::default();
-    t.topic_id = broker.cluster.topic_id(topic).expect("a hosted topic");
+    t.topic_id = broker
+        .cluster
+        .topic_id(topic)
+        .await
+        .expect("a hosted topic");
     for _ in 0..entries {
         let mut p = FetchPartition::default();
         p.partition = 0;
@@ -201,7 +205,7 @@ async fn fetch_all(
     request.max_bytes = i32::try_from(max_bytes).expect("a small budget");
     for name in names {
         let mut t = FetchTopic::default();
-        t.topic_id = broker.cluster.topic_id(name).expect("a hosted topic");
+        t.topic_id = broker.cluster.topic_id(name).await.expect("a hosted topic");
         let mut p = FetchPartition::default();
         p.partition = 0;
         p.fetch_offset = 0;
@@ -256,7 +260,7 @@ async fn an_empty_partition_does_not_spend_the_one_batch_exemption() {
     request.max_bytes = 0;
     for name in names {
         let mut t = FetchTopic::default();
-        t.topic_id = broker.cluster.topic_id(name).expect("a hosted topic");
+        t.topic_id = broker.cluster.topic_id(name).await.expect("a hosted topic");
         let mut p = FetchPartition::default();
         p.partition = 0;
         p.fetch_offset = 0;

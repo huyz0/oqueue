@@ -225,7 +225,7 @@ pub async fn bounded(
     request.max_wait_ms = 0;
     request.min_bytes = 1;
     let mut t = FetchTopic::default();
-    t.topic_id = broker.cluster.topic_id("t").expect("a hosted topic");
+    t.topic_id = broker.cluster.topic_id("t").await.expect("a hosted topic");
     let mut p = FetchPartition::default();
     p.partition = 0;
     p.fetch_offset = offset;

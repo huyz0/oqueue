@@ -407,4 +407,5 @@ fn offset_fetch(cluster: &Cluster, group: &str) -> i16 {
         .error_code
 }
 
+mod catalog;
 mod degraded_replay;

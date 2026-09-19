@@ -165,7 +165,7 @@ pub async fn capped_fetch(
     request.max_bytes = i32::try_from(max_bytes).expect("a small budget");
     for name in names {
         let mut t = FetchTopic::default();
-        t.topic_id = broker.cluster.topic_id(name).expect("a hosted topic");
+        t.topic_id = broker.cluster.topic_id(name).await.expect("a hosted topic");
         let mut p = FetchPartition::default();
         p.partition = 0;
         p.fetch_offset = 0;

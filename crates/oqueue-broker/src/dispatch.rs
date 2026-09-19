@@ -230,8 +230,8 @@ impl Dispatcher {
             return HandlerResponse::Close;
         };
         match api_key {
-            ApiKey::ListOffsets => self.listoffsets_handle(prelude, body),
-            ApiKey::Metadata => self.metadata_handle(prelude, body),
+            ApiKey::ListOffsets => self.listoffsets_handle(prelude, body).await,
+            ApiKey::Metadata => self.metadata_handle(prelude, body).await,
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
@@ -320,7 +320,7 @@ impl Dispatcher {
     /// [`crate::authz::AuthzContext`] needs the session's current
     /// principal bound to a local first, which the match arm's own line
     /// budget could not absorb alongside every other API.
-    fn metadata_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+    async fn metadata_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
         let principal = self.session.principal();
         crate::metadata::handle(
             &self.cluster,
@@ -328,6 +328,7 @@ impl Dispatcher {
             body,
             &self.authz_context(principal.as_ref()),
         )
+        .await
     }
 
     /// `FindCoordinator`'s own arm, pulled out of `dispatch`'s `match` for
@@ -338,7 +339,7 @@ impl Dispatcher {
 
     /// `ListOffsets`'s own arm — `M9.12`'s per-principal scoping, same
     /// pattern as `metadata_handle`.
-    fn listoffsets_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+    async fn listoffsets_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
         let principal = self.session.principal();
         crate::listoffsets::handle(
             &self.cluster,
@@ -346,6 +347,7 @@ impl Dispatcher {
             body,
             &self.authz_context(principal.as_ref()),
         )
+        .await
     }
 
     /// `Produce`'s own arm — `M9.12`'s per-principal scoping, same pattern

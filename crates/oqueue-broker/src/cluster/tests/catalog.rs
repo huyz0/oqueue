@@ -1,0 +1,39 @@
+//! `M7.2`: topics are read through the catalog seam, and the cache holds only
+//! what this node served (`ADR-0049` point 2).
+
+use super::cluster_still_loading;
+use oqueue_core::{FakeTopicCatalog, TopicCatalog, TopicId, topic_uuid};
+use std::sync::Arc;
+use uuid::Uuid;
+
+fn topic(name: &str) -> TopicId {
+    TopicId::new(name).expect("a non-empty name")
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_id_created_on_another_node_resolves_through_the_shared_catalog() {
+    let catalog: Arc<dyn TopicCatalog> = Arc::new(FakeTopicCatalog::new());
+    let creator = cluster_still_loading()
+        .await
+        .with_catalog(Arc::clone(&catalog));
+    let reader = cluster_still_loading()
+        .await
+        .with_catalog(Arc::clone(&catalog));
+    assert!(creator.ensure_topic("orders").await);
+    let id = Uuid::from_u128(topic_uuid(&topic("orders")));
+    assert_eq!(reader.cached_topics(), 0, "nothing served here yet");
+    assert_eq!(reader.topic_name_by_id(id).await.as_deref(), Some("orders"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_cache_holds_only_topics_this_node_served() {
+    let catalog = Arc::new(FakeTopicCatalog::new());
+    for name in ["a", "b", "c"] {
+        catalog.create(&topic(name), 1).await.expect("created");
+    }
+    let cluster = cluster_still_loading()
+        .await
+        .with_catalog(Arc::clone(&catalog) as Arc<dyn TopicCatalog>);
+    assert_eq!(cluster.partition_count("b").await, Some(1));
+    assert_eq!(cluster.cached_topics(), 1);
+}

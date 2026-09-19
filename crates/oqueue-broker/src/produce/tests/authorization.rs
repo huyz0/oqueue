@@ -145,6 +145,7 @@ async fn at_or_above_v13_a_granted_topic_by_id_answers() {
     let id = fixture
         .cluster
         .topic_id("t")
+        .await
         .expect("created by the fixture");
     let mut grants = TopicGrants::new();
     grants.grant(alice(), TopicId::new("t").expect("valid"));

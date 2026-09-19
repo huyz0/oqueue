@@ -25,7 +25,7 @@ fn body(topic: &str, partition: i32, timestamp: i64) -> Vec<u8> {
     out
 }
 
-fn replied(fixture: &Fixture, body: &[u8]) -> ListOffsetsResponse {
+async fn replied(fixture: &Fixture, body: &[u8]) -> ListOffsetsResponse {
     let prelude = RequestPrelude {
         api_key: 2,
         api_version: VERSION,
@@ -40,7 +40,9 @@ fn replied(fixture: &Fixture, body: &[u8]) -> ListOffsetsResponse {
             credentials_configured: false,
             topic_grants: &oqueue_core::TopicGrants::default(),
         },
-    ) else {
+    )
+    .await
+    else {
         panic!("a ListOffsets with a legal isolation level replies");
     };
     let mut rest = &out[5..];
@@ -49,13 +51,17 @@ fn replied(fixture: &Fixture, body: &[u8]) -> ListOffsetsResponse {
     response
 }
 
-fn replied_as(fixture: &Fixture, body: &[u8], authz: &AuthzContext<'_>) -> ListOffsetsResponse {
+async fn replied_as(
+    fixture: &Fixture,
+    body: &[u8],
+    authz: &AuthzContext<'_>,
+) -> ListOffsetsResponse {
     let prelude = RequestPrelude {
         api_key: 2,
         api_version: VERSION,
         correlation_id: 11,
     };
-    let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude, body, authz) else {
+    let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude, body, authz).await else {
         panic!("a ListOffsets with a legal isolation level replies");
     };
     let mut rest = &out[5..];
@@ -75,7 +81,7 @@ async fn latest_is_the_offset_after_the_last_record() {
         produce_one(&fixture, "t", golden_batch()).await;
     }
 
-    let response = replied(&fixture, &body("t", 0, -1));
+    let response = replied(&fixture, &body("t", 0, -1)).await;
 
     let p = &response.topics[0].partitions[0];
     assert_eq!(p.error_code, 0);
@@ -90,14 +96,14 @@ async fn latest_moves_when_the_log_does() {
     let fixture = fixture(&["t"]).await;
     produce_one(&fixture, "t", golden_batch()).await;
     assert_eq!(
-        replied(&fixture, &body("t", 0, -1)).topics[0].partitions[0].offset,
+        replied(&fixture, &body("t", 0, -1)).await.topics[0].partitions[0].offset,
         2
     );
 
     produce_one(&fixture, "t", golden_batch()).await;
 
     assert_eq!(
-        replied(&fixture, &body("t", 0, -1)).topics[0].partitions[0].offset,
+        replied(&fixture, &body("t", 0, -1)).await.topics[0].partitions[0].offset,
         4
     );
 }
@@ -109,7 +115,7 @@ async fn earliest_is_the_first_offset_still_held() {
     let fixture = fixture(&["t"]).await;
     produce_one(&fixture, "t", golden_batch()).await;
 
-    let p = &replied(&fixture, &body("t", 0, -2)).topics[0].partitions[0];
+    let p = &replied(&fixture, &body("t", 0, -2)).await.topics[0].partitions[0];
     assert_eq!(p.error_code, 0);
     assert_eq!(p.offset, 0);
 }
@@ -121,7 +127,7 @@ async fn earliest_is_the_first_offset_still_held() {
 async fn an_empty_partition_reports_zero_both_ways() {
     let fixture = fixture(&["t"]).await;
     for timestamp in [-1_i64, -2] {
-        let p = &replied(&fixture, &body("t", 0, timestamp)).topics[0].partitions[0];
+        let p = &replied(&fixture, &body("t", 0, timestamp)).await.topics[0].partitions[0];
         assert_eq!(p.error_code, 0, "ts {timestamp}");
         assert_eq!(p.offset, 0, "ts {timestamp}");
     }
@@ -142,7 +148,10 @@ async fn a_real_timestamp_is_refused_with_a_code_the_client_cannot_swallow() {
     let fixture = fixture(&["t"]).await;
     produce_one(&fixture, "t", golden_batch()).await;
 
-    let p = &replied(&fixture, &body("t", 0, 1_700_000_000_000)).topics[0].partitions[0];
+    let p = &replied(&fixture, &body("t", 0, 1_700_000_000_000))
+        .await
+        .topics[0]
+        .partitions[0];
     assert_eq!(
         p.error_code,
         kafka_protocol::error::ResponseError::UnsupportedVersion.code()
@@ -162,7 +171,7 @@ async fn a_real_timestamp_is_refused_with_a_code_the_client_cannot_swallow() {
 async fn an_unknown_topic_or_partition_answers_minus_one() {
     let fixture = fixture(&["t"]).await;
     for (topic, partition) in [("ghost", 0), ("t", 1), ("t", -1)] {
-        let p = &replied(&fixture, &body(topic, partition, -1)).topics[0].partitions[0];
+        let p = &replied(&fixture, &body(topic, partition, -1)).await.topics[0].partitions[0];
         assert_eq!(
             p.error_code,
             kafka_protocol::error::ResponseError::UnknownTopicOrPartition.code(),
@@ -208,7 +217,8 @@ async fn a_null_topic_name_closes_rather_than_framing_an_unparsable_reply() {
                 credentials_configured: false,
                 topic_grants: &oqueue_core::TopicGrants::default(),
             }
-        ),
+        )
+        .await,
         HandlerResponse::Close
     ));
 }
@@ -238,7 +248,8 @@ async fn an_undefined_isolation_level_closes_the_connection() {
                 credentials_configured: false,
                 topic_grants: &oqueue_core::TopicGrants::default(),
             }
-        ),
+        )
+        .await,
         HandlerResponse::Close
     ));
 }
@@ -266,7 +277,8 @@ mod authorization {
                 credentials_configured: false,
                 topic_grants: &TopicGrants::default(),
             },
-        );
+        )
+        .await;
         assert_eq!(response.topics[0].partitions[0].error_code, 0);
     }
 
@@ -282,7 +294,8 @@ mod authorization {
                 credentials_configured: true,
                 topic_grants: &grants,
             },
-        );
+        )
+        .await;
         assert_eq!(
             response.topics[0].partitions[0].error_code,
             oqueue_codec::error_codes::TOPIC_AUTHORIZATION_FAILED,
@@ -306,7 +319,8 @@ mod authorization {
                 credentials_configured: true,
                 topic_grants: &grants,
             },
-        );
+        )
+        .await;
         assert_eq!(response.topics[0].partitions[0].error_code, 0);
     }
 }

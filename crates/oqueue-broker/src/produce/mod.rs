@@ -163,11 +163,10 @@ pub(crate) async fn handle(
         version,
         acks_valid,
     };
-    let outcomes: Vec<TopicOutcome> = request
-        .topics
-        .iter()
-        .map(|topic| one_topic(cluster, &mut pending, topic, &mode, authz))
-        .collect();
+    let mut outcomes: Vec<TopicOutcome> = Vec::with_capacity(request.topics.len());
+    for topic in &request.topics {
+        outcomes.push(one_topic(cluster, &mut pending, topic, &mode, authz).await);
+    }
 
     let flushed = flush(cluster, session, pending).await;
 
@@ -232,7 +231,7 @@ struct TopicMode {
 }
 
 /// One topic's outcome: resolve its addressing, then every partition.
-fn one_topic(
+async fn one_topic(
     cluster: &Cluster,
     pending: &mut Pending,
     topic: &oqueue_codec::produce::ProduceTopic<'_>,
@@ -244,49 +243,24 @@ fn one_topic(
     let (name, resolved_name) = if mode.version >= 13 {
         (
             None,
-            cluster.topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id)),
+            cluster
+                .topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id))
+                .await,
         )
     } else {
         (topic.name.clone(), topic.name.clone())
     };
-    let partitions = topic
-        .partitions
-        .iter()
-        .map(|p| PartitionSlot {
+    let mut partitions = Vec::with_capacity(topic.partitions.len());
+    for p in &topic.partitions {
+        let slot = match admitted(resolved_name.as_deref(), mode, authz) {
+            Ok(topic_name) => one_partition(cluster, pending, topic_name, p.index, p.records).await,
+            Err(code) => Slot::Refused(code),
+        };
+        partitions.push(PartitionSlot {
             index: p.index,
-            slot: match (&resolved_name, mode.acks_valid) {
-                (_, false) => Slot::Refused(error_codes::INVALID_REQUIRED_ACKS),
-                // An id this broker never issued: its own error (100), mapped
-                // back through the echoed id.
-                (None, true) => Slot::Refused(error_codes::UNKNOWN_TOPIC_ID),
-                // ⚠️ **`M9.12`: checked before `one_partition` runs at all** —
-                // the same ordering `M9.9` used for `Metadata`, so an
-                // unauthorized principal cannot cause a side effect (here,
-                // none exists on this path either way, but the ordering is
-                // what keeps that true if one is ever added).
-                //
-                // ⚠️ **Below v13 this checks the client's raw name, never
-                // `Cluster::partition_count`** — round 1 review's own
-                // finding, named rather than "fixed" into matching v13+:
-                // `TopicGrants` is keyed by name, so a name-addressed
-                // request can be authorized (or refused) without ever
-                // resolving existence first, `Metadata`'s own explicit-name
-                // case (`M9.9`) doing exactly this for every version it
-                // serves. From v13 the wire carries only an id, and an id
-                // cannot be checked against a name-keyed index *before*
-                // resolving it to a name — existence-resolution is not a
-                // choice there, it is what makes a name to check exist at
-                // all. The two paths' shapes genuinely differ by
-                // addressing mode, not by an oversight in one of them.
-                (Some(topic_name), true) if !topic_authorized(topic_name, authz) => {
-                    Slot::Refused(error_codes::TOPIC_AUTHORIZATION_FAILED)
-                }
-                (Some(topic_name), true) => {
-                    one_partition(cluster, pending, topic_name, p.index, p.records)
-                }
-            },
-        })
-        .collect();
+            slot,
+        });
+    }
     TopicOutcome {
         name,
         topic_id: topic.topic_id,
@@ -294,8 +268,45 @@ fn one_topic(
     }
 }
 
+/// The name a partition may be written under, or the code refusing it.
+fn admitted<'n>(
+    resolved_name: Option<&'n str>,
+    mode: &TopicMode,
+    authz: &AuthzContext<'_>,
+) -> Result<&'n str, i16> {
+    match (resolved_name, mode.acks_valid) {
+        (_, false) => Err(error_codes::INVALID_REQUIRED_ACKS),
+        // An id this broker never issued: its own error (100), mapped
+        // back through the echoed id.
+        (None, true) => Err(error_codes::UNKNOWN_TOPIC_ID),
+        // ⚠️ **`M9.12`: checked before `one_partition` runs at all** —
+        // the same ordering `M9.9` used for `Metadata`, so an
+        // unauthorized principal cannot cause a side effect (here,
+        // none exists on this path either way, but the ordering is
+        // what keeps that true if one is ever added).
+        //
+        // ⚠️ **Below v13 this checks the client's raw name, never
+        // `Cluster::partition_count`** — round 1 review's own
+        // finding, named rather than "fixed" into matching v13+:
+        // `TopicGrants` is keyed by name, so a name-addressed
+        // request can be authorized (or refused) without ever
+        // resolving existence first, `Metadata`'s own explicit-name
+        // case (`M9.9`) doing exactly this for every version it
+        // serves. From v13 the wire carries only an id, and an id
+        // cannot be checked against a name-keyed index *before*
+        // resolving it to a name — existence-resolution is not a
+        // choice there, it is what makes a name to check exist at
+        // all. The two paths' shapes genuinely differ by
+        // addressing mode, not by an oversight in one of them.
+        (Some(topic_name), true) if !topic_authorized(topic_name, authz) => {
+            Err(error_codes::TOPIC_AUTHORIZATION_FAILED)
+        }
+        (Some(topic_name), true) => Ok(topic_name),
+    }
+}
+
 /// One partition's verdict: the ingest rule, then a region in the bundle.
-fn one_partition(
+async fn one_partition(
     cluster: &Cluster,
     pending: &mut Pending,
     topic: &str,
@@ -307,7 +318,7 @@ fn one_partition(
     };
     let hosted = usize::try_from(index)
         .ok()
-        .zip(cluster.partition_count(topic))
+        .zip(cluster.partition_count(topic).await)
         .is_some_and(|(index, count)| index < count);
     if !hosted {
         return Slot::Refused(error_codes::UNKNOWN_TOPIC_OR_PARTITION);

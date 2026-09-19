@@ -429,7 +429,7 @@ async fn in_flight_is_not_visible(broker: &Broker, invariants: &mut Invariants, 
         ..FaultConfig::default()
     });
     let before = broker.store.inner().len();
-    let frame = produce_frame(broker, "orders");
+    let frame = produce_frame(broker, "orders").await;
     let writing = {
         let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
         tokio::spawn(async move { dispatcher.handle(frame).await })
@@ -481,7 +481,7 @@ pub(crate) const PARK_MS: i32 = 50;
 pub async fn a_parked_fetch_races_a_commit(broker: &Broker, run: &mut Run) {
     run.races += 1;
     let at = i64::from(u32::try_from(run.acked.map_or(0, |last| last + 1)).unwrap_or(0));
-    let frame = parked_fetch_frame(broker, "orders", at, PARK_MS);
+    let frame = parked_fetch_frame(broker, "orders", at, PARK_MS).await;
     let parked = {
         let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
         tokio::spawn(async move { dispatcher.handle(frame).await })

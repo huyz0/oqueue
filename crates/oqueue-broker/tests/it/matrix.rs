@@ -97,7 +97,7 @@ fn sasl_authenticate_body(out: &mut Vec<u8>, version: i16) {
 
 /// The smallest valid body for `api_key` at `version`, against a cluster
 /// that has topic `"t"` — enough for a real answer, not an error dance.
-fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
+async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
     let mut body = Vec::new();
     match api_key {
         ApiKey::ApiVersions => {
@@ -111,8 +111,8 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
                 .encode(&mut body, version)
                 .expect("encodes");
         }
-        ApiKey::Produce => produce_body(&mut body, version, cluster),
-        ApiKey::Fetch => fetch_body(&mut body, version, cluster),
+        ApiKey::Produce => produce_body(&mut body, version, cluster).await,
+        ApiKey::Fetch => fetch_body(&mut body, version, cluster).await,
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
         ApiKey::SaslHandshake => sasl_handshake_body(&mut body, version),
         ApiKey::SaslAuthenticate => sasl_authenticate_body(&mut body, version),
@@ -129,12 +129,12 @@ fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
 
 /// `Produce`'s own minimal body -- its own function for the same
 /// fifty-line-limit reason `list_offsets_body` is.
-fn produce_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
+async fn produce_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
     let mut request = ProduceRequest::default();
     request.acks = -1;
     let mut topic = TopicProduceData::default();
     if version >= 13 {
-        topic.topic_id = cluster.topic_id("t").expect("t exists");
+        topic.topic_id = cluster.topic_id("t").await.expect("t exists");
     } else {
         topic.name = TopicName(StrBytes::from_static_str("t"));
     }
@@ -148,12 +148,12 @@ fn produce_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
 
 /// `Fetch`'s own minimal body -- its own function for the same
 /// fifty-line-limit reason `list_offsets_body` is.
-fn fetch_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
+async fn fetch_body(out: &mut Vec<u8>, version: i16, cluster: &Cluster) {
     let mut request = FetchRequest::default();
     request.max_wait_ms = 0;
     let mut topic = FetchTopic::default();
     if version >= 13 {
-        topic.topic_id = cluster.topic_id("t").expect("t exists");
+        topic.topic_id = cluster.topic_id("t").await.expect("t exists");
     } else {
         topic.topic = TopicName(StrBytes::from_static_str("t"));
     }
@@ -306,7 +306,7 @@ async fn every_advertised_version_is_served() {
 
     for advertised in ADVERTISED {
         for version in advertised.min..=advertised.max {
-            let body = minimal_body(advertised.api_key, version, &cluster);
+            let body = minimal_body(advertised.api_key, version, &cluster).await;
             let frame = framed(advertised.api_key, version, &body);
             let reply = match dispatcher.handle(frame).await {
                 HandlerResponse::Reply(reply) => reply,

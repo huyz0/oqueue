@@ -65,21 +65,30 @@ const fn refused_partition(index: i32, error_code: i16) -> ListOffsetsResponsePa
 /// ⚠️ **Split out so `handle` stays inside `code-structure.md`'s fifty
 /// lines**, and because the per-topic hoist below is the interesting part
 /// rather than a detail of framing a response.
-fn answer_all(
+async fn answer_all(
     cluster: &Cluster,
     request: &oqueue_codec::listoffsets::ListOffsetsRequest<'_>,
     authz: &AuthzContext<'_>,
 ) -> Vec<TopicOutcome> {
+    // Resolved up front, once per topic: the lookup awaits and the walk
+    // below is a plain iterator chain.
+    let mut counts = Vec::with_capacity(request.topics.len());
+    for topic in &request.topics {
+        counts.push(match topic.name {
+            Some(name) => cluster.partition_count(name).await,
+            None => None,
+        });
+    }
     request
         .topics
         .iter()
-        .map(|topic| TopicOutcome {
+        .zip(counts)
+        .map(|(topic, count)| TopicOutcome {
             name: topic.name.map(str::to_owned),
             partitions: {
                 let topic_id = topic
                     .name
                     .and_then(|name| TopicId::new(name.to_owned()).ok());
-                let count = topic.name.and_then(|name| cluster.partition_count(name));
                 // ⚠️ **`M9.12`: checked once per topic.** `handle`'s own
                 // guard already refuses a null name, so every topic here has
                 // one to check — the `is_none_or` fallback exists only for
@@ -113,7 +122,7 @@ fn answer_all(
 }
 
 /// Decodes, resolves, answers — or closes on a malformed body.
-pub(crate) fn handle(
+pub(crate) async fn handle(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
@@ -141,7 +150,7 @@ pub(crate) fn handle(
         return HandlerResponse::Close;
     }
 
-    let outcomes = answer_all(cluster, &request, authz);
+    let outcomes = answer_all(cluster, &request, authz).await;
 
     let response = ListOffsetsResponse {
         topics: outcomes

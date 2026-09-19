@@ -255,7 +255,7 @@ async fn a_fetch_that_cannot_meet_this_sessions_promise_refuses_rather_than_answ
     let response = crate::fetch::tests::replied(
         &fixture,
         13,
-        &crate::fetch::tests::fetch_body(13, crate::fetch::tests::by_id(&fixture), 0, 0),
+        &crate::fetch::tests::fetch_body(13, crate::fetch::tests::by_id(&fixture).await, 0, 0),
     )
     .await;
 

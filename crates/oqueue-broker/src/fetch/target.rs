@@ -243,7 +243,11 @@ mod tests {
     /// How long one produced batch comes back as, so a threshold can straddle
     /// one batch and two.
     async fn single_batch_len(fixture: &Fixture, name: &str) -> usize {
-        let id = fixture.cluster.topic_id(name).expect("a hosted topic");
+        let id = fixture
+            .cluster
+            .topic_id(name)
+            .await
+            .expect("a hosted topic");
         let response = replied(fixture, 13, &fetch_body(13, by_id_of(id), 0, 0)).await;
         response.responses[0].partitions[0]
             .records
@@ -254,7 +258,7 @@ mod tests {
 
     /// A `Fetch` naming two topics' partition 0, with the wait and the minimum
     /// chosen.
-    fn two_topic_body(
+    async fn two_topic_body(
         fixture: &Fixture,
         names: &[&str],
         max_wait_ms: i32,
@@ -265,7 +269,11 @@ mod tests {
         request.min_bytes = min_bytes;
         for name in names {
             let mut t = FetchTopic::default();
-            t.topic_id = fixture.cluster.topic_id(name).expect("a hosted topic");
+            t.topic_id = fixture
+                .cluster
+                .topic_id(name)
+                .await
+                .expect("a hosted topic");
             let mut p = FetchPartition::default();
             p.partition = 0;
             p.fetch_offset = 0;
@@ -301,7 +309,7 @@ mod tests {
         let response = replied(
             &fixture,
             13,
-            &two_topic_body(&fixture, &names, 30_000, target),
+            &two_topic_body(&fixture, &names, 30_000, target).await,
         )
         .await;
 
@@ -352,7 +360,7 @@ mod tests {
             13,
             &hungry_fetch_body(
                 13,
-                by_id(&fixture),
+                by_id(&fixture).await,
                 2,
                 0,
                 Poll {

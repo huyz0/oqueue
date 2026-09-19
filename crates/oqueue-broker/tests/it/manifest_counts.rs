@@ -292,7 +292,7 @@ async fn twice(dispatcher: &Dispatcher, broker: &Broker, offsets: [i64; 2]) -> V
     request.max_wait_ms = 0;
     request.min_bytes = 1;
     let mut t = FetchTopic::default();
-    t.topic_id = broker.cluster.topic_id("t").expect("a hosted topic");
+    t.topic_id = broker.cluster.topic_id("t").await.expect("a hosted topic");
     for offset in offsets {
         let mut p = FetchPartition::default();
         p.partition = 0;
@@ -329,7 +329,7 @@ async fn both(dispatcher: &Dispatcher, broker: &Broker, max_bytes: i32) {
     request.max_bytes = max_bytes;
     for name in ["t", "u"] {
         let mut t = FetchTopic::default();
-        t.topic_id = broker.cluster.topic_id(name).expect("a hosted topic");
+        t.topic_id = broker.cluster.topic_id(name).await.expect("a hosted topic");
         let mut p = FetchPartition::default();
         p.partition = 0;
         p.fetch_offset = 0;

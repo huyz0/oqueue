@@ -243,8 +243,8 @@ pub(crate) mod tests {
     }
 
     /// The topic this fixture hosts, addressed by id.
-    pub(crate) fn by_id(fixture: &Fixture) -> FetchTopic {
-        by_id_of(hosted(fixture))
+    pub(crate) async fn by_id(fixture: &Fixture) -> FetchTopic {
+        by_id_of(hosted(fixture).await)
     }
 
     pub(crate) fn by_id_of(id: uuid::Uuid) -> FetchTopic {
@@ -292,8 +292,12 @@ pub(crate) mod tests {
     /// ⚠️ **From v13 the wire addresses topics by id**, so a v13 request built
     /// with a name reaches no topic — the refusal a client would get, not the
     /// one a test means to exercise.
-    pub(crate) fn hosted(fixture: &Fixture) -> uuid::Uuid {
-        fixture.cluster.topic_id("t").expect("the fixture's topic")
+    pub(crate) async fn hosted(fixture: &Fixture) -> uuid::Uuid {
+        fixture
+            .cluster
+            .topic_id("t")
+            .await
+            .expect("the fixture's topic")
     }
 
     /// A cluster with one produced batch: the produce path is the fixture, so
@@ -384,7 +388,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn a_fetch_from_zero_returns_the_batch_and_the_derived_watermark() {
         let fixture = produced().await;
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 0, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture).await, 0, 0)).await;
         let p = &response.responses[0].partitions[0];
         assert_eq!(p.error_code, 0);
         assert_eq!(p.high_watermark, 2, "two records were produced");
@@ -406,7 +410,7 @@ pub(crate) mod tests {
         produce_one(&fixture, "t", golden_batch()).await;
         produce_one(&fixture, "t", golden_batch()).await;
 
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 2, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture).await, 2, 0)).await;
 
         let records = response.responses[0].partitions[0]
             .records
@@ -425,7 +429,7 @@ pub(crate) mod tests {
     #[tokio::test]
     async fn an_offset_past_the_watermark_is_out_of_range_with_the_real_watermark() {
         let fixture = produced().await;
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 99, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture).await, 99, 0)).await;
         let p = &response.responses[0].partitions[0];
         assert_eq!(
             p.error_code,
@@ -459,7 +463,7 @@ pub(crate) mod tests {
                 &fixture.cluster,
                 &fixture.session,
                 prelude(13),
-                &fetch_body(13, by_id(&fixture), 0, 7),
+                &fetch_body(13, by_id(&fixture).await, 0, 7),
                 &AuthzContext {
                     principal: None,
                     credentials_configured: false,

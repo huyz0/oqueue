@@ -76,3 +76,13 @@ open is how much of that M7 builds to meet its gate, and how the gate measures
 - `topic_name_by_id`, a linear scan today, becomes one catalog lookup.
 - The scale evidence is about the node. The catalog's own cost at 100M topics
   is object-storage cost — one small object per topic — which M14 prices.
+
+## Contract
+
+`TopicCatalog` is a new `pub trait` in `oqueue-core` (`M7.2`, `contracts.md`
+rule 12): `lookup`, `lookup_id`, `create`, `list`, with `FakeTopicCatalog`
+beside it and its four guarantees as contract cases in `catalog/tests.rs`,
+which every implementation runs. ⚠️ **Async, unlike `MaterializedIndex`**:
+the catalog is object storage's (point 3), so a lookup is a network read, and
+that seam's argument for being synchronous — every implementation is a local
+fold — does not hold here.

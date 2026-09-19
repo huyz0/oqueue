@@ -154,7 +154,7 @@ pub async fn broker(topics: &[&str]) -> Broker {
     // before the (near-instant, empty-log) replay task gets scheduled.
     cluster.wait_until_replayed().await;
     for topic in topics {
-        cluster.ensure_topic(topic);
+        cluster.ensure_topic(topic).await;
     }
     Broker {
         cluster: Arc::new(cluster),

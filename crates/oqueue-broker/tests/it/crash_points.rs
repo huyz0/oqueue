@@ -298,7 +298,7 @@ async fn kill_the_client_once_committed(broker: &Broker) {
     let dispatcher = Arc::new(Dispatcher::new(Arc::clone(&broker.cluster)));
     let conn = tokio::spawn(serve_connection(server, dispatcher, LIMITS));
 
-    let body = produce_frame(broker, "orders");
+    let body = produce_frame(broker, "orders").await;
     let mut framed = Vec::new();
     framed.extend_from_slice(
         &i32::try_from(body.len())

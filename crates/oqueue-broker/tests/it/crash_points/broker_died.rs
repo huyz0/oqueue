@@ -146,7 +146,7 @@ async fn mini_cluster_with_hanging_put() -> MiniCluster {
     // this fixture is not flaky against a request that reaches the server
     // before the (near-instant, empty-log) replay task gets scheduled.
     cluster.wait_until_replayed().await;
-    cluster.ensure_topic("orders");
+    cluster.ensure_topic("orders").await;
     let serving_task = tokio::spawn(serving.run());
     (cluster, log, store, serving_task)
 }
@@ -155,7 +155,7 @@ pub(super) async fn crash_the_broker_after_the_put_lands() -> Aftermath {
     let (cluster, log, store, serving_task) = mini_cluster_with_hanging_put().await;
 
     let dispatcher = Arc::new(Dispatcher::new(Arc::clone(&cluster)));
-    let frame = produce_frame_against(&cluster, "orders");
+    let frame = produce_frame_against(&cluster, "orders").await;
     let task = {
         let dispatcher = Arc::clone(&dispatcher);
         tokio::spawn(async move { dispatcher.handle(frame).await })
@@ -193,7 +193,7 @@ pub(super) async fn crash_the_broker_after_the_put_lands() -> Aftermath {
 /// A produce frame for `topic`, built against `cluster` directly rather than
 /// through `roundtrip::produce_frame`'s `&Broker` — this crash point's own
 /// cluster is not a `Broker` (see `HangingStore`'s own doc for why).
-fn produce_frame_against(cluster: &Cluster, topic: &'static str) -> Vec<u8> {
+async fn produce_frame_against(cluster: &Cluster, topic: &'static str) -> Vec<u8> {
     use kafka_protocol::messages::ProduceRequest;
     use kafka_protocol::messages::produce_request::{PartitionProduceData, TopicProduceData};
     use kafka_protocol::protocol::Encodable;
@@ -201,7 +201,7 @@ fn produce_frame_against(cluster: &Cluster, topic: &'static str) -> Vec<u8> {
     let mut request = ProduceRequest::default();
     request.acks = -1;
     let mut t = TopicProduceData::default();
-    t.topic_id = cluster.topic_id(topic).expect("a hosted topic");
+    t.topic_id = cluster.topic_id(topic).await.expect("a hosted topic");
     let mut p = PartitionProduceData::default();
     p.index = 0;
     p.records = Some(bytes::Bytes::from(crate::support::golden_batch(&[
@@ -236,7 +236,7 @@ async fn fetch_against(
     request.max_wait_ms = 0;
     request.min_bytes = 1;
     let mut t = FetchTopic::default();
-    t.topic_id = cluster.topic_id(topic).expect("a hosted topic");
+    t.topic_id = cluster.topic_id(topic).await.expect("a hosted topic");
     let mut p = FetchPartition::default();
     p.partition = 0;
     p.fetch_offset = offset;

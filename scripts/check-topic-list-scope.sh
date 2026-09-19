@@ -35,7 +35,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 cd "$REPO_ROOT"
 
-CLUSTER_SEAM="crates/oqueue-broker/src/cluster.rs"
+CLUSTER_SEAM="crates/oqueue-broker/src/cluster/topics.rs"
 CALLER_SEAM="crates/oqueue-broker/src/metadata.rs"
 
 # ── 0a. The seams this claim rests on exist ─────────────────────────────────
@@ -48,7 +48,7 @@ done
 ok "the topic registry and its one scoped caller are where this check reads them"
 
 # ── 0b. The definition itself: still the one place the global list is built ─
-def_line="$(grep -n '^    pub fn topic_names' "$CLUSTER_SEAM" | head -1 | cut -d: -f1 || true)"
+def_line="$(grep -n '^    pub async fn topic_names' "$CLUSTER_SEAM" | head -1 | cut -d: -f1 || true)"
 if [[ -z "$def_line" ]]; then
   fail "Cluster::topic_names not found at its pinned shape in $CLUSTER_SEAM"
   note "if it was renamed or moved, this check's own patterns need the same edit"
@@ -102,7 +102,7 @@ fi
 # guard's own line and the call's own line must be adjacent, `return
 # cluster.topic_names();` the fail-open branch's first and only statement.
 if (( ${#call_sites[@]} == 1 )) && [[ "${call_sites[0]%%:*}" == "$CALLER_SEAM" ]]; then
-  fn_body="$(awk '/^fn all_topics_names/,/^}/' "$CALLER_SEAM")"
+  fn_body="$(awk '/^async fn all_topics_names/,/^}/' "$CALLER_SEAM")"
   if [[ -z "$fn_body" ]]; then
     fail "all_topics_names not found at its pinned shape in $CALLER_SEAM"
   else

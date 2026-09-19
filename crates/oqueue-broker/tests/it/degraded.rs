@@ -22,7 +22,7 @@ async fn produce_once(dispatcher: &Dispatcher, cluster: &Cluster) -> i16 {
     let mut request = ProduceRequest::default();
     request.acks = -1;
     let mut topic = TopicProduceData::default();
-    topic.topic_id = cluster.topic_id("orders").expect("a hosted topic");
+    topic.topic_id = cluster.topic_id("orders").await.expect("a hosted topic");
     let mut partition = PartitionProduceData::default();
     partition.index = 0;
     partition.records = Some(bytes::Bytes::from(golden_batch(&[b"after the outage"])));
@@ -86,7 +86,7 @@ async fn a_node_boots_degraded_without_its_coordinator() {
         .await
         .expect("the node boots with its store unreachable"),
     );
-    cluster.ensure_topic("orders");
+    cluster.ensure_topic("orders").await;
     let dispatcher = Dispatcher::new(Arc::clone(&cluster));
 
     let reply = api_versions(&dispatcher).await;

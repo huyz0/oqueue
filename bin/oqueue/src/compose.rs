@@ -95,7 +95,9 @@ pub(crate) async fn build_cluster(
         &writer,
     )
     .await
-    .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?;
+    .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?
+    // ⚠️ In-memory still: the object-store catalog is the next task (`ADR-0049`).
+    .with_catalog(Arc::new(oqueue_core::FakeTopicCatalog::new()));
     Ok(Built {
         cluster,
         serving,

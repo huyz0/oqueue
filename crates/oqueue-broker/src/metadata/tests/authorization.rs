@@ -28,7 +28,8 @@ async fn an_unconfigured_broker_answers_every_explicit_topic_regardless_of_grant
         prelude(12),
         &body,
         &authz(None, false, &TopicGrants::default()),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert_eq!(response.topics[0].error_code, 0, "fail-open, unconfigured");
 }
@@ -44,7 +45,8 @@ async fn a_configured_broker_answers_a_granted_topic() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert_eq!(response.topics[0].error_code, 0);
 }
@@ -59,7 +61,8 @@ async fn a_configured_broker_refuses_an_ungranted_topic() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert_eq!(
         response.topics[0].error_code,
@@ -82,14 +85,15 @@ async fn refusing_an_ungranted_topic_does_not_create_it() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert_eq!(
         response.topics[0].error_code,
         oqueue_codec::error_codes::TOPIC_AUTHORIZATION_FAILED,
     );
     assert_eq!(
-        fixture.cluster.partition_count("ghost"),
+        fixture.cluster.partition_count("ghost").await,
         None,
         "an unauthorized request must not create the topic it named"
     );
@@ -110,7 +114,8 @@ async fn a_configured_broker_with_no_principal_refuses_every_explicit_topic() {
         prelude(12),
         &body,
         &authz(None, true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert_eq!(
         response.topics[0].error_code,
@@ -132,7 +137,8 @@ async fn each_explicit_topic_is_scoped_independently() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     let by_name = |name: &str| {
         response
@@ -163,7 +169,8 @@ async fn a_null_topic_array_answers_nothing_for_a_principal_with_no_grants() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert!(
         response.topics.is_empty(),
@@ -189,14 +196,15 @@ async fn a_grant_for_a_topic_that_does_not_exist_is_silently_omitted() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert!(
         response.topics.is_empty(),
         "a granted-but-nonexistent topic must not appear, auto-created or otherwise"
     );
     assert_eq!(
-        fixture.cluster.partition_count("never-created"),
+        fixture.cluster.partition_count("never-created").await,
         None,
         "listing must never create a topic as a side effect"
     );
@@ -215,7 +223,8 @@ async fn a_null_topic_array_answers_exactly_the_principals_own_grants() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     let names: Vec<_> = response
         .topics
@@ -237,7 +246,8 @@ async fn an_unconfigured_broker_answers_every_topic_through_the_null_array() {
         prelude(12),
         &body,
         &authz(None, false, &TopicGrants::default()),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert_eq!(response.topics.len(), 2, "fail-open, unconfigured");
 }
@@ -255,7 +265,8 @@ async fn a_configured_broker_with_no_principal_answers_no_topics_through_the_nul
         prelude(12),
         &body,
         &authz(None, true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert!(response.topics.is_empty());
 }
@@ -270,7 +281,7 @@ async fn a_principals_null_array_answer_is_unaffected_by_unrelated_grants() {
     let fixture = fixture(&["mine"]).await;
     let mut grants = TopicGrants::new();
     for n in 0..1_000 {
-        fixture.cluster.ensure_topic(&format!("t{n}"));
+        fixture.cluster.ensure_topic(&format!("t{n}")).await;
         grants.grant(
             Principal::new(format!("tenant-{n}")).expect("valid"),
             TopicId::new(format!("t{n}")).expect("valid"),
@@ -283,7 +294,8 @@ async fn a_principals_null_array_answer_is_unaffected_by_unrelated_grants() {
         prelude(12),
         &body,
         &authz(Some(&alice()), true, &grants),
-    );
+    )
+    .await;
     let response = decode(&out, 12);
     assert_eq!(response.topics.len(), 1);
     assert_eq!(

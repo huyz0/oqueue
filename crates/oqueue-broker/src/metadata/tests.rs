@@ -37,7 +37,7 @@ fn prelude(version: i16) -> RequestPrelude {
 /// The reply's bytes, or a panic naming the other verdict — no
 /// credential source configured, `M9.9`'s own fail-open default, so
 /// every existing test here keeps its pre-`M9` meaning unchanged.
-fn answered(cluster: &crate::Cluster, prelude: RequestPrelude, body: &[u8]) -> Vec<u8> {
+async fn answered(cluster: &crate::Cluster, prelude: RequestPrelude, body: &[u8]) -> Vec<u8> {
     answered_as(
         cluster,
         prelude,
@@ -48,16 +48,17 @@ fn answered(cluster: &crate::Cluster, prelude: RequestPrelude, body: &[u8]) -> V
             topic_grants: &oqueue_core::TopicGrants::default(),
         },
     )
+    .await
 }
 
 /// `answered`, with authorization actually live — `M9.9`'s own tests.
-fn answered_as(
+async fn answered_as(
     cluster: &crate::Cluster,
     prelude: RequestPrelude,
     body: &[u8],
     authz: &super::AuthzContext<'_>,
 ) -> Vec<u8> {
-    match handle(cluster, prelude, body, authz) {
+    match handle(cluster, prelude, body, authz).await {
         crate::connection::HandlerResponse::Reply(out) => out,
         other => panic!("expected a reply, got {other:?}"),
     }
@@ -77,19 +78,22 @@ async fn v12_with_the_flag_creates_and_answers() {
     let fixture = at("h.example", 9092, &[]).await;
     let cluster = &fixture.cluster;
     let body = request_bytes(12, Some(vec!["orders"]), true);
-    let out = answered(cluster, prelude(12), &body);
+    let out = answered(cluster, prelude(12), &body).await;
     let response = decode(&out, 12);
     assert_eq!(response.brokers.len(), 1);
     assert_eq!(response.brokers[0].port, 9092);
     assert_eq!(response.topics.len(), 1);
     assert_eq!(response.topics[0].error_code, 0);
     assert_eq!(response.topics[0].partitions.len(), 1);
-    assert_eq!(cluster.partition_count("orders"), Some(1));
+    assert_eq!(cluster.partition_count("orders").await, Some(1));
     // From v10 the topic's id rides along -- how id-addressed produce
     // and fetch learn their targets.
     assert_eq!(
         response.topics[0].topic_id,
-        cluster.topic_id("orders").expect("created with an id")
+        cluster
+            .topic_id("orders")
+            .await
+            .expect("created with an id")
     );
     assert_ne!(response.topics[0].topic_id, uuid::Uuid::nil());
 }
@@ -99,16 +103,34 @@ async fn v12_without_the_flag_refuses_the_missing_topic() {
     let fixture = fixture(&[]).await;
     let cluster = &fixture.cluster;
     let body = request_bytes(12, Some(vec!["ghost"]), false);
-    let out = answered(cluster, prelude(12), &body);
+    let out = answered(cluster, prelude(12), &body).await;
     let response = decode(&out, 12);
     assert_eq!(
         response.topics[0].error_code,
         kafka_protocol::error::ResponseError::UnknownTopicOrPartition.code()
     );
     assert_eq!(
-        cluster.partition_count("ghost"),
+        cluster.partition_count("ghost").await,
         None,
         "nothing was created"
+    );
+}
+
+/// ⚠️ **A creation the catalog refuses is not reported as a topic** (`M7.2`'s
+/// review): the empty name is one `TopicId` cannot hold.
+#[tokio::test]
+async fn a_refused_creation_answers_unknown_topic() {
+    let fixture = fixture(&[]).await;
+    let body = request_bytes(12, Some(vec![""]), true);
+    let out = answered(&fixture.cluster, prelude(12), &body).await;
+    let response = decode(&out, 12);
+    assert_eq!(
+        response.topics[0].error_code,
+        kafka_protocol::error::ResponseError::UnknownTopicOrPartition.code()
+    );
+    assert!(
+        response.topics[0].partitions.is_empty(),
+        "no partition offered"
     );
 }
 
@@ -116,10 +138,10 @@ async fn v12_without_the_flag_refuses_the_missing_topic() {
 async fn a_null_topic_list_answers_everything() {
     let fixture = fixture(&[]).await;
     let cluster = &fixture.cluster;
-    cluster.ensure_topic("a");
-    cluster.ensure_topic("b");
+    cluster.ensure_topic("a").await;
+    cluster.ensure_topic("b").await;
     let body = request_bytes(12, None, false);
-    let out = answered(cluster, prelude(12), &body);
+    let out = answered(cluster, prelude(12), &body).await;
     let response = decode(&out, 12);
     let mut names: Vec<String> = response
         .topics
@@ -139,19 +161,19 @@ async fn below_v4_the_wire_has_no_flag_and_creation_is_the_default() {
     // and the decoder defaults it true, the historical behaviour this
     // handler inherits.
     let body = request_bytes(1, Some(vec!["implicit"]), true);
-    let out = answered(cluster, prelude(1), &body);
+    let out = answered(cluster, prelude(1), &body).await;
     let response = decode(&out, 1);
     assert_eq!(response.topics[0].error_code, 0);
-    assert_eq!(cluster.partition_count("implicit"), Some(1));
+    assert_eq!(cluster.partition_count("implicit").await, Some(1));
 }
 
 #[tokio::test]
 async fn v0_empty_array_means_all_topics() {
     let fixture = fixture(&[]).await;
     let cluster = &fixture.cluster;
-    cluster.ensure_topic("v0-visible");
+    cluster.ensure_topic("v0-visible").await;
     let body = request_bytes(0, Some(vec![]), true);
-    let out = answered(cluster, prelude(0), &body);
+    let out = answered(cluster, prelude(0), &body).await;
     let response = decode(&out, 0);
     assert_eq!(response.topics.len(), 1, "v0's empty array is all-topics");
 }
@@ -160,9 +182,9 @@ async fn v0_empty_array_means_all_topics() {
 async fn from_v1_an_empty_array_means_no_topics() {
     let fixture = fixture(&[]).await;
     let cluster = &fixture.cluster;
-    cluster.ensure_topic("hidden");
+    cluster.ensure_topic("hidden").await;
     let body = request_bytes(12, Some(vec![]), true);
-    let out = answered(cluster, prelude(12), &body);
+    let out = answered(cluster, prelude(12), &body).await;
     let response = decode(&out, 12);
     assert!(response.topics.is_empty());
 }
@@ -194,7 +216,7 @@ async fn metadata_routes_through_the_dispatcher() {
     let response = decode(&out, 12);
     assert_eq!(response.brokers[0].host.as_str(), "routed.example");
     assert_eq!(response.topics[0].error_code, 0);
-    assert_eq!(cluster.partition_count("routed"), Some(1));
+    assert_eq!(cluster.partition_count("routed").await, Some(1));
 }
 
 #[tokio::test]
@@ -202,7 +224,7 @@ async fn the_advertised_identity_is_the_configured_one() {
     let fixture = at("adv.example.test", 31234, &[]).await;
     let cluster = &fixture.cluster;
     let body = request_bytes(9, None, false);
-    let out = answered(cluster, prelude(9), &body);
+    let out = answered(cluster, prelude(9), &body).await;
     let response = decode(&out, 9);
     assert_eq!(response.brokers[0].host.as_str(), "adv.example.test");
     assert_eq!(response.brokers[0].port, 31234);

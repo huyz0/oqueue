@@ -74,7 +74,7 @@ pub(crate) async fn produce(
     request.acks = -1;
     for name in topics {
         let mut t = TopicProduceData::default();
-        t.topic_id = broker.cluster.topic_id(name).expect("a hosted topic");
+        t.topic_id = broker.cluster.topic_id(name).await.expect("a hosted topic");
         let mut p = PartitionProduceData::default();
         p.index = 0;
         p.records = Some(bytes::Bytes::from(golden_batch(&[
@@ -95,11 +95,15 @@ pub(crate) async fn produce(
 
 /// The framed `Produce` request `produce` sends, for a caller that needs the
 /// future rather than the answer.
-pub(crate) fn produce_frame(broker: &Broker, topic: &'static str) -> Vec<u8> {
+pub(crate) async fn produce_frame(broker: &Broker, topic: &'static str) -> Vec<u8> {
     let mut request = ProduceRequest::default();
     request.acks = -1;
     let mut t = TopicProduceData::default();
-    t.topic_id = broker.cluster.topic_id(topic).expect("a hosted topic");
+    t.topic_id = broker
+        .cluster
+        .topic_id(topic)
+        .await
+        .expect("a hosted topic");
     let mut p = PartitionProduceData::default();
     p.index = 0;
     p.records = Some(bytes::Bytes::from(golden_batch(&[
@@ -129,7 +133,7 @@ pub(crate) async fn fetch(
 /// `select!` at `park.rs:146` is ever polled. A seeded run only means anything
 /// where the schedule has a choice to make (`ADR-0028`), and this is the one
 /// choice on the read path.
-pub(crate) fn parked_fetch_frame(
+pub(crate) async fn parked_fetch_frame(
     broker: &Broker,
     topic: &str,
     offset: i64,
@@ -139,7 +143,11 @@ pub(crate) fn parked_fetch_frame(
     request.max_wait_ms = wait_ms;
     request.min_bytes = 1;
     let mut t = FetchTopic::default();
-    t.topic_id = broker.cluster.topic_id(topic).expect("a hosted topic");
+    t.topic_id = broker
+        .cluster
+        .topic_id(topic)
+        .await
+        .expect("a hosted topic");
     let mut p = FetchPartition::default();
     p.partition = 0;
     p.fetch_offset = offset;
@@ -170,7 +178,11 @@ pub(crate) async fn fetch_now(
     request.max_wait_ms = 0;
     request.min_bytes = 1;
     let mut t = FetchTopic::default();
-    t.topic_id = broker.cluster.topic_id(topic).expect("a hosted topic");
+    t.topic_id = broker
+        .cluster
+        .topic_id(topic)
+        .await
+        .expect("a hosted topic");
     let mut p = FetchPartition::default();
     p.partition = 0;
     p.fetch_offset = offset;

@@ -98,8 +98,8 @@ async fn reply(dispatcher: &Dispatcher, frame: Vec<u8>) -> Vec<u8> {
 /// (`alice`) authenticated and granted exactly the first `granted` of
 /// them — deterministic naming and creation order, so two calls with the
 /// same `granted` but different `catalog_size` grant the *identical* set
-/// of topics, created in the identical order and so carrying the identical
-/// ids (`Cluster::ensure_topic`'s own creation-order id scheme).
+/// of topics, carrying the identical ids (derived from the name,
+/// `oqueue_core::topic_uuid`).
 async fn scoped_broker(catalog_size: usize, granted: usize) -> (Broker, Dispatcher) {
     let names: Vec<String> = (0..catalog_size).map(|n| format!("topic-{n:05}")).collect();
     let refs: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -147,9 +147,9 @@ async fn metadata_response_size_and_lookup_cost_do_not_grow_with_catalog_size() 
     let large_lookups = large.cluster.topic_lookups() - before;
 
     // Same byte length -- the direct NFR-12 claim -- and, order aside, the
-    // identical five topics with the identical ids: `Cluster::ensure_topic`'s
-    // creation-order id scheme means the same first five names in both
-    // catalogs are minted the same ids, so the content is not just the same
+    // identical five topics with the identical ids: ids derive from the name
+    // (`oqueue_core::topic_uuid`), so the same first five names in both
+    // catalogs carry the same ids, so the content is not just the same
     // size, it is the same response.
     assert_eq!(
         small_reply.len(),

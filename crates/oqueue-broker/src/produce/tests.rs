@@ -332,7 +332,7 @@ async fn invalid_acks_is_refused_and_stores_nothing() {
 #[tokio::test]
 async fn v13_addresses_the_topic_by_id_and_echoes_it() {
     let fixture = fixture(&["t"]).await;
-    let id = fixture.cluster.topic_id("t").expect("an id");
+    let id = fixture.cluster.topic_id("t").await.expect("an id");
     let body = produce_body_by_id(13, id, -1, golden_batch());
     let response = replied(&fixture, 13, &body).await;
     assert_eq!(response.responses[0].topic_id, id, "the id is the echo");

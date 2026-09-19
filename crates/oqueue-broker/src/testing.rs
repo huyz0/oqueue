@@ -170,7 +170,7 @@ pub(crate) async fn with_group_log(
     .expect("a minted identity is a usable key component");
     cluster.wait_until_replayed().await;
     for topic in topics {
-        cluster.ensure_topic(topic);
+        cluster.ensure_topic(topic).await;
     }
     cluster
 }
@@ -271,7 +271,7 @@ pub(crate) async fn with_store(
     // directly rather than through here.
     cluster.wait_until_replayed().await;
     for topic in topics {
-        cluster.ensure_topic(topic);
+        cluster.ensure_topic(topic).await;
     }
     Fixture {
         cluster: Arc::new(cluster),

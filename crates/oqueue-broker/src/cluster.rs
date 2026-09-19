@@ -3,9 +3,9 @@
 //!
 //! ⚠️ **This replaces `M2`'s `StubCluster`, and only half of what that held
 //! was a stub.** The topic *registry* — names, ids, partition counts,
-//! create-on-produce — is unchanged and moved here verbatim, because topic
-//! administration is nobody's milestone yet: `M3` sequences offsets and
-//! indexes objects, and a `CreateTopics` API with a creation policy is later.
+//! create-on-produce — is read through `TopicCatalog` since `M7.2`
+//! (`cluster/topics.rs`), and a `CreateTopics` API with a creation policy is
+//! later.
 //! What was a stub is the *log*, and that half is gone: a produce now seals a
 //! bundle, PUTs it once, and commits its spans to the coordinator, and a fetch
 //! resolves offset→object through the index instead of replaying every batch
@@ -39,20 +39,11 @@ use crate::join_group::GroupJoins;
 use crate::writer_id::WriterId;
 use oqueue_coordinator::{Coordinator, CoordinatorError};
 use oqueue_core::{
-    BundleNamer, CacheState, CoordinatorEpoch, Error, GroupCoordinator, GroupMetadataLog,
-    IndexReader, ObjectStore, Offset, PartitionId, TopicId,
+    BundleNamer, CacheState, CoordinatorEpoch, Error, FakeTopicCatalog, GroupCoordinator,
+    GroupMetadataLog, IndexReader, ObjectStore, Offset, PartitionId, TopicCatalog, TopicId,
 };
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
-use uuid::Uuid;
-
-/// One topic: its id and how many partitions it has.
-#[derive(Debug)]
-struct TopicEntry {
-    id: Uuid,
-    partitions: usize,
-}
+use std::sync::{Arc, Mutex};
 
 /// One node's view of the cluster.
 ///
@@ -69,10 +60,13 @@ pub struct Cluster {
     pub host: String,
     /// The advertised port.
     pub port: i32,
+    /// What topics exist (`ADR-0049` point 2) — asked on a cache miss.
+    catalog: Arc<dyn TopicCatalog>,
     // ⚠️ A std `Mutex`, deliberately (`async-concurrency.md` rules 6 and 8):
     // every critical section below is a map touch or a counter bump with no
     // `.await` inside, and the lock protects data, never control flow.
-    topics: Mutex<HashMap<String, TopicEntry>>,
+    // ⚠️ Only topics this node has served — never filled with the catalog.
+    topics: Mutex<topics::TopicCache>,
     coordinator: Coordinator,
     index: IndexReader,
     store: Arc<dyn ObjectStore>,
@@ -260,7 +254,9 @@ impl Cluster {
             node_id: 0,
             host: host.into(),
             port,
-            topics: Mutex::new(HashMap::new()),
+            // In-memory until a composer passes one (`with_catalog`).
+            catalog: Arc::new(FakeTopicCatalog::new()),
+            topics: Mutex::new(topics::TopicCache::default()),
             coordinator: sequencing.coordinator,
             index: sequencing.index,
             store: seams.store,
@@ -276,6 +272,16 @@ impl Cluster {
             replay_task: Mutex::new(Some(replay_task)),
             group_transitions,
         })
+    }
+
+    /// This cluster, reading topics through `catalog` instead of the
+    /// in-memory default. ⚠️ Call before serving: the cache starts empty
+    /// either way, so nothing resolved against the default survives.
+    #[must_use]
+    pub fn with_catalog(mut self, catalog: Arc<dyn TopicCatalog>) -> Self {
+        self.catalog = catalog;
+        self.topics = Mutex::new(topics::TopicCache::default());
+        self
     }
 
     /// The consumer-group coordinator every connection's `JoinGroup`
@@ -315,68 +321,6 @@ impl Cluster {
     /// handler shares (`M4.12`).
     pub(crate) fn committed_offsets(&self) -> &crate::offset_commit::CommittedOffsets {
         &self.committed_offsets
-    }
-
-    /// The topic's partition count, or `None` if it does not exist.
-    #[must_use]
-    pub fn partition_count(&self, topic: &str) -> Option<usize> {
-        self.topic_lookups.fetch_add(1, Ordering::Relaxed);
-        self.with_topics(|topics| topics.get(topic).map(|t| t.partitions))
-    }
-
-    /// The topic's id, or `None` if it does not exist.
-    #[must_use]
-    pub fn topic_id(&self, topic: &str) -> Option<Uuid> {
-        self.with_topics(|topics| topics.get(topic).map(|t| t.id))
-    }
-
-    /// The name behind a topic id, or `None` — how the id-addressed APIs
-    /// (`Produce` v13, `Fetch` v13+) resolve their targets.
-    #[must_use]
-    pub fn topic_name_by_id(&self, id: Uuid) -> Option<String> {
-        self.with_topics(|topics| {
-            topics
-                .iter()
-                .find(|(_, t)| t.id == id)
-                .map(|(name, _)| name.clone())
-        })
-    }
-
-    /// Every topic name, sorted — `Metadata` with no filter asks for all.
-    ///
-    /// ⚠️ **O(catalog), not O(what a caller keeps)** — this touches every
-    /// entry to build and sort the list, unlike [`Cluster::partition_count`]'s
-    /// one targeted lookup. `topic_lookups` below counts this proportionally
-    /// to catalog size for exactly that reason: a caller that resolves a
-    /// scoped set of names via `partition_count` per name costs O(that set);
-    /// a caller that calls this and filters afterward is the O(catalog)
-    /// anti-pattern `M9.10`'s own `all_topics_names` exists to avoid, and
-    /// `M9.17`'s cost test needs a proxy that actually tells the two apart.
-    #[must_use]
-    pub fn topic_names(&self) -> Vec<String> {
-        let mut names = self.with_topics(|topics| topics.keys().cloned().collect::<Vec<_>>());
-        self.topic_lookups.fetch_add(
-            u64::try_from(names.len()).unwrap_or(u64::MAX),
-            Ordering::Relaxed,
-        );
-        names.sort();
-        names
-    }
-
-    /// Creates `topic` with one partition if absent. Returns whether it exists
-    /// afterwards (always true; the return shape leaves room for a creation
-    /// policy later).
-    pub fn ensure_topic(&self, topic: &str) -> bool {
-        let mut topics = self.topics.lock().unwrap_or_else(PoisonError::into_inner);
-        // Creation-order ids, starting at 1: deterministic, never nil (nil is
-        // the wire's "no id" sentinel), unique because topics are never
-        // removed.
-        let next_id = Uuid::from_u128(topics.len() as u128 + 1);
-        topics.entry(topic.to_owned()).or_insert(TopicEntry {
-            id: next_id,
-            partitions: 1,
-        });
-        true
     }
 
     /// This coordinator's incarnation, which every watermark a client carries
@@ -468,14 +412,10 @@ impl Cluster {
     pub(crate) const fn namer(&self) -> &Mutex<BundleNamer> {
         &self.namer
     }
-
-    fn with_topics<T>(&self, read: impl FnOnce(&HashMap<String, TopicEntry>) -> T) -> T {
-        let topics = self.topics.lock().unwrap_or_else(PoisonError::into_inner);
-        read(&topics)
-    }
 }
 
 mod replay;
+mod topics;
 
 #[cfg(test)]
 mod tests;

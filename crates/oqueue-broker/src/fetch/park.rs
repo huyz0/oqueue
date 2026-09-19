@@ -85,7 +85,8 @@ pub(crate) async fn read_or_park(
     // in that set: it falls through to an `IllegalStateException` out of
     // `poll()`, so a refusal meant to protect a client would kill it.
     if session.catch_up(cluster, &mut watch).await.is_err() {
-        return partition::refuse_all(cluster, request, version, error_codes::OFFSET_NOT_AVAILABLE);
+        return partition::refuse_all(cluster, request, version, error_codes::OFFSET_NOT_AVAILABLE)
+            .await;
     }
     // ⚠️ Clamped against what a response can hold, which is the request's own
     // `max_bytes`: a `min_bytes` above it is never reachable, and a park
@@ -113,7 +114,7 @@ pub(crate) async fn read_or_park(
         // `wait_past` to resolve on. The fetch would park on outcomes read
         // before the commit and answer empty at its deadline, for a record
         // that was in the index the whole time.
-        let before = watermarks(cluster, request, version);
+        let before = watermarks(cluster, request, version).await;
         let mut applied = watch.applied();
         let outcomes = read_all(cluster, request, version, &mut objects, authz).await;
         reads += 1;
@@ -152,7 +153,7 @@ pub(crate) async fn read_or_park(
                 return outcomes;
             }
             applied = watch.applied();
-            if watermarks(cluster, request, version) != before {
+            if watermarks(cluster, request, version).await != before {
                 break;
             }
         }
@@ -213,7 +214,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn a_parked_fetch_is_woken_by_a_concurrent_produce() {
         let fixture = std::sync::Arc::new(fixture(&["t"]).await);
-        let id = fixture.cluster.topic_id("t").expect("the fixture's topic");
+        let id = fixture.cluster.topic_id("t").await.expect("hosted");
         let body = waiting_fetch_body(13, by_id_of(id), 0, 0, 30_000);
         let started = tokio::time::Instant::now();
 
@@ -265,7 +266,7 @@ mod tests {
     async fn a_park_woken_by_another_partitions_commit_does_not_re_read() {
         let fixture = std::sync::Arc::new(fixture(&["mine", "theirs"]).await);
         produce_one(&fixture, "mine", golden_batch()).await;
-        let id = fixture.cluster.topic_id("mine").expect("a hosted topic");
+        let id = fixture.cluster.topic_id("mine").await.expect("hosted");
         let body = hungry_fetch_body(
             13,
             by_id_of(id),
@@ -326,7 +327,7 @@ mod tests {
     async fn a_commit_that_lands_during_the_read_is_not_folded_into_the_baseline() {
         let fixture = std::sync::Arc::new(fixture(&["t"]).await);
         produce_one(&fixture, "t", golden_batch()).await;
-        let id = fixture.cluster.topic_id("t").expect("a hosted topic");
+        let id = fixture.cluster.topic_id("t").await.expect("a hosted topic");
         let body = hungry_fetch_body(
             13,
             by_id_of(id),
@@ -389,7 +390,7 @@ mod tests {
     async fn a_request_reads_a_bounded_number_of_times_however_much_is_committed() {
         let fixture = std::sync::Arc::new(fixture(&["t"]).await);
         produce_one(&fixture, "t", golden_batch()).await;
-        let id = fixture.cluster.topic_id("t").expect("a hosted topic");
+        let id = fixture.cluster.topic_id("t").await.expect("a hosted topic");
         let body = hungry_fetch_body(
             13,
             by_id_of(id),
@@ -451,7 +452,7 @@ mod tests {
         let response = replied(
             &fixture,
             13,
-            &waiting_fetch_body(13, by_id(&fixture), 2, 0, 250),
+            &waiting_fetch_body(13, by_id(&fixture).await, 2, 0, 250),
         )
         .await;
 

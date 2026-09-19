@@ -64,14 +64,14 @@ pub(crate) async fn read_all(
 /// ⚠️ **The cheap half of a re-read.** Every entry here is an index lookup, so
 /// asking after every wakeup costs nothing an idle shard would notice — which
 /// is what lets the expensive half happen only when something moved.
-pub(crate) fn watermarks(
+pub(crate) async fn watermarks(
     cluster: &Cluster,
     request: &oqueue_codec::fetch::FetchRequest<'_>,
     version: i16,
 ) -> Vec<i64> {
     let mut ends = Vec::new();
     for topic in &request.topics {
-        let name = resolved_name(cluster, topic, version);
+        let name = resolved_name(cluster, topic, version).await;
         for partition in &topic.partitions {
             // ⚠️ **Unresolvable entries are skipped, not given a sentinel.** A
             // topic this broker does not host is a refusal, and a refusal is
@@ -95,13 +95,15 @@ pub(crate) fn watermarks(
 ///
 /// From v13 the wire carries an id and this resolves it against the registry;
 /// below that it carries the name itself.
-pub(crate) fn resolved_name(
+pub(crate) async fn resolved_name(
     cluster: &Cluster,
     topic: &oqueue_codec::fetch::FetchTopic<'_>,
     version: i16,
 ) -> Option<String> {
     if version >= 13 {
-        cluster.topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id))
+        cluster
+            .topic_name_by_id(uuid::Uuid::from_bytes(topic.topic_id))
+            .await
     } else {
         topic.name.map(str::to_owned)
     }
@@ -133,7 +135,7 @@ async fn one_topic(
     } else {
         topic.name.map(str::to_owned)
     };
-    let resolved_name = resolved_name(cluster, topic, version);
+    let resolved_name = resolved_name(cluster, topic, version).await;
     // An id this broker never issued has its own error (100); a name it
     // does not host stays UNKNOWN_TOPIC_OR_PARTITION, matching what real
     // brokers answer on each addressing path.
@@ -228,7 +230,7 @@ mod authorization {
             &fx.cluster,
             &fx.session,
             prelude(13),
-            &fetch_body(13, by_id(&fx), 0, 0),
+            &fetch_body(13, by_id(&fx).await, 0, 0),
             &authz,
         )
         .await
@@ -252,7 +254,7 @@ mod authorization {
             &fx.cluster,
             &fx.session,
             prelude(13),
-            &fetch_body(13, by_id(&fx), 0, 0),
+            &fetch_body(13, by_id(&fx).await, 0, 0),
             &authz,
         )
         .await
@@ -280,7 +282,7 @@ mod authorization {
             &fx.cluster,
             &fx.session,
             prelude(13),
-            &fetch_body(13, by_id(&fx), 0, 0),
+            &fetch_body(13, by_id(&fx).await, 0, 0),
             &authz,
         )
         .await
@@ -315,7 +317,7 @@ mod authorization {
             &fx.cluster,
             &fx.session,
             prelude(13),
-            &fetch_body(13, by_id(&fx), 0, 0),
+            &fetch_body(13, by_id(&fx).await, 0, 0),
             &authz,
         )
         .await;

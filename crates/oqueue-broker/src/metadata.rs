@@ -37,13 +37,13 @@ use oqueue_core::TopicId;
 /// Decodes, answers, encodes. `Close` only when the body cannot be
 /// decoded — a malformed request from a client that negotiated fine is a
 /// closed connection, same policy as the dispatcher's other unanswerables.
-pub(crate) fn handle(
+pub(crate) async fn handle(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
     authz: &AuthzContext<'_>,
 ) -> crate::connection::HandlerResponse {
-    answer(cluster, prelude, body, authz).map_or(
+    answer(cluster, prelude, body, authz).await.map_or(
         crate::connection::HandlerResponse::Close,
         crate::connection::HandlerResponse::Reply,
     )
@@ -59,7 +59,7 @@ struct ResolvedTopic {
 }
 
 /// The `Option` body `handle` wraps: `None` is the close decision.
-fn answer(
+async fn answer(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
@@ -74,7 +74,7 @@ fn answer(
     let all_topics = request.topics.is_none()
         || (version == 0 && request.topics.as_ref().is_some_and(Vec::is_empty));
     let names: Option<Vec<String>> = if all_topics {
-        Some(all_topics_names(cluster, authz))
+        Some(all_topics_names(cluster, authz).await)
     } else {
         // ⚠️ A null NAME inside an entry (v10+ describe-by-topic-id) is a
         // request this id-less stub cannot serve — refusing beats creating
@@ -94,7 +94,7 @@ fn answer(
         all_topics,
         allow_auto_topic_creation: request.allow_auto_topic_creation,
     };
-    let resolved = resolve_all(cluster, names, &mode, authz);
+    let resolved = resolve_all(cluster, names, &mode, authz).await;
 
     let response = MetadataResponse {
         node_id: cluster.node_id,
@@ -133,27 +133,26 @@ struct ResolveMode {
 
 /// Resolves every requested name — authorized first for the
 /// explicitly-named case, `resolve_topic`'s own answer otherwise.
-fn resolve_all(
+async fn resolve_all(
     cluster: &Cluster,
     names: Vec<String>,
     mode: &ResolveMode,
     authz: &AuthzContext<'_>,
 ) -> Vec<ResolvedTopic> {
-    names
-        .into_iter()
-        .map(|name| {
-            if mode.all_topics || topic_authorized(&name, authz) {
-                resolve_topic(cluster, name, mode.version, mode.allow_auto_topic_creation)
-            } else {
-                ResolvedTopic {
-                    name,
-                    topic_id: [0u8; 16],
-                    error_code: error_codes::TOPIC_AUTHORIZATION_FAILED,
-                    partition_count: 0,
-                }
+    let mut resolved = Vec::with_capacity(names.len());
+    for name in names {
+        resolved.push(if mode.all_topics || topic_authorized(&name, authz) {
+            resolve_topic(cluster, name, mode.version, mode.allow_auto_topic_creation).await
+        } else {
+            ResolvedTopic {
+                name,
+                topic_id: [0u8; 16],
+                error_code: error_codes::TOPIC_AUTHORIZATION_FAILED,
+                partition_count: 0,
             }
-        })
-        .collect()
+        });
+    }
+    resolved
 }
 
 /// The topic names a null-topic-array ("every topic") request answers with
@@ -172,9 +171,9 @@ fn resolve_all(
 /// **No principal is an empty list**, not a panic — the same defensive
 /// shape as `topic_authorized`, for a case that should be equally
 /// unreachable past `M9.7`'s own gate.
-fn all_topics_names(cluster: &Cluster, authz: &AuthzContext<'_>) -> Vec<String> {
+async fn all_topics_names(cluster: &Cluster, authz: &AuthzContext<'_>) -> Vec<String> {
     if !authz.credentials_configured {
-        return cluster.topic_names();
+        return cluster.topic_names().await;
     }
     let Some(principal) = authz.principal else {
         return Vec::new();
@@ -192,25 +191,33 @@ fn all_topics_names(cluster: &Cluster, authz: &AuthzContext<'_>) -> Vec<String> 
     // topic (O(this principal's own grant count)), never a scan of
     // `Cluster`'s own topics — the cost claim this whole path exists for
     // stays intact.
-    authz
+    let mut names = Vec::new();
+    for name in authz
         .topic_grants
         .topics_for(principal)
         .map(TopicId::as_str)
-        .filter(|name| cluster.partition_count(name).is_some())
-        .map(str::to_owned)
-        .collect()
+    {
+        if cluster.partition_count(name).await.is_some() {
+            names.push(name.to_owned());
+        }
+    }
+    names
 }
 
 /// Resolves one topic: existing topics report their partitions; a missing
 /// one is created or refused by the flag. Topic ids ride the wire from v10.
-fn resolve_topic(
+async fn resolve_topic(
     cluster: &Cluster,
     name: String,
     version: i16,
     allow_auto_topic_creation: bool,
 ) -> ResolvedTopic {
-    let exists = cluster.partition_count(&name).is_some();
-    if !exists && !allow_auto_topic_creation {
+    let exists = cluster.partition_count(&name).await.is_some();
+    // ⚠️ **A refused creation is an unknown topic** (`M7.2`'s review): an
+    // empty name, or a catalog that failed the write. Answering `NONE` would
+    // send the client to produce to a topic that does not exist.
+    let created = !exists && allow_auto_topic_creation && cluster.ensure_topic(&name).await;
+    if !exists && !created {
         return ResolvedTopic {
             name,
             topic_id: [0u8; 16],
@@ -218,13 +225,11 @@ fn resolve_topic(
             partition_count: 0,
         };
     }
-    if !exists {
-        cluster.ensure_topic(&name);
-    }
-    let partition_count = cluster.partition_count(&name).unwrap_or(1);
+    let partition_count = cluster.partition_count(&name).await.unwrap_or(1);
     let topic_id = if version >= 10 {
         cluster
             .topic_id(&name)
+            .await
             .map_or([0u8; 16], uuid::Uuid::into_bytes)
     } else {
         [0u8; 16]

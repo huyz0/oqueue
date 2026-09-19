@@ -61,7 +61,7 @@ fuzz_target!(|data: &[u8]| {
             &oqueue_broker::WriterId::mint(),
         )
         .expect("a minted identity is a usable key component");
-        cluster.ensure_topic("t");
+        cluster.ensure_topic("t").await;
         let dispatcher = oqueue_broker::Dispatcher::new(Arc::new(cluster));
         // ⚠️ **The coordinator loop runs `select!`ed, never `spawn`ed.** A
         // spawned task is aborted rather than joined, and on a current-thread

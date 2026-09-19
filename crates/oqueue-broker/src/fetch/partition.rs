@@ -57,41 +57,42 @@ pub(crate) struct PartitionOutcome {
 /// ⚠️ **Shaped like a read rather than like an error**, because a client parses
 /// one response either way: the same topics in the same order, each partition
 /// carrying the refusal instead of records.
-pub(crate) fn refuse_all(
+pub(crate) async fn refuse_all(
     cluster: &Cluster,
     request: &oqueue_codec::fetch::FetchRequest<'_>,
     version: i16,
     error_code: i16,
 ) -> Vec<TopicOutcome> {
-    request
-        .topics
-        .iter()
-        .map(|topic| {
-            // ⚠️ **Resolved once per topic, not once per partition.** The
-            // partition count is the client's to choose and a 16 MiB frame can
-            // name hundreds of thousands, so a registry lock and a `String`
-            // allocation per entry would be paid on the path that returns *no*
-            // records — the cheap answer costing more contention than the read
-            // it replaced. `one_topic` and `watermarks`, both in `pass.rs`, have
-            // the same shape for the same reason.
-            let resolved = resolved_name(cluster, topic, version);
-            TopicOutcome {
-                name: if version >= 13 {
-                    None
-                } else {
-                    topic.name.map(str::to_owned)
-                },
-                topic_id: topic.topic_id,
-                partitions: topic
-                    .partitions
-                    .iter()
-                    .map(|partition| {
-                        refused(cluster, resolved.as_deref(), partition.index, error_code)
-                    })
-                    .collect(),
-            }
-        })
-        .collect()
+    let mut outcomes = Vec::with_capacity(request.topics.len());
+    for topic in &request.topics {
+        // ⚠️ **Resolved once per topic, not once per partition.** The
+        // partition count is the client's to choose and a 16 MiB frame can
+        // name hundreds of thousands, so a registry lock and a `String`
+        // allocation per entry would be paid on the path that returns *no*
+        // records — the cheap answer costing more contention than the read
+        // it replaced. `one_topic` and `watermarks`, both in `pass.rs`, have
+        // the same shape for the same reason.
+        let resolved = resolved_name(cluster, topic, version).await;
+        let mut partitions = Vec::with_capacity(topic.partitions.len());
+        for partition in &topic.partitions {
+            partitions.push(refused(
+                cluster,
+                resolved.as_deref(),
+                partition.index,
+                error_code,
+            ));
+        }
+        outcomes.push(TopicOutcome {
+            name: if version >= 13 {
+                None
+            } else {
+                topic.name.map(str::to_owned)
+            },
+            topic_id: topic.topic_id,
+            partitions,
+        });
+    }
+    outcomes
 }
 
 /// One partition, refused — with the real watermark when this broker knows it.
@@ -135,7 +136,7 @@ pub(crate) fn refused(
 /// — ⚠️ **the real one wherever this broker knows it**: a client that overshot
 /// needs to hear where the log actually ends, and the `0` on the paths that
 /// never reached a partition is a confession rather than a guess.
-fn resolve(
+async fn resolve(
     cluster: &Cluster,
     topic: Option<&str>,
     unknown: i16,
@@ -147,7 +148,7 @@ fn resolve(
     };
     let hosted = usize::try_from(index)
         .ok()
-        .zip(cluster.partition_count(name))
+        .zip(cluster.partition_count(name).await)
         .is_some_and(|(index, count)| index < count);
     let Some((topic_id, partition)) = hosted
         .then(|| {
@@ -205,7 +206,7 @@ pub(crate) async fn one_partition(
     };
 
     let (topic_id, partition, high, start) =
-        match resolve(cluster, topic, unknown, index, fetch_offset) {
+        match resolve(cluster, topic, unknown, index, fetch_offset).await {
             Ok(resolved) => resolved,
             Err((code, high)) => return refused(code, high),
         };
@@ -309,7 +310,7 @@ mod tests {
         produce_one(&fixture, "t", golden_batch()).await;
         fixture.break_store(4);
 
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 0, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture).await, 0, 0)).await;
 
         let p = &response.responses[0].partitions[0];
         assert_eq!(
@@ -337,7 +338,7 @@ mod tests {
         let fixture = produced().await;
         let mut request = FetchRequest::default();
         let mut t = FetchTopic::default();
-        t.topic_id = hosted(&fixture);
+        t.topic_id = hosted(&fixture).await;
         let mut p = FetchPartition::default();
         p.partition = 1;
         p.fetch_offset = 0;
@@ -369,7 +370,7 @@ mod tests {
         let fixture = produced().await;
         let before = fixture.store.counts().count(Operation::Get);
 
-        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture), 2, 0)).await;
+        let response = replied(&fixture, 13, &fetch_body(13, by_id(&fixture).await, 2, 0)).await;
 
         let p = &response.responses[0].partitions[0];
         assert_eq!(p.error_code, 0);

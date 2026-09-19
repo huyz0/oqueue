@@ -58,14 +58,14 @@ fn produce_response_of(reply: &[u8]) -> ProduceResponse {
 pub async fn two_produces_race_one_parked_fetch(broker: &Broker, run: &mut Run) {
     run.races += 1;
     let at = i64::from(u32::try_from(run.acked.map_or(0, |last| last + 1)).unwrap_or(0));
-    let parked_frame = parked_fetch_frame(broker, "orders", at, PARK_MS);
+    let parked_frame = parked_fetch_frame(broker, "orders", at, PARK_MS).await;
     let parked = {
         let dispatcher = Dispatcher::new(Arc::clone(&broker.cluster));
         tokio::spawn(async move { dispatcher.handle(parked_frame).await })
     };
 
-    let frame_a = produce_frame(broker, "orders");
-    let frame_b = produce_frame(broker, "orders");
+    let frame_a = produce_frame(broker, "orders").await;
+    let frame_b = produce_frame(broker, "orders").await;
     let dispatcher_a = Dispatcher::new(Arc::clone(&broker.cluster));
     let dispatcher_b = Dispatcher::new(Arc::clone(&broker.cluster));
     let task_a = tokio::spawn(async move { dispatcher_a.handle(frame_a).await });

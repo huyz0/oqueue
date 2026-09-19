@@ -340,8 +340,8 @@ mod authorization {
     #[tokio::test]
     async fn a_metadata_request_after_authentication_is_scoped_by_topic_grants() {
         let (dispatcher, fixture) = dispatcher().await;
-        fixture.cluster.ensure_topic("seen");
-        fixture.cluster.ensure_topic("unseen");
+        fixture.cluster.ensure_topic("seen").await;
+        fixture.cluster.ensure_topic("unseen").await;
         let mut grants = TopicGrants::new();
         grants.grant(
             Principal::new("alice").expect("valid"),
@@ -412,8 +412,8 @@ mod authorization {
     #[tokio::test]
     async fn a_produce_request_after_authentication_is_scoped_by_topic_grants() {
         let (dispatcher, fixture) = dispatcher().await;
-        fixture.cluster.ensure_topic("seen");
-        fixture.cluster.ensure_topic("unseen");
+        fixture.cluster.ensure_topic("seen").await;
+        fixture.cluster.ensure_topic("unseen").await;
         let mut grants = TopicGrants::new();
         grants.grant(
             Principal::new("alice").expect("valid"),
