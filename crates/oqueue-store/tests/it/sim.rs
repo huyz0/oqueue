@@ -34,6 +34,7 @@ mod encoding;
 mod faults;
 mod handlers;
 mod latency;
+mod lease_pause;
 mod model;
 mod pauses;
 mod state;

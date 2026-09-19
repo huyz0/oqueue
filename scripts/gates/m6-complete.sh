@@ -98,6 +98,13 @@ leg "FR-51/NFR-20 (a coordinator killed under load loses nothing)" \
 leg "task 13 (a coordinator whose lease expired fences itself)" \
   a_paused_coordinator_fences_itself \
   "needs the coordinator lease and its self-fencing poll"
+# ⚠️ **And under M10's own pause** (`M6.14`, `M6.0`'s review): the leg above
+# steps a fake clock, which a kill-only suite could satisfy; this one holds a
+# renewal's response in the S3 model past the TTL, the fault `M10.8` built,
+# so the lease is lost by a pause and not by the test's arithmetic.
+leg "task 13a (a lease paused past its TTL by M10's injector fences its holder)" \
+  a_lease_paused_past_its_ttl_fences_its_holder \
+  "needs M10's pause fault with the coordinator lease as its subject"
 leg "NFR-44 (a node with an empty disk serves correctly)" \
   an_empty_disk_node_serves_correctly \
   "needs cold start from the object-storage log and its newest snapshot"
