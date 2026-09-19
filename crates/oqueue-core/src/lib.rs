@@ -71,6 +71,7 @@ mod index_state;
 mod key;
 mod key_layout;
 mod lease;
+mod maintenance_store;
 mod materialized_index;
 mod member_id;
 mod merge;
@@ -139,6 +140,7 @@ pub use index_state::{
 pub use key::{FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
 pub use key_layout::KeyLayout;
 pub use lease::{LEASE_RENEW_MS, LEASE_SKEW_MS, LEASE_TTL_MS, ObjectStoreLease};
+pub use maintenance_store::MaintenanceStore;
 pub use materialized_index::{FakeMaterializedIndex, MaterializedIndex};
 pub use member_id::MemberId;
 pub use merge::MergingObjectStore;

@@ -36,6 +36,7 @@ mod rate_governor;
 mod redaction;
 mod retry;
 mod store;
+mod store_list;
 mod store_streaming;
 mod tiers;
 mod time_span;

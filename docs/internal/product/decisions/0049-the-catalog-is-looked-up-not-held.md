@@ -86,3 +86,17 @@ which every implementation runs. ⚠️ **Async, unlike `MaterializedIndex`**:
 the catalog is object storage's (point 3), so a lookup is a network read, and
 that seam's argument for being synchronous — every implementation is a local
 fold — does not hold here.
+
+`MaintenanceStore::list(prefix, after, limit)` is added by `M7.3a`, a new
+`pub trait` in `oqueue-core` (`contracts.md` rule 12) and the separate listing
+seam `ADR-0009` §2 named and deferred. `TopicCatalog::list` must page topic
+names in order, and the store it reads had no way to enumerate anything:
+`ObjectStore` still carries no `list`, deliberately, so only a component
+explicitly handed a `MaintenanceStore` can LIST. The method answers keys under
+a plain string prefix, strictly after `after`, in byte order, at most `limit`
+— the shape both backends already have natively, since S3's `ListObjectsV2`
+and GCS's list both page lexically from a start-after, so each page is one
+request and no implementation buffers a listing. ⚠️ **`ADR-0046`'s rule is
+unchanged**: the metadata log still opens without a LIST, and nothing on the
+produce, fetch or recovery path is handed a `MaintenanceStore`; it exists for
+the catalog alone.

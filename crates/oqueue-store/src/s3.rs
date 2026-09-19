@@ -23,6 +23,7 @@ use crate::classify::classify;
 use crate::get::{
     disambiguate_failed_ranged_get, get_options_for, requested_range, truncated_range_error,
 };
+use crate::list::list_keys;
 use crate::multipart::{PutStrategy, put_strategy_for};
 use crate::retry::retry_config_for;
 use crate::s3_stream::StreamingWriter;
@@ -43,8 +44,8 @@ use object_store::PutMultipartOptions;
 use object_store::aws::AmazonS3Builder;
 use object_store::path::Path as ObjectStorePath;
 use oqueue_core::{
-    BoxFuture, ByteRange, Error, MultipartLimits, ObjectKey, ObjectMeta, ObjectStore, Precondition,
-    PreconditionToken, Result, RetryPolicy,
+    BoxFuture, ByteRange, Error, MaintenanceStore, MultipartLimits, ObjectKey, ObjectMeta,
+    ObjectStore, Precondition, PreconditionToken, Result, RetryPolicy,
 };
 use std::ops::Range;
 
@@ -364,6 +365,19 @@ impl ObjectStore for S3Store {
             }
             Ok(())
         })
+    }
+}
+
+impl MaintenanceStore for S3Store {
+    /// ⚠️ **One `ListObjectsV2`-shaped request per page**, from a start-after,
+    /// through `list.rs` — shared with `gcs.rs`, so this twin needs no hand edit.
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+        after: Option<&'a ObjectKey>,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<ObjectKey>>> {
+        Box::pin(list_keys(&self.inner, prefix, after, limit))
     }
 }
 

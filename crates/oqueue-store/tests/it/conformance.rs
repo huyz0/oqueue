@@ -11,9 +11,10 @@
 // suite itself is wrong.
 #![allow(clippy::expect_used)]
 
+mod listing;
 pub mod record;
 
-use oqueue_core::{ByteRange, Error, ObjectKey, ObjectStore, Precondition};
+use oqueue_core::{ByteRange, Error, MaintenanceStore, ObjectKey, ObjectStore, Precondition};
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
@@ -49,6 +50,9 @@ fn key(name: &str) -> ObjectKey {
 /// per fault makes adding the second one a visible edit here.
 pub struct Harness<'a> {
     store: &'a dyn ObjectStore,
+    /// The same backend, seen through the listing seam (`M7.3a`,
+    /// `ADR-0009` §2): every backend the suite runs implements both.
+    lister: &'a dyn MaintenanceStore,
     arm_crash_after_put: Option<&'a dyn Fn()>,
 }
 
@@ -65,9 +69,10 @@ impl core::fmt::Debug for Harness<'_> {
 impl<'a> Harness<'a> {
     /// A harness over `store` that can inject no faults.
     #[must_use]
-    pub const fn new(store: &'a dyn ObjectStore) -> Self {
+    pub const fn new<S: ObjectStore + MaintenanceStore>(store: &'a S) -> Self {
         Self {
             store,
+            lister: store,
             arm_crash_after_put: None,
         }
     }
@@ -88,6 +93,12 @@ impl<'a> Harness<'a> {
     #[must_use]
     pub const fn store(&self) -> &dyn ObjectStore {
         self.store
+    }
+
+    /// The store under test, through its listing seam.
+    #[must_use]
+    pub const fn lister(&self) -> &dyn MaintenanceStore {
+        self.lister
     }
 
     /// Arms the next `put` to write durably and then answer an error.
@@ -243,7 +254,7 @@ pub fn run_conformance_suite(
 ) -> ConformanceReport {
     let mut ran = Vec::new();
     let mut skipped = Vec::new();
-    for case in cases() {
+    for case in cases().into_iter().chain(listing::cases()) {
         if (case.requires)(capabilities) {
             (case.run)(harness);
             ran.push(case.name);

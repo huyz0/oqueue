@@ -100,6 +100,8 @@ impl ModelS3 {
     ) -> HttpResponse {
         match req.method().as_str() {
             "PUT" => Self::put(state, req, key, body),
+            // `M7.3a`: a bucket-level GET carrying `list-type=2` is a listing.
+            "GET" if super::listing::is_list(req) => Self::list(state, req),
             "GET" => Self::get(state, req, &key),
             // ⚠️ **A HEAD is not optional for this model.** `oqueue-store`
             // answers a failed ranged GET by asking for the object's size and

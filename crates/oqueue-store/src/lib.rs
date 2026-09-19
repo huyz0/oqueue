@@ -27,6 +27,7 @@
 mod classify;
 mod gcs;
 mod get;
+mod list;
 mod multipart;
 mod retry;
 mod s3;

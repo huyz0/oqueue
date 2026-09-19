@@ -23,9 +23,10 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// (NFR-51). It names no S3 or GCS type, and no vendor SDK appears in
 /// `oqueue-core`; the backends live in `oqueue-store`, which `M1` writes.
 ///
-/// ⚠️ **Carries no `list()`** — ADR-0009. Listing lives on a separate,
-/// not-yet-built `MaintenanceStore` seam, so "never LIST on the read path"
-/// (NFR-30) is a property nothing holding only this trait can violate.
+/// ⚠️ **Carries no `list()`** — ADR-0009. Listing lives on the separate
+/// [`MaintenanceStore`](crate::MaintenanceStore) seam (built by `M7.3a`, for
+/// the topic catalog), so "never LIST on the read path" (NFR-30) is a property
+/// nothing holding only this trait can violate.
 ///
 /// # What an implementor must guarantee
 ///

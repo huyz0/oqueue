@@ -7,6 +7,7 @@
 //! that stands in for a backend is here.
 
 use super::{BoxFuture, MultipartWriter, ObjectStore};
+use crate::MaintenanceStore;
 use crate::fault::{DelayedThen, StormKind};
 use crate::{
     ByteRange, Error, FaultConfig, ObjectKey, ObjectMeta, Precondition, PreconditionToken, Result,
@@ -428,6 +429,38 @@ impl ObjectStore for FakeObjectStore {
                 }
             }
             Ok(())
+        })
+    }
+}
+
+/// ⚠️ **The same fake, not a second one** (`contracts.md` rule 9): a listing
+/// answers what `get` would find, and faults reach it like any other call.
+impl MaintenanceStore for FakeObjectStore {
+    /// ⚠️ **Sorted on every call**, because the slots are a `HashMap`: the
+    /// order is the contract's, not an accident of insertion, and a fake that
+    /// kept a `BTreeMap` only for this would reorder nothing a test can see.
+    /// Tombstoned slots are skipped for the same reason [`keys`](Self::keys)
+    /// skips them.
+    fn list<'a>(
+        &'a self,
+        prefix: &'a str,
+        after: Option<&'a ObjectKey>,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<ObjectKey>>> {
+        Box::pin(async move {
+            self.delay().await;
+            if let Some(err) = self.take_storm_error() {
+                return Err(err);
+            }
+            let mut keys: Vec<ObjectKey> = self
+                .keys()
+                .into_iter()
+                .filter(|key| key.as_str().starts_with(prefix))
+                .filter(|key| after.is_none_or(|after| key.as_str() > after.as_str()))
+                .collect();
+            keys.sort_unstable_by(|a, b| a.as_str().cmp(b.as_str()));
+            keys.truncate(limit);
+            Ok(keys)
         })
     }
 }

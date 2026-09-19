@@ -106,6 +106,14 @@ needs listing reaches for a `MaintenanceStore` seam rather than adding `list()`
 to `ObjectStore` out of local convenience, which would silently reopen the
 property this decision buys.
 
+> **Amended by `M7.3a` (`ADR-0049`), 2026-09-20.** The seam named above is now
+> built, as `MaintenanceStore` in `oqueue-core`, with one method:
+> `list(prefix, after, limit)`. Its first holder is the topic catalog, which
+> must page topic names in order — not the GC reconciler this section
+> anticipated. `ObjectStore` still carries no `list`, and the metadata log and
+> the read path are never handed a `MaintenanceStore`, so NFR-30 remains a
+> property of the seam's shape.
+
 ## Alternatives considered
 
 **An associated error type on the trait** (`type Error: std::error::Error`,
