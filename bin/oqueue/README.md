@@ -98,9 +98,10 @@ Nothing. It is the top of the graph.
   (`M2.25`) over the real write and read paths (`M3.14`): a produce seals one
   bundle, PUTs it once and commits its spans; a fetch resolves offset→object
   through the index. ⚠️ **`OQUEUE_STORE` picks the backend** — `s3`, `gcs`, or
-  unset for an in-memory store — and ⚠️ **the metadata log is in memory
-  regardless**, so offsets do not survive a restart (`M6`, `roadmap.md`'s
-  deferral table). `advertise`
+  unset for an in-memory store — and ⚠️ **the metadata and group logs live in
+  that same store** (`ADR-0046`, `M6.6`), so positions and committed offsets
+  survive a restart exactly as far as the store does: over S3 or GCS, yes;
+  over the in-memory store, no. `advertise`
   overrides the identity `Metadata` hands out (doc 02 §7.2: identity is a
   decision); the harness's capture proxy relies on it.
 - ⚠️ **`cargo build` links this on x86_64 only.** aarch64 stays at `cargo check`

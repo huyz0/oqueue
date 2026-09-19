@@ -19,12 +19,11 @@ use std::sync::Arc;
 /// 10 #12's disk engine is open — and it is picked here rather than defaulted
 /// inside a library, so swapping it is one line in a composition root.
 ///
-/// ⚠️ **`FakeMetadataLog` is the only `MetadataLog` `M3` builds**
-/// (`ADR-0020` point 5, doc 10 #12, `M3.md`'s goal note), so this broker's
-/// offsets do not survive its process: a restart re-bases at `Offset::ZERO`
-/// over objects that already hold those offsets. `roadmap.md`'s deferral table
-/// gives the durable engine to `M6`. The warning below is so an operator hears
-/// it from the broker rather than from a consumer.
+/// ⚠️ **Both logs live in the chosen object store** (`ADR-0046`, `M6.6`): the
+/// metadata log under `meta/0`, the group log under `groups/0`, so positions
+/// and committed offsets survive the process exactly as far as the store
+/// does. Over the in-memory store that is not at all, which `serve`'s own
+/// durability warning already tells an operator.
 ///
 /// ⚠️ **The coordinator's loop is returned, not spawned here.** It is spawned
 /// by `serve`, which watches its handle — `async-concurrency.md` rule 13 wants
@@ -42,7 +41,19 @@ pub(crate) async fn build_cluster(
     oqueue_coordinator::CoordinatorLoop,
     oqueue_broker::Retention,
 )> {
-    let log: Arc<dyn oqueue_core::MetadataLog> = Arc::new(oqueue_core::FakeMetadataLog::new());
+    let opened = |what: &str, error: oqueue_core::Error| {
+        std::io::Error::other(format!("the {what} would not open: {error}"))
+    };
+    let log: Arc<dyn oqueue_core::MetadataLog> = Arc::new(
+        oqueue_core::ObjectStoreMetadataLog::open(Arc::clone(&store), "meta/0")
+            .await
+            .map_err(|error| opened("metadata log", error))?,
+    );
+    let group_metadata_log: Arc<dyn oqueue_core::GroupMetadataLog> = Arc::new(
+        oqueue_core::ObjectStoreGroupMetadataLog::open(Arc::clone(&store), "groups/0")
+            .await
+            .map_err(|error| opened("group metadata log", error))?,
+    );
     let clock: Arc<dyn oqueue_core::Clock> = Arc::new(crate::wall_clock::WallClock);
     let index = Box::new(oqueue_index::MemoryIndex::new());
     let epoch = oqueue_core::CoordinatorEpoch::new(1);
@@ -62,17 +73,8 @@ pub(crate) async fn build_cluster(
     )
     .map_err(|error| std::io::Error::other(format!("retention would not start: {error}")))?;
     eprintln!(
-        "oqueue: WARNING -- the metadata log is in memory (M6 owns the durable one). \
-         Offsets do not survive a restart."
-    );
-    eprintln!(
         "oqueue: WARNING -- consumer-group membership/generation is in memory (M4.15 owns the \
          durable one, ADR-0034). Group membership and generation do not survive a restart."
-    );
-    eprintln!(
-        "oqueue: WARNING -- the group metadata log is in memory (M6 owns the durable engine, \
-         ADR-0035, the same one M4.14 names for the topic metadata log above). Committed \
-         offsets replay correctly across an in-process restart but do not survive the process."
     );
     let cluster = oqueue_broker::Cluster::new(
         host,
@@ -81,7 +83,7 @@ pub(crate) async fn build_cluster(
         oqueue_broker::Seams {
             store,
             group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
-            group_metadata_log: Arc::new(oqueue_core::FakeGroupMetadataLog::new()),
+            group_metadata_log,
         },
         &oqueue_broker::WriterId::mint(),
     )

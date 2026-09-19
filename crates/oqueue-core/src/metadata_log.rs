@@ -163,7 +163,7 @@ impl FakeMetadataLog {
     }
 
     /// Validates the whole batch before storing any of it — guarantee 3.
-    pub(crate) fn validate(entries: &[MetadataEntry], last: Option<CommitVersion>) -> Result<()> {
+    fn validate(entries: &[MetadataEntry], last: Option<CommitVersion>) -> Result<()> {
         let mut previous = last;
         for entry in entries {
             if let Some(prev) = previous

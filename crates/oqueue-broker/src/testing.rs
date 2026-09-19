@@ -139,6 +139,42 @@ impl Drop for Fixture {
     }
 }
 
+/// A cluster over `store` whose group metadata log is `group_metadata_log`,
+/// ready — for a test about what that log carries across a restart (`M6.6`).
+pub(crate) async fn with_group_log(
+    topics: &[&str],
+    store: Arc<dyn ObjectStore>,
+    group_metadata_log: Arc<dyn oqueue_core::GroupMetadataLog>,
+) -> Cluster {
+    let (coordinator, serving, reader) = Coordinator::open(
+        Arc::new(FakeMetadataLog::new()),
+        Box::new(FakeMaterializedIndex::new()),
+        CoordinatorEpoch::new(1),
+        Arc::new(oqueue_core::FakeClock::new()),
+    )
+    .await
+    .expect("an empty log opens");
+    tokio::spawn(serving.run());
+    let cluster = Cluster::new(
+        "h",
+        1,
+        crate::cluster::Sequencing::new(coordinator, reader),
+        crate::cluster::Seams {
+            store,
+            group_coordinator: Arc::new(oqueue_core::FakeGroupCoordinator::new()),
+            group_metadata_log,
+        },
+        &WriterId::mint(),
+    )
+    .await
+    .expect("a minted identity is a usable key component");
+    cluster.wait_until_replayed().await;
+    for topic in topics {
+        cluster.ensure_topic(topic);
+    }
+    cluster
+}
+
 /// A cluster hosting each of `topics`, over an empty log and store.
 pub(crate) async fn fixture(topics: &[&str]) -> Fixture {
     at("h", 1, topics).await

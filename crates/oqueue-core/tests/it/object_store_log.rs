@@ -137,3 +137,50 @@ fn debug_names_no_record() {
         "{shown}"
     );
 }
+
+/// The group log is the same segment log with its own format (`M6.6`): what
+/// one appends, a second opened over the same store reads back.
+#[test]
+fn a_reopened_group_log_reads_back_every_append() {
+    use oqueue_core::{
+        GroupId, GroupMetadataEntry, GroupMetadataLog, GroupMetadataRecord,
+        ObjectStoreGroupMetadataLog, TopicId,
+    };
+    let store: Arc<dyn ObjectStore> = Arc::new(FakeObjectStore::new());
+    let entry = GroupMetadataEntry::new(
+        CommitVersion::new(0),
+        GroupMetadataRecord::OffsetCommitted {
+            group: GroupId::new("secret-group").expect("a valid group"),
+            topic: TopicId::new("orders").expect("a valid topic"),
+            partition: 1,
+            offset: 42,
+        },
+    );
+    let first = block_on(ObjectStoreGroupMetadataLog::open(
+        Arc::clone(&store),
+        "groups/0",
+    ))
+    .expect("opens");
+    block_on(first.append(core::slice::from_ref(&entry))).expect("appends");
+    let shown = format!("{first:?}");
+    assert!(
+        shown.contains("groups/0") && shown.contains("entries: 1"),
+        "{shown}"
+    );
+    assert!(!shown.contains("secret-group"), "{shown}");
+    drop(first);
+
+    let second = block_on(ObjectStoreGroupMetadataLog::open(
+        Arc::clone(&store),
+        "groups/0",
+    ))
+    .expect("reopens");
+    assert_eq!(
+        block_on(second.read_from(CommitVersion::ZERO, 16)).expect("reads"),
+        vec![entry]
+    );
+    assert_eq!(
+        block_on(second.last_version()).expect("reads"),
+        Some(CommitVersion::new(0))
+    );
+}

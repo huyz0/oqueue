@@ -485,3 +485,5 @@ async fn a_malformed_body_closes_rather_than_panicking() {
     let response = handle(&fixture.cluster, prelude(), &[0xFF; 3], &open()).await;
     assert!(matches!(response, HandlerResponse::Close));
 }
+
+mod restart;

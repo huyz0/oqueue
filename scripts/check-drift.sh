@@ -582,6 +582,9 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_COMPACTED"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_TRIMMED"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_EPOCH"]="a record tag in the segment format, fixed once written"
+  ["crates/oqueue-core/src/group_segment.rs|FORMAT"]="the group-log segment format's version number (`M6.6`)"
+  ["crates/oqueue-core/src/group_segment.rs|TAG_OFFSET"]="a record tag in the group segment format, fixed once written"
+  ["crates/oqueue-core/src/group_segment.rs|TAG_TRANSITION"]="a record tag in the group segment format, fixed once written"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
   # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
   ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"
