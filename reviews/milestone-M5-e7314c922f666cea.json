@@ -1,0 +1,133 @@
+{
+  "commits": [
+    "bd99389718caf198dc51215f3d9980dbe74dbd40",
+    "6fe5ddce1624b4a995a5906442883c23952c265c",
+    "be15acd5c1d78da8c11526e8275e14e77cbd8113",
+    "e9e1157c0467b77d8d6b45c5547f3e80f5c2dd30",
+    "e0c32f0d03dd767ada624ad30b61292a8f53ec26",
+    "98f7e0e115e4ef1f8db28aa11a1d23a2b7e2f49a",
+    "ecd81152fb0598d1379d068267237776f6717b0f",
+    "4926947e22cc4a467482ef9e32a6926832538072",
+    "a1b74b370c2f55cc8d1f2e4fbd77f569921497d8",
+    "25396a3e5ab03b665bb389e37b184072e83c71c3",
+    "385d537621bd6c8e77304eab913f3f0d3cef61aa",
+    "90b33947baaf8a4961d9e92e5a2a44de064725b4",
+    "4e5915fa619528dfda146dbd418c9296dd58c9e8",
+    "d815329731dcead44430158079cf8c01bf8cdbf8",
+    "88b486842d07fcc67fffeee833b621e4cd4cb7dc",
+    "608797431e5c25870ea54b4a7c038df63a57b990",
+    "b71bacb70c063123da90c2ad45f8ba90e24998ea",
+    "9249e5c76a336adc6683c026a27c03c9269ee8fc",
+    "39b4215c7bbe8b0fab874d0fb6ceb5d6a9a27205",
+    "74fedab418f913b7e928885658967bd121d1955e",
+    "91aed4ce5f4bb71ea934d160012cfc4af80c1bb1",
+    "745cacbf0c27bb7eaa708a21f9790e40a33fa6c9",
+    "96747887701880f392da1f86ab670c28101f0314",
+    "01aaa8ee55aef4bc97cbe9b343256297d2d6d5c8",
+    "8f564aa8ae58fce779ad781ad36031b73e97b87f",
+    "a259b5fe3da3b66a01cf9fd5984c63e1a94b3618",
+    "051924ebefc065baad6823bd3d2c189051038a69",
+    "08acf9b9b5746b2cb64c6c7e495bdff3ac3ed790",
+    "236cea482af4fd039793f51b57157c29e97bb2ea",
+    "886dd34e13682cf394b07f9227c9901eb2c765fd",
+    "fd614b7dfbce42cb505f0ec1f86d85b68da4cb7a",
+    "782e92b2a66c0e582a86b1997b5ec7cf049c42f3",
+    "46c6983ac5479e02d73719a1ca84d4e891beda59",
+    "347cef5e0d77965f1692069a817e3bf4db3028ac",
+    "870fa5102e7b0b5f2efb9d2699b90ab512bb422d",
+    "1529a75f400caa39be1d6680daa2ab6fd58f27c9",
+    "af1492c4d4c189f3e73c01a35d872e33d77b0bf1",
+    "7c84d39f26a36a2888af309f56ea2bba7e4ad954",
+    "64faf92e1caf283e25da7e7d7372fe34edad45fd",
+    "76815a9e5748138a96cd89304126b08eac614c0c",
+    "bd506ed853bc401a0fd7032cfdc07f98fab9572b",
+    "24ca40793d65eaa1cbf49e6ba1045bb75a6233a3",
+    "cbff2e8d23d54fb84367069e639c701d27953a52",
+    "8f82acf04f0adef082beeb03d4088cadcbad957e",
+    "3750d0f92346a9342a5ac1f47ad8c36adac1318c",
+    "bd349e863569b3931a74b402fd687cee2830d1ca",
+    "c6d4158cda95a8c5f173b275056725f6b26c79a8",
+    "1b949a3c9e5965056c273298fae25f5925a3536c",
+    "99ff52e84bdec8773a7b9538ed40b59e8e96c437",
+    "1362d713148c49f5d909dae9ceb40b4cb10760c4"
+  ],
+  "findings": [
+    {
+      "evidence": [
+        "crates/oqueue-compact/tests/it/end_to_end.rs:338-417 (hand-applied RangeCompacted)",
+        "crates/oqueue-coordinator/src/coordinator.rs:266,303,362 (commit/trim/drop_cache, no compaction journal)",
+        "bin/oqueue/src/compose.rs:56 (Retention wired; no compaction task)",
+        "docs/internal/product/backlog.md M5.90, M5.91 rows (the FR-33 precedent)",
+        "scripts/gates/m5-complete.sh FR-34 leg"
+      ],
+      "id": "e59cdafc32f8",
+      "kind": "gate-wrong",
+      "severity": "major",
+      "summary": "FR-34's leg passes on a library test while nothing in the shipped broker ever compacts. No production code runs sweep/merge_round, and Coordinator has no method that journals RangeCompacted (only commit, trim, drop_cache). The test applies RangeCompacted to a fake index by hand. M5.90/M5.91 judged exactly this shape insufficient for FR-33 ('Nothing in production can journal a trim', 'Nothing runs retention') and fixed it; FR-34 got no equivalent row, so the two legs are held to different standards. In a deployed oqueue, read amplification is never bounded.",
+      "task_id": "M5.92"
+    },
+    {
+      "evidence": [
+        "docs/internal/product/requirements.md:77",
+        "crates/oqueue-compact/src/retention.rs:17-25",
+        "docs/internal/product/backlog.md M5.16, M5.17 (todo)",
+        "scripts/gates/m5-complete.sh FR-33 leg",
+        "docs/internal/product/roadmap.md:192"
+      ],
+      "id": "5d59cc3ce0fc",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "FR-33 is 'time- and size-based retention', but the completion condition tests only whole-partition idle expiry. M5.16 (time retention from per-object ts, i.e. progressive trims of an active partition) and M5.17 (size-based retention) are both todo. retention.rs states that an active partition is never trimmed until its newest commit ages out, so a partition written continuously keeps its data forever and is never size-bounded. m5-complete.sh can go green with FR-33 half met, and the roadmap's M5 row cites FR-33 without qualification, unlike the qualified M4 cells beside it.",
+      "task_id": "M5.16"
+    },
+    {
+      "evidence": [
+        "crates/oqueue-compact/tests/it/gc_race.rs:130-150 (release filter, now+skew)",
+        "crates/oqueue-compact/src/lifecycle.rs:185-203"
+      ],
+      "id": "b0b1b5daa269",
+      "kind": "gate-wrong",
+      "severity": "minor",
+      "summary": "a_stale_reader_racing_a_deleter cannot fail on the clock-skew term. The skew is a constant offset on the deleter's clock, and Lifecycle measures only differences between its own readings, so the offset cancels. Readers also resolve from the live index and model staleness only as extra hold time, and the writer releases only objects already at zero references, so the release-before-zero hazard lifecycle.rs guards against is never exercised. The test is falsifiable only on the delay itself.",
+      "task_id": ""
+    },
+    {
+      "evidence": [
+        "docs/internal/product/decisions/ ADR-0036 line 61",
+        "docs/internal/product/milestones/M5.md decision table",
+        "crates/oqueue-compact/src/retention.rs:17-25,238-247"
+      ],
+      "id": "cc3b021a8549",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "ADR-0036 and M5.md's decision table still key the expiry heap on ts_min + retention. The code keys it on the newest commit (ts_max) and says so only in a module comment, so the ADR now records a decision the code does not implement.",
+      "task_id": ""
+    },
+    {
+      "evidence": [
+        "scripts/gates/m5-complete.sh:18-27",
+        "docs/internal/product/backlog.md M5.84 row (done)"
+      ],
+      "id": "86e69618f3b4",
+      "kind": "drift",
+      "severity": "minor",
+      "summary": "m5-complete.sh's header says 'M5.84 ... is todo', but M5.84 is done. The header also asserts a backlog count of 84 at 7c84d39, and the count is now 92.",
+      "task_id": ""
+    },
+    {
+      "evidence": [
+        "crates/oqueue-broker/src/retention.rs:155-182,207-212",
+        "crates/oqueue-compact/src/lifecycle.rs:59-73"
+      ],
+      "id": "e64edd0ccee9",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "Lifecycle state is in memory only. A trim is durable but its release is not, so a restart between trim and sweep leaks the released objects permanently, because a rebuild never re-releases already-trimmed objects. This is safe (it leaks and never deletes early), and the only backstop is M5.23 orphan reconciliation, which is todo.",
+      "task_id": ""
+    }
+  ],
+  "milestone": "M5",
+  "recorded_at": "2026-09-19T02:35:03Z",
+  "reviewer": "independent milestone-review subagent (Claude Opus 5); did not drive M5 and did not see its transcript",
+  "verdict": "changes-requested"
+}
