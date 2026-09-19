@@ -15,6 +15,9 @@
 // Every `expect` is on a value the suite itself constructed from a literal it
 // controls, so a panic means the suite is wrong, not the code under test.
 #![allow(clippy::expect_used)]
+// ⚠️ `pub` is `pub(crate)` in effect: `main.rs` is this binary's only root, and
+// `object_store_log.rs` runs the same conformance suite (`M6.1`).
+#![allow(unreachable_pub)]
 
 use oqueue_core::Timestamp;
 use oqueue_core::{
@@ -24,7 +27,7 @@ use oqueue_core::{
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
 
-fn block_on<F: Future>(future: F) -> F::Output {
+pub fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);
     let waker = Waker::noop();
     let mut cx = Context::from_waker(waker);
@@ -36,7 +39,7 @@ fn block_on<F: Future>(future: F) -> F::Output {
     }
 }
 
-fn commit(version: u64, records: u32) -> MetadataEntry {
+pub fn commit(version: u64, records: u32) -> MetadataEntry {
     let span = CommittedSpan::new(
         TopicId::new("orders").expect("a valid topic"),
         PartitionId::new(0).expect("a valid partition"),
@@ -55,7 +58,7 @@ fn commit(version: u64, records: u32) -> MetadataEntry {
 }
 
 /// The backend-agnostic cases. Each takes a freshly built, empty log.
-mod conformance {
+pub mod conformance {
     use super::{block_on, commit};
     use oqueue_core::{
         ByteRange, CommitVersion, CommittedSpan, CoordinatorEpoch, Error, MetadataEntry,
@@ -64,7 +67,7 @@ mod conformance {
     };
 
     /// What was appended reads back, in the order it was appended.
-    pub(super) fn append_then_read_returns_what_went_in<L: MetadataLog>(log: &L) {
+    pub fn append_then_read_returns_what_went_in<L: MetadataLog>(log: &L) {
         let batch = vec![commit(1, 10), commit(2, 20), commit(3, 30)];
         block_on(log.append(&batch)).expect("a strictly increasing batch is accepted");
 
@@ -75,7 +78,7 @@ mod conformance {
     /// ⚠️ `M3.md` task 14. A batch whose versions do not strictly increase is
     /// refused — the log is the serialization point, and an out-of-order
     /// entry would make the fold that derives offsets depend on arrival order.
-    pub(super) fn an_out_of_order_batch_is_rejected<L: MetadataLog>(log: &L) {
+    pub fn an_out_of_order_batch_is_rejected<L: MetadataLog>(log: &L) {
         let err = block_on(log.append(&[commit(2, 1), commit(1, 1)]))
             .expect_err("a decreasing batch is refused");
         assert_eq!(
@@ -90,7 +93,7 @@ mod conformance {
     /// A repeat of the same version is out of order too — strictly
     /// increasing, not merely non-decreasing. Two records at one version
     /// would give the fold two answers for the same position.
-    pub(super) fn a_repeated_version_is_rejected<L: MetadataLog>(log: &L) {
+    pub fn a_repeated_version_is_rejected<L: MetadataLog>(log: &L) {
         let err = block_on(log.append(&[commit(5, 1), commit(5, 1)]))
             .expect_err("a repeated version is refused");
         assert_eq!(
@@ -103,7 +106,7 @@ mod conformance {
     }
 
     /// Ordering holds *across* appends, not only within one.
-    pub(super) fn an_append_below_the_last_stored_version_is_rejected<L: MetadataLog>(log: &L) {
+    pub fn an_append_below_the_last_stored_version_is_rejected<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(7, 1)])).expect("the first append is accepted");
         let err = block_on(log.append(&[commit(4, 1)])).expect_err("going backwards is refused");
         assert_eq!(
@@ -121,7 +124,7 @@ mod conformance {
     /// `<=` but guards its persisted high-water mark with `<` passes every
     /// other case in this suite and accepts this one — and the fold then
     /// counts that object's records twice, in silence.
-    pub(super) fn a_version_equal_to_the_last_stored_one_is_rejected<L: MetadataLog>(log: &L) {
+    pub fn a_version_equal_to_the_last_stored_one_is_rejected<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(7, 1)])).expect("the first append is accepted");
         let err = block_on(log.append(&[commit(7, 1)]))
             .expect_err("re-offering the last stored version is refused");
@@ -145,7 +148,7 @@ mod conformance {
     /// caller that retries after a rejection replays onto a log holding a
     /// prefix of the batch it thinks was refused, and the fold silently
     /// double-counts.
-    pub(super) fn a_rejected_append_stores_nothing<L: MetadataLog>(log: &L) {
+    pub fn a_rejected_append_stores_nothing<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(1, 1)])).expect("the first append is accepted");
         let before = block_on(log.read_from(CommitVersion::ZERO, 100)).expect("read succeeds");
 
@@ -157,7 +160,7 @@ mod conformance {
     }
 
     /// `read_from` is inclusive of its start and skips everything below it.
-    pub(super) fn read_from_starts_at_the_requested_version<L: MetadataLog>(log: &L) {
+    pub fn read_from_starts_at_the_requested_version<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(1, 1), commit(2, 2), commit(3, 3)])).expect("accepted");
 
         let read = block_on(log.read_from(CommitVersion::new(2), 100)).expect("read succeeds");
@@ -166,7 +169,7 @@ mod conformance {
 
     /// A read past the end is empty rather than an error — the caller is
     /// caught up, which is the ordinary case for a tail subscriber.
-    pub(super) fn a_read_past_the_end_is_empty<L: MetadataLog>(log: &L) {
+    pub fn a_read_past_the_end_is_empty<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(1, 1)])).expect("accepted");
         let read = block_on(log.read_from(CommitVersion::new(99), 100)).expect("read succeeds");
         assert!(read.is_empty());
@@ -175,7 +178,7 @@ mod conformance {
     /// ⚠️ The page bound is honoured. `M3.9` pulls history in bounded pages,
     /// and a `max_entries` a backend ignores turns a cold catch-up into an
     /// unbounded allocation driven by how far behind the reader is.
-    pub(super) fn read_from_honours_its_page_bound<L: MetadataLog>(log: &L) {
+    pub fn read_from_honours_its_page_bound<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(1, 1), commit(2, 2), commit(3, 3)])).expect("accepted");
         let read = block_on(log.read_from(CommitVersion::ZERO, 2)).expect("read succeeds");
         assert_eq!(read, vec![commit(1, 1), commit(2, 2)]);
@@ -183,12 +186,12 @@ mod conformance {
 
     /// An empty log has no last version — distinct from having version zero,
     /// which is a real position a real entry can occupy.
-    pub(super) fn an_empty_log_has_no_last_version<L: MetadataLog>(log: &L) {
+    pub fn an_empty_log_has_no_last_version<L: MetadataLog>(log: &L) {
         assert_eq!(block_on(log.last_version()).expect("read succeeds"), None);
     }
 
     /// `last_version` tracks the highest stored version.
-    pub(super) fn last_version_follows_the_appends<L: MetadataLog>(log: &L) {
+    pub fn last_version_follows_the_appends<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(1, 1), commit(9, 1)])).expect("accepted");
         assert_eq!(
             block_on(log.last_version()).expect("read succeeds"),
@@ -198,7 +201,7 @@ mod conformance {
 
     /// An empty append is accepted and changes nothing — a flush that turned
     /// out to cover no records is not an error.
-    pub(super) fn an_empty_append_is_a_no_op<L: MetadataLog>(log: &L) {
+    pub fn an_empty_append_is_a_no_op<L: MetadataLog>(log: &L) {
         block_on(log.append(&[commit(3, 1)])).expect("accepted");
         block_on(log.append(&[])).expect("an empty batch is accepted");
         assert_eq!(
@@ -208,7 +211,7 @@ mod conformance {
     }
 
     /// The log carries every record variant, not only commits.
-    pub(super) fn an_epoch_change_round_trips<L: MetadataLog>(log: &L) {
+    pub fn an_epoch_change_round_trips<L: MetadataLog>(log: &L) {
         let entry = MetadataEntry::new(
             CommitVersion::new(1),
             MetadataRecord::EpochChanged {
@@ -224,7 +227,7 @@ mod conformance {
     /// lets `Allocator::apply` reconstruct `producer_state` from the log on
     /// restart, so the log carrying it at all — not just an ordinary `None`
     /// span — is the property this row exists to prove.
-    pub(super) fn a_producer_identity_round_trips<L: MetadataLog>(log: &L) {
+    pub fn a_producer_identity_round_trips<L: MetadataLog>(log: &L) {
         let span = CommittedSpan::new(
             TopicId::new("orders").expect("a valid topic"),
             PartitionId::new(0).expect("a valid partition"),

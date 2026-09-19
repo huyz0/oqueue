@@ -576,6 +576,12 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/composite.rs|COMPOSITE_TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/partition_manifest.rs|PARTITION_MANIFEST_VERSION"]="the partition manifest format's version number"
   ["crates/oqueue-core/src/partition_manifest.rs|PARTITION_MANIFEST_TRAILER_LEN"]="the trailer's own width, fixed by the format"
+  ["crates/oqueue-core/src/metadata_segment.rs|FORMAT"]="the metadata-log segment format's version number (`M6.1`)"
+  ["crates/oqueue-core/src/metadata_segment.rs|TAG_BATCH"]="a record tag in the segment format, fixed once written"
+  ["crates/oqueue-core/src/metadata_segment.rs|TAG_MANIFEST"]="a record tag in the segment format, fixed once written"
+  ["crates/oqueue-core/src/metadata_segment.rs|TAG_COMPACTED"]="a record tag in the segment format, fixed once written"
+  ["crates/oqueue-core/src/metadata_segment.rs|TAG_TRIMMED"]="a record tag in the segment format, fixed once written"
+  ["crates/oqueue-core/src/metadata_segment.rs|TAG_EPOCH"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
   # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
   ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"

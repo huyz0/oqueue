@@ -431,6 +431,16 @@ pub enum Error {
         expected: i64,
     },
 
+    /// A metadata-log segment could not be read (`M6.1`).
+    ///
+    /// ⚠️ **Refused whole, never folded in part**: a log that folds a
+    /// half-read record mis-bases every later offset.
+    #[error("the metadata-log segment is malformed at byte {at}")]
+    MalformedMetadataSegment {
+        /// How far in the parser got.
+        at: usize,
+    },
+
     /// A partition manifest could not be read.
     #[error("the partition manifest is malformed at byte {at}")]
     MalformedPartitionManifest {

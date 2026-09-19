@@ -26,6 +26,7 @@ mod materialized_index;
 mod metadata_log;
 mod multipart;
 mod object_ref;
+mod object_store_log;
 mod op_counts;
 mod partition_manifest;
 mod precondition;

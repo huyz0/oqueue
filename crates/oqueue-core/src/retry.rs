@@ -115,6 +115,7 @@ impl Error {
             | Self::UnknownCompositeVersion { .. }
             | Self::ManifestDoesNotMeetHistory { .. }
             | Self::MalformedPartitionManifest { .. }
+            | Self::MalformedMetadataSegment { .. }
             | Self::NotAPartitionManifest
             | Self::UnknownPartitionManifestVersion { .. }
             // Never, and `BundleTailTooShort`'s own docs say why it is here
