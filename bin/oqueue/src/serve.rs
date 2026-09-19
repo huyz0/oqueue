@@ -280,7 +280,6 @@ fn advertised_identity(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::{Duration, SERVE_LIMITS, advertised_identity};
-    use oqueue_core::ObjectStore;
     use std::sync::Arc;
 
     fn addr(spec: &str) -> std::net::SocketAddr {
@@ -381,7 +380,7 @@ mod tests {
     /// this constructs the same cluster the binary does, with fakes.
     #[tokio::test]
     async fn the_accept_loop_notices_a_dead_coordinator_rather_than_serving_past_it() {
-        let store: Arc<dyn ObjectStore> = Arc::new(oqueue_core::FakeObjectStore::new());
+        let store: Arc<dyn crate::compose::Backend> = Arc::new(oqueue_core::FakeObjectStore::new());
         let built = crate::compose::build_cluster("h".to_owned(), 1, store)
             .await
             .expect("an empty fixture composes");

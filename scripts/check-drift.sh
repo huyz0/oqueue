@@ -604,6 +604,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_TRIMMED"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_EPOCH"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/group_segment.rs|FORMAT"]="the group-log segment format's version number (`M6.6`)"
+  ["crates/oqueue-core/src/catalog/stored.rs|FORMAT"]="the topic catalog entry format's version number (`M7.3`)"
   ["crates/oqueue-core/src/group_segment.rs|TAG_OFFSET"]="a record tag in the group segment format, fixed once written"
   ["crates/oqueue-core/src/group_segment.rs|TAG_TRANSITION"]="a record tag in the group segment format, fixed once written"
   ["crates/oqueue-core/src/lease.rs|SEARCH_PROBES"]="twice the probes a 64-bit bisection needs -- a loop bound, not a policy"

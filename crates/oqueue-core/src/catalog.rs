@@ -8,6 +8,10 @@ use std::sync::Mutex;
 
 use crate::{BoxFuture, Result, TopicId};
 
+mod stored;
+
+pub use stored::ObjectStoreTopicCatalog;
+
 /// One topic's catalog entry: its name, its id, and its partition count.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {

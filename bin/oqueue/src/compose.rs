@@ -8,8 +8,17 @@
 // clippy's `redundant_pub_crate` asks for.
 #![allow(clippy::redundant_pub_crate)]
 
-use oqueue_core::ObjectStore;
+use oqueue_core::{MaintenanceStore, ObjectStore};
 use std::sync::Arc;
+
+/// A backend usable both ways: to read and write objects, and to list them
+/// for the topic catalog (`M7.3`). The fake, S3 and GCS each are both.
+///
+/// ⚠️ **One value, handed out as two seams**, so the catalog cannot list a
+/// different store from the one it writes.
+pub(crate) trait Backend: ObjectStore + MaintenanceStore {}
+
+impl<T: ObjectStore + MaintenanceStore + ?Sized> Backend for T {}
 
 /// Composes the broker: a coordinator over a metadata log, a materialized
 /// index, and the chosen object store.
@@ -49,8 +58,9 @@ pub(crate) struct Built {
 pub(crate) async fn build_cluster(
     host: String,
     port: i32,
-    store: Arc<dyn ObjectStore>,
+    backend: Arc<dyn Backend>,
 ) -> std::io::Result<Built> {
+    let store: Arc<dyn ObjectStore> = Arc::clone(&backend) as _;
     // ⚠️ **Nothing here waits on the store** (`M6.10`): both logs open on
     // first use and the coordinator replays inside its loop, so a node whose
     // store is unreachable still boots, answers what it can, and recovers
@@ -70,15 +80,7 @@ pub(crate) async fn build_cluster(
     let serving = serving
         .fenced_by(Arc::clone(&lease))
         .reopening_with(reopener(&store, &current));
-    // FR-33: retention runs on time alone, over its own follower index.
-    let retention = oqueue_broker::Retention::new(
-        coordinator.clone(),
-        log,
-        Box::new(oqueue_index::MemoryIndex::new()),
-        Arc::clone(&store),
-        clock,
-    )
-    .map_err(|error| std::io::Error::other(format!("retention would not start: {error}")))?;
+    let retention = retention_for(coordinator.clone(), log, &store, clock)?;
     eprintln!(
         "oqueue: WARNING -- consumer-group membership/generation is in memory (M4.15 owns the \
          durable one, ADR-0034). Group membership and generation do not survive a restart."
@@ -96,8 +98,7 @@ pub(crate) async fn build_cluster(
     )
     .await
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?
-    // ⚠️ In-memory still: the object-store catalog is the next task (`ADR-0049`).
-    .with_catalog(Arc::new(oqueue_core::FakeTopicCatalog::new()));
+    .with_catalog(catalog_over(backend));
     Ok(Built {
         cluster,
         serving,
@@ -105,6 +106,34 @@ pub(crate) async fn build_cluster(
         log: current,
         lease,
     })
+}
+
+/// FR-33: retention runs on time alone, over its own follower index.
+///
+/// ⚠️ Split from [`build_cluster`] at the 50-line limit (`M7.3`).
+fn retention_for(
+    coordinator: oqueue_coordinator::Coordinator,
+    log: Arc<dyn oqueue_core::MetadataLog>,
+    store: &Arc<dyn ObjectStore>,
+    clock: Arc<dyn oqueue_core::Clock>,
+) -> std::io::Result<oqueue_broker::Retention> {
+    oqueue_broker::Retention::new(
+        coordinator,
+        log,
+        Box::new(oqueue_index::MemoryIndex::new()),
+        Arc::clone(store),
+        clock,
+    )
+    .map_err(|error| std::io::Error::other(format!("retention would not start: {error}")))
+}
+
+/// The topic catalog, looked up in the store and never held (`ADR-0049`,
+/// `M7.3`): written and listed through the same backend.
+fn catalog_over(backend: Arc<dyn Backend>) -> Arc<oqueue_core::ObjectStoreTopicCatalog> {
+    let listing: Arc<dyn MaintenanceStore> = Arc::clone(&backend) as _;
+    Arc::new(oqueue_core::ObjectStoreTopicCatalog::new(
+        backend, listing, SHARD,
+    ))
 }
 
 /// The one metadata shard a node runs until rebalance lands (`ADR-0049` point 1).

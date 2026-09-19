@@ -371,7 +371,7 @@ async fn every_configured_source_reaches_the_dispatcher() {
     // ⚠️ The same cluster the binary composes, with fakes —
     // `serve::tests`'s own route to one, because `oqueue-broker`'s
     // `testing::fixture` is `#[cfg(test)]` and so not reachable from here.
-    let store: std::sync::Arc<dyn oqueue_core::ObjectStore> =
+    let store: std::sync::Arc<dyn crate::compose::Backend> =
         std::sync::Arc::new(oqueue_core::FakeObjectStore::new());
     let cluster = crate::compose::build_cluster("h".to_owned(), 1, store)
         .await

@@ -47,3 +47,4 @@ crates/oqueue-store/src/list.rs:44:13: delete field offset from struct Paginated
 crates/oqueue-store/src/list.rs:45:13: delete field max_keys from struct PaginatedListOptions expression in list_keys  Equivalent in result: the backend's own page cap applies instead and `truncate(limit)` bounds the answer. `M7.3a`.
 crates/oqueue-store/src/list.rs:45:34: replace - with + in list_keys  Equivalent in result: a larger page request, bounded by `truncate(limit)`. `M7.3a`.
 crates/oqueue-store/src/list.rs:50:30: delete ! in list_keys  Equivalent in result: a non-empty prefix is then not pushed down and the backend lists everything, which `admits` filters to the prefix; an empty prefix is pushed as "", which matches everything as `None` does. `M7.3a`.
+crates/oqueue-core/src/catalog/stored.rs:223:52: replace | with ^ in unhex  Equivalent: the high digit is shifted into the upper nibble and the low digit is below 16, so the two never share a bit and OR equals XOR. `M7.3`.

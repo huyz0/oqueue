@@ -54,7 +54,7 @@ mod security;
 mod serve;
 mod wall_clock;
 
-use oqueue_core::{KeyProvider, ObjectStore};
+use oqueue_core::KeyProvider;
 use oqueue_crypto::NoOpKeyProvider;
 use serve::serve;
 use std::sync::Arc;
@@ -93,7 +93,7 @@ use std::sync::Arc;
 /// schedules or expires yet.
 struct Wiring {
     keys: Box<dyn KeyProvider>,
-    store: Arc<dyn ObjectStore>,
+    store: Arc<dyn compose::Backend>,
     store_name: &'static str,
 }
 
@@ -138,7 +138,7 @@ impl Wiring {
 /// smallest thing that lets this binary hand a *real* backend to a `Cluster`;
 /// a config file, per-bucket settings and validation are an operability
 /// milestone's, and `M3` has none.
-fn chosen_store() -> Result<(Arc<dyn ObjectStore>, &'static str), oqueue_core::Error> {
+fn chosen_store() -> Result<(Arc<dyn compose::Backend>, &'static str), oqueue_core::Error> {
     store_for(selection_from(std::env::var("OQUEUE_STORE"))?.as_deref())
 }
 
@@ -196,7 +196,7 @@ fn selection_from(
 /// at exit, which is the outcome this whole milestone is written against.
 fn store_for(
     selection: Option<&str>,
-) -> Result<(Arc<dyn ObjectStore>, &'static str), oqueue_core::Error> {
+) -> Result<(Arc<dyn compose::Backend>, &'static str), oqueue_core::Error> {
     match selection {
         Some("s3") => Ok((Arc::new(oqueue_store::S3Store::from_env()?), "S3Store")),
         Some("gcs") => Ok((Arc::new(oqueue_store::GcsStore::from_env()?), "GcsStore")),

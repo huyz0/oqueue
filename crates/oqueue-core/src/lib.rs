@@ -113,7 +113,9 @@ pub use bundle_footer::parse_footer;
 pub use bundle_name::BundleNamer;
 pub use bundle_stream::{BUNDLE_PART_BYTES, BundleStream, Written};
 pub use byte_range::ByteRange;
-pub use catalog::{CatalogEntry, FakeTopicCatalog, TopicCatalog, topic_uuid};
+pub use catalog::{
+    CatalogEntry, FakeTopicCatalog, ObjectStoreTopicCatalog, TopicCatalog, topic_uuid,
+};
 pub use chunk::ChunkedObjectStore;
 pub use clock::{Clock, FakeClock, Timestamp};
 pub use commit_version::CommitVersion;
