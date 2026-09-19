@@ -46,7 +46,7 @@ pub(crate) fn serve(
         let listener = tokio::net::TcpListener::bind(addr).await?;
         let local = listener.local_addr()?;
         let (advertised_host, advertised_port) = advertised_identity(advertise, local)?;
-        let (cluster, serving, retention) = crate::compose::build_cluster(
+        let (cluster, serving, retention, log) = crate::compose::build_cluster(
             advertised_host,
             advertised_port,
             Arc::clone(&wiring.store),
@@ -60,6 +60,9 @@ pub(crate) fn serve(
         // ⚠️ Not watched, deliberately: retention stopping delays deletion and
         // loses no acknowledged record, so it is no reason to stop serving.
         tokio::spawn(retention.run());
+        // ⚠️ Not watched either, for the same reason: a stopped cadence only
+        // makes the next cold start slower (`M6.4`).
+        tokio::spawn(oqueue_broker::checkpoints(log));
         let cluster = Arc::new(cluster);
         println!(
             "oqueue {} ({:?}, {})",
@@ -367,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn the_accept_loop_notices_a_dead_coordinator_rather_than_serving_past_it() {
         let store: Arc<dyn ObjectStore> = Arc::new(oqueue_core::FakeObjectStore::new());
-        let (cluster, serving, _retention) =
+        let (cluster, serving, _retention, _log) =
             crate::compose::build_cluster("h".to_owned(), 1, store)
                 .await
                 .expect("an empty fixture composes");

@@ -158,3 +158,120 @@ async fn a_replay_follows_a_gap_in_the_version_line() {
     drop(coordinator);
     serving.await.expect("the loop ends");
 }
+
+/// Commits across three partitions, with a trim and a checkpoint partway.
+async fn history(coordinator: &Coordinator, log: &ObjectStoreMetadataLog) {
+    use crate::support::region;
+    for n in 0..30 {
+        let partition = i32::try_from(n % 3).expect("small");
+        coordinator
+            .commit(object(n), vec![region("t", partition, 2, 0)])
+            .await
+            .expect("commits");
+        if n == 14 {
+            log.checkpoint().await.expect("a checkpoint partway");
+        }
+    }
+    coordinator
+        .trim(
+            topic(),
+            partition(),
+            Offset::new(4).expect("a valid offset"),
+        )
+        .await
+        .expect("a trim");
+}
+
+/// Every question an index is asked, over every partition and offset the
+/// history touched — the comparison `a_rebuilt_index_answers_like_the_original`
+/// makes query by query rather than byte by byte (`M6.md`).
+fn answers(reader: &oqueue_core::IndexReader) -> Vec<String> {
+    let mut out = Vec::new();
+    for p in 0..3 {
+        let partition = oqueue_core::PartitionId::new(p).expect("a valid partition");
+        let end = reader.end_offset(&topic(), partition);
+        out.push(format!("{p} end {}", end.get()));
+        for at in 0..=end.get() {
+            let found = reader.find_batches(
+                &topic(),
+                partition,
+                Offset::new(at).expect("a valid offset"),
+                u64::MAX,
+            );
+            out.push(format!("{p}@{at} {found:?}"));
+        }
+    }
+    out
+}
+
+/// ⚠️ **NFR-44 — nothing but the object store survives**: the successor gets
+/// a fresh index and opens the log from the store, over a checkpoint and the
+/// tail after it, and serves every offset the original served.
+#[tokio::test(start_paused = true)]
+async fn an_empty_disk_node_serves_correctly() {
+    let store: Arc<dyn ObjectStore> = Arc::new(FakeObjectStore::new());
+    let log = Arc::new(
+        ObjectStoreMetadataLog::open(Arc::clone(&store), "meta/0")
+            .await
+            .expect("opens"),
+    );
+    let (coordinator, serving, reader) = Coordinator::open(
+        Arc::clone(&log) as Arc<dyn MetadataLog>,
+        Box::new(FakeMaterializedIndex::new()),
+        CoordinatorEpoch::ZERO,
+        Arc::new(FakeClock::new()),
+    )
+    .await
+    .expect("opens");
+    let serving = tokio::spawn(serving.run());
+    history(&coordinator, &log).await;
+    let before = answers(&reader);
+    drop(coordinator);
+    serving.await.expect("the loop ends");
+    drop((log, reader));
+
+    let (successor, serving, rebuilt) = opened(&store).await;
+    assert_eq!(answers(&rebuilt), before);
+    drop(successor);
+    serving.await.expect("the loop ends");
+}
+
+/// ⚠️ **The rebuild's index is equivalent to the one it replaces, query by
+/// query** — "logically equivalent, not byte-identical" (`M6.md`): the local
+/// materialization is discarded and refilled from the log alone.
+#[tokio::test(start_paused = true)]
+async fn a_rebuilt_index_answers_like_the_original() {
+    let store: Arc<dyn ObjectStore> = Arc::new(FakeObjectStore::new());
+    let log = Arc::new(
+        ObjectStoreMetadataLog::open(Arc::clone(&store), "meta/0")
+            .await
+            .expect("opens"),
+    );
+    let (coordinator, serving, original) = Coordinator::open(
+        Arc::clone(&log) as Arc<dyn MetadataLog>,
+        Box::new(FakeMaterializedIndex::new()),
+        CoordinatorEpoch::ZERO,
+        Arc::new(FakeClock::new()),
+    )
+    .await
+    .expect("opens");
+    let serving = tokio::spawn(serving.run());
+    history(&coordinator, &log).await;
+    let expected = answers(&original);
+
+    coordinator.drop_cache().await.expect("the cache drops");
+    // ⚠️ The refill runs on the next commit, so one lands — on another topic,
+    // so every answer about `t` is still comparable.
+    coordinator
+        .commit(object(500), vec![crate::support::region("u", 0, 1, 0)])
+        .await
+        .expect("a commit that triggers the refill");
+    let rebuilt = answers(&original);
+    assert_eq!(
+        rebuilt[..],
+        expected[..],
+        "the refilled index answers every query as before"
+    );
+    drop(coordinator);
+    serving.await.expect("the loop ends");
+}

@@ -27,6 +27,7 @@
 #![forbid(unsafe_code)]
 
 mod authz;
+pub mod checkpoint;
 pub mod cluster;
 pub mod connection;
 pub mod dispatch;
@@ -58,6 +59,7 @@ mod testing;
 pub mod tls;
 mod writer_id;
 
+pub use checkpoint::{CHECKPOINT_JOURNAL_BYTES, CHECKPOINT_PAUSE, checkpoints};
 pub use cluster::{Cluster, FlushError, Seams, Sequencing};
 pub use connection::{ConnectionEnd, ConnectionLimits, Handler, HandlerResponse, serve_connection};
 pub use dispatch::Dispatcher;

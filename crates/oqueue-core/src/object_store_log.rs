@@ -20,16 +20,17 @@
 //! sequence number, finds it taken, and is refused — so a writer that lost an
 //! answer stops rather than writing past an entry it does not know it wrote.
 
+mod base;
+
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use base::{Base, base_key, read_base};
 
 use crate::{
     BoxFuture, ByteRange, CommitVersion, Error, GroupMetadataEntry, GroupMetadataLog,
     MetadataEntry, MetadataLog, ObjectKey, ObjectStore, Precondition, Result, decode_segment,
     encode_segment, group_segment,
 };
-
-/// The bytes a base object begins with.
-const BASE_MAGIC: [u8; 4] = *b"OQMB";
 
 /// How one log's entries become a segment's bytes and back.
 trait SegmentFormat {
@@ -82,35 +83,122 @@ struct Segments<F: SegmentFormat> {
 struct State<E> {
     next_seq: u64,
     entries: Vec<E>,
+    /// The newest base generation, `None` before the first checkpoint.
+    generation: Option<u64>,
+    /// The lowest live segment.
+    base_seq: u64,
+    /// The snapshot the base names, if any.
+    snapshot: Option<ObjectKey>,
+    /// Segment bytes appended since the last checkpoint — its trigger.
+    unsnapshotted_bytes: u64,
 }
 
 impl<F: SegmentFormat> Segments<F> {
     async fn open(store: Arc<dyn ObjectStore>, prefix: String) -> Result<Self> {
-        let base = read_base(&*store, &prefix).await?;
-        let mut entries: Vec<F::Entry> = Vec::new();
-        let mut seq = base;
+        // ⚠️ **A walk that raced a checkpoint is started over** (`M6.4`'s
+        // review). Pruning deletes segment keys, so a segment deleted under a
+        // reader reads as absent — as the tail — and an append there would be
+        // written behind the newer base, where no later open looks. A
+        // checkpoint commits its base generation *before* it deletes, so a
+        // reader that met a deleted segment always finds the base moved when
+        // it looks again, and reads from the new one.
         loop {
-            let bytes = match store
-                .get(&segment_key(&prefix, seq)?, ByteRange::Full)
-                .await
-            {
-                Ok(bytes) => bytes,
-                Err(Error::ObjectNotFound { .. }) => break,
-                Err(other) => return Err(other),
-            };
-            let segment = F::decode(&bytes)?;
-            validate::<F>(&segment, entries.last().map(F::version))?;
-            entries.extend(segment);
-            seq = next(seq)?;
+            let (generation, base) = read_base(&*store, &prefix).await?;
+            let (entries, seq) = walk::<F>(&*store, &prefix, &base).await?;
+            if read_base(&*store, &prefix).await?.0 != generation {
+                continue;
+            }
+            return Ok(Self {
+                store,
+                prefix,
+                state: Mutex::new(State {
+                    next_seq: seq,
+                    entries,
+                    generation,
+                    base_seq: base.seq,
+                    snapshot: base.snapshot,
+                    unsnapshotted_bytes: 0,
+                }),
+            });
         }
-        Ok(Self {
-            store,
-            prefix,
-            state: Mutex::new(State {
-                next_seq: seq,
-                entries,
-            }),
-        })
+    }
+
+    /// Folds every live segment into one snapshot object, points a new base
+    /// at it, and deletes what the snapshot replaced (`M6.4`, `M6.5`).
+    ///
+    /// ⚠️ **Ordered so a crash anywhere leaves a readable log**: the snapshot
+    /// is written first (unreferenced until the base names it), then the base
+    /// generation (the commit point), and only then are the old segments and
+    /// snapshot deleted. A crash before the base leaves an orphan object; a
+    /// crash after it leaves segments the new base no longer reads.
+    ///
+    /// ⚠️ **A writer that is no longer the log's tail refuses.** Before the
+    /// base is written it checks its own next segment is still absent; one
+    /// that is present means another writer appended, and this one's view is
+    /// stale. The base generation is itself written only if absent, so two
+    /// checkpointers cannot both commit one generation.
+    async fn checkpoint(&self) -> Result<bool> {
+        let (seq, generation, old_base, old_snapshot, payload, last) = {
+            let state = self.lock();
+            let Some(last) = state.entries.last().map(F::version) else {
+                return Ok(false);
+            };
+            if state.next_seq == state.base_seq {
+                return Ok(false);
+            }
+            (
+                state.next_seq,
+                state.generation.map_or(Ok(0), next)?,
+                state.base_seq,
+                state.snapshot.clone(),
+                F::encode(&state.entries)?,
+                last,
+            )
+        };
+        let snapshot = ObjectKey::new(format!("{}/snap/{:020}", self.prefix, last.get()))?;
+        // ⚠️ Already present is fine: a retry after a crash wrote the same
+        // entries under the same key.
+        put_if_absent(&*self.store, &snapshot, payload).await?;
+        // ⚠️ The tail *now*, not the one captured with the snapshot: this
+        // process's own appends since then are live segments past the new
+        // base, not another writer (`M6.4`'s review).
+        let tail = self.lock().next_seq;
+        self.still_the_tail(tail).await?;
+        let base = Base {
+            seq,
+            snapshot: Some(snapshot.clone()),
+        };
+        self.store
+            .put(
+                &base_key(&self.prefix, generation)?,
+                base.encode()?,
+                Some(Precondition::IfAbsent),
+            )
+            .await?;
+        {
+            let mut state = self.lock();
+            state.generation = Some(generation);
+            state.base_seq = seq;
+            state.snapshot = Some(snapshot.clone());
+            state.unsnapshotted_bytes = 0;
+        }
+        let mut retired = (old_base..seq)
+            .map(|old| segment_key(&self.prefix, old))
+            .collect::<Result<Vec<_>>>()?;
+        retired.extend(old_snapshot.filter(|old| *old != snapshot));
+        self.store.delete(&retired).await?;
+        Ok(true)
+    }
+
+    /// Refuses when segment `seq` exists: another writer has appended past
+    /// this log's view of the tail.
+    async fn still_the_tail(&self, seq: u64) -> Result<()> {
+        let tail = segment_key(&self.prefix, seq)?;
+        match self.store.get(&tail, ByteRange::Full).await {
+            Err(Error::ObjectNotFound { .. }) => Ok(()),
+            Ok(_) => Err(Error::PreconditionFailed { key: tail }),
+            Err(other) => Err(other),
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, State<F::Entry>> {
@@ -130,6 +218,7 @@ impl<F: SegmentFormat> Segments<F> {
         };
         validate::<F>(entries, last)?;
         let payload = F::encode(entries)?;
+        let size = u64::try_from(payload.len()).unwrap_or(u64::MAX);
         let key = segment_key(&self.prefix, seq)?;
         self.store
             .put(&key, payload, Some(Precondition::IfAbsent))
@@ -137,6 +226,7 @@ impl<F: SegmentFormat> Segments<F> {
         let mut state = self.lock();
         state.next_seq = next(seq)?;
         state.entries.extend_from_slice(entries);
+        state.unsnapshotted_bytes = state.unsnapshotted_bytes.saturating_add(size);
         drop(state);
         Ok(())
     }
@@ -190,6 +280,25 @@ impl ObjectStoreMetadataLog {
     /// do not form one increasing line.
     pub async fn open(store: Arc<dyn ObjectStore>, prefix: impl Into<String>) -> Result<Self> {
         Ok(Self(Segments::open(store, prefix.into()).await?))
+    }
+
+    /// Writes a snapshot of every live entry and prunes what it replaces;
+    /// `Ok(false)` when there was nothing to fold. See `Segments::checkpoint`.
+    ///
+    /// # Errors
+    ///
+    /// The store's error, or [`Error::PreconditionFailed`] when this log is no
+    /// longer the tail — another writer has appended since it last looked.
+    pub async fn checkpoint(&self) -> Result<bool> {
+        self.0.checkpoint().await
+    }
+
+    /// Segment bytes appended since the last checkpoint: the trigger a
+    /// checkpoint cadence reads, so recovery time tracks journal volume and
+    /// not the wall clock (`M6.md` task 6).
+    #[must_use]
+    pub fn unsnapshotted_bytes(&self) -> u64 {
+        self.0.lock().unsnapshotted_bytes
     }
 }
 
@@ -252,6 +361,32 @@ impl GroupMetadataLog for ObjectStoreGroupMetadataLog {
     }
 }
 
+/// Reads a base's snapshot and every segment after it, until one is absent;
+/// the entries, and the sequence number of the first absent segment.
+async fn walk<F: SegmentFormat>(
+    store: &dyn ObjectStore,
+    prefix: &str,
+    base: &Base,
+) -> Result<(Vec<F::Entry>, u64)> {
+    let mut entries: Vec<F::Entry> = Vec::new();
+    if let Some(snapshot) = &base.snapshot {
+        entries = F::decode(&store.get(snapshot, ByteRange::Full).await?)?;
+        validate::<F>(&entries, None)?;
+    }
+    let mut seq = base.seq;
+    loop {
+        let bytes = match store.get(&segment_key(prefix, seq)?, ByteRange::Full).await {
+            Ok(bytes) => bytes,
+            Err(Error::ObjectNotFound { .. }) => return Ok((entries, seq)),
+            Err(other) => return Err(other),
+        };
+        let segment = F::decode(&bytes)?;
+        validate::<F>(&segment, entries.last().map(F::version))?;
+        entries.extend(segment);
+        seq = next(seq)?;
+    }
+}
+
 /// Refuses a batch whose versions do not strictly increase from `last` —
 /// guarantee 3, the check both fakes make.
 fn validate<F: SegmentFormat>(entries: &[F::Entry], last: Option<CommitVersion>) -> Result<()> {
@@ -271,6 +406,13 @@ fn validate<F: SegmentFormat>(entries: &[F::Entry], last: Option<CommitVersion>)
     Ok(())
 }
 
+async fn put_if_absent(store: &dyn ObjectStore, key: &ObjectKey, payload: Vec<u8>) -> Result<()> {
+    match store.put(key, payload, Some(Precondition::IfAbsent)).await {
+        Ok(_) | Err(Error::PreconditionFailed { .. }) => Ok(()),
+        Err(other) => Err(other),
+    }
+}
+
 fn next(seq: u64) -> Result<u64> {
     seq.checked_add(1).ok_or(Error::CommitVersionOverflow {
         base: seq,
@@ -284,21 +426,4 @@ fn next(seq: u64) -> Result<u64> {
 /// sequence order for anyone who does list them — an operator, an inventory.
 fn segment_key(prefix: &str, seq: u64) -> Result<ObjectKey> {
     ObjectKey::new(format!("{prefix}/log/{seq:020}"))
-}
-
-/// The lowest live segment, from the base object; zero when there is none.
-async fn read_base(store: &dyn ObjectStore, prefix: &str) -> Result<u64> {
-    let key = ObjectKey::new(format!("{prefix}/base"))?;
-    let bytes = match store.get(&key, ByteRange::Full).await {
-        Ok(bytes) => bytes,
-        Err(Error::ObjectNotFound { .. }) => return Ok(0),
-        Err(other) => return Err(other),
-    };
-    let malformed = Error::MalformedMetadataSegment { at: 0 };
-    let (magic, seq) = bytes.split_at_checked(4).ok_or_else(|| malformed.clone())?;
-    if magic != BASE_MAGIC {
-        return Err(malformed);
-    }
-    let seq: [u8; 8] = seq.try_into().map_err(|_| malformed)?;
-    Ok(u64::from_be_bytes(seq))
 }

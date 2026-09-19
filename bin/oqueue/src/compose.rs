@@ -40,20 +40,10 @@ pub(crate) async fn build_cluster(
     oqueue_broker::Cluster,
     oqueue_coordinator::CoordinatorLoop,
     oqueue_broker::Retention,
+    Arc<oqueue_core::ObjectStoreMetadataLog>,
 )> {
-    let opened = |what: &str, error: oqueue_core::Error| {
-        std::io::Error::other(format!("the {what} would not open: {error}"))
-    };
-    let log: Arc<dyn oqueue_core::MetadataLog> = Arc::new(
-        oqueue_core::ObjectStoreMetadataLog::open(Arc::clone(&store), "meta/0")
-            .await
-            .map_err(|error| opened("metadata log", error))?,
-    );
-    let group_metadata_log: Arc<dyn oqueue_core::GroupMetadataLog> = Arc::new(
-        oqueue_core::ObjectStoreGroupMetadataLog::open(Arc::clone(&store), "groups/0")
-            .await
-            .map_err(|error| opened("group metadata log", error))?,
-    );
+    let (durable, group_metadata_log) = open_logs(&store).await?;
+    let log: Arc<dyn oqueue_core::MetadataLog> = Arc::clone(&durable) as _;
     let clock: Arc<dyn oqueue_core::Clock> = Arc::new(crate::wall_clock::WallClock);
     let index = Box::new(oqueue_index::MemoryIndex::new());
     let epoch = oqueue_core::CoordinatorEpoch::new(1);
@@ -89,5 +79,28 @@ pub(crate) async fn build_cluster(
     )
     .await
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?;
-    Ok((cluster, serving, retention))
+    Ok((cluster, serving, retention, durable))
+}
+
+/// The metadata log and the group log, both from `store` (`ADR-0046`).
+async fn open_logs(
+    store: &Arc<dyn ObjectStore>,
+) -> std::io::Result<(
+    Arc<oqueue_core::ObjectStoreMetadataLog>,
+    Arc<dyn oqueue_core::GroupMetadataLog>,
+)> {
+    let opened = |what: &str, error: oqueue_core::Error| {
+        std::io::Error::other(format!("the {what} would not open: {error}"))
+    };
+    let durable = Arc::new(
+        oqueue_core::ObjectStoreMetadataLog::open(Arc::clone(store), "meta/0")
+            .await
+            .map_err(|error| opened("metadata log", error))?,
+    );
+    let group_metadata_log: Arc<dyn oqueue_core::GroupMetadataLog> = Arc::new(
+        oqueue_core::ObjectStoreGroupMetadataLog::open(Arc::clone(store), "groups/0")
+            .await
+            .map_err(|error| opened("group metadata log", error))?,
+    );
+    Ok((durable, group_metadata_log))
 }

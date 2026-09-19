@@ -43,15 +43,23 @@ coordinators; `ADR-0020` rejected a separately hosted metadata service (doc 15
    added to every acknowledgement. `ADR-0020` rejected per-record CAS on this
    exact ground; batching removes the throughput ceiling and not the latency
    floor. NFR-1 is the requirement at risk, and M14 measures it.
-4. **Snapshots are objects, and the log says where they are.** A snapshot of
-   the materialized state is written to `meta/<shard>/snap/<version>`, then a
-   `SnapshotCommitted` record is appended naming it — doc 13 §4's pointer in
-   the log. A small base object, `meta/<shard>/base`, names the lowest live
-   segment and the snapshot it follows; it is updated with
-   `Precondition::IfMatches` only when the log is pruned, which is the
-   low-frequency control-plane CAS `ADR-0020` point 4 allows.
-5. **Opening a log is: read the base, GET its snapshot, then GET segments
-   forward until one is absent.** No LIST (`mission.md`), and the number of
+4. **Snapshots are objects, and a base generation says where they are.**
+   ⚠️ **Amended by `M6.4`** — the first draft appended a `SnapshotCommitted`
+   record and CAS'd one `base` object in place; `get` returns no precondition
+   token, so in-place CAS was not available. A checkpoint instead writes
+   `meta/<shard>/snap/<version>` (every live entry, in the segment format),
+   then a new `meta/<shard>/base/<generation>` only if absent — the commit
+   point, naming the first segment the snapshot does not cover — and only
+   then deletes the segments and snapshot it replaced. A writer checks its
+   own next segment is still absent before committing a generation, so a
+   stale writer cannot point the base behind a newer one's pruning.
+   ⚠️ **The snapshot holds entries, not a serialized index**: opening is one
+   snapshot GET plus the tail's segments, and the fold then replays every
+   entry in memory. What this bounds is object-storage round trips, not
+   replay CPU; a snapshot of the materialized state itself is not built.
+5. **Opening a log is: find the newest base generation (doubling, then
+   bisecting — O(log n) GETs), GET its snapshot, then GET segments forward
+   until one is absent.** No LIST (`mission.md`), and the number of
    GETs is bounded by the replay tail pruning keeps short (doc 13 §10.7).
 6. **Doc 10 #12, the materialized-state engine, is not needed for M6 and is
    deferred to M14.** The materialized index stays in memory (`MemoryIndex`);

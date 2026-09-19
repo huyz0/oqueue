@@ -373,6 +373,12 @@ declare -A RUST_BOUNDS=(
   # How often retention runs a round (`M5.91`). ⚠️ Weakening is *raising*:
   # a longer interval delays every expiry and every deletion by up to it.
   ["crates/oqueue-broker/src/retention.rs|RETENTION_ROUND_INTERVAL"]="Duration::from_secs(30)"
+  # Journal bytes between metadata-log checkpoints (`M6.4`, doc 13 §10.7).
+  # ⚠️ Weakening is *raising*: a longer replay tail is a slower cold start.
+  ["crates/oqueue-broker/src/checkpoint.rs|CHECKPOINT_JOURNAL_BYTES"]="33_554_432"
+  # The pause after each checkpoint check (`M6.4`). ⚠️ Weakening is *raising*:
+  # the tail overshoots the trigger by up to a pause's worth of appends.
+  ["crates/oqueue-broker/src/checkpoint.rs|CHECKPOINT_PAUSE"]="Duration::from_secs(10)"
   # How many bytes one part of a bundled object carries (`M5.6`). ⚠️ Weakening
   # is *lowering*: S3 refuses any part but the last below 5 MiB, so a smaller
   # value moves the failure from this crate to the backend, which is the wrong
