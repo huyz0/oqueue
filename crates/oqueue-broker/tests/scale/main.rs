@@ -17,6 +17,7 @@
 
 mod catalog;
 mod memory;
+mod metadata;
 
 use stats_alloc::{INSTRUMENTED_SYSTEM, StatsAlloc};
 use std::alloc::System;
@@ -44,4 +45,9 @@ pub fn live_bytes() -> i128 {
     i128::try_from(stats.bytes_allocated).expect("fits")
         - i128::try_from(stats.bytes_deallocated).expect("fits")
         + i128::try_from(stats.bytes_reallocated).expect("fits")
+}
+
+/// Allocations made so far, process-wide — a count, not bytes.
+pub fn allocations() -> usize {
+    GLOBAL.stats().allocations
 }

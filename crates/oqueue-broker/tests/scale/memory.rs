@@ -28,8 +28,10 @@ const TOLERANCE: i128 = 1024;
 
 const PRODUCE_VERSION: i16 = 13;
 
-/// A node over `catalog`, with the coordinator loop serving it.
-async fn node(catalog: SyntheticCatalog) -> (Arc<Cluster>, tokio::task::JoinHandle<()>) {
+/// A node over `catalog`, shared by every scale test, with the coordinator loop serving it.
+pub async fn node(
+    catalog: Arc<dyn oqueue_core::TopicCatalog>,
+) -> (Arc<Cluster>, tokio::task::JoinHandle<()>) {
     let log: Arc<dyn oqueue_core::MetadataLog> = Arc::new(FakeMetadataLog::new());
     let (coordinator, serving, reader) = Coordinator::open(
         log,
@@ -53,7 +55,7 @@ async fn node(catalog: SyntheticCatalog) -> (Arc<Cluster>, tokio::task::JoinHand
     )
     .await
     .expect("a minted identity is a usable key component, and an empty log opens")
-    .with_catalog(Arc::new(catalog));
+    .with_catalog(catalog);
     cluster.wait_until_replayed().await;
     (Arc::new(cluster), tokio::spawn(serving.run()))
 }
@@ -125,7 +127,7 @@ fn batch() -> Vec<u8> {
 /// same [`ACTIVE`] topics: resolved by name, then produced to.
 async fn live_bytes_serving(size: u64) -> i128 {
     let before = crate::live_bytes();
-    let (cluster, serving) = node(SyntheticCatalog::new(size)).await;
+    let (cluster, serving) = node(Arc::new(SyntheticCatalog::new(size))).await;
     let dispatcher = Dispatcher::new(Arc::clone(&cluster));
     for index in 0..ACTIVE {
         let name = SyntheticCatalog::name(index);

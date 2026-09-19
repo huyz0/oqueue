@@ -142,3 +142,79 @@ async fn the_synthetic_catalog_answers_like_a_catalog() {
     let first = catalog.list(Some(&name("a")), 1).await.expect("pages");
     assert_eq!(first, vec![name("t00000000")]);
 }
+
+/// Every call a node makes on a [`TopicCatalog`], counted.
+///
+/// ⚠️ **Calls, not names returned** (the review finding on `M7.4`):
+/// `Cluster::topic_lookups` counts names a listing returned, so it cannot see
+/// a node that pages the whole catalog and keeps the first page. `listed`
+/// counts every name any `list` call produced, which it can.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Calls {
+    pub lookup: u64,
+    pub lookup_id: u64,
+    pub create: u64,
+    pub list: u64,
+    pub listed: u64,
+}
+
+/// `C`, with every call counted.
+#[derive(Debug)]
+pub struct Counted<C> {
+    inner: C,
+    calls: std::sync::Mutex<Calls>,
+}
+
+impl<C> Counted<C> {
+    pub fn new(inner: C) -> Self {
+        Self {
+            inner,
+            calls: std::sync::Mutex::default(),
+        }
+    }
+
+    /// The calls counted so far.
+    pub fn calls(&self) -> Calls {
+        *self.count()
+    }
+
+    fn count(&self) -> std::sync::MutexGuard<'_, Calls> {
+        self.calls
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+impl<C: TopicCatalog> TopicCatalog for Counted<C> {
+    fn lookup<'a>(&'a self, name: &'a TopicId) -> BoxFuture<'a, Result<Option<CatalogEntry>>> {
+        self.count().lookup += 1;
+        self.inner.lookup(name)
+    }
+
+    fn lookup_id(&self, id: u128) -> BoxFuture<'_, Result<Option<CatalogEntry>>> {
+        self.count().lookup_id += 1;
+        self.inner.lookup_id(id)
+    }
+
+    fn create<'a>(
+        &'a self,
+        name: &'a TopicId,
+        partitions: u32,
+    ) -> BoxFuture<'a, Result<CatalogEntry>> {
+        self.count().create += 1;
+        self.inner.create(name, partitions)
+    }
+
+    fn list<'a>(
+        &'a self,
+        after: Option<&'a TopicId>,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<TopicId>>> {
+        self.count().list += 1;
+        Box::pin(async move {
+            let page = self.inner.list(after, limit).await?;
+            self.count().listed += u64::try_from(page.len()).unwrap_or(u64::MAX);
+            Ok(page)
+        })
+    }
+}
