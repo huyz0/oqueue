@@ -12,6 +12,7 @@ mod idempotence;
 mod recovery;
 mod sequencing;
 mod stamping;
+mod standby;
 mod support;
 mod tail;
 mod trim;

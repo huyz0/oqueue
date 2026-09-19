@@ -107,6 +107,18 @@ leg "task 14 (a node boots degraded without its coordinator)" \
 leg "NFR-22 (failover and cold rebuild timed separately)" \
   failover_and_cold_rebuild_are_measured_separately \
   "needs a hot standby to promote and a cold rebuild to time, each recorded"
+# ⚠️ **The two numbers are recorded, not just measured** (`M6.0`'s review):
+# a test that times both and writes neither would pass this leg's test while
+# `M6.md`'s "records hot-standby and cold-rebuild numbers separately" went
+# unmet.
+for key in hot_standby_us cold_rebuild_us; do
+  if grep -qE "^${key}: [0-9]+$" baselines/rto.txt 2>/dev/null; then
+    ok "NFR-22: baselines/rto.txt records ${key}"
+  else
+    fail "NFR-22: baselines/rto.txt does not record ${key}"
+    note "run the measurement with --nocapture and record its RTO line"
+  fi
+done
 leg "rebuild equivalence (a rebuilt index answers as the original)" \
   a_rebuilt_index_answers_like_the_original \
   "needs a cold rebuild whose index is compared query by query, not byte by byte"

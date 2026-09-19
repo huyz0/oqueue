@@ -166,6 +166,9 @@ STORE_DIR="crates/oqueue-store"
 # neither path and started scanning the first file again — the documented
 # remedy making things worse.
 REAL_CLOCK_EXEMPT=(
+  # `M6.13`: NFR-22 is a recovery *time*, so its measurement reads the wall
+  # clock by definition; a virtual clock would time nothing (`ADR-0048`).
+  "crates/oqueue-broker/tests/it/rto.rs"
   "crates/oqueue-broker/src/writer_id.rs"
   # `M11.4`: `InitProducerId`'s minting path, on `WriterId::mint`'s own
   # exemption above -- a faked clock is shared by every broker a test

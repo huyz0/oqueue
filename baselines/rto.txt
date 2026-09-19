@@ -1,0 +1,17 @@
+# Recovery times, measured and not targeted (NFR-22, ADR-0048, M6.13).
+#
+# Recorded from `failover_and_cold_rebuild_are_measured_separately`
+# (crates/oqueue-broker/tests/it/rto.rs), run with --nocapture:
+# 2,000 one-record commits, checkpointed, then 10 more; a hot standby caught
+# up before the 10 is promoted, and a cold coordinator is rebuilt from the
+# same log. Both include opening the log from the store.
+#
+# ⚠️ Over the in-memory store, in a debug build, in the test container: these
+# are the fold's cost and the shape of the difference, not an operator's RTO.
+# Object-storage latency and the lease wait (LEASE_TTL_MS + LEASE_SKEW_MS)
+# dominate a real failover; M14 measures against real storage.
+#
+# `m6-complete.sh` requires both keys below to be present.
+measured_on: 2026-09-19
+hot_standby_us: 2259
+cold_rebuild_us: 11400

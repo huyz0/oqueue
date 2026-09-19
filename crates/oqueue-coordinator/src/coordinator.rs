@@ -154,7 +154,9 @@ impl Coordinator {
         Self::assemble(log, index, epoch, clock, (Allocator::new(), None, true))
     }
 
-    fn assemble(
+    /// Builds the handle, loop and reader over a line already folded — by
+    /// `open`'s replay, or by a promoted [`Standby`](crate::Standby).
+    pub(crate) fn assemble(
         log: Arc<dyn MetadataLog>,
         index: Box<dyn MaterializedIndex>,
         epoch: CoordinatorEpoch,

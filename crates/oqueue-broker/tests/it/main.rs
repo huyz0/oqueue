@@ -24,6 +24,7 @@ mod reads;
 mod reap;
 mod retention;
 mod roundtrip;
+mod rto;
 mod secrets_log_scan;
 mod seeded;
 mod support;
