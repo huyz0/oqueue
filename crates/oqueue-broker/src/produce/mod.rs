@@ -1,10 +1,11 @@
 //! `Produce` v3-13 against the real write path: verify, bundle, PUT, commit.
 //!
-//! ⚠️ **One request is one object and one metadata record** — FR-32. Every
-//! partition that passes the ingest rule goes into a single
-//! [`BundleBuilder`], so a produce spanning N topics costs one PUT rather than
-//! N. Doc 12 prices a PUT far above the bytes in it; that ratio is the cost
-//! model, and this handler is where it is spent.
+//! ⚠️ **One request is one object per key domain** — FR-32 and FR-42. Every
+//! partition that passes the ingest rule goes into the [`BundleBuilder`] for
+//! its topic's domain, so a default-only produce spanning N topics still costs
+//! one PUT while a mixed default/BYOK produce costs one PUT per domain. Doc 12
+//! prices a PUT far above the bytes in it; that ratio is the cost model, and
+//! this handler is where it is spent.
 //!
 //! ⚠️ **The offset a client is told is the one the *commit* assigned**, not
 //! one this handler picked. `ADR-0020` puts the serialization point at the log
@@ -25,7 +26,7 @@
 mod answer;
 
 use crate::authz::{AuthzContext, topic_authorized};
-use crate::cluster::{Cluster, FlushError};
+use crate::cluster::{Cluster, FlushError, RegionSealer};
 use crate::connection::HandlerResponse;
 use crate::ingest::verify;
 use crate::session::Session;
@@ -35,7 +36,8 @@ use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_codec::metadata::TopicIdentity;
 use oqueue_codec::produce::{ProduceResponse, ProduceResponseTopic, decode_request};
-use oqueue_core::{BundleBuilder, PartitionId, PushedRecords, TopicId};
+use oqueue_core::{BundleBuilder, KeyDomain, PartitionId, PushedRecords, TopicId};
+use std::collections::HashMap;
 use std::collections::HashSet;
 
 /// The bundle this request is filling, and what is already in it.
@@ -48,8 +50,102 @@ use std::collections::HashSet;
 /// carrying a partition twice is malformed, and the second entry is what is
 /// refused, so the first still lands.
 struct Pending {
-    bundle: BundleBuilder,
+    bundles: Vec<BundleBuilder>,
+    by_domain: HashMap<KeyDomain, usize>,
+    routes: Vec<Vec<usize>>,
+    pushed: usize,
     seen: HashSet<(String, i32)>,
+}
+
+struct PendingRecord<'a> {
+    topic: TopicId,
+    partition: PartitionId,
+    pushed: PushedRecords,
+    records: &'a [u8],
+}
+
+#[derive(Debug)]
+enum PendingPushError {
+    InvalidRecord,
+    EncryptionUnavailable,
+}
+
+fn failed_outcomes(outcomes: Vec<Option<PushOutcome>>, code: i16) -> Vec<PushOutcome> {
+    outcomes
+        .into_iter()
+        .map(|outcome| outcome.unwrap_or(PushOutcome::Failed(code)))
+        .collect()
+}
+
+const fn failure_code(error: &FlushError) -> i16 {
+    match error {
+        FlushError::Store(_) => error_codes::NOT_ENOUGH_REPLICAS,
+        FlushError::Commit(_) => error_codes::LEADER_NOT_AVAILABLE,
+    }
+}
+
+impl Pending {
+    fn new() -> Self {
+        Self {
+            bundles: Vec::new(),
+            by_domain: HashMap::new(),
+            routes: Vec::new(),
+            pushed: 0,
+            seen: HashSet::new(),
+        }
+    }
+
+    const fn is_empty(&self) -> bool {
+        self.pushed == 0
+    }
+
+    async fn push(
+        &mut self,
+        sealer: &dyn RegionSealer,
+        domain: KeyDomain,
+        record: PendingRecord<'_>,
+    ) -> Result<usize, PendingPushError> {
+        let PendingRecord {
+            topic,
+            partition,
+            pushed,
+            records,
+        } = record;
+        let sealed_region = if domain.requires_sealing() {
+            Some(
+                sealer
+                    .seal(&domain, &topic, partition, records)
+                    .await
+                    .map_err(|_| PendingPushError::EncryptionUnavailable)?,
+            )
+        } else {
+            None
+        };
+        let bundle_index = if let Some(index) = self.by_domain.get(&domain).copied() {
+            index
+        } else {
+            let index = self.bundles.len();
+            self.by_domain.insert(domain, index);
+            self.bundles.push(BundleBuilder::new());
+            self.routes.push(Vec::new());
+            index
+        };
+        let local = self.bundles[bundle_index].len();
+        if let Some(sealed) = sealed_region {
+            self.bundles[bundle_index]
+                .push_sealed(topic, partition, pushed, sealed.as_region())
+                .map_err(|_| PendingPushError::EncryptionUnavailable)?;
+        } else {
+            self.bundles[bundle_index]
+                .push(topic, partition, pushed, records)
+                .map_err(|_| PendingPushError::InvalidRecord)?;
+        }
+        let global = self.pushed;
+        self.pushed += 1;
+        self.routes[bundle_index].push(global);
+        debug_assert_eq!(local, self.routes[bundle_index].len() - 1);
+        Ok(global)
+    }
 }
 
 /// One topic's response, owned so the borrowed [`ProduceResponseTopic`] can
@@ -64,35 +160,26 @@ struct TopicOutcome {
 ///
 /// ⚠️ **Only when something passed.** An empty bundle cannot be sealed —
 /// `Error::EmptyBundle` — and committing no spans would burn a `CommitVersion`
-/// on a record saying nothing happened.
 async fn flush(
     cluster: &Cluster,
     session: &Session,
     pending: Pending,
 ) -> Result<Vec<PushOutcome>, FlushError> {
-    if pending.bundle.is_empty() {
+    if pending.is_empty() {
         return Ok(Vec::new());
     }
-    cluster.flush(pending.bundle).await.map(|ack| {
-        // ⚠️ **Remembered before the response is written**, which is the
-        // ordering hazard H2 turns on: a client that reads on the same
-        // connection the moment it sees this ack must find the bar already
-        // raised. Setting it after the write would leave a window in which the
-        // client has the offset and this broker has not yet promised to serve
-        // it.
-        //
-        // ⚠️ **Only when something was actually assigned** (`M11.6` review).
-        // An all-rejected commit (`Allocator::admit` excluded every span) can
-        // leave `CoordinatorLoop::serve` with nothing ever staged, journaled,
-        // or published — its ack's version is `last_committed`'s fallback for
-        // a coordinator that has *never* committed anything, which is never
-        // itself published. Observing that watermark regardless would raise
-        // this session's read-your-writes bar to a version `IndexWatch`'s own
-        // `AtLeast` wait can never see satisfied (it requires the index to
-        // have applied *something* first, whatever the version), stalling
-        // this connection's next fetch for a write that never happened. A
-        // produce answered entirely in refusals has nothing for read-your-
-        // writes to guarantee, so it raises no bar at all.
+    let Pending {
+        bundles,
+        routes,
+        pushed,
+        ..
+    } = pending;
+    let mut outcomes: Vec<Option<PushOutcome>> = vec![None; pushed];
+    for (bundle_index, bundle) in bundles.into_iter().enumerate() {
+        let ack = match cluster.flush(bundle).await {
+            Ok(ack) => ack,
+            Err(error) => return Ok(failed_outcomes(outcomes, failure_code(&error))),
+        };
         if ack
             .outcomes()
             .iter()
@@ -100,23 +187,28 @@ async fn flush(
         {
             session.observe(ack.watermark());
         }
-        // ⚠️ **`outcomes`, not `assignments`, from `M11.6`** — a rejected
-        // producer sequence excludes its span from `assignments` entirely
-        // (`CommitAck`'s own doc), which would silently shift every later
-        // region's offset onto the wrong pushed position. `outcomes` has one
-        // entry per pushed region, in push order, with no exclusions.
-        ack.outcomes()
-            .iter()
-            .map(|outcome| match outcome {
+        let route = routes
+            .get(bundle_index)
+            .ok_or(FlushError::Store(oqueue_core::Error::IndexObjectMismatch))?;
+        for (local, outcome) in ack.outcomes().iter().enumerate() {
+            let global = route
+                .get(local)
+                .copied()
+                .ok_or(FlushError::Store(oqueue_core::Error::IndexObjectMismatch))?;
+            outcomes[global] = Some(match outcome {
                 oqueue_coordinator::SpanOutcome::Assigned(assignment) => {
                     PushOutcome::Assigned(assignment.base_offset().get())
                 }
                 oqueue_coordinator::SpanOutcome::Rejected(reason) => {
                     PushOutcome::from_rejection(*reason)
                 }
-            })
-            .collect()
-    })
+            });
+        }
+    }
+    outcomes
+        .into_iter()
+        .map(|outcome| outcome.ok_or(FlushError::Store(oqueue_core::Error::IndexObjectMismatch)))
+        .collect()
 }
 
 /// Whether this request has a shape no response can express.
@@ -155,10 +247,7 @@ pub(crate) async fn handle(
     // INVALID_REQUIRED_ACKS per partition with nothing stored.
     let acks_valid = matches!(request.acks, -1..=1);
 
-    let mut pending = Pending {
-        bundle: BundleBuilder::new(),
-        seen: HashSet::new(),
-    };
+    let mut pending = Pending::new();
     let mode = TopicMode {
         version,
         acks_valid,
@@ -338,7 +427,6 @@ async fn one_partition(
         // A partition named twice in one request — see `Pending`.
         return Slot::Refused(error_codes::INVALID_RECORD);
     }
-    let nth = pending.bundle.len();
     // ⚠️ The bytes go in **unstamped**: the offset is not known until the
     // commit, which is after this object is written. `Cluster::read` is where
     // the assigned offset is stamped in, and the CRC never covered those
@@ -347,15 +435,45 @@ async fn one_partition(
         count: verified.records,
         producer: verified.producer,
     };
-    match pending.bundle.push(topic_id, partition, pushed, records) {
-        Ok(()) => Slot::Pushed(nth),
-        // Only a region this handler could not have built: an empty range, a
-        // zero record count, or a topic name past the format's ceiling. None
-        // is the client's fault in a way a retry mends.
-        Err(_) => Slot::Refused(error_codes::INVALID_RECORD),
-    }
+    let Some(domain) = cluster.topic_key_domain(&topic_id).await else {
+        return Slot::Refused(error_codes::UNKNOWN_TOPIC_OR_PARTITION);
+    };
+    append_partition(
+        cluster,
+        pending,
+        domain,
+        PendingRecord {
+            topic: topic_id,
+            partition,
+            pushed,
+            records,
+        },
+    )
+    .await
 }
 
+async fn append_partition(
+    cluster: &Cluster,
+    pending: &mut Pending,
+    domain: KeyDomain,
+    record: PendingRecord<'_>,
+) -> Slot {
+    pending
+        .push(cluster.region_sealer(), domain, record)
+        .await
+        .map_or_else(
+            |error| {
+                Slot::Refused(match error {
+                    PendingPushError::InvalidRecord => error_codes::INVALID_RECORD,
+                    PendingPushError::EncryptionUnavailable => error_codes::INVALID_REQUEST,
+                })
+            },
+            Slot::Pushed,
+        )
+}
+
+#[cfg(test)]
+mod domain_tests;
 #[cfg(test)]
 mod idempotent;
 #[cfg(test)]

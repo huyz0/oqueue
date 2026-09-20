@@ -150,6 +150,30 @@ impl FakeTopicCatalog {
         Self::default()
     }
 
+    /// Creates `name` in `key_domain`, or returns the existing entry.
+    ///
+    /// This is the in-memory catalog's configuration hook for BYOK tests. The
+    /// object-store catalog exposes the same operation as an inherent async
+    /// method because the trait's default `create` contract remains the
+    /// provider-managed path until the broker's topic-creation API grows a
+    /// key-domain field.
+    pub fn create_with_key_domain(
+        &self,
+        name: &TopicId,
+        partitions: u32,
+        key_domain: KeyDomain,
+    ) -> CatalogEntry {
+        self.with(|e| {
+            if let Some(existing) = e.by_name.get(name) {
+                return existing.clone();
+            }
+            let entry = CatalogEntry::with_key_domain(name.clone(), partitions, key_domain);
+            e.by_id.insert(entry.id(), name.clone());
+            e.by_name.insert(name.clone(), entry.clone());
+            entry
+        })
+    }
+
     fn with<T>(&self, f: impl FnOnce(&mut Entries) -> T) -> T {
         f(&mut self
             .inner
@@ -180,15 +204,7 @@ impl TopicCatalog for FakeTopicCatalog {
         partitions: u32,
     ) -> BoxFuture<'a, Result<CatalogEntry>> {
         Box::pin(async move {
-            Ok(self.with(|e| {
-                if let Some(existing) = e.by_name.get(name) {
-                    return existing.clone();
-                }
-                let entry = CatalogEntry::new(name.clone(), partitions);
-                e.by_id.insert(entry.id(), name.clone());
-                e.by_name.insert(name.clone(), entry.clone());
-                entry
-            }))
+            Ok(self.create_with_key_domain(name, partitions, KeyDomain::default_domain()))
         })
     }
 

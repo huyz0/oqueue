@@ -29,11 +29,12 @@
 //! # ⚠️ One flush, one PUT
 //!
 //! FR-32, and the wire-level half `M3.13` could not reach for want of a
-//! composer. Every partition in one `Produce` request goes into one
-//! [`BundleBuilder`](oqueue_core::BundleBuilder), so a request spanning N
-//! topics costs **one** PUT and one
-//! metadata record rather than N of each. Doc 12 prices a PUT far above the
-//! bytes in it, so this ratio is the cost model.
+//! composer. Every partition in one `Produce` request goes into the
+//! [`BundleBuilder`](oqueue_core::BundleBuilder) for its key domain, so a
+//! default-only request spanning N topics costs **one** PUT and one metadata
+//! record. A request spanning domains gets one flush, PUT and metadata record
+//! per domain, which is the segregation required by FR-42. Doc 12 prices a
+//! PUT far above the bytes in it, so this ratio is the cost model.
 
 use crate::join_group::GroupJoins;
 use crate::writer_id::WriterId;
@@ -44,6 +45,8 @@ use oqueue_core::{
 };
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+pub use crate::region_sealer::{RegionSealer, RejectingRegionSealer, SealedRegionOwned};
 
 /// One node's view of the cluster.
 ///
@@ -70,6 +73,7 @@ pub struct Cluster {
     coordinator: Coordinator,
     index: IndexReader,
     store: Arc<dyn ObjectStore>,
+    region_sealer: Arc<dyn RegionSealer>,
     namer: Mutex<BundleNamer>,
     reaped_reads: AtomicU64,
     /// How many catalog entries [`Cluster::partition_count`] and
@@ -260,6 +264,7 @@ impl Cluster {
             coordinator: sequencing.coordinator,
             index: sequencing.index,
             store: seams.store,
+            region_sealer: Arc::new(RejectingRegionSealer),
             namer: Mutex::new(BundleNamer::new(writer.as_str())?),
             reaped_reads: AtomicU64::new(0),
             topic_lookups: AtomicU64::new(0),
@@ -282,6 +287,17 @@ impl Cluster {
         self.catalog = catalog;
         self.topics = Mutex::new(topics::TopicCache::default());
         self
+    }
+
+    /// Installs the encryption seam for customer-key topic writes.
+    #[must_use]
+    pub fn with_region_sealer(mut self, sealer: Arc<dyn RegionSealer>) -> Self {
+        self.region_sealer = sealer;
+        self
+    }
+
+    pub(crate) fn region_sealer(&self) -> &dyn RegionSealer {
+        self.region_sealer.as_ref()
     }
 
     /// The consumer-group coordinator every connection's `JoinGroup`

@@ -43,6 +43,8 @@ pub(crate) enum PushOutcome {
     /// `produce/mod.rs`'s own `flush`, so this module stays the one place
     /// that chooses a Kafka error code from something else.
     Refused(i16),
+    /// The domain's flush failed before this region was committed.
+    Failed(i16),
 }
 
 impl PushOutcome {
@@ -79,7 +81,7 @@ pub(crate) fn answer(
         (Slot::Refused(code), _) => (*code, UNASSIGNED),
         (Slot::Pushed(nth), Ok(outcomes)) => match outcomes.get(*nth) {
             Some(PushOutcome::Assigned(offset)) => (error_codes::NONE, *offset),
-            Some(PushOutcome::Refused(code)) => (*code, UNASSIGNED),
+            Some(PushOutcome::Refused(code) | PushOutcome::Failed(code)) => (*code, UNASSIGNED),
             None => (error_codes::UNKNOWN_SERVER_ERROR, UNASSIGNED),
         },
         (Slot::Pushed(_), Err(FlushError::Store(_))) => {

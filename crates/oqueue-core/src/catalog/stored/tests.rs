@@ -7,11 +7,11 @@ use std::sync::Arc;
 use super::super::tests::{
     create_is_idempotent, list_pages_in_name_order, lookup_id_agrees_with_lookup,
 };
-use super::{ObjectStoreTopicCatalog, hex};
+use super::{ObjectStoreTopicCatalog, encode, hex};
 use crate::test_executor::block_on;
 use crate::{
-    CountingObjectStore, Error, FakeObjectStore, MetadataShardId, ObjectKey, ObjectStore,
-    Operation, TopicCatalog, TopicId,
+    CatalogEntry, CountingObjectStore, Error, FakeObjectStore, KeyDomain, KeyId, MetadataShardId,
+    ObjectKey, ObjectStore, Operation, TopicCatalog, TopicId,
 };
 
 fn topic(name: &str) -> TopicId {
@@ -56,6 +56,40 @@ fn two_catalogs_over_one_store_agree() {
     );
     let again = block_on(other.create(&topic("orders"), 9)).expect("answers");
     assert_eq!(again, created, "the other's entry, not a second one");
+}
+
+#[test]
+fn customer_key_domain_round_trips_without_changing_the_default_format() {
+    let store = Arc::new(FakeObjectStore::new());
+    let catalog = over(&store);
+    let expected_domain = KeyDomain::customer(KeyId::new("customer-kek").expect("a key id"));
+    let created =
+        block_on(catalog.create_with_key_domain(&topic("private"), 2, expected_domain.clone()))
+            .expect("creates");
+
+    assert_eq!(created.key_domain(), &expected_domain);
+    assert_eq!(
+        block_on(catalog.lookup(&topic("private"))).expect("reads"),
+        Some(created.clone())
+    );
+    assert_eq!(
+        block_on(catalog.lookup_id(created.id())).expect("reads"),
+        Some(created)
+    );
+}
+
+#[test]
+fn an_unrepresentable_customer_key_reports_the_key_length_offset() {
+    let name = topic("private");
+    let key = KeyId::new("x".repeat(usize::from(u16::MAX) + 1)).expect("a non-empty key id");
+    let entry = CatalogEntry::with_key_domain(name.clone(), 1, KeyDomain::customer(key));
+
+    assert_eq!(
+        encode(&entry),
+        Err(Error::MalformedMetadataSegment {
+            at: 7 + name.as_str().len(),
+        })
+    );
 }
 
 /// Guarantee 2, as far as `oqueue-core` can see it: it has no runtime to

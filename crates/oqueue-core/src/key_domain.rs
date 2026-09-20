@@ -8,7 +8,7 @@ use crate::{Error, KeyId, Region, RegionAlg, Result};
 /// domain stores sealed regions under the named key. This fact belongs to
 /// topic metadata, not to the region footer: the footer's algorithm byte is
 /// part of the bytes an attacker can edit.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub enum KeyDomain {
     /// The provider-managed, unsealed object path.
     #[default]

@@ -98,6 +98,7 @@ pub(crate) async fn build_cluster(
     )
     .await
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?
+    .with_region_sealer(Arc::new(oqueue_broker::RejectingRegionSealer::new()))
     .with_catalog(catalog_over(backend));
     Ok(Built {
         cluster,

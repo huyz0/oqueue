@@ -14,12 +14,13 @@ use std::sync::Arc;
 
 use super::{CatalogEntry, TopicCatalog};
 use crate::{
-    BoxFuture, ByteRange, Error, MaintenanceStore, MetadataShardId, ObjectKey, ObjectStore,
-    Precondition, Result, TopicId,
+    BoxFuture, ByteRange, Error, KeyDomain, MaintenanceStore, MetadataShardId, ObjectKey,
+    ObjectStore, Precondition, Result, TopicId,
 };
 
 /// The entry format's version, the body's first byte.
-const FORMAT: u8 = 1;
+const DEFAULT_FORMAT: u8 = 1;
+const CUSTOMER_FORMAT: u8 = 2;
 
 /// A [`TopicCatalog`] over object storage, one shard's worth.
 ///
@@ -114,12 +115,22 @@ impl ObjectStoreTopicCatalog {
     }
 
     async fn insert(&self, name: &TopicId, partitions: u32) -> Result<CatalogEntry> {
-        let entry = CatalogEntry::new(name.clone(), partitions);
+        self.insert_with_key_domain(name, partitions, KeyDomain::default_domain())
+            .await
+    }
+
+    async fn insert_with_key_domain(
+        &self,
+        name: &TopicId,
+        partitions: u32,
+        key_domain: KeyDomain,
+    ) -> Result<CatalogEntry> {
+        let entry = CatalogEntry::with_key_domain(name.clone(), partitions, key_domain);
         // ⚠️ A present id key holds these same bytes: the id is the name's.
         self.put_absent(&self.id_key(entry.id())?, name.as_str().as_bytes().to_vec())
             .await?;
         if self
-            .put_absent(&self.topic_key(name)?, encode(&entry))
+            .put_absent(&self.topic_key(name)?, encode(&entry)?)
             .await?
         {
             return Ok(entry);
@@ -128,6 +139,23 @@ impl ObjectStoreTopicCatalog {
         self.find(name)
             .await?
             .ok_or(Error::MalformedMetadataSegment { at: 0 })
+    }
+
+    /// Creates a topic in a customer key domain, or returns the existing
+    /// entry if another caller won the create race.
+    ///
+    /// # Errors
+    ///
+    /// The store's error, or [`Error::MalformedMetadataSegment`] if the
+    /// entry cannot be represented by the catalog format.
+    pub async fn create_with_key_domain(
+        &self,
+        name: &TopicId,
+        partitions: u32,
+        key_domain: KeyDomain,
+    ) -> Result<CatalogEntry> {
+        self.insert_with_key_domain(name, partitions, key_domain)
+            .await
     }
 
     async fn page(&self, after: Option<&TopicId>, limit: usize) -> Result<Vec<TopicId>> {
@@ -173,30 +201,101 @@ impl TopicCatalog for ObjectStoreTopicCatalog {
     }
 }
 
-/// `FORMAT`, the partition count big-endian, then the name's bytes.
-fn encode(entry: &CatalogEntry) -> Vec<u8> {
-    let mut out = vec![FORMAT];
-    out.extend_from_slice(&entry.partitions().to_be_bytes());
-    out.extend_from_slice(entry.name().as_str().as_bytes());
-    out
+/// The default format remains byte-identical: `DEFAULT_FORMAT`, partition
+/// count big-endian, then the name's bytes. Customer entries use a v2 shape
+/// with explicit name and key-id lengths so both metadata fields can be read
+/// back without guessing a boundary.
+fn encode(entry: &CatalogEntry) -> Result<Vec<u8>> {
+    let name = entry.name().as_str().as_bytes();
+    match entry.key_domain() {
+        KeyDomain::Default => {
+            let mut out = vec![DEFAULT_FORMAT];
+            out.extend_from_slice(&entry.partitions().to_be_bytes());
+            out.extend_from_slice(name);
+            Ok(out)
+        }
+        KeyDomain::Customer(key_id) => {
+            let key = key_id.as_str().as_bytes();
+            let mut out = vec![CUSTOMER_FORMAT];
+            out.extend_from_slice(&entry.partitions().to_be_bytes());
+            let name_len =
+                u16::try_from(name.len()).map_err(|_| Error::MalformedMetadataSegment { at: 5 })?;
+            out.extend_from_slice(&name_len.to_be_bytes());
+            out.extend_from_slice(name);
+            let key_len = u16::try_from(key.len())
+                .map_err(|_| Error::MalformedMetadataSegment { at: 7 + name.len() })?;
+            out.extend_from_slice(&key_len.to_be_bytes());
+            out.extend_from_slice(key);
+            Ok(out)
+        }
+    }
 }
 
 /// ⚠️ **Refused whole, never misread**: an unknown format, a short body, or a
 /// name that is not a topic's is [`Error::MalformedMetadataSegment`].
 fn decode(bytes: &[u8]) -> Result<CatalogEntry> {
-    if bytes.first() != Some(&FORMAT) {
-        return Err(Error::MalformedMetadataSegment { at: 0 });
-    }
+    let format = *bytes
+        .first()
+        .ok_or(Error::MalformedMetadataSegment { at: 0 })?;
     let partitions: [u8; 4] = bytes
         .get(1..5)
         .and_then(|raw| raw.try_into().ok())
         .ok_or(Error::MalformedMetadataSegment { at: 1 })?;
+    let partitions = u32::from_be_bytes(partitions);
+    match format {
+        DEFAULT_FORMAT => decode_default(bytes, partitions),
+        CUSTOMER_FORMAT => decode_customer(bytes, partitions),
+        _ => Err(Error::MalformedMetadataSegment { at: 0 }),
+    }
+}
+
+fn decode_default(bytes: &[u8], partitions: u32) -> Result<CatalogEntry> {
     let name = bytes
         .get(5..)
         .and_then(|raw| String::from_utf8(raw.to_vec()).ok())
         .and_then(|name| TopicId::new(name).ok())
         .ok_or(Error::MalformedMetadataSegment { at: 5 })?;
-    Ok(CatalogEntry::new(name, u32::from_be_bytes(partitions)))
+    Ok(CatalogEntry::new(name, partitions))
+}
+
+fn decode_customer(bytes: &[u8], partitions: u32) -> Result<CatalogEntry> {
+    let name_len = bytes
+        .get(5..7)
+        .and_then(|raw| raw.try_into().ok())
+        .map(u16::from_be_bytes)
+        .ok_or(Error::MalformedMetadataSegment { at: 5 })?;
+    let name_len = usize::from(name_len);
+    let name_end = 7usize
+        .checked_add(name_len)
+        .ok_or(Error::MalformedMetadataSegment { at: 7 })?;
+    let name = bytes
+        .get(7..name_end)
+        .and_then(|raw| String::from_utf8(raw.to_vec()).ok())
+        .and_then(|name| TopicId::new(name).ok())
+        .ok_or(Error::MalformedMetadataSegment { at: 7 })?;
+    let key_len_at = name_end;
+    let key_len = bytes
+        .get(key_len_at..key_len_at + 2)
+        .and_then(|raw| raw.try_into().ok())
+        .map(u16::from_be_bytes)
+        .ok_or(Error::MalformedMetadataSegment { at: key_len_at })?;
+    let key_start = key_len_at + 2;
+    let key_end = key_start
+        .checked_add(usize::from(key_len))
+        .ok_or(Error::MalformedMetadataSegment { at: key_start })?;
+    let key = bytes
+        .get(key_start..key_end)
+        .and_then(|raw| String::from_utf8(raw.to_vec()).ok())
+        .and_then(|key| crate::KeyId::new(key).ok())
+        .ok_or(Error::MalformedMetadataSegment { at: key_start })?;
+    if key_end != bytes.len() {
+        return Err(Error::MalformedMetadataSegment { at: key_end });
+    }
+    Ok(CatalogEntry::with_key_domain(
+        name,
+        partitions,
+        KeyDomain::customer(key),
+    ))
 }
 
 fn hex(bytes: &[u8]) -> String {

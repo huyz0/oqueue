@@ -20,7 +20,7 @@
 // `pub`, so `pub(crate)` is the only thing that compiles.
 #![allow(clippy::redundant_pub_crate)]
 
-use crate::cluster::Cluster;
+use crate::cluster::{Cluster, RegionSealer};
 use crate::writer_id::WriterId;
 use oqueue_coordinator::Coordinator;
 use oqueue_core::{
@@ -232,6 +232,75 @@ pub(crate) async fn with_store(
     topics: &[&str],
     store: Arc<TestStore>,
 ) -> Fixture {
+    with_store_and_catalog(
+        host,
+        port,
+        topics,
+        store,
+        Arc::new(oqueue_core::FakeTopicCatalog::new()),
+    )
+    .await
+}
+
+/// The same fixture with a caller-owned catalog, for topic metadata tests.
+pub(crate) async fn with_store_and_catalog(
+    host: &str,
+    port: i32,
+    topics: &[&str],
+    store: Arc<TestStore>,
+    catalog: Arc<dyn oqueue_core::TopicCatalog>,
+) -> Fixture {
+    build_fixture(FixtureSetup {
+        host,
+        port,
+        topics,
+        store,
+        catalog,
+        sealer: None,
+    })
+    .await
+}
+
+/// The same fixture with an explicit customer-domain encryption seam.
+pub(crate) async fn with_store_and_catalog_and_sealer(
+    topics: &[&str],
+    store: Arc<TestStore>,
+    catalog: Arc<dyn oqueue_core::TopicCatalog>,
+    sealer: Arc<dyn RegionSealer>,
+) -> Fixture {
+    build_fixture(FixtureSetup {
+        host: "h",
+        port: 1,
+        topics,
+        store,
+        catalog,
+        sealer: Some(sealer),
+    })
+    .await
+}
+
+struct FixtureSetup<'a> {
+    host: &'a str,
+    port: i32,
+    topics: &'a [&'a str],
+    store: Arc<TestStore>,
+    catalog: Arc<dyn oqueue_core::TopicCatalog>,
+    sealer: Option<Arc<dyn RegionSealer>>,
+}
+
+// This fixture assembles the coordinator, catalog, store and optional crypto
+// seam in one place; splitting those wiring steps would make the test seam
+// harder to compare with the production composition root.
+#[allow(clippy::too_many_lines)]
+async fn build_fixture(setup: FixtureSetup<'_>) -> Fixture {
+    let FixtureSetup {
+        host,
+        port,
+        topics,
+        store,
+        catalog,
+        sealer,
+    } = setup;
     let log = Arc::new(FakeMetadataLog::new());
     let index = Box::new(FakeMaterializedIndex::new());
     let epoch = CoordinatorEpoch::new(1);
@@ -258,6 +327,12 @@ pub(crate) async fn with_store(
     )
     .await
     .expect("a minted identity is a usable key component, and an empty log opens");
+    let cluster = cluster.with_catalog(catalog);
+    let cluster = if let Some(sealer) = sealer {
+        cluster.with_region_sealer(sealer)
+    } else {
+        cluster
+    };
     // ⚠️ **Ready by default, not just capable by default** — `M4.15a`
     // moved `Cluster::new`'s own offset replay to a background task, so a
     // freshly-returned `Cluster` starts `replay_in_progress()`. Every

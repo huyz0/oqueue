@@ -628,6 +628,8 @@ declare -A RUST_BOUNDS=(
 # than trusting the old file-level comment's word for "one constant" --
 # `oqueue-codec/src/error_codes.rs` alone has 14.
 declare -A NOT_A_BOUND=(
+  ["crates/oqueue-core/src/catalog/stored.rs|DEFAULT_FORMAT"]="the durable catalog format discriminator, not a tunable threshold"
+  ["crates/oqueue-core/src/catalog/stored.rs|CUSTOMER_FORMAT"]="the durable customer-domain catalog format discriminator, not a tunable threshold"
   ["crates/oqueue-broker/src/fetch/partition.rs|OFFSET_UNSET"]="the protocol's unset-offset sentinel"
   ["crates/oqueue-broker/src/find_coordinator.rs|GROUP"]="the wire schema's own key_type value for a consumer-group lookup, fixed by the protocol"
   # `M10.20`: moved from `records.rs` to its own `records/count.rs` when
