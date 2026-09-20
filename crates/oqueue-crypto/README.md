@@ -27,6 +27,11 @@ Because BYOK is a per-topic opt-in and server-side encryption cannot express it:
   copy handed to `KeyProvider::wrap`; `oqueue_core::Redacted` has no `Drop` of
   its own, so that is the owner's job (`security.md` rule 8).
 
+`providers` contains the thin AWS KMS and GCP Cloud KMS adapters. They expose
+only each API's encrypt/decrypt operations and implement the same
+`oqueue_core::KeyProvider` seam; M8 tests them against in-process API
+simulations, while real cloud credentials and round trips remain M15's.
+
 ## Downstream
 
 `oqueue-broker`, and through it `bin/oqueue`.
@@ -78,6 +83,10 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 - **A fresh DEK's randomness comes through `entropy::Entropy`** (`M8.5`), never
   from a direct OS call in library logic. `OsEntropy` is for a composition root;
   `FakeEntropy` is a counter and is not entropy.
+
+- **The provider adapters only wrap and unwrap** (`M8.7`, ADR-0050 point 6).
+  Neither adapter exposes `generate_data_key`: AWS has that operation, but GCP
+  does not, so the portable seam stays at the intersection.
 
 - ⚠️ **Nonces are constructed, never random.** `security.md` — a repeated nonce under the same key is a total loss of confidentiality for both messages.
 - **Key material is zeroized on drop** (`security.md` rule 8) and never reaches a formatted string. `oqueue_core::Redacted` gives the formatting half; zeroization is this crate's.

@@ -69,6 +69,15 @@ it: this crate compiles no runtime, which is what lets `M0.16` measure NFR-56's
 floor. What holds is stated precisely in the module doc — at most N entries,
 each at most a TTL old *as of the last insert*.
 
+## ⚠️ Provider adapters stop at encrypt/decrypt
+
+`M8.7`'s [`providers`](src/providers.rs) module maps AWS KMS `Encrypt`/`Decrypt`
+and GCP Cloud KMS `encrypt`/`decrypt` to the one `KeyProvider` seam. It owns no
+vendor SDK and makes no network call; in-process API simulations prove the
+mapping here, while real cloud round trips belong to M15. Do not add
+`generate_data_key`: AWS has it, GCP does not, and the seam deliberately
+generates DEKs locally before wrapping them.
+
 ## ⚠️ The rest of this crate is still being filled in
 
 `M0.8` created the skeleton so the workspace shape exists before any behaviour

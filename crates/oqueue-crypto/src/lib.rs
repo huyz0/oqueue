@@ -9,8 +9,8 @@
 //! absence; `M8.3` added [`region`], which seals and opens **one** region;
 //! `M8.5` added [`dek_cache`] and [`unwrap_cache`], which are what keep KMS
 //! calls a function of rotation rather than of produce volume (`NFR-33`), and
-//! [`entropy`], the seam a fresh DEK's 32 bytes come from. The KMS providers
-//! themselves are the rest of `M8`'s.
+//! [`entropy`], the seam a fresh DEK's 32 bytes come from. `M8.7` adds the AWS
+//! and GCP adapter seams in [`providers`]; real vendor calls remain M15's.
 //!
 //! # ⚠️ The algorithm is a format, not a library
 //!
@@ -26,11 +26,13 @@
 
 pub mod dek_cache;
 pub mod entropy;
+pub mod providers;
 pub mod region;
 pub mod unwrap_cache;
 
 pub use dek_cache::{DEK_MAX_AGE_MS, DEK_MAX_SEALED_BYTES, DekCache};
 pub use entropy::{Entropy, FakeEntropy, OsEntropy, mint_dek};
+pub use providers::{AwsKmsApi, AwsKmsProvider, GcpCloudKmsApi, GcpKmsProvider};
 pub use region::{RegionAad, TAG_BYTES, open, seal};
 pub use unwrap_cache::{UNWRAPPED_DEK_CACHE_ENTRIES, UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
 

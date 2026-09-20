@@ -3,6 +3,7 @@
 mod dek_cache;
 mod entropy;
 mod no_op;
+mod providers;
 mod region;
 mod support;
 mod unwrap_cache;
