@@ -36,7 +36,8 @@ mod outcome;
 pub use outcome::MergeOutcome;
 
 use oqueue_core::{
-    BundleStream, ByteRange, Error, ObjectRef, ObjectStore, PushedRecords, Result, parse_footer,
+    BundleStream, ByteRange, Error, KeyDomain, ObjectRef, ObjectStore, PushedRecords, Result,
+    parse_footer,
 };
 
 use crate::{CompactionNamer, CompactionPlan};
@@ -117,10 +118,14 @@ where
 
     let mut gets = 0_usize;
     let mut records = 0_i64;
+    // M8.6 will pass the plan's topic key domain here. Until BYOK routing
+    // exists, compaction can only safely consume the default path; a sealed
+    // region is refused rather than copied as if it were plaintext.
+    let domain = KeyDomain::default_domain();
     for reference in covering {
         let bytes = store.get(reference.object(), ByteRange::Full).await?;
         gets += 1;
-        records += i64::from(take_regions(&bytes, plan, reference, stream).await?);
+        records += i64::from(take_regions(&bytes, plan, reference, stream, &domain).await?);
     }
 
     // ⚠️ **No final check against `plan.cost().records_rewritten()`, and none
@@ -211,12 +216,14 @@ async fn take_regions(
     plan: &CompactionPlan,
     reference: &ObjectRef,
     stream: &mut BundleStream<'_>,
+    domain: &KeyDomain,
 ) -> Result<u32> {
     let mut taken = 0_u32;
     for region in parse_footer(bytes, bytes.len() as u64)? {
         if region.topic() != plan.topic() || region.partition() != plan.partition() {
             continue;
         }
+        domain.validate_region(&region)?;
         let ByteRange::Bounded(span) = region.bytes() else {
             // `BundleBuilder::push` only ever produces a bounded range, so a
             // `Full` one means this footer was written by something else.

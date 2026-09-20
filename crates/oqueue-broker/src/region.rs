@@ -13,17 +13,18 @@
 // same trade `fetch/target.rs` and `test_executor.rs` already make.
 #![allow(clippy::redundant_pub_crate)]
 
-use oqueue_core::{ByteRange, Error, PartitionId, Region, TopicId, parse_footer};
+use oqueue_core::{ByteRange, Error, KeyDomain, PartitionId, Region, TopicId, parse_footer};
 
 /// This partition's records, cut out of a whole bundled object.
 pub(crate) fn slice_region(
     whole: &[u8],
     topic: &TopicId,
     partition: PartitionId,
+    domain: &KeyDomain,
 ) -> Result<Vec<u8>, Error> {
     let size = whole.len() as u64;
     let regions = parse_footer(whole, size)?;
-    let ByteRange::Bounded(bounds) = region_for(&regions, topic, partition)? else {
+    let ByteRange::Bounded(bounds) = region_for(&regions, topic, partition, domain)? else {
         // `parse_footer` refuses an unbounded region, so this arm is
         // unreachable — named rather than `unwrap`ped, because a panic here
         // would be reachable from stored bytes (`security.md` rule 3).
@@ -51,6 +52,7 @@ fn region_for(
     regions: &[Region],
     topic: &TopicId,
     partition: PartitionId,
+    domain: &KeyDomain,
 ) -> Result<ByteRange, Error> {
     let mut found = regions
         .iter()
@@ -59,5 +61,67 @@ fn region_for(
     if found.next().is_some() {
         return Err(Error::IndexObjectMismatch);
     }
+    domain.validate_region(region)?;
     Ok(region.bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::slice_region;
+    use oqueue_core::{BundleBuilder, KeyDomain, PartitionId, PushedRecords, TopicId};
+
+    fn topic() -> TopicId {
+        TopicId::new("orders").expect("a valid topic")
+    }
+
+    fn object() -> Vec<u8> {
+        let mut bundle = BundleBuilder::new();
+        bundle
+            .push(
+                topic(),
+                PartitionId::new(0).expect("a valid partition"),
+                PushedRecords {
+                    count: 1,
+                    producer: None,
+                },
+                b"a record batch",
+            )
+            .expect("a non-empty region");
+        bundle.seal().expect("a non-empty bundle").into_payload()
+    }
+
+    #[test]
+    fn a_default_domain_accepts_an_unsealed_region() {
+        let bytes = object();
+        let sliced = slice_region(
+            &bytes,
+            &topic(),
+            PartitionId::new(0).expect("a valid partition"),
+            &KeyDomain::default_domain(),
+        )
+        .expect("the region belongs to the default domain");
+
+        assert_eq!(sliced, b"a record batch");
+    }
+
+    #[test]
+    fn a_customer_domain_refuses_a_region_relabelled_as_unsealed() {
+        let bytes = object();
+        let error = slice_region(
+            &bytes,
+            &topic(),
+            PartitionId::new(0).expect("a valid partition"),
+            &KeyDomain::customer(oqueue_core::KeyId::new("customer-kek").expect("a key id")),
+        )
+        .expect_err("topic metadata requires a sealed region");
+
+        assert!(matches!(
+            error,
+            oqueue_core::Error::RegionKeyDomainMismatch {
+                expected_sealed: true
+            }
+        ));
+    }
 }

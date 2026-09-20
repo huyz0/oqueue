@@ -416,6 +416,20 @@ pub enum Error {
         sealed: bool,
     },
 
+    /// A region's footer disagrees with the key domain recorded for its
+    /// topic.
+    ///
+    /// ⚠️ The expected domain is authoritative. The footer's algorithm byte
+    /// is untrusted metadata, so accepting it as the answer would let an
+    /// attacker relabel ciphertext as plaintext (or the reverse).
+    #[error(
+        "region sealedness does not match the topic's key domain (expected sealed: {expected_sealed})"
+    )]
+    RegionKeyDomainMismatch {
+        /// Whether the topic metadata requires a sealed region.
+        expected_sealed: bool,
+    },
+
     /// A region envelope's field will not fit what the footer can carry.
     ///
     /// ⚠️ **The same bound on both sides.** It refuses an over-long value on

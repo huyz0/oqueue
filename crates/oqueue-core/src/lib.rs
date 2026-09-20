@@ -69,6 +69,7 @@ mod group_state;
 mod index_reader;
 mod index_state;
 mod key;
+mod key_domain;
 mod key_layout;
 mod lease;
 mod maintenance_store;
@@ -143,6 +144,7 @@ pub use index_state::{
     IndexQuota, IndexState, MAX_BATCHES_PER_PAGE, Pressure, TAIL_WINDOW_ENTRIES, Tiers,
 };
 pub use key::{DEK_BYTES, Dek, FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
+pub use key_domain::KeyDomain;
 pub use key_layout::KeyLayout;
 pub use lease::{LEASE_RENEW_MS, LEASE_SKEW_MS, LEASE_TTL_MS, ObjectStoreLease};
 pub use maintenance_store::MaintenanceStore;

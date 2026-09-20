@@ -7,7 +7,7 @@
 //! asking the catalog, not by waiting for it to appear here.
 
 use super::Cluster;
-use oqueue_core::{CatalogEntry, TopicId};
+use oqueue_core::{CatalogEntry, KeyDomain, TopicId};
 use std::collections::HashMap;
 use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
@@ -17,10 +17,11 @@ use uuid::Uuid;
 const LIST_PAGE: usize = 1000;
 
 /// One served topic: its id and how many partitions it has.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Served {
     id: Uuid,
     partitions: usize,
+    key_domain: KeyDomain,
 }
 
 /// The topics this node has served, by name and by id.
@@ -40,6 +41,15 @@ impl Cluster {
     /// The topic's id, or `None` if it does not exist.
     pub async fn topic_id(&self, topic: &str) -> Option<Uuid> {
         self.served(topic).await.map(|t| t.id)
+    }
+
+    /// The topic's key domain, or `None` if the topic cannot be resolved.
+    ///
+    /// ⚠️ This is metadata, not an inference from object bytes. A read must
+    /// have this answer before it can decide whether a region is allowed to
+    /// remain unsealed.
+    pub(crate) async fn topic_key_domain(&self, topic: &TopicId) -> Option<KeyDomain> {
+        self.served(topic.as_str()).await.map(|t| t.key_domain)
     }
 
     /// The name behind a topic id, or `None` — how the id-addressed APIs
@@ -114,13 +124,13 @@ impl Cluster {
     /// turn into `UNKNOWN_TOPIC_OR_PARTITION` — retriable, so a client asks
     /// again rather than giving up, and nothing is cached on the way.
     async fn served(&self, topic: &str) -> Option<Served> {
-        if let Some(hit) = self.with_cache(|c| c.by_name.get(topic).copied()) {
+        if let Some(hit) = self.with_cache(|c| c.by_name.get(topic).cloned()) {
             return Some(hit);
         }
         let name = TopicId::new(topic).ok()?;
         let entry = self.catalog.lookup(&name).await.ok()??;
         self.remember(&entry);
-        self.with_cache(|c| c.by_name.get(topic).copied())
+        self.with_cache(|c| c.by_name.get(topic).cloned())
     }
 
     /// Caches `entry`, returning its name.
@@ -129,6 +139,7 @@ impl Cluster {
         let served = Served {
             id: Uuid::from_u128(entry.id()),
             partitions: usize::try_from(entry.partitions()).unwrap_or(usize::MAX),
+            key_domain: entry.key_domain().clone(),
         };
         self.with_cache(|c| {
             c.by_id.insert(served.id, name.clone());

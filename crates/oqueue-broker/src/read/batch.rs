@@ -11,7 +11,7 @@
 use crate::cluster::Cluster;
 use crate::read::{Fetched, Spend};
 use crate::region::slice_region;
-use oqueue_core::{ByteRange, IndexedBatch, PartitionId, TopicId};
+use oqueue_core::{ByteRange, Error, IndexedBatch, PartitionId, TopicId};
 
 impl Cluster {
     /// One batch's bytes, and what fetching them cost the request.
@@ -74,7 +74,13 @@ impl Cluster {
                 match whole {
                     Ok(whole) => {
                         let cost = if missed { whole.len() as u64 } else { 0 };
-                        let sliced = slice_region(&whole, topic, partition);
+                        // The topic catalog is authoritative. The footer's
+                        // `alg` byte is not allowed to decide whether bytes
+                        // need opening.
+                        let sliced = self.topic_key_domain(topic).await.map_or_else(
+                            || Err(Error::IndexObjectMismatch),
+                            |domain| slice_region(&whole, topic, partition, &domain),
+                        );
                         // ⚠️ **A bundle that arrived and would not parse is a
                         // failure of this request too.** The store was healthy,
                         // so `get` counted nothing — and without this a frame

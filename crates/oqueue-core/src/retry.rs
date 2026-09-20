@@ -156,6 +156,7 @@ impl Error {
             // envelope field too wide for the format is too wide on every
             // attempt.
             | Self::RegionEnvelopeMismatch { .. }
+            | Self::RegionKeyDomainMismatch { .. }
             | Self::RegionEnvelopeLength { .. }
             | Self::SealedRegionNotRepresentable { .. }
             | Self::BundleTooLarge

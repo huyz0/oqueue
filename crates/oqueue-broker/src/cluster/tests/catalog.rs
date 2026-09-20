@@ -38,6 +38,17 @@ async fn the_cache_holds_only_topics_this_node_served() {
     assert_eq!(cluster.cached_topics(), 1);
 }
 
+#[tokio::test(start_paused = true)]
+async fn an_unresolvable_topic_has_no_key_domain() {
+    let cluster = cluster_still_loading().await;
+    assert!(
+        cluster
+            .topic_key_domain(&topic("never-created"))
+            .await
+            .is_none()
+    );
+}
+
 /// ⚠️ **A limit past one catalog page is met exactly** (`M7.4`): the last page
 /// asks only for what is still wanted.
 #[tokio::test(start_paused = true)]

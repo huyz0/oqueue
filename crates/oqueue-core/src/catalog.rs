@@ -6,18 +6,20 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Mutex;
 
-use crate::{BoxFuture, Result, TopicId};
+use crate::{BoxFuture, KeyDomain, Result, TopicId};
 
 mod stored;
 
 pub use stored::ObjectStoreTopicCatalog;
 
-/// One topic's catalog entry: its name, its id, and its partition count.
+/// One topic's catalog entry: its name, its id, partition count, and key
+/// domain.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
     name: TopicId,
     id: u128,
     partitions: u32,
+    key_domain: KeyDomain,
 }
 
 impl CatalogEntry {
@@ -30,6 +32,19 @@ impl CatalogEntry {
             name,
             id,
             partitions,
+            key_domain: KeyDomain::default_domain(),
+        }
+    }
+
+    /// The entry for `name` in a specific key domain.
+    #[must_use]
+    pub fn with_key_domain(name: TopicId, partitions: u32, key_domain: KeyDomain) -> Self {
+        let id = topic_uuid(&name);
+        Self {
+            name,
+            id,
+            partitions,
+            key_domain,
         }
     }
 
@@ -49,6 +64,12 @@ impl CatalogEntry {
     #[must_use]
     pub const fn partitions(&self) -> u32 {
         self.partitions
+    }
+
+    /// The topic's authoritative key domain.
+    #[must_use]
+    pub const fn key_domain(&self) -> &KeyDomain {
+        &self.key_domain
     }
 }
 
