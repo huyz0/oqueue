@@ -1,6 +1,7 @@
 # 0050. Envelope encryption: the scheme, and what M8 can verify
 
-Status: accepted
+Status: accepted; 2026-09-20: `M8.10` derives the writer epoch from the
+coordinator's fenced epoch through `WriterEpoch`; see ADR-0054.
 Date: 2026-09-20
 Requirements: FR-41, FR-42, FR-43, NFR-14, NFR-33
 

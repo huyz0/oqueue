@@ -19,9 +19,9 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    BundleBuilder, ByteRange, Error, KeyId, MAX_WRAPPED_DEK_LEN, NonceMinter, ParsedNonce,
-    PartitionId, PushedRecords, Redacted, Region, RegionAlg, RegionEnvelope, SealedRegion, TopicId,
-    WrappedKey, parse_footer,
+    BundleBuilder, ByteRange, CoordinatorEpoch, Error, KeyId, MAX_WRAPPED_DEK_LEN, NonceMinter,
+    ParsedNonce, PartitionId, PushedRecords, Redacted, Region, RegionAlg, RegionEnvelope,
+    SealedRegion, TopicId, WrappedKey, WriterEpoch, parse_footer,
 };
 
 use crate::bundle_footer::four_topics;
@@ -33,10 +33,12 @@ fn topic(name: &str) -> TopicId {
 }
 
 fn envelope(key: &str, region_index: u32) -> RegionEnvelope {
-    let mut source = NonceMinter::new(7)
-        .expect("in range")
-        .next_object()
-        .expect("first object");
+    let mut source = NonceMinter::new(WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(
+        7,
+    )))
+    .expect("in range")
+    .next_object()
+    .expect("first object");
     for index in 0..=region_index {
         let nonce = source.for_region(index).expect("in order");
         if index == region_index {
@@ -61,10 +63,12 @@ fn sealed_bytes(marker: u8) -> Vec<u8> {
 /// `mixed()`, but with a wrapped key of exactly `len` bytes — what the
 /// bound-edge test needs, since the envelope helper's key is a fixed string.
 fn mixed_with_wrapped(len: usize) -> BundleBuilder {
-    let mut source = NonceMinter::new(9)
-        .expect("in range")
-        .next_object()
-        .expect("first object");
+    let mut source = NonceMinter::new(WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(
+        9,
+    )))
+    .expect("in range")
+    .next_object()
+    .expect("first object");
     let nonce = source.for_region(0).expect("in order");
     let envelope = RegionEnvelope::new(
         KeyId::new("arn:aws:kms:eu-west-1:1:key/abc".to_owned()).expect("non-empty"),

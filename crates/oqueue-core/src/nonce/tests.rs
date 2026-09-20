@@ -5,9 +5,9 @@
 
 use super::{
     MAX_OBJECT_SEQUENCE, MAX_REGION_INDEX, MAX_WRITER_EPOCH, NONCE_BYTES, Nonce, NonceMinter,
-    NonceSource, ParsedNonce,
+    NonceSource, ParsedNonce, WriterEpoch,
 };
-use crate::Error;
+use crate::{CoordinatorEpoch, Error};
 use proptest::prelude::*;
 use std::collections::HashSet;
 
@@ -27,6 +27,10 @@ fn nonce(epoch: u64, object: u64, region: u32) -> Nonce {
         source.for_region(index).expect("in range and in order");
     }
     source.for_region(region).expect("in range and in order")
+}
+
+fn epoch(value: u64) -> WriterEpoch {
+    WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(value))
 }
 
 #[test]
@@ -66,12 +70,12 @@ fn the_maximum_in_range_triple_fills_every_bit() {
 #[test]
 fn a_writer_epoch_past_the_ceiling_is_refused_not_truncated() {
     assert_eq!(
-        NonceMinter::new(MAX_WRITER_EPOCH + 1).unwrap_err(),
+        NonceMinter::new(epoch(MAX_WRITER_EPOCH + 1)).unwrap_err(),
         Error::NonceWriterEpochOutOfRange {
             got: MAX_WRITER_EPOCH + 1
         }
     );
-    assert!(NonceMinter::new(u64::MAX).is_err());
+    assert!(NonceMinter::new(epoch(u64::MAX)).is_err());
 }
 
 #[test]
@@ -91,7 +95,7 @@ fn an_exhausted_object_sequence_is_refused_not_wrapped() {
 
 #[test]
 fn a_region_index_past_the_ceiling_is_refused_not_truncated() {
-    let mut minter = NonceMinter::new(0).expect("in range");
+    let mut minter = NonceMinter::new(epoch(0)).expect("in range");
     let mut source = minter.next_object().expect("object zero");
     assert_eq!(
         source.for_region(MAX_REGION_INDEX + 1).unwrap_err(),
@@ -107,7 +111,7 @@ fn a_region_index_past_the_ceiling_is_refused_not_truncated() {
 
 #[test]
 fn asking_twice_for_one_region_is_refused() {
-    let mut minter = NonceMinter::new(7).expect("in range");
+    let mut minter = NonceMinter::new(epoch(7)).expect("in range");
     let mut source = minter.next_object().expect("object zero");
     let first = source.for_region(0).expect("region zero");
     assert_eq!(
@@ -124,7 +128,7 @@ fn asking_twice_for_one_region_is_refused() {
 
 #[test]
 fn a_skipped_region_is_refused() {
-    let mut minter = NonceMinter::new(7).expect("in range");
+    let mut minter = NonceMinter::new(epoch(7)).expect("in range");
     let mut source = minter.next_object().expect("object zero");
     assert_eq!(
         source.for_region(1).unwrap_err(),
@@ -137,7 +141,7 @@ fn a_skipped_region_is_refused() {
 
 #[test]
 fn two_regions_of_one_object_differ() {
-    let mut minter = NonceMinter::new(3).expect("in range");
+    let mut minter = NonceMinter::new(epoch(3)).expect("in range");
     let mut source = minter.next_object().expect("object zero");
     let a = source.for_region(0).expect("region zero");
     let b = source.for_region(1).expect("region one");
@@ -146,7 +150,7 @@ fn two_regions_of_one_object_differ() {
 
 #[test]
 fn two_objects_of_one_writer_differ() {
-    let mut minter = NonceMinter::new(3).expect("in range");
+    let mut minter = NonceMinter::new(epoch(3)).expect("in range");
     let mut first = minter.next_object().expect("object zero");
     let mut second = minter.next_object().expect("object one");
     assert_eq!(minter.issued(), 2);
@@ -179,14 +183,39 @@ fn the_maximum_in_range_values_do_not_collide() {
 /// and obligation (1) in the module docs is this sentence.
 #[test]
 fn a_restarted_writer_reusing_its_epoch_repeats_nonces() {
-    let mut before = NonceMinter::new(1).expect("in range");
-    let mut after = NonceMinter::new(1).expect("in range");
+    let mut before = NonceMinter::new(epoch(1)).expect("in range");
+    let mut after = NonceMinter::new(epoch(1)).expect("in range");
     let mut first = before.next_object().expect("object zero");
     let mut second = after.next_object().expect("object zero again");
     assert_eq!(
         first.for_region(0).expect("region zero"),
         second.for_region(0).expect("region zero"),
         "the caller's obligation -- see M8.10, not this type"
+    );
+}
+
+#[test]
+fn a_restarted_writer_uses_a_new_coordinator_epoch() {
+    let before_epoch = WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(7));
+    let after_epoch = WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(8));
+    let mut before = NonceMinter::new(before_epoch).expect("the fenced epoch is in range");
+    let mut after = NonceMinter::new(after_epoch).expect("the fenced epoch is in range");
+
+    let before_nonce = before
+        .next_object()
+        .expect("the first object is in range")
+        .for_region(0)
+        .expect("the first region is in range");
+    let after_nonce = after
+        .next_object()
+        .expect("the first object is in range")
+        .for_region(0)
+        .expect("the first region is in range");
+
+    assert_ne!(
+        before_nonce.as_bytes(),
+        after_nonce.as_bytes(),
+        "a restarted writer must not reuse the predecessor's fenced epoch"
     );
 }
 
@@ -260,7 +289,7 @@ proptest! {
                     let slot = &mut minters[epoch];
                     if slot.is_none() {
                         let epoch = u64::try_from(epoch).expect("a small index");
-                        *slot = Some(NonceMinter::new(epoch).expect("in range"));
+                        *slot = Some(NonceMinter::new(self::epoch(epoch)).expect("in range"));
                     }
                     let minter = slot.as_mut().expect("just opened");
                     sources.push(minter.next_object().expect("far below the ceiling"));
@@ -311,10 +340,13 @@ fn the_ceilings_are_the_widths_the_layout_claims() {
     assert_eq!(MAX_WRITER_EPOCH, 1_099_511_627_775, "40 bits");
     assert_eq!(MAX_OBJECT_SEQUENCE, 1_099_511_627_775, "40 bits");
     assert_eq!(MAX_REGION_INDEX, 65_535, "16 bits");
-    assert!(NonceMinter::new(1_099_511_627_776).is_err(), "past 40 bits");
+    assert!(
+        NonceMinter::new(epoch(1_099_511_627_776)).is_err(),
+        "past 40 bits"
+    );
     let mut minter = NonceMinter::at(0, 1_099_511_627_776);
     assert!(minter.next_object().is_err(), "past 40 bits");
-    let mut minter = NonceMinter::new(0).expect("in range");
+    let mut minter = NonceMinter::new(epoch(0)).expect("in range");
     let mut source = minter.next_object().expect("object zero");
     assert!(source.for_region(65_536).is_err(), "past 16 bits");
     assert_eq!(source.minted(), 0, "a refusal mints nothing");

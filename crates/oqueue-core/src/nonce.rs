@@ -48,27 +48,22 @@
 //! broken. This module makes the *triple* injective into 96 bits; it cannot
 //! know whether two live brokers were handed the same epoch.
 //!
-//! ⚠️ **The tree has no monotonic numeric writer epoch today.**
+//! ⚠️ **The writer epoch comes from the coordinator fence, not `WriterId`.**
 //! `WriterId::mint` (in `oqueue-broker`) produces a *string* —
-//! `{pid:x}-{nanos:x}-{nth:x}` — and `BundleNamer` gives a monotonic `u64`
-//! object sequence *per writer identity*, starting at zero for each. So the
-//! narrowest honest construction is the one below: this type takes the epoch
-//! as a `u64` it validates the range of, and states what must hold of it.
-//! Wiring an epoch that actually satisfies that is the job of whatever mints
-//! writer identities, not of `oqueue-core`, which names no process and reads
-//! no clock.
+//! `{pid:x}-{nanos:x}-{nth:x}` — and is suitable for object naming, but its
+//! timestamp is not a durable restart fence. [`WriterEpoch`] therefore has no
+//! raw constructor: the composer derives it from [`CoordinatorEpoch`], whose
+//! value changes with the fenced coordinator incarnation.
 //!
 //! **What must hold for uniqueness:**
 //!
 //! 1. no two writer incarnations that could ever seal under the same DEK are
-//!    given the same `writer_epoch` — including a process and its own restart,
-//!    for the reason `BundleNamer`'s doc gives about pids being reused.
-//!    ⚠️ **This is the one obligation left to a caller**, and it is the whole
-//!    of what this module cannot check: a restarted process handed its
-//!    predecessor's epoch repeats every nonce. Backlog row `M8.10` owns
-//!    minting an epoch that survives a restart, and
-//!    `a_restarted_writer_reusing_its_epoch_repeats_nonces` is the test that
-//!    says so out loud rather than leaving it implied;
+//!    given the same coordinator-fenced `writer_epoch` — including a process
+//!    and its own restart. [`WriterEpoch`] makes the source explicit, while
+//!    the coordinator remains responsible for advancing its fence on restart;
+//!    `a_restarted_writer_uses_a_new_coordinator_epoch` pins that contract and
+//!    `a_restarted_writer_reusing_its_epoch_repeats_nonces` documents the
+//!    refusal boundary if a composer violates it;
 //! 2. within one writer epoch, `object_sequence` never repeats — ⚠️ **no
 //!    longer an obligation**: [`NonceMinter`] owns the counter and there is
 //!    no public way to name an object sequence at all;
@@ -77,7 +72,7 @@
 //!
 //! Given (1), the layout below makes (2) and (3) hold by construction.
 
-use crate::{Error, Result};
+use crate::{CoordinatorEpoch, Error, Result};
 
 /// A GCM nonce is 96 bits — 12 bytes.
 ///
@@ -94,6 +89,29 @@ pub const MAX_OBJECT_SEQUENCE: u64 = (1 << 40) - 1;
 
 /// The largest region index the layout can express.
 pub const MAX_REGION_INDEX: u32 = (1 << 16) - 1;
+
+/// A writer epoch derived from the coordinator's fenced incarnation.
+///
+/// A writer must not choose this value from a process id, a wall-clock stamp,
+/// or configuration: each can repeat after a restart. The coordinator epoch
+/// is the durable fence that changes when leadership changes, so it is the
+/// only public source for a production writer epoch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct WriterEpoch(u64);
+
+impl WriterEpoch {
+    /// Derives the nonce writer epoch from the coordinator's fence.
+    #[must_use]
+    pub const fn from_coordinator_epoch(epoch: CoordinatorEpoch) -> Self {
+        Self(epoch.get())
+    }
+
+    /// The encoded epoch value.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
 
 /// A 96-bit AES-GCM nonce.
 ///
@@ -202,19 +220,21 @@ pub struct NonceMinter {
 }
 
 impl NonceMinter {
-    /// A minter for writer incarnation `writer_epoch`.
+    /// A minter for coordinator-fenced writer incarnation `writer_epoch`.
     ///
     /// # Errors
     ///
     /// [`Error::NonceWriterEpochOutOfRange`] if `writer_epoch` exceeds
     /// [`MAX_WRITER_EPOCH`] — refused, never masked into the field, because a
     /// truncated epoch is exactly how two writers collide.
-    pub const fn new(writer_epoch: u64) -> Result<Self> {
-        if writer_epoch > MAX_WRITER_EPOCH {
-            return Err(Error::NonceWriterEpochOutOfRange { got: writer_epoch });
+    pub const fn new(writer_epoch: WriterEpoch) -> Result<Self> {
+        if writer_epoch.get() > MAX_WRITER_EPOCH {
+            return Err(Error::NonceWriterEpochOutOfRange {
+                got: writer_epoch.get(),
+            });
         }
         Ok(Self {
-            writer_epoch,
+            writer_epoch: writer_epoch.get(),
             next_object: 0,
         })
     }

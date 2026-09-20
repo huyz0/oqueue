@@ -154,7 +154,7 @@ pub use metadata_segment::{decode_segment, encode_segment};
 pub use multipart::{MultipartLimits, MultipartSession};
 pub use nonce::{
     MAX_OBJECT_SEQUENCE, MAX_REGION_INDEX, MAX_WRITER_EPOCH, NONCE_BYTES, Nonce, NonceMinter,
-    NonceSource, ParsedNonce,
+    NonceSource, ParsedNonce, WriterEpoch,
 };
 pub use object_key::ObjectKey;
 pub use object_meta::{ObjectMeta, PreconditionToken};

@@ -1,0 +1,27 @@
+{
+  "commits": [
+    "b3fb64a2fbd6fd1d44411edb121fff91efd9acbd",
+    "65d1a57cdc130ccfaafe38075f9152343b836947",
+    "6513f6b05a5e2306c0e4d601499b1e3b2dee761e",
+    "2629b331e0e262b2db419e69c4d6ef86a6142d5d",
+    "e5d5204204e6cbb8056ef1d773961b32da920fdb",
+    "78f03df5a1a35eb454377bfff5097b0a0ff8cbb8",
+    "5c41fa73e89ddd8d098abac18171473cbe1014ef",
+    "34d430094ec075e7a70bef1537834699dc943c09",
+    "aea15ec0c42dc9bd27ea6801474762fbbe79fa4d",
+    "18291e729e74a6b84fdf5dc120ac0e1531f4029d"
+  ],
+  "findings": [
+    {
+      "evidence": "docs/internal/product/architecture.md:48,73-75 and docs/internal/standards/contracts.md:24-26 require seams in oqueue-core, while crates/oqueue-crypto/src/providers.rs:16,85 and src/entropy.rs:50 define public traits in oqueue-crypto; ADR-0051 and ADR-0053 explicitly choose this exception, but no standard or architecture amendment records it.",
+      "id": "bf766e22fbda",
+      "kind": "standard-not-followed",
+      "severity": "minor",
+      "summary": "M8 publishes cross-crate seam traits from oqueue-crypto despite the architecture and contracts standards requiring every seam to live in oqueue-core."
+    }
+  ],
+  "milestone": "M8",
+  "recorded_at": "2026-09-20T10:40:15Z",
+  "reviewer": "Erdos (Codex GPT-5)",
+  "verdict": "pass"
+}

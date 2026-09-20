@@ -9,7 +9,8 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    Dek, Error, KeyId, Nonce, NonceMinter, ParsedNonce, PartitionId, RegionAlg, TopicId,
+    CoordinatorEpoch, Dek, Error, KeyId, Nonce, NonceMinter, ParsedNonce, PartitionId, RegionAlg,
+    TopicId, WriterEpoch,
 };
 use oqueue_crypto::{RegionAad, TAG_BYTES, open, seal};
 
@@ -36,12 +37,14 @@ fn partition() -> PartitionId {
 /// ⚠️ A fresh nonce per call, from the one API that can mint them. There is no
 /// `Nonce::from_bytes`, by design — `oqueue-core::nonce`.
 fn nonce() -> Nonce {
-    NonceMinter::new(1)
-        .expect("in range")
-        .next_object()
-        .expect("first object")
-        .for_region(0)
-        .expect("first region")
+    NonceMinter::new(WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(
+        1,
+    )))
+    .expect("in range")
+    .next_object()
+    .expect("first object")
+    .for_region(0)
+    .expect("first region")
 }
 
 /// The twelve bytes of a freshly minted nonce, as a header would carry them.
@@ -294,10 +297,12 @@ fn an_unknown_alg_code_is_still_an_error() {
 #[test]
 fn two_regions_of_one_object_do_not_open_as_each_other() {
     let topic = topic();
-    let mut source = NonceMinter::new(9)
-        .expect("in range")
-        .next_object()
-        .expect("first object");
+    let mut source = NonceMinter::new(WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(
+        9,
+    )))
+    .expect("in range")
+    .next_object()
+    .expect("first object");
 
     let first_nonce = source.for_region(0).expect("region 0");
     let first_seen = parsed(&first_nonce);
