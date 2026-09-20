@@ -255,8 +255,11 @@ is not licence to batch unrelated scope, which `git.md` rule 1 still forbids.
 
 **A milestone carries at most 20 tasks.** Past that it is two milestones wearing
 one name, its completion condition stops being a single coherent claim, and the
-cross-cutting review at its boundary exceeds what one reader can hold. ⚠️ M-1 is
-over this and is the evidence for the rule rather than an exception to it.
+cross-cutting review at its boundary exceeds what one reader can hold. The
+active milestone's count is enforced by `scripts/check-milestone-exit.sh`; an
+additional finding is handed to the next milestone rather than appended past
+the cap. ⚠️ M-1 is over this and is the evidence for the rule rather than an
+exception to it.
 
 ⚠️ **The number is a heuristic for that reasoning, not the reasoning itself, and
 exceeding it costs a recorded argument** — in the backlog section's own notes,

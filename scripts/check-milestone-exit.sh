@@ -51,6 +51,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "$REPO_ROOT" || exit 1
 
 ROADMAP="docs/internal/product/roadmap.md"
+TASK_CAP=20
 
 # ⚠️ **The staged bytes, not the working tree.** `check-milestone-handoff.sh`
 # reads this same file through the index and says why: a gate on the commit
@@ -89,6 +90,8 @@ fi
 skipped_not_started=0
 looks_like=$(roadmap_text | grep -cE '^\| .*\[M-?[0-9]+\]\(milestones/' || true)
 parsed=0
+active_milestone="$(current_milestone)"
+active_state=""
 
 # The sequence table's rows are `| n | [ID](…) | name | kind | deps | tasks |
 # condition | state |`. Anything else in the file — the deferral table, prose —
@@ -120,6 +123,9 @@ while IFS='|' read -r _ _ idcell _ _ _ taskscell condcell statecell _; do
   esac
   started=$((started + 1))
   parsed=$((parsed + 1))
+  if [[ "$id" == "$active_milestone" ]]; then
+    active_state="$state"
+  fi
 
   # ── leg 1: the exit condition is a command that exists ──────────────────
   #
@@ -166,6 +172,31 @@ while IFS='|' read -r _ _ idcell _ _ _ taskscell condcell statecell _; do
     note "git log -p -- $ROADMAP has the number this cell held before $id opened"
   fi
 done < <(roadmap_text | awk -F'|' 'NF >= 9 && $2 ~ /^ *[0-9]+ *$/')
+
+# ── leg 3: the active milestone stays within the reviewer's task budget ───
+#
+# `sdd.md` says a milestone carries at most 20 tasks. Before this leg that was
+# advice only: the gate printed the planned and actual counts but let the
+# active decomposition grow without bound. Historical milestones are allowed
+# to retain their recorded overruns; only the milestone the current task
+# commits are working in can consume the budget. A finding beyond the cap must
+# be handed to the next milestone before another implementation commit lands.
+if [[ "$active_state" == inprogress* && -n "$active_milestone" ]]; then
+  backlog_text="$(git -C "$REPO_ROOT" show ':docs/internal/product/backlog.md' 2>/dev/null || true)"
+  if [[ -z "$backlog_text" ]]; then
+    fail "$active_milestone is in progress but docs/internal/product/backlog.md is not in the index"
+    note "the active milestone's task budget cannot be checked against unstaged bytes"
+  else
+    active_rows="$(grep -cE "^\| ${active_milestone//./\\.}\." <<< "$backlog_text" || true)"
+    if (( active_rows > TASK_CAP )); then
+      fail "$active_milestone has $active_rows task rows; the active milestone cap is $TASK_CAP"
+      note "hand new review or mutation findings to the next milestone before continuing"
+      note "update roadmap.md's deferral table and the receiving milestone's plan"
+    else
+      ok "$active_milestone task budget ($active_rows/$TASK_CAP rows)"
+    fi
+  fi
+fi
 
 # ⚠️ **Parsed fewer rows than the table has is a failure, not a skip.**
 if (( looks_like == 0 )); then

@@ -93,6 +93,12 @@ Every **blocking** or **major** finding names a `task_id` that the backlog
 already lists: write the row first, then cite it. The gate checks the row
 exists. A finding you judge non-actionable is `minor` and needs no task.
 
+Before adding a row, check the active milestone's task budget. Twenty rows is a
+hard ceiling enforced by `scripts/check-milestone-exit.sh`, not a suggestion.
+When the row would exceed it, hand the finding to the next milestone and add
+the required roadmap and receiving-plan entries there; do not grow the
+milestone under review.
+
 ## ⚠️ Which findings reopen the milestone, and which are handed on
 
 **This is the step that decides whether the milestone can end**, and until

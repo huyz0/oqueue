@@ -5313,6 +5313,19 @@ run_case "check-milestone-exit.sh (a started milestone whose planned count was e
   setup_exit_pointer invoke_exit \
   "rather than the planned count"
 
+setup_exit_over_cap() {
+  local dir; dir="$(_exit_fixture '`scripts/gates/m-1-complete.sh`' 20 'in progress')"
+  for n in $(seq 3 21); do
+    printf '| M-1.%s | a review finding beyond the cap | some criterion | todo |\n' "$n" \
+      >> "$dir/docs/internal/product/backlog.md"
+  done
+  (cd "$dir" && git add docs/internal/product/backlog.md && git commit -qm "M-1.2: exceed the task budget")
+  printf '%s\n' "$dir"
+}
+run_case "check-milestone-exit.sh (an active milestone over the task budget)" \
+  setup_exit_over_cap invoke_exit \
+  "active milestone cap is 20"
+
 setup_exit_unknown_state() {
   _exit_fixture '`scripts/gates/m-1-complete.sh`' 2 'underway'
 }
