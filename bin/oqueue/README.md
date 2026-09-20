@@ -60,6 +60,7 @@ identical to one configured correctly.
 | `OQUEUE_TLS_CERT`, `OQUEUE_TLS_KEY` | paths to a PEM certificate chain and private key | cleartext, warned about. ⚠️ **Both or neither** — one alone is refused, because falling back to cleartext on a typo'd path starts exactly the broker the operator was avoiding |
 | `OQUEUE_CREDENTIALS` | a file of `principal:password` lines | no authentication, and authorization fails **open**. ⚠️ Requires TLS: `SASL/PLAIN` is only accepted inside a TLS session (`ADR-0032`), so credentials without TLS is refused rather than started — it would serve nobody |
 | `OQUEUE_TOPIC_GRANTS` | a file of `principal:topic` lines, one grant each | no grants. With credentials configured that refuses every authenticated client every topic, so it is warned about |
+| `OQUEUE_ADMIN_GRANTS` | a file of `principal:operation` lines, one administrative grant each. Supported operations are `create_topics`, `delete_topics`, `describe_configs`, `alter_configs`, `describe_groups`, `list_groups`, and `alter_quotas` | no administrative authority. With credentials configured, administrative operations deny by default, so it is warned about |
 | `OQUEUE_MAX_IN_FLIGHT` | a positive integer | no per-principal quota. ⚠️ Inert without credentials, since the quota keys on the authenticated principal — and warned about |
 
 ⚠️ **File format**: `name:value`, split on the **first** colon (a password may
@@ -73,7 +74,9 @@ uninformative `SASL/PLAIN authentication failed`.
 `orders,payments`, not two — and the client is then refused with nothing
 saying why. ⚠️ **A named source that parses to nothing is refused** rather
 than treated as absent: an empty credential file would otherwise mean "no
-authentication at all".
+authentication at all". Administrative grants use the same one-entry-per-line
+rule, for example `alice:create_topics`; topic visibility never grants
+administrative authority.
 
 
 ## Downstream

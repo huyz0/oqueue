@@ -73,6 +73,8 @@ pub struct Dispatcher {
     /// `Metadata`'s own fail-open rule (`credentials` empty) means this
     /// field is not even read until a credential source exists.
     topic_grants: std::sync::Arc<oqueue_core::TopicGrants>,
+    /// Administrative authority, separate from topic visibility (`M12.1`).
+    admin_grants: std::sync::Arc<oqueue_core::AdminGrants>,
     /// The in-flight-request bound each authenticated principal shares
     /// across every connection it opens (`security.md` rule 13, FR-45,
     /// `M9.16`) — `None` by construction, matching `credentials`' own
@@ -106,6 +108,7 @@ impl Dispatcher {
             tls: false,
             credentials: std::sync::Arc::default(),
             topic_grants: std::sync::Arc::default(),
+            admin_grants: std::sync::Arc::default(),
             quota: None,
         }
     }
@@ -156,6 +159,13 @@ impl Dispatcher {
     #[must_use]
     pub fn with_topic_grants(mut self, topic_grants: oqueue_core::TopicGrants) -> Self {
         self.topic_grants = std::sync::Arc::new(topic_grants);
+        self
+    }
+
+    /// Supplies the independent administrative authority policy.
+    #[must_use]
+    pub fn with_admin_grants(mut self, admin_grants: oqueue_core::AdminGrants) -> Self {
+        self.admin_grants = std::sync::Arc::new(admin_grants);
         self
     }
 

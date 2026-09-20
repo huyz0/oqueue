@@ -16,7 +16,9 @@
 
 use super::{Security, SecurityError};
 use oqueue_broker::sasl_authenticate::{PlainCredential, PlainCredentials};
-use oqueue_core::{Principal, PrincipalQuota, Redacted, TopicGrants, TopicId};
+use oqueue_core::{
+    AdminGrants, AdminOperation, Principal, PrincipalQuota, Redacted, TopicGrants, TopicId,
+};
 use std::sync::Arc;
 
 /// Reads every source this deployment names.
@@ -30,11 +32,23 @@ use std::sync::Arc;
 /// [`SecurityError`] if any named source is unreadable or malformed. Never
 /// for a source that is simply absent — that is the operator declining a
 /// feature, which [`Security::describe`] warns about rather than refusing.
+#[cfg(test)]
 pub(super) fn from_sources(
     tls: Option<(&[u8], &[u8])>,
     credentials: Option<&str>,
     topic_grants: Option<&str>,
     quota: Option<&str>,
+) -> Result<Security, SecurityError> {
+    from_sources_with_admin(tls, credentials, topic_grants, quota, None)
+}
+
+/// As [`from_sources`], with the independent administrative authority source.
+pub(super) fn from_sources_with_admin(
+    tls: Option<(&[u8], &[u8])>,
+    credentials: Option<&str>,
+    topic_grants: Option<&str>,
+    quota: Option<&str>,
+    admin_grants: Option<&str>,
 ) -> Result<Security, SecurityError> {
     // ⚠️ **Credentials without TLS is a broker that serves nobody**, so it
     // is refused rather than warned about. `sasl_authenticate::handle`
@@ -62,6 +76,11 @@ pub(super) fn from_sources(
             .map(topic_grants_from)
             .transpose()?
             .unwrap_or_default(),
+        admin_grants: admin_grants
+            .map(admin_grants_from)
+            .transpose()?
+            .unwrap_or_default(),
+        admin_grants_configured: admin_grants.is_some(),
         quota: quota.map(quota_from).transpose()?,
     })
 }
@@ -103,11 +122,13 @@ pub(crate) fn configured() -> Result<Security, SecurityError> {
     };
     let credentials = read_source("OQUEUE_CREDENTIALS", var("OQUEUE_CREDENTIALS")?)?;
     let topic_grants = read_source("OQUEUE_TOPIC_GRANTS", var("OQUEUE_TOPIC_GRANTS")?)?;
-    from_sources(
+    let admin_grants = read_source("OQUEUE_ADMIN_GRANTS", var("OQUEUE_ADMIN_GRANTS")?)?;
+    from_sources_with_admin(
         tls.as_ref().map(|(c, k)| (c.as_slice(), k.as_slice())),
         decode("OQUEUE_CREDENTIALS", credentials)?.as_deref(),
         decode("OQUEUE_TOPIC_GRANTS", topic_grants)?.as_deref(),
         var("OQUEUE_MAX_IN_FLIGHT")?.as_deref(),
+        decode("OQUEUE_ADMIN_GRANTS", admin_grants)?.as_deref(),
     )
 }
 
@@ -295,6 +316,49 @@ pub(super) fn topic_grants_from(text: &str) -> Result<TopicGrants, SecurityError
         return Err(SecurityError::EmptySource {
             variable: VARIABLE,
             shape: "principal:topic pairs",
+        });
+    }
+    Ok(grants)
+}
+
+/// `principal:operation` lines for administrative authority.
+pub(super) fn admin_grants_from(text: &str) -> Result<AdminGrants, SecurityError> {
+    const VARIABLE: &str = "OQUEUE_ADMIN_GRANTS";
+    let mut grants = AdminGrants::new();
+    let mut empty = true;
+    for (line, name, operation) in pairs(VARIABLE, "principal:operation", text)? {
+        let operation = match operation {
+            "create_topics" => AdminOperation::CreateTopics,
+            "delete_topics" => AdminOperation::DeleteTopics,
+            "describe_configs" => AdminOperation::DescribeConfigs,
+            "alter_configs" => AdminOperation::AlterConfigs,
+            "describe_groups" => AdminOperation::DescribeGroups,
+            "list_groups" => AdminOperation::ListGroups,
+            "alter_quotas" => AdminOperation::AlterQuotas,
+            _ => {
+                return Err(SecurityError::MalformedLine {
+                    variable: VARIABLE,
+                    line,
+                    shape: "principal:operation",
+                    reason: format!("unsupported administrative operation {operation:?}"),
+                });
+            }
+        };
+        grants.grant(
+            Principal::new(name).map_err(|error| SecurityError::MalformedLine {
+                variable: VARIABLE,
+                line,
+                shape: "principal:operation",
+                reason: error.to_string(),
+            })?,
+            operation,
+        );
+        empty = false;
+    }
+    if empty {
+        return Err(SecurityError::EmptySource {
+            variable: VARIABLE,
+            shape: "principal:operation pairs",
         });
     }
     Ok(grants)

@@ -15,7 +15,9 @@
 #![allow(clippy::expect_used)]
 
 use super::tls;
-use crate::security::sources::{credentials_from, from_sources, topic_grants_from};
+use crate::security::sources::{
+    credentials_from, from_sources, from_sources_with_admin, topic_grants_from,
+};
 
 /// ⚠️ **The whole load fails, not the one bad source.** A `Security` built
 /// with three good sources and one malformed one would run — authenticated,
@@ -29,6 +31,29 @@ fn one_malformed_source_fails_the_whole_load() {
         Some("64"),
     )
     .expect_err("a malformed grant file must stop startup, not be skipped");
+}
+
+#[tokio::test]
+async fn administrative_authority_reaches_the_live_dispatcher_separately() {
+    let security = from_sources_with_admin(
+        Some(tls()),
+        Some("alice:secret\n"),
+        Some("alice:orders\n"),
+        None,
+        Some("alice:create_topics\n"),
+    )
+    .expect("all sources parse");
+    let store: std::sync::Arc<dyn crate::compose::Backend> =
+        std::sync::Arc::new(oqueue_core::FakeObjectStore::new());
+    let cluster = crate::compose::build_cluster("h".to_owned(), 1, store)
+        .await
+        .expect("an empty fixture composes")
+        .cluster;
+    let rendered = format!("{:?}", security.dispatcher(std::sync::Arc::new(cluster)));
+    assert!(
+        rendered.contains("CreateTopics"),
+        "admin authority must reach the live dispatcher: {rendered}"
+    );
 }
 
 /// ⚠️ **An absent source is a choice; a malformed one is not.** That is the
@@ -220,6 +245,39 @@ fn credentials_without_grants_are_warned_about() {
     );
 }
 
+#[test]
+fn credentials_without_admin_grants_are_warned_about() {
+    let security = from_sources(Some(tls()), Some("alice:secret\n"), None, None).expect("loads");
+    assert!(
+        security
+            .describe()
+            .iter()
+            .any(|w| w.contains("no admin grants")),
+        "the warning names the administrative gap: {:?}",
+        security.describe()
+    );
+}
+
+#[test]
+fn configured_admin_grants_silence_the_admin_warning() {
+    let security = from_sources_with_admin(
+        Some(tls()),
+        Some("alice:secret\n"),
+        None,
+        None,
+        Some("alice:create_topics\n"),
+    )
+    .expect("loads");
+    assert!(
+        !security
+            .describe()
+            .iter()
+            .any(|w| w.contains("no admin grants")),
+        "configured authority needs no missing-authority warning: {:?}",
+        security.describe()
+    );
+}
+
 /// ⚠️ **The grants warning must not fire when there are no credentials**,
 /// which is the other half of its condition and the half a one-sided test
 /// leaves unpinned — `cargo mutants` flipped the `&&` to `||` and nothing
@@ -322,6 +380,7 @@ fn every_source_refuses_a_set_but_undecodable_value() {
         "OQUEUE_TLS_KEY",
         "OQUEUE_CREDENTIALS",
         "OQUEUE_TOPIC_GRANTS",
+        "OQUEUE_ADMIN_GRANTS",
         "OQUEUE_MAX_IN_FLIGHT",
     ] {
         let undecodable = std::env::VarError::NotUnicode(std::ffi::OsString::from("x"));

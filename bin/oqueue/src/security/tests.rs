@@ -11,7 +11,47 @@
 
 mod composition;
 
-use super::sources::{credentials_from, quota_from, topic_grants_from};
+use super::sources::{admin_grants_from, credentials_from, quota_from, topic_grants_from};
+
+#[test]
+fn an_admin_grant_names_a_supported_operation() {
+    let alice = oqueue_core::Principal::new("alice").expect("valid principal");
+    for (wire_name, operation) in [
+        ("create_topics", oqueue_core::AdminOperation::CreateTopics),
+        ("delete_topics", oqueue_core::AdminOperation::DeleteTopics),
+        (
+            "describe_configs",
+            oqueue_core::AdminOperation::DescribeConfigs,
+        ),
+        ("alter_configs", oqueue_core::AdminOperation::AlterConfigs),
+        (
+            "describe_groups",
+            oqueue_core::AdminOperation::DescribeGroups,
+        ),
+        ("list_groups", oqueue_core::AdminOperation::ListGroups),
+        ("alter_quotas", oqueue_core::AdminOperation::AlterQuotas),
+    ] {
+        let grants = admin_grants_from(&format!("alice:{wire_name}\n")).expect("parses");
+        assert!(
+            grants.allows(&alice, operation),
+            "the supported operation {wire_name} must be granted"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_admin_operation_is_refused() {
+    let error = admin_grants_from("alice:make_everything\n").expect_err("must refuse");
+    assert!(
+        error.to_string().contains("OQUEUE_ADMIN_GRANTS"),
+        "the error names the configured source: {error}"
+    );
+}
+
+#[test]
+fn an_empty_admin_grant_source_is_refused() {
+    admin_grants_from("# no authority\n").expect_err("empty authority must not silently deny all");
+}
 
 /// A valid self-signed pair, so a test can configure credentials — which
 /// `from_sources` refuses without TLS, deliberately.

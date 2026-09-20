@@ -30,7 +30,7 @@
 
 use oqueue_broker::Dispatcher;
 use oqueue_broker::sasl_authenticate::PlainCredentials;
-use oqueue_core::{PrincipalQuota, TopicGrants};
+use oqueue_core::{AdminGrants, PrincipalQuota, TopicGrants};
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 
@@ -108,10 +108,12 @@ pub(crate) struct Security {
     pub(crate) acceptor: Option<TlsAcceptor>,
     credentials: PlainCredentials,
     topic_grants: TopicGrants,
+    admin_grants: AdminGrants,
     /// ⚠️ Recorded rather than asked of `TopicGrants`, which has no
     /// `is_empty` — and adding one to `oqueue-core` for a composition
     /// root's warning would be a library change made for the wrong reason.
     grants_configured: bool,
+    admin_grants_configured: bool,
     quota: Option<Arc<PrincipalQuota>>,
 }
 
@@ -132,7 +134,9 @@ impl Security {
             acceptor: None,
             credentials: PlainCredentials::default(),
             topic_grants: TopicGrants::new(),
+            admin_grants: AdminGrants::new(),
             grants_configured: false,
+            admin_grants_configured: false,
             quota: None,
         }
     }
@@ -144,6 +148,7 @@ impl std::fmt::Debug for Security {
             .field("tls", &self.acceptor.is_some())
             .field("credentials_configured", &!self.credentials.is_empty())
             .field("quota_configured", &self.quota.is_some())
+            .field("admin_grants_configured", &self.admin_grants_configured)
             .finish_non_exhaustive()
     }
 }
@@ -173,7 +178,8 @@ impl Security {
         }
         dispatcher = dispatcher
             .with_credentials(self.credentials.clone())
-            .with_topic_grants(self.topic_grants.clone());
+            .with_topic_grants(self.topic_grants.clone())
+            .with_admin_grants(self.admin_grants.clone());
         if let Some(quota) = self.quota.as_ref() {
             dispatcher = dispatcher.with_quota(Arc::clone(quota));
         }
@@ -211,6 +217,12 @@ impl Security {
                 "oqueue: WARNING -- credentials are configured but no topic grants are, so \
                  every authenticated client will be refused every topic. Set \
                  OQUEUE_TOPIC_GRANTS."
+                    .to_owned(),
+            );
+        }
+        if !self.credentials.is_empty() && !self.admin_grants_configured {
+            lines.push(
+                "oqueue: WARNING -- no admin grants configured, so administrative operations deny by default. Set OQUEUE_ADMIN_GRANTS."
                     .to_owned(),
             );
         }
