@@ -17,3 +17,4 @@ mod standby;
 mod support;
 mod tail;
 mod trim;
+mod writer_epoch;

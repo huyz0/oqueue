@@ -1,6 +1,7 @@
 # 0054. Writer nonce epochs come from coordinator fences
 
-Status: accepted
+Status: superseded by ADR-0055; 2026-09-20: M8.16 replaces the shared
+coordinator-fence derivation with a durable create-only writer-epoch allocator.
 Date: 2026-09-20
 Requirements: FR-42
 

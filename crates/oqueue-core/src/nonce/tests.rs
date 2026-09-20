@@ -7,7 +7,7 @@ use super::{
     MAX_OBJECT_SEQUENCE, MAX_REGION_INDEX, MAX_WRITER_EPOCH, NONCE_BYTES, Nonce, NonceMinter,
     NonceSource, ParsedNonce, WriterEpoch,
 };
-use crate::{CoordinatorEpoch, Error};
+use crate::Error;
 use proptest::prelude::*;
 use std::collections::HashSet;
 
@@ -30,7 +30,7 @@ fn nonce(epoch: u64, object: u64, region: u32) -> Nonce {
 }
 
 fn epoch(value: u64) -> WriterEpoch {
-    WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(value))
+    WriterEpoch::from_durable_counter(value)
 }
 
 #[test]
@@ -179,7 +179,7 @@ fn the_maximum_in_range_values_do_not_collide() {
 /// Two minters at one writer epoch — which is what a process restarted with
 /// its predecessor's epoch is — hand out the same nonces from their first
 /// call. No code in `oqueue-core` can tell: it names no process and reads no
-/// clock. Backlog row `M8.10` owns minting an epoch that survives a restart,
+/// clock. Backlog row `M8.16` owns minting an epoch that survives a restart,
 /// and obligation (1) in the module docs is this sentence.
 #[test]
 fn a_restarted_writer_reusing_its_epoch_repeats_nonces() {
@@ -190,16 +190,16 @@ fn a_restarted_writer_reusing_its_epoch_repeats_nonces() {
     assert_eq!(
         first.for_region(0).expect("region zero"),
         second.for_region(0).expect("region zero"),
-        "the caller's obligation -- see M8.10, not this type"
+        "the caller's obligation -- see M8.16, not this type"
     );
 }
 
 #[test]
-fn a_restarted_writer_uses_a_new_coordinator_epoch() {
-    let before_epoch = WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(7));
-    let after_epoch = WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(8));
-    let mut before = NonceMinter::new(before_epoch).expect("the fenced epoch is in range");
-    let mut after = NonceMinter::new(after_epoch).expect("the fenced epoch is in range");
+fn a_restarted_writer_uses_a_new_durable_epoch() {
+    let before_epoch = WriterEpoch::from_durable_counter(7);
+    let after_epoch = WriterEpoch::from_durable_counter(8);
+    let mut before = NonceMinter::new(before_epoch).expect("the durable epoch is in range");
+    let mut after = NonceMinter::new(after_epoch).expect("the durable epoch is in range");
 
     let before_nonce = before
         .next_object()
@@ -215,7 +215,7 @@ fn a_restarted_writer_uses_a_new_coordinator_epoch() {
     assert_ne!(
         before_nonce.as_bytes(),
         after_nonce.as_bytes(),
-        "a restarted writer must not reuse the predecessor's fenced epoch"
+        "a restarted writer must not reuse the predecessor's durable epoch"
     );
 }
 

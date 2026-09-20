@@ -9,12 +9,39 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    CoordinatorEpoch, Dek, Error, KeyId, Nonce, NonceMinter, ParsedNonce, PartitionId, RegionAlg,
-    TopicId, WriterEpoch,
+    Dek, DurableWriterEpochAllocator, Error, FakeObjectStore, KeyId, MaintenanceStore, Nonce,
+    NonceMinter, ObjectStore, ParsedNonce, PartitionId, RegionAlg, TopicId, WriterEpoch,
 };
 use oqueue_crypto::{RegionAad, TAG_BYTES, open, seal};
+use std::future::Future;
+use std::sync::Arc;
+use std::task::{Context, Poll, Waker};
 
 const PLAINTEXT: &[u8] = b"a region's worth of record batches, or near enough";
+
+fn block_on<F: Future>(future: F) -> F::Output {
+    let mut future = Box::pin(future);
+    let waker = Waker::noop();
+    let mut context = Context::from_waker(waker);
+    loop {
+        match future.as_mut().poll(&mut context) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => std::hint::spin_loop(),
+        }
+    }
+}
+
+fn writer_epoch(value: u64) -> WriterEpoch {
+    let store_impl = Arc::new(FakeObjectStore::new());
+    let store: Arc<dyn ObjectStore> = Arc::clone(&store_impl) as _;
+    let maintenance: Arc<dyn MaintenanceStore> = Arc::clone(&store_impl) as _;
+    let allocator = DurableWriterEpochAllocator::new(store, maintenance, "test");
+    let mut epoch = None;
+    for _ in 0..=value {
+        epoch = Some(block_on(allocator.allocate()).expect("a durable test epoch"));
+    }
+    epoch.expect("at least one epoch")
+}
 
 const fn dek() -> Dek {
     Dek::new([7u8; 32])
@@ -37,14 +64,12 @@ fn partition() -> PartitionId {
 /// ⚠️ A fresh nonce per call, from the one API that can mint them. There is no
 /// `Nonce::from_bytes`, by design — `oqueue-core::nonce`.
 fn nonce() -> Nonce {
-    NonceMinter::new(WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(
-        1,
-    )))
-    .expect("in range")
-    .next_object()
-    .expect("first object")
-    .for_region(0)
-    .expect("first region")
+    NonceMinter::new(writer_epoch(1))
+        .expect("in range")
+        .next_object()
+        .expect("first object")
+        .for_region(0)
+        .expect("first region")
 }
 
 /// The twelve bytes of a freshly minted nonce, as a header would carry them.
@@ -297,12 +322,10 @@ fn an_unknown_alg_code_is_still_an_error() {
 #[test]
 fn two_regions_of_one_object_do_not_open_as_each_other() {
     let topic = topic();
-    let mut source = NonceMinter::new(WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(
-        9,
-    )))
-    .expect("in range")
-    .next_object()
-    .expect("first object");
+    let mut source = NonceMinter::new(writer_epoch(9))
+        .expect("in range")
+        .next_object()
+        .expect("first object");
 
     let first_nonce = source.for_region(0).expect("region 0");
     let first_seen = parsed(&first_nonce);

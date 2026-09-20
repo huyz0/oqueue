@@ -108,6 +108,7 @@ mod test_executor;
 mod time_span;
 mod topic;
 mod topic_grants;
+mod writer_epoch;
 
 pub use authz::authorize;
 pub use bundle::{BUNDLE_FORMAT_VERSION, BundleBuilder, PushedRecords, Region, RegionAlg, Sealed};
@@ -186,3 +187,4 @@ pub use store::{BoxFuture, FakeMultipartWriter, FakeObjectStore, MultipartWriter
 pub use time_span::TimeSpan;
 pub use topic::TopicId;
 pub use topic_grants::TopicGrants;
+pub use writer_epoch::DurableWriterEpochAllocator;

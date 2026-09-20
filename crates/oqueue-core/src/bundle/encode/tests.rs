@@ -13,19 +13,17 @@
 
 use super::encode_footer;
 use crate::{
-    ByteRange, CoordinatorEpoch, Dek, Error, KeyId, NonceMinter, ParsedNonce, PartitionId,
-    Redacted, Region, RegionAlg, RegionEnvelope, TopicId, WrappedKey, WriterEpoch,
+    ByteRange, Dek, Error, KeyId, NonceMinter, ParsedNonce, PartitionId, Redacted, Region,
+    RegionAlg, RegionEnvelope, TopicId, WrappedKey, WriterEpoch,
 };
 
 fn envelope() -> RegionEnvelope {
-    let nonce = NonceMinter::new(WriterEpoch::from_coordinator_epoch(CoordinatorEpoch::new(
-        1,
-    )))
-    .expect("in range")
-    .next_object()
-    .expect("first object")
-    .for_region(0)
-    .expect("first region");
+    let nonce = NonceMinter::new(WriterEpoch::from_durable_counter(1))
+        .expect("in range")
+        .next_object()
+        .expect("first object")
+        .for_region(0)
+        .expect("first region");
     RegionEnvelope::new(
         KeyId::new("kek").expect("non-empty"),
         WrappedKey::new(Redacted::new(vec![9_u8; 24])),

@@ -330,6 +330,11 @@ declare -A RUST_BOUNDS=(
   # insert, so this constant is the *only* bound on an abandoned entry.
   # Lowering it is safe and costs KMS calls.
   ["crates/oqueue-crypto/src/unwrap_cache.rs|UNWRAPPED_DEK_CACHE_ENTRIES"]="1024"
+  # How many create-only races one writer retries before a permanently
+  # inconsistent listing fails as transient (`M8.16`). Lowering can refuse a
+  # valid burst of concurrent writers; raising delays surfacing a backend that
+  # never reflects a winner.
+  ["crates/oqueue-core/src/writer_epoch.rs|MAX_ALLOCATION_ATTEMPTS"]="128"
   # How many links of a partition-manifest chain one fetch follows before
   # refusing (`M5.63`, `ADR-0042` point 2). A ceiling on GETs per read, so
   # raising it is the weakening direction: NFR-30's "bounded GETs" is what it
@@ -637,6 +642,9 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/nonce.rs|MAX_WRITER_EPOCH"]="what the layout's 40-bit writer-epoch field can express, not a policy"
   ["crates/oqueue-core/src/nonce.rs|MAX_OBJECT_SEQUENCE"]="what the layout's 40-bit object-sequence field can express, not a policy"
   ["crates/oqueue-core/src/nonce.rs|MAX_REGION_INDEX"]="what the layout's 16-bit region-index field can express, not a policy"
+  # `M8.16`: the allocator's list page is a pagination detail, not a
+  # correctness or product limit; the store's page contract remains the gate.
+  ["crates/oqueue-core/src/writer_epoch.rs|LIST_PAGE"]="the maintenance-list page size, not a correctness or product limit"
   # `M8.3`: AES-GCM's tag width. Not truncated by this format, so it is the
   # cipher's own number rather than a setting -- shortening it would weaken
   # the forgery bound to save sixteen bytes on a megabyte-sized region.

@@ -1,0 +1,19 @@
+{
+  "commits": [
+    "7e8c5e550c0f4be1feb240d2c4a1a5511f0d515f"
+  ],
+  "findings": [
+    {
+      "evidence": "crates/oqueue-core/src/nonce.rs derives WriterEpoch solely from CoordinatorEpoch; CoordinatorEpoch::new is caller-supplied; broker writers are per-process. Two writers using one coordinator epoch therefore create identical first nonces, while M8.2 and ADR-0050 require distinct writer epochs for all writers sealing under the same DEK. The restart test covers only epochs 7 and 8 and not concurrent writers sharing one epoch.",
+      "id": "69af09bea592",
+      "kind": "spec-wrong",
+      "severity": "blocking",
+      "summary": "CoordinatorEpoch is not sufficient as the complete writer epoch because multiple writer processes can share one coordinator epoch and independently restart object sequences at zero.",
+      "task_id": "M8.16"
+    }
+  ],
+  "milestone": "M8",
+  "recorded_at": "2026-09-20T10:53:47Z",
+  "reviewer": "Heisenberg (Codex GPT-5)",
+  "verdict": "changes-requested"
+}

@@ -48,20 +48,24 @@
 //! broken. This module makes the *triple* injective into 96 bits; it cannot
 //! know whether two live brokers were handed the same epoch.
 //!
-//! ⚠️ **The writer epoch comes from the coordinator fence, not `WriterId`.**
+//! ⚠️ **The writer epoch comes from a durable allocator, not `WriterId` or a
+//! coordinator fence.**
 //! `WriterId::mint` (in `oqueue-broker`) produces a *string* —
 //! `{pid:x}-{nanos:x}-{nth:x}` — and is suitable for object naming, but its
-//! timestamp is not a durable restart fence. [`WriterEpoch`] therefore has no
-//! raw constructor: the composer derives it from [`CoordinatorEpoch`], whose
-//! value changes with the fenced coordinator incarnation.
+//! timestamp is not a durable restart fence. A coordinator fence can also be
+//! shared by several writer processes, so it is not sufficient on its own.
+//! [`WriterEpoch`] therefore has no raw constructor: the composer derives it
+//! from a durable create-only counter that advances for every writer process
+//! and restart.
 //!
 //! **What must hold for uniqueness:**
 //!
 //! 1. no two writer incarnations that could ever seal under the same DEK are
-//!    given the same coordinator-fenced `writer_epoch` — including a process
-//!    and its own restart. [`WriterEpoch`] makes the source explicit, while
-//!    the coordinator remains responsible for advancing its fence on restart;
-//!    `a_restarted_writer_uses_a_new_coordinator_epoch` pins that contract and
+//!    given the same durable `writer_epoch` — including distinct processes
+//!    sharing one coordinator fence and a process's own restart.
+//!    [`WriterEpoch`] makes the source explicit, while the composer remains
+//!    responsible for allocating it durably;
+//!    `a_restarted_writer_uses_a_new_durable_epoch` pins that contract and
 //!    `a_restarted_writer_reusing_its_epoch_repeats_nonces` documents the
 //!    refusal boundary if a composer violates it;
 //! 2. within one writer epoch, `object_sequence` never repeats — ⚠️ **no
@@ -72,7 +76,7 @@
 //!
 //! Given (1), the layout below makes (2) and (3) hold by construction.
 
-use crate::{CoordinatorEpoch, Error, Result};
+use crate::{Error, Result};
 
 /// A GCM nonce is 96 bits — 12 bytes.
 ///
@@ -90,25 +94,29 @@ pub const MAX_OBJECT_SEQUENCE: u64 = (1 << 40) - 1;
 /// The largest region index the layout can express.
 pub const MAX_REGION_INDEX: u32 = (1 << 16) - 1;
 
-/// A writer epoch derived from the coordinator's fenced incarnation.
+/// A writer epoch allocated from a durable writer-incarnation counter.
 ///
 /// A writer must not choose this value from a process id, a wall-clock stamp,
-/// or configuration: each can repeat after a restart. The coordinator epoch
-/// is the durable fence that changes when leadership changes, so it is the
-/// only public source for a production writer epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// or configuration: each can repeat after a restart. A coordinator fence can
+/// also be shared by multiple writer processes, so production writers must
+/// obtain this value from a durable create-only allocator.
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WriterEpoch(u64);
 
 impl WriterEpoch {
-    /// Derives the nonce writer epoch from the coordinator's fence.
+    /// Constructs the nonce writer epoch returned by a durable allocator.
     #[must_use]
-    pub const fn from_coordinator_epoch(epoch: CoordinatorEpoch) -> Self {
-        Self(epoch.get())
+    pub(crate) const fn from_durable_counter(counter: u64) -> Self {
+        Self(counter)
     }
 
     /// The encoded epoch value.
     #[must_use]
-    pub const fn get(self) -> u64 {
+    pub const fn get(&self) -> u64 {
+        self.0
+    }
+
+    pub(crate) const fn into_value(self) -> u64 {
         self.0
     }
 }
@@ -212,7 +220,7 @@ impl ParsedNonce {
 /// its twin had already used.
 ///
 /// ⚠️ One minter per writer epoch, and distinct epochs are the caller's
-/// obligation — see the [module docs](self), obligation (1), and `M8.10`.
+/// obligation — see the [module docs](self), obligation (1), and `M8.16`.
 #[derive(Debug)]
 pub struct NonceMinter {
     writer_epoch: u64,
@@ -220,7 +228,7 @@ pub struct NonceMinter {
 }
 
 impl NonceMinter {
-    /// A minter for coordinator-fenced writer incarnation `writer_epoch`.
+    /// A minter for durable writer incarnation `writer_epoch`.
     ///
     /// # Errors
     ///
@@ -228,13 +236,12 @@ impl NonceMinter {
     /// [`MAX_WRITER_EPOCH`] — refused, never masked into the field, because a
     /// truncated epoch is exactly how two writers collide.
     pub const fn new(writer_epoch: WriterEpoch) -> Result<Self> {
-        if writer_epoch.get() > MAX_WRITER_EPOCH {
-            return Err(Error::NonceWriterEpochOutOfRange {
-                got: writer_epoch.get(),
-            });
+        let writer_epoch = writer_epoch.into_value();
+        if writer_epoch > MAX_WRITER_EPOCH {
+            return Err(Error::NonceWriterEpochOutOfRange { got: writer_epoch });
         }
         Ok(Self {
-            writer_epoch: writer_epoch.get(),
+            writer_epoch,
             next_object: 0,
         })
     }
