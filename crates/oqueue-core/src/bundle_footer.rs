@@ -8,7 +8,10 @@
 //! goes through one bounds-checked cursor rather than one check per field.
 
 use crate::bundle::{BUNDLE_FORMAT_VERSION, Region, RegionAlg, TRAILER_LEN};
-use crate::{ByteRange, Error, PartitionId, Result, TopicId};
+use crate::{
+    ByteRange, Error, KeyId, MAX_WRAPPED_DEK_LEN, NONCE_BYTES, ParsedNonce, PartitionId, Redacted,
+    RegionEnvelope, Result, TopicId, WrappedKey,
+};
 
 /// Reads a bundle's footer back out of the object's tail.
 ///
@@ -246,12 +249,52 @@ impl Cursor<'_> {
         let length = self.u64()?;
         let bytes = ByteRange::bounded(offset, length)?;
         let alg = RegionAlg::from_code(self.take(1)?[0])?;
+        // ⚠️ **The algorithm code is what says whether an envelope follows**,
+        // and that is the format's only discriminator — `bundle/encode.rs`
+        // says why there is no second one and no version bump. An unsealed
+        // region reads exactly the bytes it always read.
+        let envelope = match alg {
+            RegionAlg::None => None,
+            RegionAlg::Aes256Gcm => Some(self.envelope()?),
+        };
         Ok(Region {
             topic,
             partition,
             bytes,
             record_count,
             alg,
+            envelope,
         })
+    }
+
+    /// The `{key_id, wrapped_dek, nonce}` a sealed region carries.
+    ///
+    /// ⚠️ **Nothing is allocated on a claimed length.** Both variable fields
+    /// go through [`take`](Cursor::take) first, which fails if the footer does
+    /// not actually hold that many bytes, and only the slice it returns is
+    /// copied — so a footer claiming a four-gigabyte wrapped key costs a
+    /// comparison, not four gigabytes. The wrapped key is bounded a second
+    /// time by [`MAX_WRAPPED_DEK_LEN`], the same bound
+    /// [`RegionEnvelope::new`] applies on the write path, so a footer cannot
+    /// describe an envelope this build would not have written.
+    fn envelope(&mut self) -> Result<RegionEnvelope> {
+        let key_len = self.u16()? as usize;
+        let at = self.at;
+        let key_id = KeyId::new(
+            core::str::from_utf8(self.take(key_len)?)
+                .map_err(|_| Error::MalformedBundleFooter { at })?
+                .to_owned(),
+        )
+        .map_err(|_| Error::MalformedBundleFooter { at })?;
+        let wrapped_len = self.u32()? as usize;
+        if wrapped_len == 0 || wrapped_len > MAX_WRAPPED_DEK_LEN {
+            return Err(Error::MalformedBundleFooter { at: self.at });
+        }
+        let wrapped = WrappedKey::new(Redacted::new(self.take(wrapped_len)?.to_vec()));
+        let mut nonce = [0_u8; NONCE_BYTES];
+        nonce.copy_from_slice(self.take(NONCE_BYTES)?);
+        let at = self.at;
+        RegionEnvelope::new(key_id, wrapped, ParsedNonce::decode(nonce))
+            .map_err(|_| Error::MalformedBundleFooter { at })
     }
 }

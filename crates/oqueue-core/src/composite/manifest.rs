@@ -147,11 +147,19 @@ fn decode_region(cursor: &mut Cursor<'_>) -> Result<Region> {
     let offset = cursor.u64()?;
     let length = cursor.u64()?;
     let alg = RegionAlg::from_code(cursor.byte()?)?;
+    // ⚠️ The other half of the refusal in `composite.rs`'s writer: this format
+    // carries no envelope, so a region it claims is sealed is a region whose
+    // key id, wrapped DEK and nonce are nowhere — parsing it would build a
+    // `Region` whose algorithm and envelope contradict each other.
+    if alg != RegionAlg::None {
+        return Err(Error::MalformedCompositeManifest { at: at_count });
+    }
     Ok(Region {
         topic,
         partition,
         bytes: ByteRange::bounded(offset, length)?,
         record_count,
         alg,
+        envelope: None,
     })
 }

@@ -7,7 +7,16 @@
 // the lint that disagrees is the one allowed.
 #![allow(clippy::redundant_pub_crate)]
 
-use crate::{ByteRange, CommittedSpan, Error, PartitionId, ProducerIdentity, Result, TopicId};
+mod alg;
+mod encode;
+
+pub use alg::RegionAlg;
+
+use crate::{
+    ByteRange, CommittedSpan, Error, PartitionId, ProducerIdentity, RegionEnvelope, Result,
+    SealedRegion, TopicId,
+};
+use encode::encode_footer;
 
 /// The format version this crate writes, and the only one it reads.
 ///
@@ -20,64 +29,6 @@ use crate::{ByteRange, CommittedSpan, Error, PartitionId, ProducerIdentity, Resu
 /// changes.
 pub const BUNDLE_FORMAT_VERSION: u8 = 1;
 
-/// How a region's bytes are protected.
-///
-/// ⚠️ **Doc 10 #40: the region header names its algorithm from its first
-/// commit**, which is this one — `M1.7` found `M1` had no object format to put
-/// the field on, so `roadmap.md`'s deferral table carried it here, to the first
-/// commit that defines a bundled object's internal structure. A few bytes now
-/// against a migration later.
-///
-/// ⚠️ **`M3` writes [`None`](RegionAlg::None) and reads nothing else.** `M8` is
-/// where a decoder acts on another value; what matters today is that the field
-/// exists, so an object written now can be told apart from one written then
-/// without guessing.
-///
-/// ⚠️ **Per region, not per object.** `architecture.md`'s Encryption section
-/// bundles topics sharing one KEK into one object, and a region's algorithm is
-/// a property of the topic whose records it holds.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[repr(u8)]
-pub enum RegionAlg {
-    /// Stored as written. The default path, and all `M3` produces.
-    None = 0,
-    /// AES-256-GCM, sealed by `oqueue-crypto` under the topic's data
-    /// encryption key (`M8.3`, `ADR-0050` point 1).
-    ///
-    /// ⚠️ **The code is durable the moment one object carries it**, so this
-    /// discriminant is part of the wire format rather than an implementation
-    /// detail — a later build that renumbered it would read every region
-    /// written before it as something else. ⚠️ **`M13`'s FIPS build swaps the
-    /// *implementation* of this value, never the value** (`ADR-0050` point 7,
-    /// `ADR-0012`): the whole reason the header names an algorithm is that a
-    /// FIPS and a non-FIPS broker must read each other's data.
-    Aes256Gcm = 1,
-}
-
-impl RegionAlg {
-    /// The byte a footer carries.
-    #[must_use]
-    pub const fn code(self) -> u8 {
-        self as u8
-    }
-
-    /// Reads one back.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::UnknownRegionAlg`] for any value this build does not know.
-    /// ⚠️ **An error, never a default.** Treating an unknown algorithm as
-    /// "stored as written" would hand a decoder ciphertext and let it decode
-    /// whatever that happened to look like.
-    pub const fn from_code(code: u8) -> Result<Self> {
-        match code {
-            0 => Ok(Self::None),
-            1 => Ok(Self::Aes256Gcm),
-            other => Err(Error::UnknownRegionAlg { code: other }),
-        }
-    }
-}
-
 /// One `(topic, partition)`'s region of a bundled object.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Region {
@@ -86,6 +37,11 @@ pub struct Region {
     pub(crate) bytes: ByteRange,
     pub(crate) record_count: u32,
     pub(crate) alg: RegionAlg,
+    /// `Some` exactly when [`alg`](Self::alg) is not
+    /// [`RegionAlg::None`](RegionAlg::None) — the two fields are one fact, and
+    /// `bundle/encode.rs` refuses either contradiction rather than writing an
+    /// object no reader can make sense of.
+    pub(crate) envelope: Option<RegionEnvelope>,
 }
 
 impl Region {
@@ -122,6 +78,19 @@ impl Region {
     #[must_use]
     pub const fn alg(&self) -> RegionAlg {
         self.alg
+    }
+
+    /// The key id, wrapped DEK and nonce a sealed region carries, and `None`
+    /// for a region stored as written.
+    ///
+    /// ⚠️ **`None` here and [`RegionAlg::None`] are the same statement**, and
+    /// a reader must not take either one as permission to serve the bytes: a
+    /// header byte is not authenticated, so what a region *must* be is derived
+    /// from its topic's key domain rather than from what the footer says it is
+    /// (`M8.12`).
+    #[must_use]
+    pub const fn envelope(&self) -> Option<&RegionEnvelope> {
+        self.envelope.as_ref()
     }
 }
 
@@ -231,8 +200,57 @@ impl BundleBuilder {
             partition,
             bytes,
             record_count,
-            // ⚠️ `M3` writes exactly this. `M8` is where a caller chooses.
+            // ⚠️ `M3` writes exactly this; `M8.4`'s `push_sealed` is where a
+            // caller chooses otherwise, and this path's bytes are unchanged by
+            // its arrival — an unsealed region encodes exactly what it always
+            // did.
             alg: RegionAlg::None,
+            envelope: None,
+        });
+        self.producers.push(producer);
+        Ok(())
+    }
+
+    /// Appends one `(topic, partition)`'s **sealed** records, with the
+    /// envelope that opens them.
+    ///
+    /// ⚠️ **The bytes are sealed before they arrive** (`ADR-0050` point 1):
+    /// the caller minted a [`Nonce`](crate::Nonce), spent it on
+    /// `oqueue-crypto::seal`, and passes the ciphertext ‖ tag here with the
+    /// envelope recording what a reader needs to undo it. The region's byte
+    /// range therefore covers the tag, which is what a reader must GET.
+    ///
+    /// # Errors
+    ///
+    /// As [`BundleBuilder::push`], plus [`Error::RegionNotEncrypted`] if
+    /// `sealed.alg` is [`RegionAlg::None`] — an envelope over bytes stored as
+    /// written is a caller that has not decided whether this region is
+    /// encrypted, and the footer has no way to record the contradiction.
+    pub fn push_sealed(
+        &mut self,
+        topic: TopicId,
+        partition: PartitionId,
+        pushed: PushedRecords,
+        sealed: SealedRegion<'_>,
+    ) -> Result<()> {
+        let PushedRecords {
+            count: record_count,
+            producer,
+        } = pushed;
+        admissible(&topic, record_count)?;
+        if sealed.alg == RegionAlg::None {
+            return Err(Error::RegionNotEncrypted);
+        }
+        let offset = self.payload.len() as u64;
+        let bytes = ByteRange::bounded(offset, sealed.bytes.len() as u64)?;
+        self.payload.extend_from_slice(sealed.bytes);
+        self.regions.push(Region {
+            topic,
+            partition,
+            bytes,
+            record_count,
+            alg: sealed.alg,
+            envelope: Some(sealed.envelope),
         });
         self.producers.push(producer);
         Ok(())
@@ -273,6 +291,7 @@ impl BundleBuilder {
             bytes,
             record_count,
             alg: RegionAlg::None,
+            envelope: None,
         });
         self.producers.push(producer);
         Ok(())
@@ -443,37 +462,4 @@ pub(crate) const TRAILER_LEN: usize = 9;
 /// than where it is written, so an over-long name is refused before any bytes
 /// are copied. Kafka's own limit is 249 characters, so nothing this project
 /// accepts on the wire comes close.
-const MAX_TOPIC_NAME_LEN: usize = u16::MAX as usize;
-
-fn encode_footer(regions: &[Region], out: &mut Vec<u8>) -> Result<()> {
-    let start = out.len();
-    for region in regions {
-        let topic = region.topic.as_str().as_bytes();
-        let name_len = u16::try_from(topic.len()).map_err(|_| Error::BundleTooLarge)?;
-        out.extend_from_slice(&name_len.to_be_bytes());
-        out.extend_from_slice(topic);
-        // `PartitionId` is never negative (its own invariant), so this is a
-        // widening rather than a reinterpretation.
-        out.extend_from_slice(&region.partition.get().unsigned_abs().to_be_bytes());
-        out.extend_from_slice(&region.record_count.to_be_bytes());
-        let (offset, length) = match region.bytes {
-            ByteRange::Bounded(bounded) => (bounded.offset(), bounded.length()),
-            // ⚠️ **An error, not `(0, 0)`.** Unreachable from `push`, but
-            // `Region` is public and this is a durable-format writer: encoding
-            // a zero-length range would produce an object `parse_footer`
-            // refuses, after `seal` returned `Ok`, the PUT landed and the
-            // metadata record committed. Failing here costs nothing and fails
-            // before anything durable exists.
-            ByteRange::Full => return Err(Error::UnboundedRegion),
-        };
-        out.extend_from_slice(&offset.to_be_bytes());
-        out.extend_from_slice(&length.to_be_bytes());
-        out.push(region.alg.code());
-    }
-    let footer_len = u32::try_from(out.len() - start).map_err(|_| Error::BundleTooLarge)?;
-    let count = u32::try_from(regions.len()).map_err(|_| Error::BundleTooLarge)?;
-    out.extend_from_slice(&count.to_be_bytes());
-    out.push(BUNDLE_FORMAT_VERSION);
-    out.extend_from_slice(&footer_len.to_be_bytes());
-    Ok(())
-}
+pub(crate) const MAX_TOPIC_NAME_LEN: usize = u16::MAX as usize;

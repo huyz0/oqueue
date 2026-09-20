@@ -5,6 +5,7 @@
 
 mod batched_effects;
 mod bundle;
+mod bundle_envelope;
 mod bundle_footer;
 mod clock;
 mod composite;

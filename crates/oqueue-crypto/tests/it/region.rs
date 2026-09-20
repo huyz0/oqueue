@@ -8,7 +8,9 @@
 // Sites are on values this test constructed from literals it controls.
 #![allow(clippy::expect_used)]
 
-use oqueue_core::{Dek, Error, Nonce, NonceMinter, ParsedNonce, PartitionId, RegionAlg, TopicId};
+use oqueue_core::{
+    Dek, Error, KeyId, Nonce, NonceMinter, ParsedNonce, PartitionId, RegionAlg, TopicId,
+};
 use oqueue_crypto::{RegionAad, TAG_BYTES, open, seal};
 
 const PLAINTEXT: &[u8] = b"a region's worth of record batches, or near enough";
@@ -47,12 +49,23 @@ const fn parsed(n: &Nonce) -> ParsedNonce {
     ParsedNonce::decode(*n.as_bytes())
 }
 
+/// The key id every vector below is sealed under.
+///
+/// ⚠️ **A `static`, because `RegionAad` borrows it** — and borrowing rather
+/// than owning is what keeps the associated data cheap on the seal path, where
+/// it is built per region.
+fn key_id() -> &'static KeyId {
+    static KEY_ID: std::sync::OnceLock<KeyId> = std::sync::OnceLock::new();
+    KEY_ID.get_or_init(|| KeyId::new("kek-1").expect("non-empty"))
+}
+
 fn aad(topic: &TopicId) -> RegionAad<'_> {
     RegionAad {
         topic,
         partition: partition(),
         region_index: 0,
         alg: RegionAlg::Aes256Gcm,
+        key_id: key_id(),
     }
 }
 
@@ -180,6 +193,26 @@ fn a_changed_partition_is_refused() {
 
     assert_eq!(
         open(&dek(), seen, moved, &bytes),
+        Err(Error::RegionOpenFailed)
+    );
+}
+
+/// ⚠️ **`M8.4` brought the footer's key id under the tag.** A footer edited to
+/// name a different KEK — which under BYOK is a different tenant's key domain
+/// — does not open, and that is a guarantee of the binding rather than a
+/// consequence of the two keys happening to differ.
+#[test]
+fn a_relabelled_key_id_is_refused() {
+    let topic = topic();
+    let (bytes, seen) = sealed(&topic);
+    let other = KeyId::new("kek-2").expect("non-empty");
+    let relabelled = RegionAad {
+        key_id: &other,
+        ..aad(&topic)
+    };
+
+    assert_eq!(
+        open(&dek(), seen, relabelled, &bytes),
         Err(Error::RegionOpenFailed)
     );
 }
@@ -327,15 +360,23 @@ fn the_minted_nonce_is_the_one_the_vectors_were_generated_under() {
 /// round-trip test can see moving: the associated data's own byte encoding.
 ///
 /// `b"oqueue:region:v1"` ‖ `u64_be(topic_len)` ‖ topic ‖ `i32_be(partition)` ‖
-/// `u32_be(region_index)` ‖ `u8(alg_code)`, for topic `orders`, partition 3,
-/// region 0, `Aes256Gcm`.
+/// `u32_be(region_index)` ‖ `u8(alg_code)` ‖ `u64_be(key_id_len)` ‖ key id,
+/// for topic `orders`, partition 3, region 0, `Aes256Gcm`, key id `kek-1`.
+///
+/// ⚠️ **The key id was appended by `M8.4`, and both vectors here were
+/// regenerated with it.** That is a change to a *pinned* format, which is
+/// normally the thing these literals exist to prevent — it is admissible only
+/// because nothing has sealed a region yet: `M8.6` is the first writer to
+/// choose `alg = 1`, so the set of objects the old encoding could make
+/// unopenable is empty. After that row, this literal moves only with a
+/// migration.
 #[test]
 fn the_associated_data_encoding_is_pinned() {
     let topic = topic();
 
     assert_eq!(
         aad(&topic).encode(),
-        b"oqueue:region:v1\x00\x00\x00\x00\x00\x00\x00\x06orders\x00\x00\x00\x03\x00\x00\x00\x00\x01"
+        b"oqueue:region:v1\x00\x00\x00\x00\x00\x00\x00\x06orders\x00\x00\x00\x03\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x05kek-1"
     );
 }
 
@@ -372,7 +413,7 @@ fn the_pinned_vector_opens_to_the_pinned_plaintext() {
 
 /// `seal(dek = [7u8; 32], nonce = NONCE_VECTOR, aad = the vector above,
 /// plaintext = PLAINTEXT)`, as ciphertext ‖ tag.
-const SEALED_VECTOR: &str = "5eba01af63c7878fe19778a9ff14910e8644d075d4b9c3c2630793ea9fa5cc0b114b0b02b91347d7a29d99474264bb059d3354975159c7b10fe6cd52487382fa43e4";
+const SEALED_VECTOR: &str = "5eba01af63c7878fe19778a9ff14910e8644d075d4b9c3c2630793ea9fa5cc0b114b0b02b91347d7a29d99474264bb059d3358f1e61f51e3a0971547ca1d5d2a7171";
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

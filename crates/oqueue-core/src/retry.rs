@@ -151,6 +151,13 @@ impl Error {
             // way every time.
             | Self::InvalidIndexQuota { .. }
             | Self::UnboundedRegion
+            // Never: a footer whose envelope and algorithm code contradict
+            // each other contradicts itself identically on every read, and an
+            // envelope field too wide for the format is too wide on every
+            // attempt.
+            | Self::RegionEnvelopeMismatch { .. }
+            | Self::RegionEnvelopeLength { .. }
+            | Self::SealedRegionNotRepresentable { .. }
             | Self::BundleTooLarge
             | Self::MalformedWriterId
             // Never: a value that does not fit a fixed-width nonce field does

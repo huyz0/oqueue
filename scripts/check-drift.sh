@@ -400,6 +400,11 @@ declare -A RUST_BOUNDS=(
   # `8 * 1024 * 1024`: the arithmetic form leaves two mutants no test can
   # distinguish, because nothing in a unit test writes eight megabytes.
   ["crates/oqueue-core/src/bundle_stream.rs|BUNDLE_PART_BYTES"]="8_388_608"
+  # `M8.4`: the longest wrapped DEK a region's footer envelope may carry.
+  # ⚠️ **Weakens by rising** -- it is the ceiling a parser checks a *claimed*
+  # length against before copying anything, so raising it raises what one
+  # fabricated footer can make a reader allocate.
+  ["crates/oqueue-core/src/region_envelope.rs|MAX_WRAPPED_DEK_LEN"]="8192"
   # How many object-storage reads one parked `Fetch` may make. Raising it lets
   # a client's read volume be set by somebody else's write rate.
   ["crates/oqueue-broker/src/fetch/target.rs|MAX_READS_PER_REQUEST"]="4"
@@ -626,6 +631,10 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/lease.rs|SEARCH_PROBES"]="twice the probes a 64-bit bisection needs -- a loop bound, not a policy"
   ["crates/oqueue-core/src/object_store_log/base.rs|SEARCH_PROBES"]="twice the probes a 64-bit bisection needs -- a loop bound, not a policy"
   ["crates/oqueue-core/src/bundle.rs|MAX_TOPIC_NAME_LEN"]="what the footer's u16 name-length field can express, not a policy"
+  # `M8.4`: the envelope's own widths. The key id's is the footer's field
+  # width, exactly as the topic name's above is; the wrapped DEK's is a real
+  # bound and lives in the pinned map instead.
+  ["crates/oqueue-core/src/region_envelope.rs|MAX_KEY_ID_LEN"]="what the footer's u16 key-id-length field can express, not a policy"
   # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
   ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|OFFSET_OUT_OF_RANGE"]="Kafka's own error code, the protocol fixes it"

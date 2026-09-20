@@ -19,7 +19,7 @@
 
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead as _, KeyInit as _, Payload};
-use oqueue_core::{Dek, Error, Nonce, ParsedNonce, PartitionId, RegionAlg, Result, TopicId};
+use oqueue_core::{Dek, Error, KeyId, Nonce, ParsedNonce, PartitionId, RegionAlg, Result, TopicId};
 
 /// How many bytes sealing adds to a region: AES-GCM's 128-bit tag, appended.
 ///
@@ -46,7 +46,21 @@ pub const TAG_BYTES: usize = 16;
 /// - the **region index** within the object — so two regions of one object
 ///   cannot be swapped;
 /// - the **algorithm code** — so a header edited to name a different algorithm
-///   fails to open rather than being decoded under the wrong one.
+///   fails to open rather than being decoded under the wrong one;
+/// - the **key id** the footer names (`M8.4`, carrying `M8.12`'s obligation) —
+///   so a region cannot be relabelled as sealed under a different KEK, which
+///   under BYOK is a different tenant's key domain. ⚠️ The DEK already fails a
+///   forged key id in practice, because the wrong key gives the wrong tag; the
+///   binding is what makes that a *guaranteed* refusal rather than a
+///   consequence of the two always disagreeing.
+///
+/// Bound without being in this struct:
+///
+/// - the **nonce**. It is an input to AES-GCM itself, not associated data, so
+///   editing the twelve bytes the footer carries changes the keystream and the
+///   tag fails. ⚠️ Adding it here as well would be a second copy of a binding
+///   the construction already gives, and a reader would have to check which of
+///   the two a mismatch came from.
 ///
 /// Not bound, and each is deliberate:
 ///
@@ -67,9 +81,17 @@ pub const TAG_BYTES: usize = 16;
 /// - the **record count**, for the same reason the byte range is not — it is
 ///   the footer's claim about the region, and `M8.4` is where the footer's
 ///   claims are covered;
-/// - the **key id and wrapped DEK**. The DEK *is* the key, so a wrong key
-///   already fails; binding its wrapped form would break `ADR-0050` point 4's
-///   lazy re-wrap, which changes the wrapped bytes for an unchanged DEK.
+/// - the **wrapped DEK's bytes**. ⚠️ `ADR-0050` point 4's lazy re-wrap is why,
+///   and `M8.4` re-examined the argument rather than inheriting it: a DEK is
+///   re-wrapped under the current KEK version when it next rotates or when
+///   compaction rewrites its data, so the wrapped bytes legitimately change
+///   for an unchanged key and an unchanged region — binding them would turn
+///   every re-wrap into a decrypt-and-reseal of the data, which is exactly the
+///   eager rewrite that point forbids. The argument still holds, and what it
+///   concedes is bounded: substituting these bytes yields an unwrap failure at
+///   the KMS or a different DEK, and a different DEK fails the tag. So the
+///   reachable harm is a denial of service on one region, never a region
+///   opening as something it is not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegionAad<'a> {
     /// The topic whose records the region holds.
@@ -80,6 +102,8 @@ pub struct RegionAad<'a> {
     pub region_index: u32,
     /// The algorithm the region header names.
     pub alg: RegionAlg,
+    /// The key-encryption key the footer's envelope names.
+    pub key_id: &'a KeyId,
 }
 
 impl RegionAad<'_> {
@@ -117,6 +141,12 @@ impl RegionAad<'_> {
         out.extend_from_slice(&self.partition.get().to_be_bytes());
         out.extend_from_slice(&self.region_index.to_be_bytes());
         out.push(self.alg.code());
+        // ⚠️ **Appended, and length-prefixed like the topic name**, so the
+        // encoding stays injective: without the prefix a key id could absorb
+        // the boundary and two identities would encode alike.
+        let key_id = self.key_id.as_str().as_bytes();
+        out.extend_from_slice(&(key_id.len() as u64).to_be_bytes());
+        out.extend_from_slice(key_id);
         out
     }
 }

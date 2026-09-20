@@ -32,7 +32,7 @@ mod manifest;
 
 pub use manifest::{Component, parse_composite};
 
-use crate::{ByteRange, Error, ObjectKey, PartitionId, Region, Result, TopicId};
+use crate::{ByteRange, Error, ObjectKey, PartitionId, Region, RegionAlg, Result, TopicId};
 use std::collections::HashSet;
 
 /// The manifest format's version.
@@ -177,6 +177,17 @@ fn encode_component(component: &Component, out: &mut Vec<u8>) -> Result<()> {
         };
         out.extend_from_slice(&bounded.offset().to_be_bytes());
         out.extend_from_slice(&bounded.length().to_be_bytes());
+        // ⚠️ **A composite manifest has no envelope field**, so a sealed
+        // region cannot be described by it: writing the algorithm code without
+        // the key id, wrapped DEK and nonce that undo it would make the data
+        // durable and permanently unopenable. Unreachable until `M8.6` seals
+        // anything, and a refusal from the day those bytes can exist rather
+        // than from the day someone notices.
+        if region.alg() != RegionAlg::None {
+            return Err(Error::SealedRegionNotRepresentable {
+                context: "a composite manifest",
+            });
+        }
         out.push(region.alg().code());
     }
     Ok(())
@@ -264,6 +275,7 @@ mod tests {
             bytes: ByteRange::Full,
             record_count: 1,
             alg: RegionAlg::None,
+            envelope: None,
         }
     }
 

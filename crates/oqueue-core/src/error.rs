@@ -398,6 +398,54 @@ pub enum Error {
     #[error("region algorithm `none` stores bytes as written; there is nothing to seal or open")]
     RegionNotEncrypted,
 
+    /// A region's envelope and its algorithm code contradict each other.
+    ///
+    /// ⚠️ **Both directions are a durable-format hazard**, which is why one
+    /// variant carries which one happened rather than two variants existing.
+    /// A sealed region with no envelope is data nobody holds a key for —
+    /// durable, billed and unreadable forever. An unsealed region carrying one
+    /// writes bytes a reader parses as the *next* region's fields, which is
+    /// how one topic's consumer ends up served another topic's records.
+    #[error(
+        "a region's envelope contradicts its algorithm code (the header says          sealed: {sealed})"
+    )]
+    RegionEnvelopeMismatch {
+        /// What the region's algorithm code says: `true` for a sealed region
+        /// whose envelope is missing, `false` for an unsealed one carrying an
+        /// envelope it cannot encode.
+        sealed: bool,
+    },
+
+    /// A region envelope's field will not fit what the footer can carry.
+    ///
+    /// ⚠️ **The same bound on both sides.** It refuses an over-long value on
+    /// the write path before any payload is built, and a *claimed* length on
+    /// the read path before anything is allocated for it — a footer that could
+    /// name four gigabytes of wrapped key is a footer that could make a reader
+    /// allocate it (`security.md` rule 3).
+    #[error("a region envelope's {field} is {got} bytes, which the footer cannot carry")]
+    RegionEnvelopeLength {
+        /// Which field: a key id, or a wrapped data encryption key.
+        field: &'static str,
+        /// Its length in bytes.
+        got: usize,
+    },
+
+    /// A sealed region reached a writer whose format cannot carry its
+    /// envelope.
+    ///
+    /// ⚠️ **A refusal rather than a silent drop.** A composite manifest copies
+    /// a component's region descriptions, and its own format has no envelope
+    /// field — so writing a sealed region into one would record the algorithm
+    /// code without the key id, wrapped DEK or nonce that undo it, and the
+    /// data would be durable and permanently unopenable. Unreachable until
+    /// `M8.6` seals anything; an error from the day the bytes could exist.
+    #[error("a sealed region cannot be described by {context}")]
+    SealedRegionNotRepresentable {
+        /// The format that cannot carry it.
+        context: &'static str,
+    },
+
     /// A sealed region did not authenticate.
     ///
     /// ⚠️ **Carries nothing, deliberately.** A wrong key, a wrong nonce, a

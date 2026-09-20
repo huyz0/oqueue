@@ -32,6 +32,19 @@ fuzz_target!(|data: &[u8]| {
     let _ = oqueue_core::parse_footer(data, size / 2);
 });
 
+// ⚠️ **`M8.4` added two more seeds, because the footer grew a conditional
+// shape.** A region whose `alg` byte is `1` is followed by an envelope —
+// `u16 key_id_len ‖ key_id ‖ u32 wrapped_len ‖ wrapped ‖ 12-byte nonce` — and
+// none of the seeds below reach it, because none of them sets that byte. A
+// mutator would have to discover both the byte and the four length fields it
+// gates before any of the envelope's own refusals (a claimed wrapped length
+// past the footer's end, a zero-length one, a key id that swallows the fields
+// after it) were reachable at all. `one-sealed-region` and
+// `sealed-and-unsealed` are well-formed objects in the new shape, so the
+// mutations that matter are one flipped byte away rather than one discovered
+// structure away — and the second of the two is the mixed object, where an
+// envelope's bytes and the next region's fields are adjacent.
+//
 // ⚠️ **Two seeds for `BundleTailTooShort`, because it has two sites.**
 // `below-the-trailer` is four bytes: too short to hold the trailer at all, so
 // `needed` is a *lower bound* — the field that would give the real one is
