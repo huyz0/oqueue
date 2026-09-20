@@ -52,7 +52,22 @@ the cost is one wasted call and never two live DEKs for a topic. Serializing
 instead would hold a lock across a network round trip.
 
 ⚠️ The caches hand out `&Dek` through a `FnOnce`, not by return, because `Dek`
-is deliberately not `Clone`. Do not `.await` inside one of those closures.
+is deliberately not `Clone`. Do not `.await` inside one of those closures, and
+⚠️ **do not call back into the cache from one either** — the lock is held for
+the length of the call and `std::sync::Mutex` is not reentrant, so every
+accessor (`sealed_bytes`, `holds_live_dek`, `live_topics`, `live_dek_is`,
+`len`, `is_empty`) deadlocks that task permanently. The `.await` rule is held by
+the type system; this one is not.
+
+## ⚠️ The read cache is bounded by its capacity, not by its TTL
+
+There is no sweep here and no timer, so an expired entry nobody looks up again
+is reached by nothing — that was a real leak of plaintext key material until
+`UNWRAPPED_DEK_CACHE_ENTRIES` and `Entries::make_room` landed. ⚠️ **Do not
+"simplify" the eviction away**, and do not add a background sweeper to replace
+it: this crate compiles no runtime, which is what lets `M0.16` measure NFR-56's
+floor. What holds is stated precisely in the module doc — at most N entries,
+each at most a TTL old *as of the last insert*.
 
 ## ⚠️ The rest of this crate is still being filled in
 

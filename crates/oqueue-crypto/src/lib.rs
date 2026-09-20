@@ -32,7 +32,7 @@ pub mod unwrap_cache;
 pub use dek_cache::{DEK_MAX_AGE_MS, DEK_MAX_SEALED_BYTES, DekCache};
 pub use entropy::{Entropy, FakeEntropy, OsEntropy, mint_dek};
 pub use region::{RegionAad, TAG_BYTES, open, seal};
-pub use unwrap_cache::{UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
+pub use unwrap_cache::{UNWRAPPED_DEK_CACHE_ENTRIES, UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
 
 use oqueue_core::{BoxFuture, Error, KeyId, KeyProvider, Redacted, Result, WrappedKey};
 

@@ -67,9 +67,13 @@ from here does not depend on here — the type belongs in `oqueue-core`.
   (7 days) — `ADR-0050` point 3, both pinned in `check-drift.sh`. `unwrap_cache`
   holds unwrapped DEKs keyed by `(key id, wrapped blob)` — ⚠️ **never by topic**,
   because a reader meets every DEK the topic ever rotated through — for
-  `UNWRAPPED_DEK_TTL_MS`. ⚠️ That TTL is where a KMS outage becomes visible:
-  reads of BYOK topics fail once an entry ages out (`ADR-0050`'s last
-  consequence).
+  `UNWRAPPED_DEK_TTL_MS`, at most `UNWRAPPED_DEK_CACHE_ENTRIES` of them.
+  ⚠️ That TTL is where a KMS outage becomes visible: reads of BYOK topics fail
+  once an entry ages out (`ADR-0050`'s last consequence). ⚠️ **The TTL alone
+  bounds nothing about memory** — there is no sweep and no timer here, so an
+  entry nobody looks up again is reached only by the eviction an *insert*
+  performs; the capacity is what makes the memory bound true, and the module
+  doc states exactly what holds and between which events.
 
 - **A fresh DEK's randomness comes through `entropy::Entropy`** (`M8.5`), never
   from a direct OS call in library logic. `OsEntropy` is for a composition root;

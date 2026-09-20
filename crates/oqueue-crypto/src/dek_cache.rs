@@ -160,6 +160,14 @@ impl<C: Clock, P: KeyProvider, E: Entropy> DekCache<C, P, E> {
     /// `std::sync::Mutex`; the signature takes `FnOnce`, not an async closure,
     /// so this is a rule the type system already holds.
     ///
+    /// ⚠️ **And do not call back into this cache from `seal`.** The lock is
+    /// held for the length of the call and `std::sync::Mutex` is not
+    /// reentrant, so [`Self::with_live_dek`], [`Self::sealed_bytes`],
+    /// [`Self::holds_live_dek`], [`Self::live_topics`] and
+    /// [`Self::live_dek_is`] all deadlock that task permanently if called from
+    /// inside. Nothing in the type system prevents it, unlike the `.await`
+    /// above, so it is a rule rather than a guarantee.
+    ///
     /// # Errors
     ///
     /// [`oqueue_core::Error::EntropyUnavailable`] if a fresh DEK cannot be

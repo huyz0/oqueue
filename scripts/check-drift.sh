@@ -322,6 +322,14 @@ declare -A RUST_BOUNDS=(
   # (`ADR-0050`'s last consequence). UNDERIVED: chosen, and `M15` is where a
   # real KMS could measure it.
   ["crates/oqueue-crypto/src/unwrap_cache.rs|UNWRAPPED_DEK_TTL_MS"]="300_000"
+  # The most unwrapped DEKs the read-side cache holds after any insert
+  # (`M8.5`, review). ⚠️ Weakening is *raising*, and it weakens two things at
+  # once: how much plaintext key material this process holds (a heap dump
+  # finds at most this many 256-bit keys), and how long an entry nobody looks
+  # up again survives -- expiry is noticed by a lookup and eviction only by an
+  # insert, so this constant is the *only* bound on an abandoned entry.
+  # Lowering it is safe and costs KMS calls.
+  ["crates/oqueue-crypto/src/unwrap_cache.rs|UNWRAPPED_DEK_CACHE_ENTRIES"]="1024"
   # How many links of a partition-manifest chain one fetch follows before
   # refusing (`M5.63`, `ADR-0042` point 2). A ceiling on GETs per read, so
   # raising it is the weakening direction: NFR-30's "bounded GETs" is what it

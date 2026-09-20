@@ -22,9 +22,28 @@
 //! It buys a bounded window in which a **revoked or rotated KEK is still
 //! effectively granting reads**: a DEK unwrapped before the revocation stays
 //! usable until it ages out, so revocation takes effect within
-//! [`UNWRAPPED_DEK_TTL_MS`] rather than instantly. It also buys a bound on how
-//! long plaintext key material for a tenant sits in this process's memory,
-//! which is what a heap dump would find.
+//! [`UNWRAPPED_DEK_TTL_MS`] rather than instantly.
+//!
+//! # ⚠️ The TTL alone bounds nothing about memory — the capacity does
+//!
+//! ⚠️ **This section used to claim the TTL bounded how long key material sits
+//! in this process, and it did not.** There is no sweep here and no timer:
+//! expiry is only ever noticed by a lookup, so an entry nobody asks for again
+//! was never reached by anything. A consumer scanning a partition's history
+//! under ten thousand rotated DEKs would have retained ten thousand plaintext
+//! DEKs for the life of the process, every one of them long expired. That was
+//! a real leak of key material, not a wording problem, and the fix is
+//! [`UNWRAPPED_DEK_CACHE_ENTRIES`] rather than a softer sentence.
+//!
+//! What now holds, exactly: **after any insert the cache holds at most
+//! [`UNWRAPPED_DEK_CACHE_ENTRIES`] entries, and every one of them was
+//! unwrapped within the last [`UNWRAPPED_DEK_TTL_MS`].** Both halves come from
+//! the same place — every insert first drops every expired entry, then evicts
+//! the least recently used until there is room. ⚠️ Between inserts the bound
+//! is the weaker *at most `UNWRAPPED_DEK_CACHE_ENTRIES` entries, each at most
+//! TTL old as of the last insert*: a cache that goes quiet holds what it held,
+//! and nothing wakes up to wipe it. Bounding *that* needs a sweep, which needs
+//! a timer, which needs a runtime this crate does not have and will not take.
 //!
 //! It costs availability, and `ADR-0050`'s last consequence names it: **a KMS
 //! outage degrades reads for BYOK topics once a DEK ages out of cache.** While
@@ -37,6 +56,7 @@ use oqueue_core::{Clock, Dek, KeyId, KeyProvider, Result, Timestamp, WrappedKey}
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use zeroize::Zeroize as _;
 
 /// How long an unwrapped DEK is kept before the KMS must be asked again: five
 /// minutes, in milliseconds.
@@ -54,6 +74,28 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 /// is where a real KMS is finally in the loop, is where a measurement could
 /// replace it.
 pub const UNWRAPPED_DEK_TTL_MS: i64 = 300_000;
+
+/// The most unwrapped DEKs held at once, after any insert.
+///
+/// ⚠️ **Weakening is *raising*, and it weakens two different things.** It is
+/// the bound on how much plaintext key material this process holds — a heap
+/// dump finds at most this many 256-bit keys — and it is also the *only* thing
+/// bounding how long an entry nobody looks up again survives, because expiry
+/// is noticed by a lookup and eviction by an insert. A larger cache holds more
+/// keys, and holds each abandoned one across more inserts. Lowering it is safe
+/// and costs KMS calls.
+///
+/// ⚠️ **Chosen, and here is the arithmetic rather than a feeling.** One entry
+/// is a 32-byte DEK plus its `BlobId` — a key id and a wrapped blob, the
+/// latter bounded by `MAX_WRAPPED_DEK_LEN` (8192) and a few hundred bytes in
+/// practice for both AWS and GCP. So 1024 entries is well under a megabyte
+/// typically and ~8 MiB at the format's worst case, which is a bound an
+/// operator can reason about. On the other side, 1024 DEKs is 1024 rotations
+/// of one topic — 64 TiB of sealed data at `DEK_MAX_SEALED_BYTES`, or twenty
+/// years at the age bound — reachable inside one `UNWRAPPED_DEK_TTL_MS` window
+/// only by a reader sweeping very old history very fast, which is exactly the
+/// case where paying a KMS call for the oldest blob is right.
+pub const UNWRAPPED_DEK_CACHE_ENTRIES: usize = 1024;
 
 /// What identifies an unwrapped DEK: the KEK it came from, and the blob.
 ///
@@ -75,11 +117,20 @@ impl BlobId {
     }
 }
 
-/// A DEK that came back from the KMS, and when.
+/// A DEK that came back from the KMS, when, and how recently it was used.
 #[derive(Debug)]
 struct CachedDek {
     dek: Dek,
     unwrapped_at: Timestamp,
+    /// A tick from [`Entries::next_use`], not a time.
+    ///
+    /// ⚠️ **Deliberately not a [`Timestamp`].** Recency has to order *every*
+    /// pair of entries for "least recently used" to name one, and a clock is
+    /// allowed to return the same instant twice — `ADR-0004` says so, and
+    /// `FakeClock` does exactly that unless a test advances it. Two entries
+    /// with equal timestamps would make the victim whichever one the map
+    /// happened to iterate first, which is not an eviction policy.
+    last_used: u64,
 }
 
 impl CachedDek {
@@ -87,6 +138,61 @@ impl CachedDek {
         now.as_millis()
             .saturating_sub(self.unwrapped_at.as_millis())
             < UNWRAPPED_DEK_TTL_MS
+    }
+}
+
+/// Everything the lock protects: the map, and the recency counter that orders
+/// it.
+///
+/// ⚠️ **One struct rather than two locks**, because a recency tick handed out
+/// under a different lock than the map it orders is two places for the same
+/// answer to come from.
+#[derive(Debug, Default)]
+struct Entries {
+    by_blob: HashMap<BlobId, CachedDek>,
+    /// The next recency tick to hand out. Monotonic for the life of the
+    /// process; at one use per nanosecond it would take 584 years to wrap.
+    next_use: u64,
+}
+
+impl Entries {
+    /// The tick for a use happening now.
+    const fn tick(&mut self) -> u64 {
+        let tick = self.next_use;
+        self.next_use = self.next_use.saturating_add(1);
+        tick
+    }
+
+    /// Makes room for one more entry: drops everything expired, then the least
+    /// recently used until the map is under capacity.
+    ///
+    /// ⚠️ **Called on the insert path only**, because this crate has no
+    /// runtime and therefore no sweep — see the module documentation for
+    /// exactly what that does and does not bound. Every removal here drops a
+    /// [`CachedDek`], and dropping one zeroizes its [`Dek`]; that is the whole
+    /// mechanism by which key material stops being resident.
+    fn make_room(&mut self, now: Timestamp) {
+        self.by_blob.retain(|_, entry| entry.fresh_at(now));
+        while self.by_blob.len() >= UNWRAPPED_DEK_CACHE_ENTRIES {
+            // ⚠️ `min_by_key` over the map rather than a second ordered
+            // structure: capacity is a small constant, this runs only on a
+            // miss that is already paying a KMS round trip, and a heap kept in
+            // step with a `HashMap` is two places for the recency of a key to
+            // disagree.
+            let Some(victim) = self
+                .by_blob
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(id, _)| id.clone())
+            else {
+                // ⚠️ Empty and still "at capacity" is unreachable while
+                // `UNWRAPPED_DEK_CACHE_ENTRIES` is positive, and breaking
+                // rather than trusting that is what makes this loop
+                // unconditionally terminate.
+                break;
+            };
+            self.by_blob.remove(&victim);
+        }
     }
 }
 
@@ -104,7 +210,7 @@ impl CachedDek {
 pub struct UnwrappedDekCache<C, P> {
     clock: C,
     provider: P,
-    entries: Mutex<HashMap<BlobId, CachedDek>>,
+    entries: Mutex<Entries>,
 }
 
 impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
@@ -115,7 +221,7 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
         Self {
             clock,
             provider,
-            entries: Mutex::new(HashMap::new()),
+            entries: Mutex::new(Entries::default()),
         }
     }
 
@@ -129,6 +235,13 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
     ///
     /// ⚠️ **Do not `.await` inside `open`** — it runs under a
     /// `std::sync::Mutex`, and `FnOnce` is what makes that unwritable.
+    ///
+    /// ⚠️ **And do not call back into this cache from `open`.** The lock is
+    /// held for the length of the call and `std::sync::Mutex` is not
+    /// reentrant, so [`Self::with_dek`], [`Self::len`] and [`Self::is_empty`]
+    /// all deadlock that task permanently if called from inside. Nothing in
+    /// the type system prevents it, unlike the `.await` above, so it is a
+    /// rule rather than a guarantee.
     ///
     /// # Errors
     ///
@@ -169,17 +282,18 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
         &self.provider
     }
 
-    /// How many unwrapped DEKs are held, expired ones included until the
-    /// lookup that evicts them.
+    /// How many unwrapped DEKs are held — never more than
+    /// [`UNWRAPPED_DEK_CACHE_ENTRIES`], and expired ones included until the
+    /// lookup or the insert that evicts them.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.entries().len()
+        self.entries().by_blob.len()
     }
 
     /// Whether it holds nothing at all.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries().is_empty()
+        self.entries().by_blob.is_empty()
     }
 
     /// Runs `open` under the lock if a fresh entry is held; evicts an expired
@@ -194,16 +308,23 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
     {
         let now = self.clock.now();
         let mut entries = self.entries();
-        let Some(entry) = entries.get(id) else {
+        let Some(entry) = entries.by_blob.get(id) else {
             return Err(open);
         };
         if !entry.fresh_at(now) {
-            // ⚠️ Evicted here rather than left to be overwritten, so an entry
-            // that is never asked for again does not keep key material alive
-            // for the life of the process.
-            entries.remove(id);
+            // ⚠️ Evicted here rather than left to be overwritten — but this
+            // path only ever reaches the key being looked up, which is why it
+            // is **not** what bounds the cache. An entry nobody asks for again
+            // is reached by `Entries::make_room` on some later insert, and by
+            // nothing else.
+            entries.by_blob.remove(id);
             return Err(open);
         }
+        let tick = entries.tick();
+        let Some(entry) = entries.by_blob.get_mut(id) else {
+            return Err(open);
+        };
+        entry.last_used = tick;
         let result = open(&entry.dek);
         drop(entries);
         Ok(result)
@@ -225,25 +346,36 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
     where
         F: FnOnce(&Dek) -> R,
     {
-        let plaintext = self.provider.unwrap(key_id, wrapped).await?;
-        // ⚠️ `Dek::from_slice` copies, and the `Redacted` the provider returned
-        // is dropped at the end of this statement *without* a wipe —
-        // `Redacted` has no `Drop` of its own (see its documentation) and this
-        // allocation is the provider's rather than ours to have zeroized in
-        // place. What this crate can guarantee is that the copy it keeps
-        // zeroizes.
-        let dek = Dek::from_slice(plaintext.expose())?;
+        // ⚠️ **`mut`, and wiped below, because this value is *ours*.** The
+        // provider moved it into this function and no other owner exists, so
+        // if it is dropped unwiped then 32 bytes of plaintext AES-256 key go
+        // back to the allocator on every read-side miss — `security.md` rule 8
+        // is discharged by the *key* type, and `Redacted` explicitly has no
+        // `Drop` of its own (see `redacted.rs`: a blanket `Drop` cannot be
+        // conditional on `T: Zeroize`). An earlier comment here called this
+        // "the provider's allocation"; that was wrong about ownership, and it
+        // is the argument that let the leak through.
+        let mut plaintext = self.provider.unwrap(key_id, wrapped).await?;
+        let dek = Dek::from_slice(plaintext.expose());
+        plaintext.zeroize();
         let now = self.clock.now();
         let cached = CachedDek {
-            dek,
+            dek: dek?,
             unwrapped_at: now,
+            last_used: 0,
         };
+
+        let mut entries = self.entries();
+        // ⚠️ Before the insert, and unconditionally: this is the only place
+        // anything expired is dropped that nobody looked up. See the module
+        // documentation for exactly what the resulting bound is.
+        entries.make_room(now);
+        let tick = entries.tick();
 
         // ⚠️ One `Entry` lookup, and the reference comes out of the branch that
         // decided — never a second `get` needing a fallback for a case that
         // cannot happen.
-        let mut entries = self.entries();
-        let entry = match entries.entry(id) {
+        let entry = match entries.by_blob.entry(id) {
             Entry::Occupied(occupied) if occupied.get().fresh_at(now) => {
                 // Lost the race; the DEK just unwrapped is dropped here and
                 // zeroized, and the incumbent answers.
@@ -256,6 +388,7 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
             }
             Entry::Vacant(vacant) => vacant.insert(cached),
         };
+        entry.last_used = tick;
         let result = open(&entry.dek);
         drop(entries);
         Ok(result)
@@ -263,7 +396,7 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
 
     /// ⚠️ Poison is recovered from, not propagated: every critical section
     /// here is a single map operation and cannot be left half-applied.
-    fn entries(&self) -> MutexGuard<'_, HashMap<BlobId, CachedDek>> {
+    fn entries(&self) -> MutexGuard<'_, Entries> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }

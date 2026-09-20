@@ -7,7 +7,7 @@ use crate::support::{CountingKeyProvider, block_on, key_id};
 use oqueue_core::{
     DEK_BYTES, Dek, FakeClock, FakeKeyProvider, KeyId, KeyProvider as _, Redacted, WrappedKey,
 };
-use oqueue_crypto::{UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
+use oqueue_crypto::{UNWRAPPED_DEK_CACHE_ENTRIES, UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
 
 type TestCache = UnwrappedDekCache<FakeClock, CountingKeyProvider<FakeKeyProvider>>;
 
@@ -154,4 +154,181 @@ fn the_key_id_is_part_of_the_entry_identity() {
     );
     assert_eq!(cache.len(), 1, "a refused unwrap caches nothing");
     assert!(!cache.is_empty());
+}
+
+/// A wrapped blob for the DEK made of a 32-byte pattern derived from `n`, so a
+/// test can make as many distinct blobs as it likes.
+fn nth_blob(key_id: &KeyId, n: usize) -> WrappedKey {
+    let provider = FakeKeyProvider::new();
+    let mut material = [0xC3u8; DEK_BYTES];
+    material[..8].copy_from_slice(&(n as u64).to_be_bytes());
+    let plaintext = Redacted::new(material.to_vec());
+    block_on(provider.wrap(key_id, &plaintext)).expect("the fake provider wraps")
+}
+
+/// An entry nobody ever looks up again is gone after a later insert past its
+/// TTL.
+///
+/// ⚠️ **This is the leak the review found, as a test.** Expiry is noticed by a
+/// lookup and eviction by an insert; an abandoned entry is reached by neither
+/// unless an insert sweeps it, which is what `Entries::make_room` now does.
+/// Without that sweep this test fails with `len() == 2` — the abandoned DEK
+/// resident forever with nothing that would ever wipe it.
+#[test]
+fn an_abandoned_entry_is_swept_by_a_later_insert() {
+    let kek = key_id();
+    let cache = cache();
+
+    read(&cache, &kek, &wrapped(&kek, 0x77));
+    assert_eq!(cache.len(), 1);
+
+    // Nobody ever asks for that blob again.
+    cache
+        .clock()
+        .advance(UNWRAPPED_DEK_TTL_MS)
+        .expect("in range");
+
+    // An unrelated read. Its insert is what has to do the sweeping.
+    read(&cache, &kek, &wrapped(&kek, 0x88));
+
+    assert_eq!(
+        cache.len(),
+        1,
+        "the expired entry nobody looked up must not still be resident"
+    );
+}
+
+/// The cache never exceeds its capacity, however many distinct blobs are read.
+///
+/// ⚠️ Every blob here is *fresh* — the clock never moves — so nothing is
+/// expired and the capacity is the only thing that can hold the size down.
+/// That separates this assertion from the sweep above: it is the least-
+/// recently-used eviction being tested, not the TTL.
+#[test]
+fn the_cache_never_exceeds_its_capacity() {
+    let kek = key_id();
+    let cache = cache();
+
+    for n in 0..(UNWRAPPED_DEK_CACHE_ENTRIES + 50) {
+        read(&cache, &kek, &nth_blob(&kek, n));
+        assert!(
+            cache.len() <= UNWRAPPED_DEK_CACHE_ENTRIES,
+            "cache grew to {} past the capacity of {UNWRAPPED_DEK_CACHE_ENTRIES}",
+            cache.len()
+        );
+    }
+
+    assert_eq!(cache.len(), UNWRAPPED_DEK_CACHE_ENTRIES);
+}
+
+/// Eviction takes an expired entry before it takes a live one.
+///
+/// ⚠️ The ordering matters and is not an optimisation: evicting a live entry
+/// while an expired one sits beside it costs a KMS call for a DEK that was
+/// still valid *and* leaves key material resident past its TTL. Both halves of
+/// `make_room` are needed, in that order.
+#[test]
+fn eviction_prefers_expired_entries_over_live_ones() {
+    let kek = key_id();
+    let cache = cache();
+
+    // One blob read early, then left alone — it will be the oldest by
+    // recency as well as expired, so this alone would not separate the two
+    // policies.
+    let stale = wrapped(&kek, 0x99);
+    read(&cache, &kek, &stale);
+
+    cache
+        .clock()
+        .advance(UNWRAPPED_DEK_TTL_MS)
+        .expect("in range");
+
+    // Fill to exactly capacity with live blobs. The very first of these is now
+    // the least recently used *live* entry, so an eviction that ignored expiry
+    // would take it.
+    let first_live = nth_blob(&kek, 0);
+    read(&cache, &kek, &first_live);
+    for n in 1..UNWRAPPED_DEK_CACHE_ENTRIES {
+        read(&cache, &kek, &nth_blob(&kek, n));
+    }
+    assert_eq!(cache.len(), UNWRAPPED_DEK_CACHE_ENTRIES);
+
+    // The stale entry is gone; the live one that would have been the LRU
+    // victim is still a hit.
+    let before = cache.provider().unwraps();
+    read(&cache, &kek, &first_live);
+    assert_eq!(
+        cache.provider().unwraps(),
+        before,
+        "the oldest live entry must have survived, because an expired one was \
+         there to take instead"
+    );
+}
+
+/// Eviction takes the *least recently used* live entry, not an arbitrary one.
+///
+/// # ⚠️ What this rests on
+///
+/// For the real code the assertion is **deterministic**: with the clock never
+/// moving nothing expires, so `make_room` falls through to the recency
+/// comparison, and the victims are exactly the entries not touched in the
+/// second pass.
+///
+/// Against the failure it guards — a recency counter that does not advance, so
+/// every entry ties and the victim is whichever the map iterates first — it is
+/// not a proof but is not close: the tie-broken order is bucket order, which a
+/// randomly seeded `HashMap` makes uncorrelated with insertion order, so the
+/// chance that the evicted set avoids all `TOUCHED` touched entries is about
+/// `0.75^256`. That is not a flake rate to reason about.
+///
+/// ⚠️ It deliberately says nothing about *which* live entry is best to evict.
+/// LRU is a policy; what makes it worth a test is that the alternative here is
+/// not a different policy but no policy at all.
+#[test]
+fn eviction_takes_the_least_recently_used_live_entry() {
+    /// How many entries are touched, and how many new blobs are then read.
+    const TOUCHED: usize = 256;
+
+    let kek = key_id();
+    let cache = cache();
+
+    // Fill to capacity. Nothing expires: the clock never moves.
+    for n in 0..UNWRAPPED_DEK_CACHE_ENTRIES {
+        read(&cache, &kek, &nth_blob(&kek, n));
+    }
+    assert_eq!(cache.len(), UNWRAPPED_DEK_CACHE_ENTRIES);
+
+    // Touch the oldest `TOUCHED`, making them the most recently used.
+    for n in 0..TOUCHED {
+        read(&cache, &kek, &nth_blob(&kek, n));
+    }
+
+    // `TOUCHED` new blobs, so `TOUCHED` evictions.
+    for n in 0..TOUCHED {
+        read(
+            &cache,
+            &kek,
+            &nth_blob(&kek, UNWRAPPED_DEK_CACHE_ENTRIES + n),
+        );
+    }
+    assert_eq!(cache.len(), UNWRAPPED_DEK_CACHE_ENTRIES);
+
+    // Every touched entry survived.
+    let before = cache.provider().unwraps();
+    for n in 0..TOUCHED {
+        read(&cache, &kek, &nth_blob(&kek, n));
+    }
+    assert_eq!(
+        cache.provider().unwraps(),
+        before,
+        "an entry used since the fill must not have been the victim"
+    );
+
+    // And the least recently used one did not.
+    read(&cache, &kek, &nth_blob(&kek, TOUCHED));
+    assert_eq!(
+        cache.provider().unwraps(),
+        before + 1,
+        "the least recently used entry must have been evicted"
+    );
 }
