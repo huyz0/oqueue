@@ -387,6 +387,38 @@ pub enum Error {
         code: u8,
     },
 
+    /// A region's algorithm says its bytes are stored as written, and
+    /// something asked to seal or open it as if they were not.
+    ///
+    /// ⚠️ **[`crate::RegionAlg::None`] is not an encryption algorithm**, so
+    /// "open this region" under it has no answer. Returning the bytes
+    /// unchanged would be the identity-AEAD mistake ADR-0006 already refuses
+    /// one layer up for keys: a caller that believed it had decrypted
+    /// something would be holding whatever the object happened to contain.
+    #[error("region algorithm `none` stores bytes as written; there is nothing to seal or open")]
+    RegionNotEncrypted,
+
+    /// A sealed region did not authenticate.
+    ///
+    /// ⚠️ **Carries nothing, deliberately.** A wrong key, a wrong nonce, a
+    /// flipped ciphertext byte, a flipped tag byte and an associated-data
+    /// mismatch are one error here, because distinguishing them is what turns
+    /// an AEAD failure into an oracle — and because the honest description of
+    /// all five is the same: these bytes are not what was sealed.
+    #[error("a sealed region failed authentication")]
+    RegionOpenFailed,
+
+    /// A region could not be sealed.
+    ///
+    /// ⚠️ **Not the mirror of [`Error::RegionOpenFailed`]** — sealing does not
+    /// fail on untrusted data, because the data is ours. The only way here is
+    /// a region larger than the AEAD's own per-message bound, which
+    /// `ADR-0050` point 3's 64 GiB rotation bound already sits under. It is an
+    /// error rather than a partial seal, because a partially sealed region is
+    /// bytes that look encrypted and are not.
+    #[error("a region could not be sealed")]
+    RegionSealFailed,
+
     /// A composite's manifest could not be read.
     ///
     /// ⚠️ Truncated, torn, or declaring lengths that do not fit — the same

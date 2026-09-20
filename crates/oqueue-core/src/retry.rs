@@ -104,6 +104,12 @@ impl Error {
             // Never: a malformed or unknown-format object does not become
             // well-formed by being read again.
             | Self::UnknownRegionAlg { .. }
+            // Never: the same bytes fail authentication identically every
+            // time, and a region whose algorithm is `none` does not become
+            // encrypted by being asked again.
+            | Self::RegionNotEncrypted
+            | Self::RegionOpenFailed
+            | Self::RegionSealFailed
             | Self::UnknownBundleFormat { .. }
             | Self::MalformedBundleFooter { .. }
             // Never, for the same reason one format over: a manifest that is

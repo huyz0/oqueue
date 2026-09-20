@@ -4,10 +4,27 @@
 //! it: one object carries many tenants' data and can only carry one SSE-KMS
 //! key. So encryption is broker-side, and this is where it lives.
 //!
-//! ⚠️ **Almost empty.** `M0.11` added the no-op provider so the unencrypted
-//! path is an explicit, testable configuration rather than an absence; the
-//! envelope scheme, the DEK cache and nonce construction are `M8`'s.
+//! ⚠️ **Still mostly empty.** `M0.11` added the no-op provider so the
+//! unencrypted path is an explicit, testable configuration rather than an
+//! absence; `M8.3` added [`region`], which seals and opens **one** region.
+//! The envelope in the footer, the DEK cache and the KMS providers are the
+//! rest of `M8`'s.
+//!
+//! # ⚠️ The algorithm is a format, not a library
+//!
+//! [`region::seal`] and [`region::open`] are AES-256-GCM over `RustCrypto`'s
+//! pure-Rust `aes-gcm`, chosen so the default build still needs only cargo and
+//! a C compiler (NFR-42, `ADR-0012`). `M13`'s FIPS build swaps that
+//! implementation for `aws-lc-rs`'s validated one — and **swaps nothing about
+//! the format**: the same `alg` code, the same nonce, the same associated
+//! data, the same tag. That is the whole reason the region header names an
+//! algorithm at all (`ADR-0050` point 7), and why a FIPS and a non-FIPS broker
+//! can read each other's objects.
 #![forbid(unsafe_code)]
+
+pub mod region;
+
+pub use region::{RegionAad, TAG_BYTES, open, seal};
 
 use oqueue_core::{BoxFuture, Error, KeyId, KeyProvider, Redacted, Result, WrappedKey};
 

@@ -10,6 +10,10 @@ license.workspace = true
 # topology, enforced by `check-layering.sh`. A dependency on a sibling crate is a layering violation, not a shortcut.
 [dependencies]
 oqueue-core = { path = "../oqueue-core" }
+# AES-256-GCM for `region::seal`/`region::open` (`M8.3`). Version, features and
+# the no-C-toolchain argument are in the workspace root, beside every other
+# third-party version.
+aes-gcm.workspace = true
 
 # ⚠️ Empty on purpose, and worth a word because it is the one section
 # `check-layering.sh` never reads: nothing here may take an async runtime.

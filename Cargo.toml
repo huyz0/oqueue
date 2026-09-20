@@ -80,6 +80,29 @@ zeroize = { version = "1", default-features = false, features = ["alloc"] }
 # ⚠️ Same footprint argument as `zeroize`: pure Rust, no build script,
 # already in `Cargo.lock` transitively through `ring`.
 subtle = { version = "2", default-features = false }
+# The AEAD `M8.3` seals a region with: AES-256-GCM, the algorithm `ADR-0050`
+# point 1 fixes. RustCrypto's pure-Rust implementation, chosen so the default
+# build's toolchain stays cargo plus a C compiler (NFR-42) — ⚠️ **no
+# `build.rs` in any of it** — measured against `git show HEAD:Cargo.lock`
+# rather than read off a dependency tree, because a tree lists what is
+# *reachable* and the question is what is *new*: the lock gains exactly twelve
+# packages, `aead`, `aes`, `aes-gcm`, `cipher`, `cmov`, `cpubits`, `ctr`,
+# `ctutils`, `ghash`, `inout`, `polyval` and `universal-hash`. ⚠️ The rest of
+# what `cargo tree -p oqueue-crypto` shows — `block-buffer`, `crypto-common`,
+# `hybrid-array`, `typenum`, `cpufeatures`, `zeroize` — was already in the lock
+# before this entry existed, so it costs nothing new. Not one of the eighteen
+# ships a build script (checked by looking for `build.rs` in each unpacked
+# source, `M8.3`), so doc 20 §1's budget is untouched. `cpufeatures` detects
+# AES-NI at *runtime*; it compiles no C. ⚠️ **`default-features = false`, no
+# `getrandom`**: this project's nonces are *constructed*, never random
+# (`oqueue-core::nonce`), and a random-nonce constructor in scope is the one
+# API `M8.2` exists to make unreachable. ⚠️ `M13`'s FIPS build swaps this
+# implementation for `aws-lc-rs`'s validated one and changes **nothing** about
+# the format — same `alg` code, same bytes (ADR-0012, ADR-0050 point 7).
+aes-gcm = { version = "0.11", default-features = false, features = [
+    "aes",
+    "alloc",
+] }
 # The global allocator, set in `bin/oqueue` only. ADR-0007. ⚠️ Pulls a C
 # toolchain — permitted by NFR-42 ("cargo and a C compiler"), recorded here
 # because `AGENTS.md` forbids it happening without a reason.

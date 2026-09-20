@@ -11,6 +11,10 @@ Because BYOK is a per-topic opt-in and server-side encryption cannot express it:
 ## Upstream
 
 - `oqueue-core` — the types, IDs, errors and trait seams this crate is written against.
+- `aes-gcm` — RustCrypto's pure-Rust AES-256-GCM, the AEAD `region::seal` and
+  `region::open` use (`M8.3`). Taken without `getrandom`, so no random-nonce
+  constructor is in scope; no build script, so the default build's toolchain
+  stays cargo plus a C compiler (NFR-42, ADR-0012).
 
 ## Downstream
 
@@ -24,13 +28,22 @@ from here does not depend on here — the type belongs in `oqueue-core`.
 
 | Must stay true | Held by |
 |---|---|
-| A nonce is never random | review; `security.md` |
+| A nonce is never random | review; `security.md` — and, since `M8.3`, by construction: `aes-gcm` is taken without `getrandom`, so no random-nonce constructor is in scope |
 | Key material is zeroized on drop | review — `security.md` rule 8 |
 | No key material reaches a formatted string | `oqueue_core::Redacted`, and `check-secrets.sh` once `M8` writes it |
 
 ## Notes for whoever touches this
 
-- **`NoOpKeyProvider` is the only thing here, and it refuses.** `M0.11`,
+- **`region::seal`/`region::open` are the AEAD** (`M8.3`): AES-256-GCM over
+  one region, with the algorithm taken from the region header at open time and
+  never assumed. The associated data binds the region's identity — topic,
+  partition, region index and algorithm code — and deliberately **not** the
+  object key or byte range; `region.rs`'s own docs say precisely what that does
+  and does not buy. Sealing costs exactly sixteen bytes, the untruncated GCM
+  tag. ⚠️ `M13`'s FIPS build swaps the *implementation* behind
+  `RegionAlg::Aes256Gcm`, never the format (ADR-0050 point 7, ADR-0012).
+
+- **`NoOpKeyProvider` refuses, and is the other thing here.** `M0.11`,
   ADR-0006. ⚠️ It is *production* code for the unencrypted path, not a fake —
   which is why it lives here and the fake lives beside the trait in
   `oqueue-core`. It returns `EncryptionDisabled` rather than passing the

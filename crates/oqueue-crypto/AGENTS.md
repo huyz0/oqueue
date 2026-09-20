@@ -25,8 +25,19 @@ protects, looking exactly like a successful wrap.
 predates the decision and asks for a "no-op" in the natural reading; the natural
 reading is the rejected alternative.
 
-## ⚠️ The rest of this crate is empty
+## ⚠️ The algorithm is read, never assumed
+
+`region::open` dispatches on the [`RegionAlg`] its caller read out of the
+region header. ⚠️ **Do not add a convenience that decrypts without one** — the
+whole reason the header carries the field is that `M13`'s FIPS build must read
+objects this build wrote and vice versa (ADR-0050 point 7, ADR-0012), and an
+API that assumes AES-GCM makes that unprovable. `RegionAlg::None` is refused by
+both `seal` and `open`; it is not an algorithm.
+
+## ⚠️ The rest of this crate is still mostly empty
 
 `M0.8` created the skeleton so the workspace shape exists before any behaviour
-does. Adding code here means the milestone that owns it has started — check
-[`backlog.md`](../../docs/internal/product/backlog.md) rather than assuming.
+does; `M0.11` added the refusing no-op and `M8.3` the region AEAD. The envelope
+in the footer, the DEK cache and the KMS providers are the rest of `M8`'s —
+check [`backlog.md`](../../docs/internal/product/backlog.md) rather than
+assuming.

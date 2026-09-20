@@ -41,6 +41,17 @@ pub const BUNDLE_FORMAT_VERSION: u8 = 1;
 pub enum RegionAlg {
     /// Stored as written. The default path, and all `M3` produces.
     None = 0,
+    /// AES-256-GCM, sealed by `oqueue-crypto` under the topic's data
+    /// encryption key (`M8.3`, `ADR-0050` point 1).
+    ///
+    /// ⚠️ **The code is durable the moment one object carries it**, so this
+    /// discriminant is part of the wire format rather than an implementation
+    /// detail — a later build that renumbered it would read every region
+    /// written before it as something else. ⚠️ **`M13`'s FIPS build swaps the
+    /// *implementation* of this value, never the value** (`ADR-0050` point 7,
+    /// `ADR-0012`): the whole reason the header names an algorithm is that a
+    /// FIPS and a non-FIPS broker must read each other's data.
+    Aes256Gcm = 1,
 }
 
 impl RegionAlg {
@@ -61,6 +72,7 @@ impl RegionAlg {
     pub const fn from_code(code: u8) -> Result<Self> {
         match code {
             0 => Ok(Self::None),
+            1 => Ok(Self::Aes256Gcm),
             other => Err(Error::UnknownRegionAlg { code: other }),
         }
     }

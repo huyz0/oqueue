@@ -603,6 +603,10 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/nonce.rs|MAX_WRITER_EPOCH"]="what the layout's 40-bit writer-epoch field can express, not a policy"
   ["crates/oqueue-core/src/nonce.rs|MAX_OBJECT_SEQUENCE"]="what the layout's 40-bit object-sequence field can express, not a policy"
   ["crates/oqueue-core/src/nonce.rs|MAX_REGION_INDEX"]="what the layout's 16-bit region-index field can express, not a policy"
+  # `M8.3`: AES-GCM's tag width. Not truncated by this format, so it is the
+  # cipher's own number rather than a setting -- shortening it would weaken
+  # the forgery bound to save sixteen bytes on a megabyte-sized region.
+  ["crates/oqueue-crypto/src/region.rs|TAG_BYTES"]="AES-GCM's 128-bit tag, untruncated -- fixed by the construction, not chosen"
   ["crates/oqueue-core/src/bundle.rs|BUNDLE_FORMAT_VERSION"]="this object format's version number"
   ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/composite.rs|COMPOSITE_FORMAT_VERSION"]="the composite manifest format's version number"
