@@ -312,6 +312,16 @@ GITCONFIG_ARGS+=(-e "GIT_CONFIG_KEY_${_gc_n}=safe.directory" -e "GIT_CONFIG_VALU
 _gc_n=$(( _gc_n + 1 ))
 GITCONFIG_ARGS+=(-e "GIT_CONFIG_COUNT=$_gc_n")
 
+# Docker Desktop bind mounts on Windows and macOS do not have Linux-native
+# filesystem latency. Passing the invoking platform into the container lets
+# the budget gate distinguish that measurement from Linux/WSL/CI evidence;
+# correctness gates still run in full on every platform.
+OQUEUE_HOST_PLATFORM=linux
+case "${OS:-}:${OSTYPE:-}" in
+  Windows_NT:*|*:msys|*:win32) OQUEUE_HOST_PLATFORM=windows ;;
+  *:darwin*) OQUEUE_HOST_PLATFORM=macos ;;
+esac
+
 # `-it` only when there is a terminal: an agent or a CI job invokes this with
 # no TTY, and `docker run -it` fails outright there rather than degrading.
 TTY_FLAGS=()
@@ -319,6 +329,7 @@ TTY_FLAGS=()
 
 exec docker run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
   --user "$HOST_UID:$HOST_GID" \
+  -e "OQUEUE_HOST_PLATFORM=$OQUEUE_HOST_PLATFORM" \
   --memory="$MEM" --memory-swap="$MEM" \
   --cpus="$CPUS" --pids-limit="$PIDS" \
   --tmpfs "/tmp:rw,exec,size=$TMPFS,mode=1777" \

@@ -106,6 +106,17 @@ copy_gate() {
   cp "$REPO_ROOT"/scripts/lib/*.py "$1/scripts/lib/" 2>/dev/null || true
 }
 
+# write_crlf <file>: keep the fixture's content identical while exercising
+# gates against the line endings a Windows checkout presents to the container.
+# `awk` and `mv` are available on the supported shell environments; unlike
+# `sed -i`, this does not rely on GNU or BSD-specific in-place flags.
+write_crlf() {
+  local file="$1"
+  local tmp="${file}.crlf"
+  awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }' "$file" > "$tmp"
+  mv "$tmp" "$file"
+}
+
 TOTAL=0
 FAILED_CASES=0
 
@@ -1507,6 +1518,7 @@ EOF
 |---|---|
 | M1 | FR-999 |
 EOF
+  write_crlf "$dir/docs/internal/product/roadmap.md"
   (cd "$dir" && git add -A && git commit -q -m "M-1.1: a plan cites a requirement that does not exist")
   printf '%s\n' "$dir"
 }
@@ -1721,6 +1733,7 @@ ROADMAP
 
 19. **A hot path without a benchmark is an unmeasured claim.**
 EOF
+  write_crlf "$dir/docs/internal/standards/performance.md"
   cat > "$dir/Cargo.toml" <<'EOF'
 [workspace]
 members = ["crates/oqueue-x"]

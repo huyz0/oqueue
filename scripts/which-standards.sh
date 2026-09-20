@@ -121,6 +121,7 @@ fi
 # shorter standards list and says nothing.
 patterns_of() {
   awk '
+    { sub(/\r$/, "") }
     function clean(s,   q) {
       q = sprintf("%c", 39)          # a literal single quote, without fighting
       gsub(/^[ \t]+|[ \t]+$/, "", s) # bash quoting inside this awk program

@@ -89,6 +89,13 @@ runtime fix) to solve a build problem, at large and unnecessary cost.
     variant exists, running them under emulation at roughly 85% slower — which
     presents as flaky tests, not as a portability problem.
 
+    **A timing budget is evidence about the execution platform.** Docker
+    Desktop's Windows/macOS bind mounts are translation layers, not Linux
+    native storage. Correctness gates still run there, but the warm-suite
+    budget is enforced by native Linux, WSL, and CI; Docker Desktop reports a
+    named skip with that remedy rather than turning filesystem overhead into a
+    false regression or weakening the fixed budget.
+
 ## Cross-architecture correctness
 
 18. ⚠️ **ARM CI is a codegen and SIMD-dispatch gate, not the atomics gate.**

@@ -89,7 +89,18 @@ fi
 # Table rows only — the header row ("Milestone") and separator ("---") are
 # excluded by requiring the second column to hold at least one FR/NFR id.
 declare -A ROADMAP_IDS=()
-section="$(sed -n '/^## Requirement coverage$/,/^## /p' "$ROADMAP_FILE" || true)"
+# `sed` range endpoints are inclusive.  Using the same `## ` expression as
+# both endpoints therefore returns only the heading on implementations that
+# stop a range as soon as its start line also matches the end expression.
+# That made every valid table look empty.  `awk` expresses the intended
+# half-open range directly and strips CR so a Windows checkout is read the
+# same way as an LF checkout.
+section="$(awk '
+  { sub(/\r$/, "") }
+  /^## Requirement coverage$/ { in_section=1; print; next }
+  in_section && /^## / { exit }
+  in_section { print }
+' "$ROADMAP_FILE" || true)"
 while IFS= read -r row; do
   # ⚠️ Only lines shaped like `| X | Y |` — exactly two columns — are table
   # rows. Without this, `cut -d'|' -fN` on a prose line with no `|` at all

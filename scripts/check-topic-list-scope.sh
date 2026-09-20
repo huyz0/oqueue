@@ -103,7 +103,15 @@ fi
 # guard's own line and the call's own line must be adjacent, `return
 # cluster.topic_names();` the fail-open branch's first and only statement.
 if (( ${#call_sites[@]} == 1 )) && [[ "${call_sites[0]%%:*}" == "$CALLER_SEAM" ]]; then
-  fn_body="$(awk '/^async fn all_topics_names/,/^}/' "$CALLER_SEAM")"
+  # Rust source in a Windows worktree commonly has CRLF endings.  Normalize
+  # records inside awk rather than requiring every checkout to rewrite its
+  # line endings just to run a text gate.
+  fn_body="$(awk '
+    { sub(/\r$/, "") }
+    /^async fn all_topics_names/ { in_fn=1 }
+    in_fn { print }
+    in_fn && /^}/ { exit }
+  ' "$CALLER_SEAM")"
   if [[ -z "$fn_body" ]]; then
     fail "all_topics_names not found at its pinned shape in $CALLER_SEAM"
   else

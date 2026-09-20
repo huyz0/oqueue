@@ -30,6 +30,37 @@ re-derived rather than copied when a milestone opens. Read the plan's
 "Decisions required first" before writing any of that milestone's code; see
 [`sdd.md`](../standards/sdd.md) §Decomposition.
 
+## M12: Admin API and operability
+
+19 rows against a plan of 19. ADR-0058 resolves the opening decisions: topic
+listing remains principal-scoped, admin and group operations deny by default,
+deletion is a durable non-reusable tombstone, unsupported configuration is
+refused, routine telemetry is bounded, and role selection changes real
+responsibilities. A finding filed while M12 runs is dispositioned when filed
+(`milestone/SKILL.md`).
+
+| ID | Task | Acceptance | State |
+|---|---|---|---|
+| M12.0 | M12 opening: decisions, decomposition, and red completion gate | Serves FR-40, FR-50, FR-52, FR-53. ADR-0058 is accepted; the plan and roadmap trace supporting FR-44, FR-45, and NFR-12; the 19 authoritative rows exist; `scripts/gates/m12-complete.sh` exists and exits non-zero because the live admin, role, group-authorization, diagnostic, and portability evidence are not yet present. | done |
+| M12.1 | Admin authorization model | Serves FR-40. Separate visibility from create/delete/configure authority, add deny-by-default admin decisions, and wire the configured policy to the live dispatcher. Tests prove visibility alone cannot mutate a topic and an unauthenticated configured client is refused. | todo |
+| M12.2 | Group authorization for the existing group APIs | Serves FR-40. Add `GroupGrants` and enforce principal ownership on `FindCoordinator`, `JoinGroup`, `SyncGroup`, `Heartbeat`, and `LeaveGroup`, while preserving authorized rebalances and offset behavior. M4's five reported legs become positive assertions without weakening its tripwire. | todo |
+| M12.3 | CreateTopics through the durable catalog | Serves FR-40, FR-53, NFR-12. `CreateTopics` validates bounded names and partition counts, authorizes the operation, is idempotent and race-safe, persists across restart, updates visibility/grants, and provisions no partitions or objects beyond the catalog entry. | todo |
+| M12.4 | DeleteTopics and durable tombstones | Serves FR-40, FR-53. Use the contract-change procedure for the catalog deletion seam. A successful delete is durable, immediately absent from serving/listing, revokes grants and cache entries, refuses stale UUID requests, and never reuses the name or identifier; physical cleanup stays behind the GC safety boundary. | todo |
+| M12.5 | DescribeConfigs | Serves FR-40, FR-44, FR-53. Report only supported settings and effective defaults for authorized resources, refuse unsupported resources, and omit secrets/key material from every response and error. | todo |
+| M12.6 | AlterConfigs and IncrementalAlterConfigs | Serves FR-40, FR-53. Full replacement and incremental updates share validation, persist before acknowledgement, distinguish delete/set/append semantics, and leave state unchanged after an invalid or unauthorized update. | todo |
+| M12.7 | DescribeGroups and ListGroups | Serves FR-40, FR-53. Authorized callers see accurate state and membership for owned groups, unrelated groups and subscription metadata remain hidden, and empty/dead groups have the Kafka error shape expected by the AdminClient. | todo |
+| M12.8 | Principal-scoped listing policy | Serves FR-40, NFR-12. Ordinary Kafka listing remains bounded by the principal's grants; cross-tenant enumeration is refused rather than routed through `Metadata`; unrelated tenants do not increase the requesting principal's result or catalog work. | todo |
+| M12.9 | Quota administration | Serves FR-40, FR-45, FR-53. Expose inspection and updates for the supported per-principal in-flight quota, make updates affect live admission, refuse unauthorized updates, and prove one over-quota principal cannot exhaust another's capacity. | todo |
+| M12.10 | Structured operational logging | Serves FR-44, FR-52. Emit a fixed schema for admin operations and dependency failures containing operation, outcome, principal-safe correlation context, and scope, while statically and dynamically excluding credentials, key material, and secret-bearing values. | todo |
+| M12.11 | Bounded operational metrics | Serves FR-44, FR-52. Instrument lag, write latency, coordinator health, compaction backlog, DEK-cache behavior, and index growth with aggregate cardinality; scoped diagnostics remain bounded and injected faults change the expected measurements. | todo |
+| M12.12 | Distributed tracing | Serves FR-44, FR-52. Trace produce/fetch and named object-storage/KMS round trips with connected success/failure spans, bounded attributes, and no sensitive fields. | todo |
+| M12.13 | Health and readiness | Serves FR-52. Add role-aware health/readiness that distinguishes degraded-but-routable from down, reports replay/coordinator/storage state, and keeps an isolated KMS failure scoped to its affected key domain. | todo |
+| M12.14 | Functional binary roles | Serves FR-50. One artifact starts coordinator, data-plane, and combined modes with actual responsibility differences; smoke tests exercise a request through each supported mode and reject contradictory role configuration. | todo |
+| M12.15 | Real-client AdminClient conformance | Serves FR-40, FR-44, FR-45, FR-53. Against the shipped listener, Java AdminClient and Kafka CLI cover create/delete, configs, groups, authorization denial, restart persistence, mixed-success requests, quota isolation, and captured-output secret scans. | todo |
+| M12.16 | Diagnostic runbooks and scenario review | Serves FR-52. Write and verify runbooks for stalled partition, lagging group, coordinator failover, compaction backlog, and KMS outage/revocation; each names injection, signals, query steps, and a distinguishing observation obtainable without source. | todo |
+| M12.17 | M12 closing review and evidence | Serves all M12 requirements. A fresh milestone review covers every M12 commit, dispositions findings and handoffs, and `scripts/docker-test.sh scripts/gates/m12-complete.sh` exits 0 with no skipped acceptance leg. | todo |
+| M12.18 | OS-portable tests and gates | Serves NFR-12. Every test and gate has one documented execution path on Linux, macOS, and Windows-through-WSL/Docker; text parsers tolerate checkout line endings; shell pipelines, hashing, clocks, temp paths, permissions, and missing tools have portable implementations; a cross-OS smoke matrix proves the same gate verdicts without weakening any check or budget. | todo |
+
 ## M8: Encryption, BYOK, and the key seam
 
 ⚠️ **17 rows against a plan of 18** (`M8.10`-`M8.12` opened by `M8.1`-`M8.3`'s reviews, `M8.13`-`M8.14` by `M8.4`'s, `M8.15` by the development-loop review, and `M8.16` by the checkpoint review): `ADR-0050` defers FR-41's real-cloud round trip to M15 and FR-43 (the FIPS build) to M13, whose task 5 already owns that build job, and this section builds what remains — the envelope, the nonce type, the DEK cache, key-domain segregation and both providers against simulations. A finding filed while M8 runs is dispositioned when filed (`milestone/SKILL.md`).

@@ -2,14 +2,10 @@
 # The commit-msg stage. Same shape as `pre-commit` beside it, and the same
 # rule: this file decides where, `.pre-commit-config.yaml` decides what.
 #
-# ⚠️ **Not contained, and that is not an oversight.** Both gates on this stage
-# — `check-commit-msg.sh` and `check-tests-kept.sh` — read the message file and
-# the staged diff and invoke no toolchain, so there is nothing here for a
-# memory ceiling to catch. Containing them would buy a container start per
-# commit and no protection. ⚠️ **And no, the path is not the obstacle**: git
-# passes `.git/COMMIT_EDITMSG`, relative to the worktree root, from any
-# directory — so a contained run would need no translation. Measured, because
-# an earlier version of this comment asserted the opposite as a reason.
+# The message-stage gates are light, but the executable that runs them must be
+# portable too. Docker Desktop hosts use the same container as pre-commit so a
+# native `pre-commit` installation is not required; CI/no-Docker falls back to
+# a native executable with an explicit missing-tool error.
 #
 # `M10.24`. Installed by `scripts/setup-hooks.sh`.
 set -uo pipefail
@@ -17,4 +13,21 @@ set -uo pipefail
 root="$(git rev-parse --show-toplevel)"
 cd "$root" || exit 1
 
-exec pre-commit run --hook-stage commit-msg --commit-msg-filename "$1"
+run_native() {
+  if ! command -v pre-commit >/dev/null 2>&1; then
+    printf 'commit-msg: pre-commit is not installed (install pre-commit or enable Docker)\n' >&2
+    exit 1
+  fi
+  exec pre-commit run --hook-stage commit-msg --commit-msg-filename "$1"
+}
+
+[ -n "${CI:-}" ] && run_native
+[ -n "${OQUEUE_NO_CONTAINER:-}" ] && run_native
+
+if ! docker info >/dev/null 2>&1; then
+  printf 'commit-msg: Docker is not available — running the message gate natively\n' >&2
+  run_native
+fi
+
+exec "$root/scripts/docker-test.sh" pre-commit run --hook-stage commit-msg \
+  --commit-msg-filename "$1"

@@ -121,7 +121,15 @@ fi
 # -d'|'` on a line with no `|` at all prints that whole line unchanged
 # (GNU cut's documented default), and this section's own prose (rule 19)
 # has no pipes but plenty of words a looser filter would misparse as a row.
-section="$(sed -n '/^## Hot-path benchmarks$/,/^## /p' "$PERFORMANCE_STD" || true)"
+# Keep the range half-open: a sed range with the same start and end heading
+# stops on its first line and yields no table.  Strip CR as records enter the
+# parser so anchored table expressions work from Windows checkouts too.
+section="$(awk '
+  { sub(/\r$/, "") }
+  /^## Hot-path benchmarks$/ { in_section=1; print; next }
+  in_section && /^## / { exit }
+  in_section { print }
+' "$PERFORMANCE_STD" || true)"
 declare -A TABLE_PATHS=()
 while IFS= read -r row; do
   # The table lives inside numbered-list item 18, so every real row is
@@ -234,7 +242,10 @@ while IFS= read -r row; do
     continue
   fi
   MILESTONE_STATE["$id"]="$state"
-done < <(grep -E '^\| *[0-9]+ *\| *\[M' "$ROADMAP" 2>/dev/null || true)
+done < <(awk '{
+  sub(/\r$/, "")
+  if ($0 ~ /^\| *[0-9]+ *\| *\[M/) print
+}' "$ROADMAP" 2>/dev/null || true)
 if (( ${#MILESTONE_STATE[@]} == 0 )); then
   fail "$ROADMAP lists no milestones, so no NOT_YET_BUILT reason can be checked"
   problems=$((problems + 1))
