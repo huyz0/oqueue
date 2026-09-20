@@ -34,10 +34,30 @@ objects this build wrote and vice versa (ADR-0050 point 7, ADR-0012), and an
 API that assumes AES-GCM makes that unprovable. `RegionAlg::None` is refused by
 both `seal` and `open`; it is not an algorithm.
 
-## ⚠️ The rest of this crate is still mostly empty
+## ⚠️ Randomness comes through the `Entropy` seam, never from the OS directly
+
+`M8.5`. A fresh DEK's 32 bytes come from `entropy::Entropy`; `OsEntropy` is the
+real implementation and a composition root is the only place that should build
+one. ⚠️ **Do not widen the seam to "n random bytes."** A general randomness API
+in scope is how a *random nonce* gets written, and `ADR-0050` point 2 makes
+nonces constructed precisely so that cannot happen. `FakeEntropy` is a counter
+and says so: it is a test double, and a DEK from it is guessable.
+
+## ⚠️ Both caches hold a `std::sync::Mutex` and await nothing under it
+
+`async-concurrency.md` rules 6 and 8. The one `.await` on each path is the KMS
+call, and it happens with no lock held — which means two tasks can race and
+both call the KMS. Both caches resolve that by **keeping the incumbent**, so
+the cost is one wasted call and never two live DEKs for a topic. Serializing
+instead would hold a lock across a network round trip.
+
+⚠️ The caches hand out `&Dek` through a `FnOnce`, not by return, because `Dek`
+is deliberately not `Clone`. Do not `.await` inside one of those closures.
+
+## ⚠️ The rest of this crate is still being filled in
 
 `M0.8` created the skeleton so the workspace shape exists before any behaviour
-does; `M0.11` added the refusing no-op and `M8.3` the region AEAD. The envelope
-in the footer, the DEK cache and the KMS providers are the rest of `M8`'s —
-check [`backlog.md`](../../docs/internal/product/backlog.md) rather than
-assuming.
+does; `M0.11` added the refusing no-op, `M8.3` the region AEAD, and `M8.5` the
+write- and read-side DEK caches with the entropy seam. The KMS providers are
+the rest of `M8`'s — check
+[`backlog.md`](../../docs/internal/product/backlog.md) rather than assuming.

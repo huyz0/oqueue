@@ -178,6 +178,15 @@ impl Error {
             // Never: key material of the wrong length is the wrong length on
             // every attempt.
             | Self::DekLength { .. }
+            // Never, and ⚠️ **deliberately not `Transient`.** A random source
+            // that will not answer is the one condition where an automatic
+            // retry loop is actively harmful: on a running broker the kernel
+            // pool is long since initialised, so a refusal here means
+            // something is wrong with the host rather than something that
+            // passes. Backing off against it would turn a loud failure into a
+            // slow one, and the caller that is refused is a produce that must
+            // be refused rather than written unencrypted.
+            | Self::EntropyUnavailable
             | Self::Permanent => RetryClass::Never,
         }
     }

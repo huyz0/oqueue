@@ -103,6 +103,20 @@ aes-gcm = { version = "0.11", default-features = false, features = [
     "aes",
     "alloc",
 ] }
+# The platform's own CSPRNG, behind `oqueue-crypto`'s `Entropy` seam and used
+# by nothing else (`M8.5`). A fresh DEK is 32 unpredictable bytes and there is
+# no other source of them that is not a userspace PRNG with a seed to leak.
+# ⚠️ Already in `Cargo.lock` before this entry existed — `0.2`, `0.3` and `0.4`
+# all resolve transitively — so this adds a direct edge and no new package.
+# ⚠️ Pure Rust, no `build.rs`, no C toolchain: on Linux it is `getrandom(2)`
+# through `libc`, on the BSDs and macOS `arc4random_buf`, on Windows
+# `ProcessPrng`. Doc 20 §1's budget and `build.md` rule 3 are untouched, so
+# this is not a rule 4 decision.
+# ⚠️ **Not `rand`.** `rand` is a PRNG framework with a distribution API and a
+# thread-local generator; what is wanted here is the OS call and nothing that
+# could be reached for to make a *nonce*, which this project constructs
+# (`ADR-0050` point 2).
+getrandom = { version = "0.3", default-features = false }
 # The global allocator, set in `bin/oqueue` only. ADR-0007. ⚠️ Pulls a C
 # toolchain — permitted by NFR-42 ("cargo and a C compiler"), recorded here
 # because `AGENTS.md` forbids it happening without a reason.

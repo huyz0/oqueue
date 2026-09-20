@@ -301,6 +301,27 @@ declare -A RUST_BOUNDS=(
   # lowering it makes the two curves diverge the other way. A change here is
   # a decision about `ADR-0008`'s translation, not a tuning knob.
   ["crates/oqueue-store/src/retry.rs|BACKOFF_BASE"]="2.0"
+  # How many plaintext bytes may be sealed under one DEK before it is retired
+  # (`M8.5`, `ADR-0050` point 3). ⚠️ Weakening is *raising*: the bound is the
+  # security argument -- how much plaintext may share one AES-GCM key under a
+  # constructed nonce -- so a bigger number puts more of a tenant's log behind
+  # one key and widens what a single compromised DEK opens. Lowering it only
+  # spends more KMS calls.
+  ["crates/oqueue-crypto/src/dek_cache.rs|DEK_MAX_SEALED_BYTES"]="68_719_476_736"
+  # How long a DEK may stay live, in milliseconds -- 7 days (`M8.5`,
+  # `ADR-0050` point 3). ⚠️ Weakening is *raising*: it caps the window in
+  # which a leaked DEK is still the key being written under for a topic whose
+  # traffic would never reach the byte bound. Lowering it costs one extra
+  # `wrap` per topic per window.
+  ["crates/oqueue-crypto/src/dek_cache.rs|DEK_MAX_AGE_MS"]="604_800_000"
+  # How long an unwrapped DEK is cached on the read side, in milliseconds
+  # (`M8.5`). ⚠️ Weakening is *raising*: a longer TTL widens the window in
+  # which a revoked KEK still grants reads (`ADR-0050` point 5) and keeps
+  # plaintext key material in memory longer. Lowering it is safe and costs
+  # availability -- a KMS outage starts failing BYOK reads sooner
+  # (`ADR-0050`'s last consequence). UNDERIVED: chosen, and `M15` is where a
+  # real KMS could measure it.
+  ["crates/oqueue-crypto/src/unwrap_cache.rs|UNWRAPPED_DEK_TTL_MS"]="300_000"
   # How many links of a partition-manifest chain one fetch follows before
   # refusing (`M5.63`, `ADR-0042` point 2). A ceiling on GETs per read, so
   # raising it is the weakening direction: NFR-30's "bounded GETs" is what it

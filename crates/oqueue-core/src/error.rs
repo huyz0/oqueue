@@ -456,6 +456,19 @@ pub enum Error {
     #[error("a sealed region failed authentication")]
     RegionOpenFailed,
 
+    /// No unpredictable bytes could be produced for a fresh data encryption
+    /// key.
+    ///
+    /// ⚠️ **A refusal, never a fallback.** The only correct response to a
+    /// random source that will not answer is to stop minting keys: a DEK from
+    /// a weaker source is a DEK an attacker can reconstruct without the KEK,
+    /// and it would be written into object storage looking exactly like a good
+    /// one — the same failure [`Error::EncryptionDisabled`] exists to make
+    /// loud. ⚠️ Carries nothing about the source's state, because it is
+    /// rendered into an operator's log.
+    #[error("no entropy is available for a fresh data encryption key")]
+    EntropyUnavailable,
+
     /// A region could not be sealed.
     ///
     /// ⚠️ **Not the mirror of [`Error::RegionOpenFailed`]** — sealing does not

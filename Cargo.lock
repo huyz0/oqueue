@@ -1150,7 +1150,9 @@ name = "oqueue-crypto"
 version = "0.0.0"
 dependencies = [
  "aes-gcm",
+ "getrandom 0.3.4",
  "oqueue-core",
+ "zeroize",
 ]
 
 [[package]]

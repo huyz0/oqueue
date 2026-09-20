@@ -14,6 +14,13 @@ oqueue-core = { path = "../oqueue-core" }
 # the no-C-toolchain argument are in the workspace root, beside every other
 # third-party version.
 aes-gcm.workspace = true
+# The OS random source behind `entropy::OsEntropy`, the seam a fresh DEK's 32
+# bytes come from (`M8.5`). The workspace root carries the argument.
+getrandom.workspace = true
+# `Dek`'s scratch buffers and the plaintext copy handed to `KeyProvider::wrap`
+# are wiped explicitly; `Redacted` has no `Drop` of its own (`security.md`
+# rule 8).
+zeroize.workspace = true
 
 # ⚠️ Empty on purpose, and worth a word because it is the one section
 # `check-layering.sh` never reads: nothing here may take an async runtime.

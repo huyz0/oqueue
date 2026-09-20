@@ -4,11 +4,13 @@
 //! it: one object carries many tenants' data and can only carry one SSE-KMS
 //! key. So encryption is broker-side, and this is where it lives.
 //!
-//! ⚠️ **Still mostly empty.** `M0.11` added the no-op provider so the
+//! ⚠️ **Still filling in.** `M0.11` added the no-op provider so the
 //! unencrypted path is an explicit, testable configuration rather than an
-//! absence; `M8.3` added [`region`], which seals and opens **one** region.
-//! The envelope in the footer, the DEK cache and the KMS providers are the
-//! rest of `M8`'s.
+//! absence; `M8.3` added [`region`], which seals and opens **one** region;
+//! `M8.5` added [`dek_cache`] and [`unwrap_cache`], which are what keep KMS
+//! calls a function of rotation rather than of produce volume (`NFR-33`), and
+//! [`entropy`], the seam a fresh DEK's 32 bytes come from. The KMS providers
+//! themselves are the rest of `M8`'s.
 //!
 //! # ⚠️ The algorithm is a format, not a library
 //!
@@ -22,9 +24,15 @@
 //! can read each other's objects.
 #![forbid(unsafe_code)]
 
+pub mod dek_cache;
+pub mod entropy;
 pub mod region;
+pub mod unwrap_cache;
 
+pub use dek_cache::{DEK_MAX_AGE_MS, DEK_MAX_SEALED_BYTES, DekCache};
+pub use entropy::{Entropy, FakeEntropy, OsEntropy, mint_dek};
 pub use region::{RegionAad, TAG_BYTES, open, seal};
+pub use unwrap_cache::{UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
 
 use oqueue_core::{BoxFuture, Error, KeyId, KeyProvider, Redacted, Result, WrappedKey};
 
