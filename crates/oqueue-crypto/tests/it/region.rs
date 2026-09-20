@@ -92,6 +92,7 @@ fn aad(topic: &TopicId) -> RegionAad<'_> {
         topic,
         partition: partition(),
         region_index: 0,
+        record_count: 2,
         alg: RegionAlg::Aes256Gcm,
         key_id: key_id(),
     }
@@ -303,6 +304,19 @@ fn a_region_stored_as_written_cannot_be_opened_as_encrypted() {
     );
 }
 
+#[test]
+fn an_edited_record_count_is_refused() {
+    let topic = topic();
+    let (bytes, seen) = sealed(&topic);
+    let mut altered = aad(&topic);
+    altered.record_count += 1;
+
+    assert_eq!(
+        open(&dek(), seen, altered, &bytes),
+        Err(Error::RegionOpenFailed)
+    );
+}
+
 /// The behaviour `M3` shipped, asserted here because `M8.3` added the first
 /// second variant and a `from_code` that started defaulting would be invisible
 /// from `oqueue-core`'s own tests alone.
@@ -388,8 +402,9 @@ fn the_minted_nonce_is_the_one_the_vectors_were_generated_under() {
 /// round-trip test can see moving: the associated data's own byte encoding.
 ///
 /// `b"oqueue:region:v1"` ‖ `u64_be(topic_len)` ‖ topic ‖ `i32_be(partition)` ‖
-/// `u32_be(region_index)` ‖ `u8(alg_code)` ‖ `u64_be(key_id_len)` ‖ key id,
-/// for topic `orders`, partition 3, region 0, `Aes256Gcm`, key id `kek-1`.
+/// `u32_be(region_index)` ‖ `u32_be(record_count)` ‖ `u8(alg_code)` ‖
+/// `u64_be(key_id_len)` ‖ key id, for topic `orders`, partition 3, region 0,
+/// record count 2, `Aes256Gcm`, key id `kek-1`.
 ///
 /// ⚠️ **The key id was appended by `M8.4`, and both vectors here were
 /// regenerated with it.** That is a change to a *pinned* format, which is
@@ -404,7 +419,7 @@ fn the_associated_data_encoding_is_pinned() {
 
     assert_eq!(
         aad(&topic).encode(),
-        b"oqueue:region:v1\x00\x00\x00\x00\x00\x00\x00\x06orders\x00\x00\x00\x03\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x05kek-1"
+        b"oqueue:region:v1\x00\x00\x00\x00\x00\x00\x00\x06orders\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\x02\x01\x00\x00\x00\x00\x00\x00\x00\x05kek-1"
     );
 }
 
@@ -441,7 +456,7 @@ fn the_pinned_vector_opens_to_the_pinned_plaintext() {
 
 /// `seal(dek = [7u8; 32], nonce = NONCE_VECTOR, aad = the vector above,
 /// plaintext = PLAINTEXT)`, as ciphertext ‖ tag.
-const SEALED_VECTOR: &str = "5eba01af63c7878fe19778a9ff14910e8644d075d4b9c3c2630793ea9fa5cc0b114b0b02b91347d7a29d99474264bb059d3358f1e61f51e3a0971547ca1d5d2a7171";
+const SEALED_VECTOR: &str = "5eba01af63c7878fe19778a9ff14910e8644d075d4b9c3c2630793ea9fa5cc0b114b0b02b91347d7a29d99474264bb059d33649cb19a49b8c1483380794d77fe7a55";
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;

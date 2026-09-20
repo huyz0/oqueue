@@ -45,6 +45,8 @@ pub const TAG_BYTES: usize = 16;
 ///   partition *j* of the same topic, which would reorder a log;
 /// - the **region index** within the object — so two regions of one object
 ///   cannot be swapped;
+/// - the **record count** in the footer — so offsets cannot be assigned from a
+///   forged count that does not match the sealed records;
 /// - the **algorithm code** — so a header edited to name a different algorithm
 ///   fails to open rather than being decoded under the wrong one;
 /// - the **key id** the footer names (`M8.4`, carrying `M8.12`'s obligation) —
@@ -78,9 +80,6 @@ pub const TAG_BYTES: usize = 16;
 ///   region header's own bytes come under the tag;
 /// - the **byte range**. It is a property of where the region landed, not of
 ///   what it says, and compaction changes it without changing the records;
-/// - the **record count**, for the same reason the byte range is not — it is
-///   the footer's claim about the region, and `M8.4` is where the footer's
-///   claims are covered;
 /// - the **wrapped DEK's bytes**. ⚠️ `ADR-0050` point 4's lazy re-wrap is why,
 ///   and `M8.4` re-examined the argument rather than inheriting it: a DEK is
 ///   re-wrapped under the current KEK version when it next rotates or when
@@ -100,6 +99,8 @@ pub struct RegionAad<'a> {
     pub partition: PartitionId,
     /// The region's position in the object, the same index its nonce carries.
     pub region_index: u32,
+    /// The number of records whose offsets this region advances.
+    pub record_count: u32,
     /// The algorithm the region header names.
     pub alg: RegionAlg,
     /// The key-encryption key the footer's envelope names.
@@ -132,7 +133,7 @@ impl RegionAad<'_> {
     #[must_use]
     pub fn encode(self) -> Vec<u8> {
         let topic = self.topic.as_str().as_bytes();
-        let mut out = Vec::with_capacity(AAD_DOMAIN.len() + topic.len() + 18);
+        let mut out = Vec::with_capacity(AAD_DOMAIN.len() + topic.len() + 22);
         out.extend_from_slice(AAD_DOMAIN);
         // A `u64` length prefix, so the field is fixed-width whatever the
         // name's length is — `TopicId` is already bounded far below this.
@@ -140,6 +141,7 @@ impl RegionAad<'_> {
         out.extend_from_slice(topic);
         out.extend_from_slice(&self.partition.get().to_be_bytes());
         out.extend_from_slice(&self.region_index.to_be_bytes());
+        out.extend_from_slice(&self.record_count.to_be_bytes());
         out.push(self.alg.code());
         // ⚠️ **Appended, and length-prefixed like the topic name**, so the
         // encoding stays injective: without the prefix a key id could absorb
