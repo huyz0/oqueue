@@ -1,0 +1,30 @@
+{
+  "commits": [
+    "1a07c90ab459c4645144a0280a96e15012bf607f",
+    "0694f74b0cbb88fa332cd91a3fd13b6e3f000e39",
+    "f1ad52b15cac946bdfa681873fa21df69fcfdd03",
+    "5efa59907718ca53e808b98aa00587c06a174100",
+    "d127e0d4340debc0d57ca9f2bdd224adab7e4494",
+    "f922c1cc7c2fe67097e5be612dbaf7b088ccc841"
+  ],
+  "findings": [
+    {
+      "evidence": "bin/oqueue installs RejectingRegionSealer and does not connect a production RegionSealer/ReSealer to oqueue-crypto; ADR-0056 explicitly documents that customer produces are refused until a configured composition supplies the sealer.",
+      "id": "6b4b1a6ed687",
+      "kind": "spec-wrong",
+      "severity": "major",
+      "summary": "The shipped composition cannot perform customer-key writes."
+    },
+    {
+      "evidence": "The M8.3/M8.4 backlog prose says record_count stays outside AAD, while M8.13 and oqueue-crypto now encode it in RegionAad and test tampering refusal.",
+      "id": "2149ef7e0df8",
+      "kind": "contradiction",
+      "severity": "minor",
+      "summary": "Completed M8.3 and M8.4 documentation still says record_count is outside AAD."
+    }
+  ],
+  "milestone": "M8",
+  "recorded_at": "2026-09-20T14:57:04Z",
+  "reviewer": "Carver",
+  "verdict": "changes-requested"
+}
