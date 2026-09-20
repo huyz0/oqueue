@@ -8,28 +8,44 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 ///
 /// # Invariant
 ///
-/// **Non-empty, and that is the whole invariant, deliberately.** An AWS KMS ARN
-/// and a GCP resource path are both just strings here, because `oqueue-core`
-/// names neither service (NFR-51), and their formats differ.
+/// **Non-empty, bounded, and printable ASCII.** An AWS KMS ARN and a GCP
+/// resource path are both accepted by this invariant, because `oqueue-core`
+/// names neither service (NFR-51), and their formats differ. Printable ASCII
+/// is the intersection that keeps an identifier safe at every operator-facing
+/// log site without guessing either provider's full grammar.
 ///
-/// ⚠️ **No character set is imposed, so `KeyId::new("a\0")` is accepted today.**
-/// A key id is interpolated into an operator-facing log line, so a control
-/// character in one is a real if minor problem. Validating per provider belongs
-/// to `M8`, where the provider is known; a guess here would be wrong for one
-/// cloud or both.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct KeyId(String);
+
+/// The largest key identifier the region footer can encode.
+///
+/// This is a format bound, not a provider-specific grammar: the footer stores
+/// the byte length in a `u16`, and `KeyId` enforces the same bound before a
+/// value can reach either the writer or the parser.
+pub const MAX_KEY_ID_LEN: usize = u16::MAX as usize;
 
 impl KeyId {
     /// Builds a key id.
     ///
     /// # Errors
     ///
-    /// [`crate::Error::EmptyKeyId`] if `id` is empty.
+    /// [`crate::Error::EmptyKeyId`] if `id` is empty, or
+    /// [`crate::Error::InvalidKeyId`] if it is longer than
+    /// [`MAX_KEY_ID_LEN`] bytes or contains a non-printable ASCII character.
     pub fn new(id: impl Into<String>) -> Result<Self> {
         let id = id.into();
         if id.is_empty() {
             return Err(crate::Error::EmptyKeyId);
+        }
+        if id.len() > MAX_KEY_ID_LEN {
+            return Err(crate::Error::InvalidKeyId {
+                reason: "exceeds the maximum encoded length",
+            });
+        }
+        if !id.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(crate::Error::InvalidKeyId {
+                reason: "contains a non-printable ASCII character",
+            });
         }
         Ok(Self(id))
     }

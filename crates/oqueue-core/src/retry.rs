@@ -93,6 +93,7 @@ impl Error {
             | Self::TimestampOverflow { .. }
             | Self::SecretRejected { .. }
             | Self::EmptyKeyId
+            | Self::InvalidKeyId { .. }
             | Self::EncryptionDisabled
             | Self::EmptyObjectKey
             | Self::EmptyByteRange

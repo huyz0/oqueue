@@ -107,6 +107,31 @@ fn an_empty_key_id_is_refused() {
     assert_eq!(KeyId::new(""), Err(Error::EmptyKeyId));
 }
 
+#[test]
+fn a_key_id_with_a_control_character_is_refused_without_echoing_it() {
+    let err = KeyId::new("arn:aws:kms:eu-west-1:1:key/a\noperator-forged")
+        .expect_err("newline is a log-injection payload");
+    assert_eq!(
+        err,
+        Error::InvalidKeyId {
+            reason: "contains a non-printable ASCII character"
+        }
+    );
+    assert!(!err.to_string().contains("operator-forged"));
+}
+
+#[test]
+fn a_key_id_over_the_footer_length_is_refused() {
+    let err = KeyId::new("x".repeat(oqueue_core::MAX_KEY_ID_LEN + 1))
+        .expect_err("the footer cannot encode this id");
+    assert_eq!(
+        err,
+        Error::InvalidKeyId {
+            reason: "exceeds the maximum encoded length"
+        }
+    );
+}
+
 /// The seam is usable as a trait object, as the composition root needs.
 #[test]
 fn the_seam_is_dyn_compatible() {
@@ -122,14 +147,14 @@ fn the_seam_is_dyn_compatible() {
 }
 
 /// ⚠️ A regression test for a real aliasing bug review found: with a
-/// null-terminated tag, a key wrapped under `"a\0"` unwrapped under `"a"` —
+/// delimiter-free tag, a key wrapped under `"a/"` unwrapped under `"a"` —
 /// succeeding with a corrupted DEK, which is worse than failing. The tag is
 /// length-prefixed now.
 #[test]
 fn a_key_id_that_is_a_prefix_of_another_does_not_alias() {
     let provider = FakeKeyProvider::new();
     let short = kid("a");
-    let long = kid("a\0");
+    let long = kid("a/");
     let dek = Redacted::new(DEK.to_vec());
 
     let wrapped_under_long = block_on(provider.wrap(&long, &dek)).expect("wrap");

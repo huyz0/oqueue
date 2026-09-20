@@ -327,6 +327,13 @@ pub enum Error {
     #[error("key id is empty")]
     EmptyKeyId,
 
+    /// A key id cannot be represented safely in the durable envelope or logs.
+    #[error("key id is invalid: {reason}")]
+    InvalidKeyId {
+        /// Why the identifier was rejected, without echoing its contents.
+        reason: &'static str,
+    },
+
     /// Key material presented as a data encryption key was the wrong length.
     ///
     /// ⚠️ **Carries the length, never the bytes** — the same discipline

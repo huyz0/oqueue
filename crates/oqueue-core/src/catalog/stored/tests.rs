@@ -7,11 +7,11 @@ use std::sync::Arc;
 use super::super::tests::{
     create_is_idempotent, list_pages_in_name_order, lookup_id_agrees_with_lookup,
 };
-use super::{ObjectStoreTopicCatalog, encode, hex};
+use super::{ObjectStoreTopicCatalog, hex};
 use crate::test_executor::block_on;
 use crate::{
-    CatalogEntry, CountingObjectStore, Error, FakeObjectStore, KeyDomain, KeyId, MetadataShardId,
-    ObjectKey, ObjectStore, Operation, TopicCatalog, TopicId,
+    CountingObjectStore, Error, FakeObjectStore, KeyDomain, KeyId, MetadataShardId, ObjectKey,
+    ObjectStore, Operation, TopicCatalog, TopicId,
 };
 
 fn topic(name: &str) -> TopicId {
@@ -79,16 +79,15 @@ fn customer_key_domain_round_trips_without_changing_the_default_format() {
 }
 
 #[test]
-fn an_unrepresentable_customer_key_reports_the_key_length_offset() {
-    let name = topic("private");
-    let key = KeyId::new("x".repeat(usize::from(u16::MAX) + 1)).expect("a non-empty key id");
-    let entry = CatalogEntry::with_key_domain(name.clone(), 1, KeyDomain::customer(key));
+fn an_unrepresentable_customer_key_is_refused_before_catalog_encoding() {
+    let err = KeyId::new("x".repeat(usize::from(u16::MAX) + 1))
+        .expect_err("the key id validates before a catalog entry can hold it");
 
     assert_eq!(
-        encode(&entry),
-        Err(Error::MalformedMetadataSegment {
-            at: 7 + name.as_str().len(),
-        })
+        err,
+        Error::InvalidKeyId {
+            reason: "exceeds the maximum encoded length"
+        }
     );
 }
 

@@ -13,15 +13,7 @@
 //! refusal for anything wider — `security.md` rule 3. Keeping the bounds beside
 //! the type is what stops the reader and the writer disagreeing about them.
 
-use crate::{Error, KeyId, ParsedNonce, RegionAlg, Result, WrappedKey};
-
-/// The longest key id a footer can carry.
-///
-/// ⚠️ A bound the *format* imposes — what the footer's `u16` length field can
-/// express — not a policy about key names, exactly as
-/// `MAX_TOPIC_NAME_LEN` is. An AWS KMS ARN and a GCP resource path are both
-/// orders of magnitude below it.
-pub const MAX_KEY_ID_LEN: usize = u16::MAX as usize;
+use crate::{Error, KeyId, MAX_KEY_ID_LEN, ParsedNonce, RegionAlg, Result, WrappedKey};
 
 /// The longest wrapped DEK a footer will carry, in bytes.
 ///

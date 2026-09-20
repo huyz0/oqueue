@@ -143,7 +143,7 @@ pub use index_reader::IndexReader;
 pub use index_state::{
     IndexQuota, IndexState, MAX_BATCHES_PER_PAGE, Pressure, TAIL_WINDOW_ENTRIES, Tiers,
 };
-pub use key::{DEK_BYTES, Dek, FakeKeyProvider, KeyId, KeyProvider, WrappedKey};
+pub use key::{DEK_BYTES, Dek, FakeKeyProvider, KeyId, KeyProvider, MAX_KEY_ID_LEN, WrappedKey};
 pub use key_domain::KeyDomain;
 pub use key_layout::KeyLayout;
 pub use lease::{LEASE_RENEW_MS, LEASE_SKEW_MS, LEASE_TTL_MS, ObjectStoreLease};
@@ -180,7 +180,7 @@ pub use producer_identity::ProducerIdentity;
 pub use rate_governor::{OpClass, RateDecision, RateGovernor, RateLimitPolicy};
 pub use read_mode::ReadMode;
 pub use redacted::Redacted;
-pub use region_envelope::{MAX_KEY_ID_LEN, MAX_WRAPPED_DEK_LEN, RegionEnvelope, SealedRegion};
+pub use region_envelope::{MAX_WRAPPED_DEK_LEN, RegionEnvelope, SealedRegion};
 pub use result::Result;
 pub use retry::{RetryClass, RetryDecision, RetryPolicy};
 pub use shard::{MetadataShardId, ShardMap};

@@ -673,7 +673,7 @@ declare -A NOT_A_BOUND=(
   # `M8.4`: the envelope's own widths. The key id's is the footer's field
   # width, exactly as the topic name's above is; the wrapped DEK's is a real
   # bound and lives in the pinned map instead.
-  ["crates/oqueue-core/src/region_envelope.rs|MAX_KEY_ID_LEN"]="what the footer's u16 key-id-length field can express, not a policy"
+  ["crates/oqueue-core/src/key.rs|MAX_KEY_ID_LEN"]="what the footer's u16 key-id-length field can express, not a policy"
   # --- error_codes.rs: Kafka's own error codes, the protocol fixes every value
   ["crates/oqueue-codec/src/error_codes.rs|NONE"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|OFFSET_OUT_OF_RANGE"]="Kafka's own error code, the protocol fixes it"
