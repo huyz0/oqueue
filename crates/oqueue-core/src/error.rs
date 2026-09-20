@@ -334,6 +334,13 @@ pub enum Error {
         reason: &'static str,
     },
 
+    /// The key-encryption key refused an operation because it was revoked.
+    #[error("key {key_id} is revoked")]
+    KeyRevoked {
+        /// The key domain whose operation was refused.
+        key_id: crate::KeyId,
+    },
+
     /// Key material presented as a data encryption key was the wrong length.
     ///
     /// ⚠️ **Carries the length, never the bytes** — the same discipline

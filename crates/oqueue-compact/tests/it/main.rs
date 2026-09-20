@@ -4,6 +4,7 @@
 //! is otherwise its own crate, its own link, and its own copy of the debuginfo.
 
 mod compose;
+mod encryption;
 mod end_to_end;
 mod gc_race;
 mod indexes;

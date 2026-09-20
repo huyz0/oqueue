@@ -5,7 +5,8 @@
 
 use crate::support::{CountingKeyProvider, block_on, key_id};
 use oqueue_core::{
-    DEK_BYTES, Dek, FakeClock, FakeKeyProvider, KeyId, KeyProvider as _, Redacted, WrappedKey,
+    BoxFuture, DEK_BYTES, Dek, Error, FakeClock, FakeKeyProvider, KeyId, KeyProvider, Redacted,
+    Result, WrappedKey,
 };
 use oqueue_crypto::{UNWRAPPED_DEK_CACHE_ENTRIES, UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
 
@@ -16,6 +17,35 @@ fn cache() -> TestCache {
         FakeClock::new(),
         CountingKeyProvider::new(FakeKeyProvider::new()),
     )
+}
+
+#[derive(Debug)]
+struct RevokedProvider;
+
+impl KeyProvider for RevokedProvider {
+    fn wrap<'a>(
+        &'a self,
+        key_id: &'a KeyId,
+        _plaintext: &'a Redacted<Vec<u8>>,
+    ) -> BoxFuture<'a, Result<WrappedKey>> {
+        Box::pin(async move {
+            Err(Error::KeyRevoked {
+                key_id: key_id.clone(),
+            })
+        })
+    }
+
+    fn unwrap<'a>(
+        &'a self,
+        key_id: &'a KeyId,
+        _wrapped: &'a WrappedKey,
+    ) -> BoxFuture<'a, Result<Redacted<Vec<u8>>>> {
+        Box::pin(async move {
+            Err(Error::KeyRevoked {
+                key_id: key_id.clone(),
+            })
+        })
+    }
 }
 
 /// A wrapped blob for the DEK made of `filler`, produced through a *separate*
@@ -52,6 +82,17 @@ fn many_objects_under_one_dek_cost_one_unwrap() {
         "two hundred objects sealed under one DEK are one KMS unwrap"
     );
     assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn a_revoked_key_fails_reads_with_a_specific_non_retryable_error() {
+    let kek = key_id();
+    let blob = wrapped(&kek, 0x11);
+    let cache = UnwrappedDekCache::new(FakeClock::new(), RevokedProvider);
+
+    let result = block_on(cache.with_dek(&kek, &blob, |dek: &Dek| dek.expose()[0]));
+
+    assert_eq!(result, Err(Error::KeyRevoked { key_id: kek }));
 }
 
 /// A fresh cache holds nothing, and one fetch makes that false.

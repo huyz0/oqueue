@@ -94,6 +94,7 @@ impl Error {
             | Self::SecretRejected { .. }
             | Self::EmptyKeyId
             | Self::InvalidKeyId { .. }
+            | Self::KeyRevoked { .. }
             | Self::EncryptionDisabled
             | Self::EmptyObjectKey
             | Self::EmptyByteRange

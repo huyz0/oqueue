@@ -35,9 +35,58 @@ mod outcome;
 
 pub use outcome::MergeOutcome;
 
+/// The key-domain policy for one compaction operation.
+#[derive(Clone, Copy)]
+pub struct CompactionDomain<'a> {
+    domain: &'a KeyDomain,
+    resealer: Option<&'a dyn RegionReSealer>,
+}
+
+impl<'a> CompactionDomain<'a> {
+    /// A policy for the unsealed default domain.
+    #[must_use]
+    pub const fn default_domain(domain: &'a KeyDomain) -> Self {
+        Self {
+            domain,
+            resealer: None,
+        }
+    }
+
+    /// A policy for a customer domain whose re-sealer also checks revocation.
+    #[must_use]
+    pub const fn customer(domain: &'a KeyDomain, resealer: &'a dyn RegionReSealer) -> Self {
+        Self {
+            domain,
+            resealer: Some(resealer),
+        }
+    }
+}
+
+impl core::fmt::Debug for CompactionDomain<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("CompactionDomain")
+            .field("domain", &self.domain)
+            .field("resealer", &self.resealer.is_some())
+            .finish()
+    }
+}
+
+struct RegionToAppend<'a> {
+    plan: &'a CompactionPlan,
+    region: &'a Region,
+    slice: &'a [u8],
+    security: CompactionDomain<'a>,
+    output_region_index: u32,
+}
+
+struct GatherContext<'a> {
+    security: CompactionDomain<'a>,
+    next_output_region: u32,
+}
+
 use oqueue_core::{
-    BundleStream, ByteRange, Error, KeyDomain, ObjectRef, ObjectStore, PushedRecords, Result,
-    parse_footer,
+    BundleStream, ByteRange, Error, KeyDomain, ObjectRef, ObjectStore, PushedRecords, Region,
+    RegionReSealer, ResealRequest, Result, parse_footer,
 };
 
 use crate::{CompactionNamer, CompactionPlan};
@@ -73,9 +122,54 @@ pub async fn merge<S>(
 where
     S: ObjectStore + ?Sized,
 {
+    merge_in_domain(
+        store,
+        plan,
+        inputs,
+        namer,
+        CompactionDomain::default_domain(&KeyDomain::default_domain()),
+    )
+    .await
+}
+
+/// Merges a plan in one customer key domain, re-sealing regions at their new
+/// output indices and preserving their topic-to-key association.
+///
+/// The re-sealer is consulted before any output region is written. A revoked
+/// key therefore returns [`Error::KeyRevoked`] and leaves the compaction
+/// queue free to continue with another domain; it never retries forever or
+/// copies ciphertext as plaintext.
+///
+/// # Errors
+///
+/// The store's errors, malformed input errors, or the re-sealer's error (in
+/// particular [`Error::KeyRevoked`]).
+pub async fn merge_with_resealer<S>(
+    store: &S,
+    plan: &CompactionPlan,
+    inputs: &[ObjectRef],
+    namer: &mut CompactionNamer,
+    security: CompactionDomain<'_>,
+) -> Result<MergeOutcome>
+where
+    S: ObjectStore + ?Sized,
+{
+    merge_in_domain(store, plan, inputs, namer, security).await
+}
+
+async fn merge_in_domain<S>(
+    store: &S,
+    plan: &CompactionPlan,
+    inputs: &[ObjectRef],
+    namer: &mut CompactionNamer,
+    security: CompactionDomain<'_>,
+) -> Result<MergeOutcome>
+where
+    S: ObjectStore + ?Sized,
+{
     let output = namer.next_key()?;
     let mut stream = BundleStream::open(store, &output).await?;
-    let (gets, records) = gather(store, plan, inputs, &mut stream).await?;
+    let (gets, records) = gather(store, plan, inputs, &mut stream, security).await?;
     let (spans, written) = stream.finish().await?;
 
     Ok(MergeOutcome {
@@ -104,6 +198,7 @@ pub(crate) async fn gather<'store, S>(
     plan: &CompactionPlan,
     inputs: &[ObjectRef],
     stream: &mut BundleStream<'store>,
+    security: CompactionDomain<'_>,
 ) -> Result<(usize, i64)>
 where
     S: ObjectStore + ?Sized,
@@ -118,14 +213,14 @@ where
 
     let mut gets = 0_usize;
     let mut records = 0_i64;
-    // M8.6 will pass the plan's topic key domain here. Until BYOK routing
-    // exists, compaction can only safely consume the default path; a sealed
-    // region is refused rather than copied as if it were plaintext.
-    let domain = KeyDomain::default_domain();
+    let mut context = GatherContext {
+        security,
+        next_output_region: 0,
+    };
     for reference in covering {
         let bytes = store.get(reference.object(), ByteRange::Full).await?;
         gets += 1;
-        records += i64::from(take_regions(&bytes, plan, reference, stream, &domain).await?);
+        records += i64::from(take_regions(&bytes, plan, reference, stream, &mut context).await?);
     }
 
     // ⚠️ **No final check against `plan.cost().records_rewritten()`, and none
@@ -216,14 +311,14 @@ async fn take_regions(
     plan: &CompactionPlan,
     reference: &ObjectRef,
     stream: &mut BundleStream<'_>,
-    domain: &KeyDomain,
+    context: &mut GatherContext<'_>,
 ) -> Result<u32> {
     let mut taken = 0_u32;
     for region in parse_footer(bytes, bytes.len() as u64)? {
         if region.topic() != plan.topic() || region.partition() != plan.partition() {
             continue;
         }
-        domain.validate_region(&region)?;
+        context.security.domain.validate_region(&region)?;
         let ByteRange::Bounded(span) = region.bytes() else {
             // `BundleBuilder::push` only ever produces a bounded range, so a
             // `Full` one means this footer was written by something else.
@@ -234,30 +329,74 @@ async fn take_regions(
         let slice = bytes
             .get(from..to)
             .ok_or(Error::MalformedBundleFooter { at: from })?;
-        stream
-            .push(
-                plan.topic().clone(),
-                plan.partition(),
-                PushedRecords {
-                    // ⚠️ **`None`, and it costs FR-14 nothing** (`ADR-0038`).
-                    // The footer carries no producer identity by design
-                    // (`M11.5`), so there is none here to carry; identity
-                    // survives a rewrite in the **metadata log**, which is
-                    // append-only and which `M5.13`'s swap adds to rather than
-                    // rewrites. ⚠️ A merged span holds records from several
-                    // input spans with several identities, and a
-                    // `CommittedSpan` carries one — so carrying it here is not
-                    // merely expensive, it is not well defined.
-                    count: region.record_count(),
-                    producer: None,
-                },
+        let pushed = PushedRecords {
+            // ⚠️ **`None`, and it costs FR-14 nothing** (`ADR-0038`). The
+            // footer carries no producer identity by design (`M11.5`), so
+            // there is none here to carry; identity survives a rewrite in
+            // the metadata log.
+            count: region.record_count(),
+            producer: None,
+        };
+        append_region(
+            stream,
+            pushed,
+            RegionToAppend {
+                plan,
+                region: &region,
                 slice,
-            )
-            .await?;
+                security: context.security,
+                output_region_index: context.next_output_region,
+            },
+        )
+        .await?;
+        context.next_output_region = context.next_output_region.saturating_add(1);
         taken = taken.saturating_add(region.record_count());
     }
     if taken != reference.record_count() {
         return Err(Error::IndexObjectMismatch);
     }
     Ok(taken)
+}
+
+async fn append_region(
+    stream: &mut BundleStream<'_>,
+    pushed: PushedRecords,
+    input: RegionToAppend<'_>,
+) -> Result<()> {
+    if !input.security.domain.requires_sealing() {
+        return stream
+            .push(
+                input.plan.topic().clone(),
+                input.plan.partition(),
+                pushed,
+                input.slice,
+            )
+            .await;
+    }
+    let resealer = input
+        .security
+        .resealer
+        .ok_or(Error::RegionKeyDomainMismatch {
+            expected_sealed: true,
+        })?;
+    let output = resealer
+        .reseal(ResealRequest {
+            domain: input.security.domain,
+            topic: input.plan.topic(),
+            partition: input.plan.partition(),
+            output_region_index: input.output_region_index,
+            region: input.region,
+            bytes: input.slice,
+        })
+        .await?;
+    output.validate_domain(input.security.domain)?;
+    let output_region = output.as_sealed_region();
+    stream
+        .push_sealed(
+            input.plan.topic().clone(),
+            input.plan.partition(),
+            pushed,
+            output_region,
+        )
+        .await
 }

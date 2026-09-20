@@ -14,8 +14,9 @@
 #![allow(clippy::expect_used)]
 
 use oqueue_core::{
-    BUNDLE_PART_BYTES, BundleStream, ByteRange, Error, FakeObjectStore, FaultConfig, ObjectKey,
-    ObjectStore, PartitionId, PushedRecords, StormKind, TopicId, Written, parse_footer,
+    BUNDLE_PART_BYTES, BundleStream, ByteRange, Error, FakeObjectStore, FaultConfig, KeyId,
+    ObjectKey, ObjectStore, ParsedNonce, PartitionId, PushedRecords, Redacted, RegionAlg,
+    RegionEnvelope, SealedRegion, StormKind, TopicId, WrappedKey, Written, parse_footer,
 };
 use std::future::Future;
 use std::task::{Context, Poll, Waker};
@@ -239,6 +240,69 @@ fn a_streamed_bundle_reads_back_through_the_footer() {
     assert_eq!(first.offset(), 0);
     assert_eq!(first.length(), 32);
     assert_eq!(&written[..32], b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+}
+
+/// The sealed streaming path must account for bytes, flush a full part, and
+/// preserve the envelope metadata in the footer just like the ordinary path.
+fn sealed_envelope() -> RegionEnvelope {
+    RegionEnvelope::new(
+        KeyId::new("kek").expect("a valid key id"),
+        WrappedKey::new(Redacted::new(vec![1; 8])),
+        ParsedNonce::decode([0; 12]),
+    )
+    .expect("a valid envelope")
+}
+
+#[test]
+fn a_sealed_stream_flushes_and_reads_back_its_region() {
+    let store = FakeObjectStore::new();
+    let key = key("sealed-stream");
+    let topic = TopicId::new("t").expect("a valid topic");
+    let partition = PartitionId::new(0).expect("a valid partition");
+    let payload = vec![b'c'; BUNDLE_PART_BYTES];
+
+    let (spans, cost) = block_on(async {
+        let mut stream = BundleStream::open(&store, &key).await.expect("a stream");
+        stream
+            .push_sealed(
+                topic,
+                partition,
+                PushedRecords {
+                    count: 1,
+                    producer: None,
+                },
+                SealedRegion {
+                    bytes: &payload,
+                    alg: RegionAlg::Aes256Gcm,
+                    envelope: sealed_envelope(),
+                },
+            )
+            .await
+            .expect("a sealed region");
+        assert_eq!(stream.written(), BUNDLE_PART_BYTES as u64);
+        assert_eq!(stream.parts(), 1, "a full sealed part flushes immediately");
+        stream.finish().await.expect("a sealed object")
+    });
+
+    assert_eq!(spans.len(), 1);
+    assert_eq!(cost.bytes(), BUNDLE_PART_BYTES as u64);
+    assert_eq!(cost.parts(), 2, "the full payload and footer are two parts");
+    let object = block_on(store.get(&key, ByteRange::Full)).expect("the object");
+    let regions = parse_footer(&object, object.len() as u64).expect("a valid footer");
+    assert_eq!(regions.len(), 1);
+    assert_eq!(regions[0].alg(), RegionAlg::Aes256Gcm);
+    assert_eq!(
+        regions[0].bytes(),
+        ByteRange::bounded(0, BUNDLE_PART_BYTES as u64).expect("a range")
+    );
+    assert_eq!(
+        regions[0]
+            .envelope()
+            .expect("an envelope")
+            .key_id()
+            .as_str(),
+        "kek"
+    );
 }
 
 /// ⚠️ **An empty part is not a part**, and the fake must say what a backend

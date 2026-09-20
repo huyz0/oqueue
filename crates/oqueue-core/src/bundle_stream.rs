@@ -18,7 +18,10 @@
 //! partition into millions of tiny regions would find it.
 
 use crate::bundle::{BundleBuilder, PushedRecords};
-use crate::{CommittedSpan, MultipartWriter, ObjectKey, ObjectStore, PartitionId, Result, TopicId};
+use crate::{
+    CommittedSpan, MultipartWriter, ObjectKey, ObjectStore, PartitionId, Result, SealedRegion,
+    TopicId,
+};
 
 /// How many bytes one part carries.
 ///
@@ -138,6 +141,40 @@ impl<'store> BundleStream<'store> {
         self.written = self
             .written
             .saturating_add(records.len().try_into().unwrap_or(u64::MAX));
+        while self.buffer.len() >= BUNDLE_PART_BYTES {
+            let rest = self.buffer.split_off(BUNDLE_PART_BYTES);
+            let part = core::mem::replace(&mut self.buffer, rest);
+            self.writer.write_part(part).await?;
+            self.parts += 1;
+        }
+        Ok(())
+    }
+
+    /// Appends one `(topic, partition)`'s already-sealed records, with the
+    /// envelope that opens them.
+    ///
+    /// Compaction uses this path after a customer-domain re-sealer has
+    /// produced ciphertext and an envelope for the new output-region
+    /// position. The stream records the returned bytes through the same
+    /// durable-format encoder as the ordinary builder.
+    ///
+    /// # Errors
+    ///
+    /// [`BundleBuilder::push_sealed`](crate::BundleBuilder::push_sealed)'s
+    /// validation errors, or whatever the multipart writer reports.
+    pub async fn push_sealed(
+        &mut self,
+        topic: TopicId,
+        partition: PartitionId,
+        pushed: PushedRecords,
+        sealed: SealedRegion<'_>,
+    ) -> Result<()> {
+        let bytes = sealed.bytes;
+        self.regions.push_sealed(topic, partition, pushed, sealed)?;
+        self.buffer.extend_from_slice(bytes);
+        self.written = self
+            .written
+            .saturating_add(bytes.len().try_into().unwrap_or(u64::MAX));
         while self.buffer.len() >= BUNDLE_PART_BYTES {
             let rest = self.buffer.split_off(BUNDLE_PART_BYTES);
             let part = core::mem::replace(&mut self.buffer, rest);

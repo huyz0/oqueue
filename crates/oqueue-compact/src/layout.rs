@@ -198,7 +198,14 @@ where
     let mut gets = 0_usize;
     let mut records = 0_i64;
     for planned in ordered {
-        let (read, moved) = gather(store, planned.plan(), planned.inputs(), &mut stream).await?;
+        let (read, moved) = gather(
+            store,
+            planned.plan(),
+            planned.inputs(),
+            &mut stream,
+            crate::CompactionDomain::default_domain(&oqueue_core::KeyDomain::default_domain()),
+        )
+        .await?;
         gets += read;
         records += moved;
     }

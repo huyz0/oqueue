@@ -26,8 +26,9 @@ pub use layout::{PlannedInputs, merge_round};
 pub use lifecycle::{
     DELETE_BATCH_KEYS, DELETION_BACKLOG_KEYS, Lifecycle, QUARANTINE_AFTER_REFUSALS, SweepReport,
 };
-pub use merge::{MergeOutcome, merge};
+pub use merge::{CompactionDomain, MergeOutcome, merge, merge_with_resealer};
 pub use namer::CompactionNamer;
+pub use oqueue_core::{RegionReSealer, ResealRequest, ResealedRegion};
 pub use plan::{COMPACTION_READ_AMP_THRESHOLD, CompactionPlan, Planning, plan};
 pub use read_amp::{COMPACTED_OBJECT_RECORDS, ReadAmp, read_amp};
 pub use retention::{DEFAULT_RETENTION_MS, ExpiryHeap};
