@@ -79,6 +79,7 @@ mod metadata_log;
 mod metadata_record;
 mod metadata_segment;
 mod multipart;
+mod nonce;
 mod object_key;
 mod object_meta;
 mod object_ref;
@@ -150,6 +151,10 @@ pub use metadata_log::{FakeMetadataLog, MetadataEntry, MetadataLog};
 pub use metadata_record::{CommittedSpan, MetadataRecord};
 pub use metadata_segment::{decode_segment, encode_segment};
 pub use multipart::{MultipartLimits, MultipartSession};
+pub use nonce::{
+    MAX_OBJECT_SEQUENCE, MAX_REGION_INDEX, MAX_WRITER_EPOCH, NONCE_BYTES, Nonce, NonceMinter,
+    NonceSource, ParsedNonce,
+};
 pub use object_key::ObjectKey;
 pub use object_meta::{ObjectMeta, PreconditionToken};
 pub use object_ref::{IndexedBatch, ObjectRef, TailEntry};

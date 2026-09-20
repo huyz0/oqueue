@@ -554,6 +554,52 @@ pub enum Error {
     #[error("the bundle is too large for its footer to describe")]
     BundleTooLarge,
 
+    /// A writer epoch does not fit the nonce layout's 40-bit field.
+    ///
+    /// ⚠️ **Refused rather than truncated**, and that is the whole point of the
+    /// variant: masking the value into the field is exactly how two distinct
+    /// `(writer epoch, object sequence, region index)` triples would produce
+    /// one nonce, and a repeated nonce under one AES-GCM key leaks plaintext
+    /// and forges (`ADR-0050` point 2).
+    #[error("a writer epoch must fit 40 bits, got {got}")]
+    NonceWriterEpochOutOfRange {
+        /// The rejected value.
+        got: u64,
+    },
+
+    /// An object sequence does not fit the nonce layout's 40-bit field.
+    ///
+    /// ⚠️ Refused rather than truncated, for the reason
+    /// [`Error::NonceWriterEpochOutOfRange`] gives.
+    #[error("an object sequence must fit 40 bits, got {got}")]
+    NonceObjectSequenceOutOfRange {
+        /// The rejected value.
+        got: u64,
+    },
+
+    /// A region index does not fit the nonce layout's 16-bit field.
+    ///
+    /// ⚠️ Refused rather than truncated, for the reason
+    /// [`Error::NonceWriterEpochOutOfRange`] gives.
+    #[error("a region index must fit 16 bits, got {got}")]
+    NonceRegionOutOfRange {
+        /// The rejected value.
+        got: u32,
+    },
+
+    /// A nonce was asked for out of order — which a *repeated* ask is.
+    ///
+    /// ⚠️ The counter behind a `NonceSource` only advances, so this is what a
+    /// second call for one region looks like from the inside. Refusing is what
+    /// makes nonce reuse unrepresentable rather than merely discouraged.
+    #[error("this object's next region is {expected}, not {got}")]
+    NonceRegionOutOfOrder {
+        /// The only index the source will accept next.
+        expected: u32,
+        /// The rejected value.
+        got: u32,
+    },
+
     /// A writer identity contains a `/`.
     ///
     /// ⚠️ It would let two distinct identities produce one object key by

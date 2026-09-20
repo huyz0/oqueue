@@ -147,6 +147,13 @@ impl Error {
             | Self::UnboundedRegion
             | Self::BundleTooLarge
             | Self::MalformedWriterId
+            // Never: a value that does not fit a fixed-width nonce field does
+            // not fit it on a second attempt either, and an out-of-order ask
+            // is a caller bug, not a transient condition.
+            | Self::NonceWriterEpochOutOfRange { .. }
+            | Self::NonceObjectSequenceOutOfRange { .. }
+            | Self::NonceRegionOutOfRange { .. }
+            | Self::NonceRegionOutOfOrder { .. }
             | Self::BundleSequenceExhausted
             | Self::ByteRangeOutOfBounds { .. }
             | Self::ChunkLengthTooLarge { .. }

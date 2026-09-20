@@ -595,6 +595,14 @@ declare -A NOT_A_BOUND=(
   # `count_records` (the only reader of this constant) got its own file.
   ["crates/oqueue-codec/src/records/count.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
   ["crates/oqueue-core/src/key.rs|DEK_BYTES"]="AES-256's key width, fixed by the algorithm ADR-0050 chose -- a different value is a different cipher, not a weaker setting of this one"
+  # --- nonce.rs (`M8.2`): the AES-GCM nonce's own field widths. Every one of
+  # these is fixed by the layout or by the cipher, not chosen as a policy --
+  # changing one is a different nonce format, and the values are what make the
+  # (epoch, object, region) map injective rather than a threshold on anything.
+  ["crates/oqueue-core/src/nonce.rs|NONCE_BYTES"]="AES-GCM's 96-bit nonce width, fixed by the algorithm -- a different value is a different construction"
+  ["crates/oqueue-core/src/nonce.rs|MAX_WRITER_EPOCH"]="what the layout's 40-bit writer-epoch field can express, not a policy"
+  ["crates/oqueue-core/src/nonce.rs|MAX_OBJECT_SEQUENCE"]="what the layout's 40-bit object-sequence field can express, not a policy"
+  ["crates/oqueue-core/src/nonce.rs|MAX_REGION_INDEX"]="what the layout's 16-bit region-index field can express, not a policy"
   ["crates/oqueue-core/src/bundle.rs|BUNDLE_FORMAT_VERSION"]="this object format's version number"
   ["crates/oqueue-core/src/bundle.rs|TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/composite.rs|COMPOSITE_FORMAT_VERSION"]="the composite manifest format's version number"
