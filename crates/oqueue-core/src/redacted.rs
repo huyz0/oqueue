@@ -104,6 +104,18 @@ impl<T> Redacted<T> {
     }
 }
 
+impl<T: AsRef<[u8]>> Redacted<T> {
+    /// Compares the wrapped bytes with a borrowed slice in constant time.
+    ///
+    /// The contents are compared without an early exit. As with
+    /// [`PartialEq`], different lengths are observable because the comparison
+    /// cannot read beyond either slice.
+    #[must_use]
+    pub fn ct_eq_bytes(&self, other: &[u8]) -> bool {
+        self.0.as_ref().ct_eq(other).into()
+    }
+}
+
 /// ⚠️ Prints a fixed string. No `T: Debug` bound, deliberately — see the type's
 /// documentation.
 impl<T> fmt::Debug for Redacted<T> {

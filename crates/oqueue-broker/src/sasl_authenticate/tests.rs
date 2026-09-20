@@ -113,6 +113,22 @@ fn a_wrong_password_over_tls_is_refused() {
 }
 
 #[test]
+fn wrong_passwords_of_equal_and_different_length_are_both_refused() {
+    let creds = one_credential("alice", "secret");
+    let same_length = replied(&encoded(plain_bytes("alice", "secrex")), true, &creds);
+    let different_length = replied(&encoded(plain_bytes("alice", "x")), true, &creds);
+
+    assert_eq!(
+        same_length.error_code,
+        error_codes::SASL_AUTHENTICATION_FAILED
+    );
+    assert_eq!(
+        different_length.error_code,
+        error_codes::SASL_AUTHENTICATION_FAILED
+    );
+}
+
+#[test]
 fn an_unknown_principal_over_tls_is_refused() {
     let creds = one_credential("alice", "secret");
     let body = encoded(plain_bytes("mallory", "secret"));

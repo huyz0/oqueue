@@ -13,11 +13,8 @@
 //! is refused the same way it always was — an unconfigured broker fails
 //! closed, `security.md` rule 3's instinct applied here.
 //!
-//! ⚠️ **Ordinary string equality, not constant-time.** [`Redacted`]'s own
-//! documentation names this exact gap: comparing two wrapped secrets leaks
-//! timing, and `M8` owns closing it before anything actually compares them.
-//! This is that anything, and the gap is inherited deliberately rather than
-//! solved out of scope here.
+//! Password comparison uses [`Redacted`]'s constant-time byte comparison; the
+//! length remains observable, as it is for every variable-length secret.
 
 #![allow(clippy::redundant_pub_crate)]
 
@@ -69,7 +66,9 @@ impl PlainCredentials {
     fn verify(&self, authcid: &str, password: &str) -> Option<&Principal> {
         self.0
             .iter()
-            .find(|c| c.principal.as_str() == authcid && c.password.expose() == password)
+            .find(|c| {
+                c.principal.as_str() == authcid && c.password.ct_eq_bytes(password.as_bytes())
+            })
             .map(|c| &c.principal)
     }
 }

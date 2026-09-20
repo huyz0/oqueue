@@ -232,6 +232,15 @@ fn constant_time_equality_answers_the_same_questions_ordinary_equality_would() {
     assert!(!a.ct_eq(&Dek::new(last)));
 }
 
+#[test]
+fn constant_time_byte_comparison_answers_against_a_borrowed_slice() {
+    let secret = Redacted::new("secret".to_owned());
+
+    assert!(secret.ct_eq_bytes(b"secret"));
+    assert!(!secret.ct_eq_bytes(b"secrex"));
+    assert!(!secret.ct_eq_bytes(b"x"));
+}
+
 /// `Redacted`'s own equality, now constant-time, still answers correctly —
 /// including for unequal lengths, which it reports as unequal.
 #[test]
