@@ -32,6 +32,7 @@ use crate::fetch::Allowance;
 use oqueue_codec::batch::rewrite_base_offset;
 use oqueue_core::{ByteRange, Error, ObjectKey, Offset, PartitionId, TopicId};
 use std::collections::HashMap;
+use tracing::Instrument;
 
 impl Cluster {
     /// Every batch this partition holds from `start`, with its real base
@@ -49,6 +50,25 @@ impl Cluster {
     /// the index named is gone — see [`Cluster::read_or_refresh`] for what that
     /// means; and whatever else the store returns.
     pub async fn read(
+        &self,
+        topic: &TopicId,
+        partition: PartitionId,
+        start: Offset,
+        spend: &mut Spend<'_>,
+    ) -> Result<Read, ReadFailure> {
+        let span = crate::telemetry::operation_span("fetch", "fetch");
+        let result = self
+            .read_inner(topic, partition, start, spend)
+            .instrument(span.clone())
+            .await;
+        span.record(
+            "outcome",
+            if result.is_ok() { "success" } else { "failure" },
+        );
+        result
+    }
+
+    async fn read_inner(
         &self,
         topic: &TopicId,
         partition: PartitionId,
@@ -397,7 +417,20 @@ impl FetchedObjects {
         if self.failed >= MAX_FAILED_FETCHES_PER_REQUEST {
             return (Err(Error::SlowDown), false);
         }
-        let fetched = cluster.store().get(key, range).await;
+        let get_span = crate::telemetry::dependency_span("object_store", "get", "fetch");
+        let fetched = cluster
+            .store()
+            .get(key, range)
+            .instrument(get_span.clone())
+            .await;
+        get_span.record(
+            "outcome",
+            if fetched.is_ok() {
+                "success"
+            } else {
+                "failure"
+            },
+        );
         if fetched.is_err() {
             self.failed += 1;
         }

@@ -26,6 +26,8 @@ Because BYOK is a per-topic opt-in and server-side encryption cannot express it:
 - `zeroize` — wiping the scratch buffer a DEK is minted in and the plaintext
   copy handed to `KeyProvider::wrap`; `oqueue_core::Redacted` has no `Drop` of
   its own, so that is the owner's job (`security.md` rule 8).
+- `tracing` — emitting bounded child spans for KMS wrap and unwrap round trips;
+  the broker owns subscriber and exporter configuration (`M12.12`, ADR-0067).
 
 `providers` contains the thin AWS KMS and GCP Cloud KMS adapters. They expose
 only each API's encrypt/decrypt operations and implement the same

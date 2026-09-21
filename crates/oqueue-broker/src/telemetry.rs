@@ -4,7 +4,48 @@
 
 use oqueue_codec::apikey::ApiKey;
 use oqueue_core::Principal;
-use tracing::Level;
+use tracing::{Level, Span};
+
+pub(crate) fn operation_span(name: &'static str, scope: &'static str) -> Span {
+    match name {
+        "produce" => tracing::info_span!(
+            target: "oqueue",
+            "produce",
+            operation = name,
+            outcome = tracing::field::Empty,
+            scope,
+        ),
+        "fetch" => tracing::info_span!(
+            target: "oqueue",
+            "fetch",
+            operation = name,
+            outcome = tracing::field::Empty,
+            scope,
+        ),
+        _ => tracing::info_span!(
+            target: "oqueue",
+            "operation",
+            operation = name,
+            outcome = tracing::field::Empty,
+            scope,
+        ),
+    }
+}
+
+pub(crate) fn dependency_span(
+    dependency: &'static str,
+    operation: &'static str,
+    scope: &'static str,
+) -> Span {
+    tracing::info_span!(
+        target: "oqueue",
+        "dependency",
+        dependency,
+        operation,
+        outcome = tracing::field::Empty,
+        scope,
+    )
+}
 
 pub(crate) fn admin_decision(
     api_key: ApiKey,
@@ -79,11 +120,14 @@ const fn operation_name(api_key: ApiKey) -> Option<&'static str> {
 mod tests {
     #![allow(clippy::expect_used, clippy::significant_drop_tightening)]
 
-    use super::{admin_decision, admin_operation, dependency_failure, operation_name};
+    use super::{
+        admin_decision, admin_operation, dependency_failure, dependency_span, operation_name,
+        operation_span,
+    };
     use oqueue_codec::apikey::ApiKey;
     use oqueue_core::Principal;
     use std::sync::{Arc, Mutex};
-    use tracing::{Event, Subscriber};
+    use tracing::{Event, Id, Subscriber};
     use tracing_subscriber::{
         layer::{Context, Layer},
         prelude::*,
@@ -111,6 +155,27 @@ mod tests {
         }
         fn record_str(&mut self, field: &tracing::field::Field, _value: &str) {
             self.0.push(field.name());
+        }
+    }
+
+    type SpanRecord = (String, bool, Vec<&'static str>);
+
+    #[derive(Clone)]
+    struct Spans(Arc<Mutex<Vec<SpanRecord>>>);
+
+    impl<S: Subscriber> Layer<S> for Spans {
+        fn on_new_span(&self, attrs: &tracing::span::Attributes<'_>, id: &Id, ctx: Context<'_, S>) {
+            let parented = ctx.current_span().id().is_some_and(|current| current != id);
+            self.0.lock().expect("span capture lock").push((
+                attrs.metadata().name().to_owned(),
+                parented,
+                attrs
+                    .metadata()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name())
+                    .collect(),
+            ));
         }
     }
 
@@ -168,5 +233,34 @@ mod tests {
             assert_eq!(operation_name(api_key), Some(name));
         }
         assert_eq!(operation_name(ApiKey::Metadata), None);
+    }
+
+    #[test]
+    fn dependency_span_is_connected_and_has_only_safe_fields() {
+        let spans = Arc::new(Mutex::new(Vec::new()));
+        let subscriber = tracing_subscriber::registry().with(Spans(Arc::clone(&spans)));
+        tracing::subscriber::with_default(subscriber, || {
+            let root = operation_span("produce", "produce");
+            root.in_scope(|| {
+                let child = dependency_span("object_store", "put", "produce");
+                child.in_scope(|| {});
+            });
+            let fetch = operation_span("fetch", "fetch");
+            fetch.in_scope(|| {});
+        });
+        let spans = spans.lock().expect("span capture lock");
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].0, "produce");
+        assert!(!spans[0].1);
+        assert_eq!(spans[1].0, "dependency");
+        assert!(spans[1].1);
+        assert_eq!(spans[0].2, vec!["operation", "outcome", "scope"]);
+        assert_eq!(
+            spans[1].2,
+            vec!["dependency", "operation", "outcome", "scope"]
+        );
+        assert_eq!(spans[2].0, "fetch");
+        assert!(!spans[2].1);
+        assert_eq!(spans[2].2, vec!["operation", "outcome", "scope"]);
     }
 }

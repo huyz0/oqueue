@@ -58,6 +58,7 @@ use oqueue_core::{
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use tracing::Instrument;
 use zeroize::Zeroize as _;
 
 /// How long an unwrapped DEK is kept before the KMS must be asked again: five
@@ -376,7 +377,28 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
         // conditional on `T: Zeroize`). An earlier comment here called this
         // "the provider's allocation"; that was wrong about ownership, and it
         // is the argument that let the leak through.
-        let mut plaintext = self.provider.unwrap(key_id, wrapped).await?;
+        let kms_span = tracing::info_span!(
+            target: "oqueue",
+            "kms",
+            dependency = "kms",
+            operation = "unwrap",
+            outcome = tracing::field::Empty,
+            scope = "dek",
+        );
+        let plaintext = self
+            .provider
+            .unwrap(key_id, wrapped)
+            .instrument(kms_span.clone())
+            .await;
+        kms_span.record(
+            "outcome",
+            if plaintext.is_ok() {
+                "success"
+            } else {
+                "failure"
+            },
+        );
+        let mut plaintext = plaintext?;
         let dek = Dek::from_slice(plaintext.expose());
         plaintext.zeroize();
         let now = self.clock.now();

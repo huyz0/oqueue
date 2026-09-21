@@ -10,6 +10,7 @@ use crate::cluster::{Cluster, FlushError};
 use oqueue_coordinator::CommitAck;
 use oqueue_core::BundleBuilder;
 use std::sync::PoisonError;
+use tracing::Instrument;
 
 impl Cluster {
     /// Seals `bundle`, writes it as one object, and commits the spans it
@@ -45,6 +46,16 @@ impl Cluster {
     /// written; [`FlushError::Commit`] if it was written and its position
     /// could not be journalled.
     pub async fn flush(&self, bundle: BundleBuilder) -> Result<CommitAck, FlushError> {
+        let span = crate::telemetry::operation_span("produce", "produce");
+        let result = self.flush_inner(bundle).instrument(span.clone()).await;
+        span.record(
+            "outcome",
+            if result.is_ok() { "success" } else { "failure" },
+        );
+        result
+    }
+
+    async fn flush_inner(&self, bundle: BundleBuilder) -> Result<CommitAck, FlushError> {
         let started = tokio::time::Instant::now();
         let sealed = bundle.seal().map_err(FlushError::Store)?;
         // ⚠️ Taken before the payload is moved out, and the reason is not
@@ -55,8 +66,10 @@ impl Cluster {
             let mut namer = self.namer().lock().unwrap_or_else(PoisonError::into_inner);
             namer.next_key().map_err(FlushError::Store)?
         };
+        let put_span = crate::telemetry::dependency_span("object_store", "put", "produce");
         self.store()
             .put(&key, sealed.into_payload(), None)
+            .instrument(put_span.clone())
             .await
             .map_err(|error| {
                 let latency = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
@@ -64,9 +77,11 @@ impl Cluster {
                     self.metrics()
                         .record_write(span.topic(), span.partition(), latency, false);
                 }
+                put_span.record("outcome", "failure");
                 crate::telemetry::dependency_failure("object_store", "put", 0, None, "produce");
                 FlushError::Store(error)
             })?;
+        put_span.record("outcome", "success");
         let committed_spans = spans.clone();
         self.coordinator()
             .commit(key, spans)

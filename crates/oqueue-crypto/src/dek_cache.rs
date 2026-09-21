@@ -32,6 +32,7 @@ use oqueue_core::{
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use tracing::Instrument;
 use zeroize::Zeroize as _;
 
 /// How many bytes may be sealed under one DEK before it is retired: 64 GiB.
@@ -350,7 +351,7 @@ impl<C: Clock, P: KeyProvider, E: Entropy> DekCache<C, P, E> {
         // whichever way the call went: `Redacted` has no `Drop` of its own
         // (see its documentation), so this is the owner's obligation.
         let mut plaintext = Redacted::new(dek.expose().to_vec());
-        let wrapped = self.provider.wrap(key_id, &plaintext).await;
+        let wrapped = traced_wrap(&self.provider, key_id, &plaintext).await;
         plaintext.zeroize();
         let wrapped = wrapped?;
 
@@ -411,4 +412,28 @@ impl<C: Clock, P: KeyProvider, E: Entropy> DekCache<C, P, E> {
     fn mint_counts(&self) -> MutexGuard<'_, HashMap<TopicId, u64>> {
         self.mints.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+async fn traced_wrap<P: KeyProvider + ?Sized>(
+    provider: &P,
+    key_id: &KeyId,
+    plaintext: &Redacted<Vec<u8>>,
+) -> Result<WrappedKey> {
+    let span = tracing::info_span!(
+        target: "oqueue",
+        "kms",
+        dependency = "kms",
+        operation = "wrap",
+        outcome = tracing::field::Empty,
+        scope = "dek",
+    );
+    let result = provider
+        .wrap(key_id, plaintext)
+        .instrument(span.clone())
+        .await;
+    span.record(
+        "outcome",
+        if result.is_ok() { "success" } else { "failure" },
+    );
+    result
 }

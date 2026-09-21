@@ -21,6 +21,7 @@ getrandom.workspace = true
 # are wiped explicitly; `Redacted` has no `Drop` of its own (`security.md`
 # rule 8).
 zeroize.workspace = true
+tracing.workspace = true
 
 # ⚠️ Empty on purpose, and worth a word because it is the one section
 # `check-layering.sh` never reads: nothing here may take an async runtime.

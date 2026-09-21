@@ -1161,6 +1161,7 @@ dependencies = [
  "aes-gcm",
  "getrandom 0.3.4",
  "oqueue-core",
+ "tracing",
  "zeroize",
 ]
 
