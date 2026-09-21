@@ -240,12 +240,6 @@ impl Cluster {
     /// [`Error::EmptyObjectKey`] or [`Error::MalformedWriterId`] if `writer`
     /// is not a usable key component, which [`WriterId::mint`] never
     /// produces.
-    // ⚠️ `async` with no top-level `.await`, still — `M4.15c` added a
-    // second replay (`crate::group_transitions`'s own) to the same
-    // spawned task rather than awaiting it here directly, `tokio::join!`
-    // running both replays concurrently before either marks
-    // `replay_gate` ready. Kept `async` anyway rather than reverting
-    // every call site's `.await` a second time.
     #[allow(clippy::unused_async)]
     pub async fn new(
         host: impl Into<String>,
@@ -254,6 +248,24 @@ impl Cluster {
         seams: Seams,
         writer: &WriterId,
     ) -> Result<Self, Error> {
+        Self::new_with_role(host, port, sequencing, seams, writer, NodeRole::Combined)
+    }
+
+    /// Builds a cluster with only the background state needed by `role`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::EmptyObjectKey`] or [`Error::MalformedWriterId`] if `writer`
+    /// is not a usable key component.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_role(
+        host: impl Into<String>,
+        port: i32,
+        sequencing: Sequencing,
+        seams: Seams,
+        writer: &WriterId,
+        role: NodeRole,
+    ) -> Result<Self, Error> {
         let committed_offsets = Arc::new(crate::offset_commit::CommittedOffsets::new_empty(
             Arc::clone(&seams.group_metadata_log),
         ));
@@ -261,14 +273,20 @@ impl Cluster {
         let metrics = OperationalMetrics::default();
         let (group_transitions, group_transitions_task) =
             crate::group_transitions::GroupTransitions::new();
-        let replay_task = tokio::spawn(replay::replay_groups(
-            Arc::clone(&committed_offsets),
-            Arc::clone(&replay_gate),
-            group_transitions_task,
-            Arc::clone(&seams.group_coordinator),
-            Arc::clone(&seams.group_metadata_log),
-            metrics.clone(),
-        ));
+        let replay_task = if role == NodeRole::DataPlane {
+            drop(group_transitions_task);
+            replay_gate.mark_ready();
+            None
+        } else {
+            Some(tokio::spawn(replay::replay_groups(
+                Arc::clone(&committed_offsets),
+                Arc::clone(&replay_gate),
+                group_transitions_task,
+                Arc::clone(&seams.group_coordinator),
+                Arc::clone(&seams.group_metadata_log),
+                metrics.clone(),
+            )))
+        };
         Ok(Self {
             node_id: 0,
             host: host.into(),
@@ -292,10 +310,10 @@ impl Cluster {
             heartbeats: crate::heartbeat::Heartbeats::default(),
             committed_offsets,
             replay_gate,
-            replay_task: Mutex::new(Some(replay_task)),
+            replay_task: Mutex::new(replay_task),
             group_transitions,
             metrics,
-            role: NodeRole::Combined,
+            role,
         })
     }
 

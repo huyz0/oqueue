@@ -24,6 +24,7 @@ pub(crate) fn serve(
     advertise: Option<&str>,
     wiring: &Wiring,
     security: &Arc<crate::security::Security>,
+    role: crate::ProcessRole,
 ) {
     // Sized for the harness, not for production: librdkafka's default
     // `message.max.bytes` is 1 MiB, so 16 MiB clears every test frame;
@@ -50,34 +51,17 @@ pub(crate) fn serve(
             advertised_host,
             advertised_port,
             Arc::clone(&wiring.store),
+            role.broker_role(),
         )
         .await?;
+        let cluster = Arc::new(built.cluster.with_role(role.broker_role()));
         if let Some(warning) = durability_warning(wiring.store_name) {
             eprintln!("{warning}");
         }
-        // ⚠️ Spawned *here*, where something watches it — see `build_cluster`.
-        // It replays its log first, retrying on a timer while the store is
-        // unreachable (`M6.10`).
-        let serving = tokio::spawn(
-            built
-                .serving
-                .run_retrying(|| tokio::time::sleep(oqueue_broker::DEGRADED_RETRY)),
-        );
-        // ⚠️ Not watched, deliberately: retention stopping delays deletion and
-        // loses no acknowledged record, so it is no reason to stop serving.
-        tokio::spawn(built.retention.run());
-        // ⚠️ Not watched either, for the same reason: a stopped cadence only
-        // makes the next cold start slower (`M6.4`).
-        tokio::spawn(oqueue_broker::checkpoints(
-            built.log,
-            Arc::clone(&built.lease),
-        ));
-        // ⚠️ Nor the lease keeper: without it the loop fences itself when the
-        // lease lapses, which refuses writes and loses nothing (`M6.7`).
-        tokio::spawn(oqueue_broker::keep_lease(built.lease));
-        let cluster = Arc::new(built.cluster);
+        let serving =
+            spawn_role_tasks(built.serving, built.retention, built.log, built.lease, role)?;
         println!(
-            "oqueue {} ({:?}, {})",
+            "oqueue {} ({:?}, {}, role={role:?})",
             env!("CARGO_PKG_VERSION"),
             wiring.keys(),
             wiring.store_name
@@ -91,6 +75,46 @@ pub(crate) fn serve(
         eprintln!("oqueue: serve failed: {error}");
         std::process::exit(1);
     }
+}
+
+fn spawn_role_tasks(
+    serving: Option<oqueue_coordinator::CoordinatorLoop>,
+    retention: oqueue_broker::Retention,
+    log: oqueue_broker::CurrentLog,
+    lease: Option<Arc<oqueue_core::ObjectStoreLease>>,
+    role: crate::ProcessRole,
+) -> std::io::Result<Option<tokio::task::JoinHandle<()>>> {
+    // ⚠️ Spawned here, where the caller watches it — see `build_cluster`. It
+    // replays its log first, retrying while the store is unreachable (`M6.10`).
+    let serving = serving.map(|serving| {
+        tokio::spawn(serving.run_retrying(|| tokio::time::sleep(oqueue_broker::DEGRADED_RETRY)))
+    });
+    if starts_retention(role) {
+        // ⚠️ Retention is combined-mode maintenance until a data-plane has a
+        // remote coordinator seam; it writes trim metadata through the local
+        // coordinator and must not run in a read-only data-plane process.
+        tokio::spawn(retention.run());
+    }
+    if starts_coordination_cadence(role) {
+        // ⚠️ Checkpointing and lease renewal belong to coordination. A stopped
+        // cadence only makes the next cold start slower (`M6.4`).
+        let Some(lease) = lease else {
+            return Err(std::io::Error::other(
+                "coordinator role started without its lease",
+            ));
+        };
+        tokio::spawn(oqueue_broker::checkpoints(log, Arc::clone(&lease)));
+        tokio::spawn(oqueue_broker::keep_lease(lease));
+    }
+    Ok(serving)
+}
+
+fn starts_retention(role: crate::ProcessRole) -> bool {
+    role == crate::ProcessRole::Combined
+}
+
+fn starts_coordination_cadence(role: crate::ProcessRole) -> bool {
+    role != crate::ProcessRole::DataPlane
 }
 
 /// The connection bounds `serve` runs with.
@@ -189,7 +213,7 @@ fn spawn_connection(
 async fn accept_loop(
     listener: tokio::net::TcpListener,
     cluster: Arc<oqueue_broker::Cluster>,
-    mut serving: tokio::task::JoinHandle<()>,
+    serving: Option<tokio::task::JoinHandle<()>>,
     limits: oqueue_broker::ConnectionLimits,
     security: &Arc<crate::security::Security>,
 ) -> std::io::Result<()> {
@@ -202,6 +226,17 @@ async fn accept_loop(
     let mut reported_reaps = 0_u64;
     let mut reap_tick = tokio::time::interval(Duration::from_mins(1));
     reap_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut serving = Box::pin(async move {
+        match serving {
+            Some(serving) => match serving.await {
+                Ok(()) => Err(std::io::Error::other("the coordinator loop stopped")),
+                Err(error) => Err(std::io::Error::other(format!(
+                    "the coordinator loop failed: {error}"
+                ))),
+            },
+            None => std::future::pending().await,
+        }
+    });
     loop {
         // A connection's ending is that connection's news alone, and so
         // is a failed accept: ECONNABORTED and EMFILE are transient, and
@@ -228,12 +263,7 @@ async fn accept_loop(
                     reported_reaps = reaped;
                 }
             }
-            joined = &mut serving => {
-                return Err(std::io::Error::other(match joined {
-                    Ok(()) => "the coordinator loop stopped".to_owned(),
-                    Err(error) => format!("the coordinator loop failed: {error}"),
-                }));
-            }
+            joined = &mut serving => return joined,
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
                     // ⚠️ **A dispatcher per connection, not one shared.** It
@@ -276,10 +306,16 @@ fn advertised_identity(
 }
 
 #[cfg(test)]
+mod role_tests;
+
+#[cfg(test)]
 // Sites below are on values these tests constructed from literals they control.
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::{Duration, SERVE_LIMITS, advertised_identity};
+    use super::{
+        Duration, SERVE_LIMITS, advertised_identity, starts_coordination_cadence, starts_retention,
+    };
+    use crate::ProcessRole;
     use std::sync::Arc;
 
     fn addr(spec: &str) -> std::net::SocketAddr {
@@ -332,6 +368,16 @@ mod tests {
         }
     }
 
+    #[test]
+    fn role_tasks_follow_their_ownership_boundary() {
+        assert!(starts_retention(ProcessRole::Combined));
+        assert!(!starts_retention(ProcessRole::Coordinator));
+        assert!(!starts_retention(ProcessRole::DataPlane));
+        assert!(starts_coordination_cadence(ProcessRole::Coordinator));
+        assert!(starts_coordination_cadence(ProcessRole::Combined));
+        assert!(!starts_coordination_cadence(ProcessRole::DataPlane));
+    }
+
     /// ⚠️ **A long poll must not outlive the connection it is parked on.** A
     /// parked `Fetch` sends nothing, so `read_frames` sees an idle connection
     /// for the whole park; an idle timeout below the park ceiling disconnects
@@ -381,11 +427,16 @@ mod tests {
     #[tokio::test]
     async fn the_accept_loop_notices_a_dead_coordinator_rather_than_serving_past_it() {
         let store: Arc<dyn crate::compose::Backend> = Arc::new(oqueue_core::FakeObjectStore::new());
-        let built = crate::compose::build_cluster("h".to_owned(), 1, store)
-            .await
-            .expect("an empty fixture composes");
+        let built = crate::compose::build_cluster(
+            "h".to_owned(),
+            1,
+            store,
+            oqueue_broker::NodeRole::Combined,
+        )
+        .await
+        .expect("an empty fixture composes");
         let cluster = built.cluster;
-        let serving = tokio::spawn(built.serving.run());
+        let serving = tokio::spawn(built.serving.expect("combined role").run());
 
         // ⚠️ **Aborted, not left to finish on its own** — an idle coordinator
         // loop never returns, so this is the only way to reach the failure
@@ -415,7 +466,7 @@ mod tests {
         let result = super::accept_loop(
             listener,
             cluster,
-            serving,
+            Some(serving),
             SERVE_LIMITS,
             &Arc::new(crate::security::Security::cleartext()),
         )

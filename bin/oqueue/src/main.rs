@@ -50,12 +50,14 @@ static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 static ALLOCATOR: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 mod compose;
+mod role;
 mod security;
 mod serve;
 mod wall_clock;
 
 use oqueue_core::KeyProvider;
 use oqueue_crypto::NoOpKeyProvider;
+use role::ProcessRole;
 use serve::serve;
 use std::sync::Arc;
 
@@ -245,6 +247,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    let role = role::selected();
     let mut args = std::env::args().skip(1);
     match (args.next().as_deref(), args.next()) {
         // `oqueue serve <addr> [advertise]` -- the M2 broker: the wire
@@ -273,11 +276,19 @@ fn main() {
             for line in security.describe() {
                 eprintln!("{line}");
             }
-            serve(&addr, args.next().as_deref(), &wiring, &Arc::new(security));
+            serve(
+                &addr,
+                args.next().as_deref(),
+                &wiring,
+                &Arc::new(security),
+                role,
+            );
         }
         (None, _) => run(&wiring),
         (Some(other), _) => {
-            eprintln!("unknown argument {other:?}; usage: oqueue [serve <host:port>]");
+            eprintln!(
+                "unknown argument {other:?}; usage: OQUEUE_ROLE=combined oqueue serve <host:port>"
+            );
             std::process::exit(2);
         }
     }

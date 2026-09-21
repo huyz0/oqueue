@@ -16,21 +16,31 @@
 //! tagged-fields section at v3.
 
 use crate::flex::{TaggedFields, put_compact_array_len, put_tagged_fields};
-use crate::versions::ADVERTISED;
+use crate::versions::{ADVERTISED, Advertised};
 use crate::wire::{put_i16, put_i32};
 
 /// Appends an `ApiVersions` response body at `body_version` with
 /// `error_code`, advertising [`ADVERTISED`]. The response header (always v0)
 /// is [`crate::frame::encode_response_header`]'s job.
 pub fn encode_response(out: &mut Vec<u8>, body_version: i16, error_code: i16) {
+    encode_response_for(out, body_version, error_code, &ADVERTISED);
+}
+
+/// Appends an `ApiVersions` body using an explicitly filtered table.
+pub fn encode_response_for(
+    out: &mut Vec<u8>,
+    body_version: i16,
+    error_code: i16,
+    advertised: &[Advertised],
+) {
     put_i16(out, error_code);
 
     if body_version >= 3 {
-        put_compact_array_len(out, Some(ADVERTISED.len()));
+        put_compact_array_len(out, Some(advertised.len()));
     } else {
-        put_i32(out, i32::try_from(ADVERTISED.len()).unwrap_or(i32::MAX));
+        put_i32(out, i32::try_from(advertised.len()).unwrap_or(i32::MAX));
     }
-    for row in &ADVERTISED {
+    for row in advertised {
         put_i16(out, row.api_key.as_i16());
         put_i16(out, row.min);
         put_i16(out, row.max);

@@ -64,6 +64,7 @@ identical to one configured correctly.
 | `OQUEUE_GROUP_GRANTS` | a file of `principal:group` lines, one group-ownership grant each | no group ownership. With credentials configured, group operations deny by default, so it is warned about |
 | `OQUEUE_ADMIN_GRANTS` | a file of `principal:operation` lines, one administrative grant each. Supported operations are `create_topics`, `delete_topics`, `describe_configs`, `alter_configs`, `describe_groups`, `list_groups`, and `alter_quotas` | no administrative authority. With credentials configured, administrative operations deny by default, so it is warned about |
 | `OQUEUE_MAX_IN_FLIGHT` | a positive integer | no per-principal quota. ⚠️ Inert without credentials, since the quota keys on the authenticated principal — and warned about |
+| `OQUEUE_ROLE` | `coordinator`, `data-plane`, or `combined` | `combined` |
 
 ⚠️ **File format**: `name:value`, split on the **first** colon (a password may
 contain one; a principal may not). ⚠️ **Whole-line `#` comments** and blank lines are ignored — a `#` *after* a value is part of that value, so `alice:secret # prod` sets the password to `secret # prod` and the broker then refuses the operator's own client while the file reads correctly. A password may legitimately contain `#`, which is why it cannot be stripped.
@@ -109,6 +110,13 @@ Nothing. It is the top of the graph.
   over the in-memory store, no. `advertise`
   overrides the identity `Metadata` hands out (doc 02 §7.2: identity is a
   decision); the harness's capture proxy relies on it.
+- `OQUEUE_ROLE` selects the responsibility set from this same artifact:
+  `coordinator` admits coordination and admin APIs, `data-plane` admits
+  metadata/fetch/list-offsets reads, and `combined` admits both. The current
+  data-plane role is intentionally read-only until a remote coordinator seam
+  exists; it replays metadata for reads but does not renew a lease or run
+  retention. An unknown value refuses startup rather than silently changing
+  the deployment shape.
 - ⚠️ **`cargo build` links this on x86_64 only.** aarch64 stays at `cargo check`
   until a cross-linker exists, which is `M13`'s work — and `M0`'s completion
   condition says so rather than claiming a link it never performed.

@@ -33,8 +33,7 @@
 use crate::connection::HandlerResponse;
 use core::future::Future;
 use oqueue_codec::apikey::ApiKey;
-use oqueue_codec::error_codes;
-use oqueue_codec::frame::{RequestPrelude, encode_response_header, read_request_prelude};
+use oqueue_codec::frame::read_request_prelude;
 use oqueue_codec::versions::supports;
 use std::time::Duration;
 
@@ -60,6 +59,7 @@ enum QuotaAdmission {
 #[derive(Debug)]
 pub struct Dispatcher {
     cluster: std::sync::Arc<crate::cluster::Cluster>,
+    role: crate::health::NodeRole,
     session: crate::session::Session,
     /// Whether this connection is TLS-terminated — `ADR-0032`'s prerequisite
     /// for `SASL/PLAIN` to ever succeed. `false` by construction
@@ -108,6 +108,7 @@ impl Dispatcher {
     #[must_use]
     pub fn new(cluster: std::sync::Arc<crate::cluster::Cluster>) -> Self {
         Self {
+            role: cluster.role(),
             cluster,
             session: crate::session::Session::default(),
             tls: false,
@@ -242,13 +243,16 @@ impl Dispatcher {
             // An unknown key has no parsable response; close (module doc).
             return HandlerResponse::Close;
         };
+        if !self.role.allows(api_key) {
+            return HandlerResponse::Close;
+        }
         if api_key != ApiKey::ApiVersions && !supports(api_key, prelude.api_version) {
             // Outside ApiVersions' fallback, an unadvertised version has no
             // response the client would parse.
             return HandlerResponse::Close;
         }
         if api_key == ApiKey::ApiVersions {
-            return HandlerResponse::Reply(api_versions_response(prelude));
+            return HandlerResponse::Reply(role::api_versions_response(prelude, self.role));
         }
         let principal = self.session.principal();
         if self.unauthorized(api_key) {
@@ -458,38 +462,9 @@ impl Dispatcher {
     }
 }
 
-/// The `ApiVersions` answer at any request version, fallback included.
-fn api_versions_response(prelude: RequestPrelude) -> Vec<u8> {
-    let supported = supports(ApiKey::ApiVersions, prelude.api_version);
-    // ⚠️ The fallback's whole point: an unsupported version is answered at
-    // v0 — parsable by every client ever shipped — with the error code set
-    // and the table still present, so the client retries at a version this
-    // broker named (doc 02 §1.4).
-    let (body_version, error_code) = if supported {
-        (prelude.api_version, error_codes::NONE)
-    } else {
-        (0, error_codes::UNSUPPORTED_VERSION)
-    };
-
-    let mut out = Vec::new();
-    if encode_response_header(
-        &mut out,
-        ApiKey::ApiVersions,
-        body_version,
-        prelude.correlation_id,
-    )
-    .is_err()
-    {
-        // Unreachable for a correlation-id header; an empty body would at
-        // least carry the frame. Kept non-panicking per error-handling.md.
-        out.clear();
-    }
-    oqueue_codec::apiversions::encode_response(&mut out, body_version, error_code);
-    out
-}
-
 #[cfg(test)]
 mod tests;
 
 mod group_dispatch;
 mod handlers;
+mod role;

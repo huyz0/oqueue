@@ -46,13 +46,13 @@ impl<T: ObjectStore + MaintenanceStore + ?Sized> Backend for T {}
 pub(crate) struct Built {
     pub(crate) cluster: oqueue_broker::Cluster,
     /// The coordinator's loop, which replays its log before serving.
-    pub(crate) serving: oqueue_coordinator::CoordinatorLoop,
+    pub(crate) serving: Option<oqueue_coordinator::CoordinatorLoop>,
     pub(crate) retention: oqueue_broker::Retention,
     /// The coordinator's current view of the metadata log, for the
     /// checkpoint cadence (`M6.17`).
     pub(crate) log: oqueue_broker::CurrentLog,
     /// The shard's leadership lease the loop is fenced by (`M6.7`).
-    pub(crate) lease: Arc<oqueue_core::ObjectStoreLease>,
+    pub(crate) lease: Option<Arc<oqueue_core::ObjectStoreLease>>,
 }
 
 // This is the composition root: keeping the dependency wiring together makes
@@ -62,6 +62,7 @@ pub(crate) async fn build_cluster(
     host: String,
     port: i32,
     backend: Arc<dyn Backend>,
+    role: oqueue_broker::NodeRole,
 ) -> std::io::Result<Built> {
     let store: Arc<dyn ObjectStore> = Arc::clone(&backend) as _;
     // ⚠️ **Nothing here waits on the store** (`M6.10`): both logs open on
@@ -72,7 +73,11 @@ pub(crate) async fn build_cluster(
     let log: Arc<dyn oqueue_core::MetadataLog> = Arc::clone(&durable) as _;
     let clock: Arc<dyn oqueue_core::Clock> = Arc::new(crate::wall_clock::WallClock);
     let writer = oqueue_broker::WriterId::mint();
-    let lease = lease_for(&store, &writer, &clock).await;
+    let lease = if needs_lease(role) {
+        Some(lease_for(&store, &writer, &clock).await)
+    } else {
+        None
+    };
     let (coordinator, serving, reader) = oqueue_coordinator::Coordinator::open_deferred(
         Arc::clone(&log),
         Box::new(oqueue_index::MemoryIndex::new()),
@@ -80,9 +85,11 @@ pub(crate) async fn build_cluster(
         Arc::clone(&clock),
     );
     let current: oqueue_broker::CurrentLog = Arc::new(std::sync::Mutex::new(Arc::clone(&durable)));
-    let serving = serving
-        .fenced_by(Arc::clone(&lease))
-        .reopening_with(reopener(&store, &current));
+    let serving = match &lease {
+        Some(lease) => serving.fenced_by(Arc::clone(lease)),
+        None => serving,
+    }
+    .reopening_with(reopener(&store, &current));
     let catalog = catalog_over(Arc::clone(&backend));
     let retention = retention_for(
         coordinator.clone(),
@@ -95,7 +102,7 @@ pub(crate) async fn build_cluster(
         "oqueue: WARNING -- consumer-group membership/generation is in memory (M4.15 owns the \
          durable one, ADR-0034). Group membership and generation do not survive a restart."
     );
-    let cluster = oqueue_broker::Cluster::new(
+    let cluster = oqueue_broker::Cluster::new_with_role(
         host,
         port,
         oqueue_broker::Sequencing::new(coordinator, reader),
@@ -105,18 +112,22 @@ pub(crate) async fn build_cluster(
             group_metadata_log,
         },
         &writer,
+        role,
     )
-    .await
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?
     .with_region_sealer(Arc::new(oqueue_broker::RejectingRegionSealer::new()))
     .with_catalog(catalog);
     Ok(Built {
         cluster,
-        serving,
+        serving: Some(serving),
         retention,
         log: current,
         lease,
     })
+}
+
+fn needs_lease(role: oqueue_broker::NodeRole) -> bool {
+    role != oqueue_broker::NodeRole::DataPlane
 }
 
 /// FR-33: retention runs on time alone, over its own follower index.
@@ -208,4 +219,16 @@ fn reopener(
             Ok(log as Arc<dyn oqueue_core::MetadataLog>)
         })
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::needs_lease;
+
+    #[test]
+    fn data_plane_has_no_lease_but_coordinator_roles_do() {
+        assert!(!needs_lease(oqueue_broker::NodeRole::DataPlane));
+        assert!(needs_lease(oqueue_broker::NodeRole::Coordinator));
+        assert!(needs_lease(oqueue_broker::NodeRole::Combined));
+    }
 }

@@ -3,6 +3,7 @@
 use super::Dispatcher;
 use crate::connection::HandlerResponse;
 use crate::testing::{Fixture, fixture};
+use oqueue_codec::wire::{put_i16, put_i32};
 use std::sync::Arc;
 
 /// ⚠️ The fixture is returned alongside, and holding it is not a
@@ -33,6 +34,8 @@ async fn admin_context_tracks_whether_credentials_are_configured() {
 mod creator_tests;
 #[path = "describe_configs_tests.rs"]
 mod describe_configs_tests;
+#[path = "role_tests.rs"]
+mod role_tests;
 /// The reply's bytes, or a panic naming the other verdict.
 async fn replied(dispatcher: &Dispatcher, request: Vec<u8>) -> Vec<u8> {
     match dispatcher.dispatch(request).await {
@@ -42,7 +45,7 @@ async fn replied(dispatcher: &Dispatcher, request: Vec<u8>) -> Vec<u8> {
 }
 use kafka_protocol::messages::ApiVersionsResponse;
 use kafka_protocol::protocol::Decodable;
-use oqueue_codec::wire::{Cursor, put_i16, put_i32};
+use oqueue_codec::wire::Cursor;
 
 fn api_versions_request(version: i16, correlation_id: i32) -> Vec<u8> {
     let mut body = Vec::new();

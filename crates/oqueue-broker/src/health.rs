@@ -13,6 +13,48 @@ pub enum NodeRole {
     DataPlane,
 }
 
+impl NodeRole {
+    /// Whether this role owns the protocol family represented by `api_key`.
+    #[must_use]
+    pub const fn allows(self, api_key: oqueue_codec::apikey::ApiKey) -> bool {
+        use oqueue_codec::apikey::ApiKey;
+        match self {
+            Self::Combined => true,
+            Self::Coordinator => matches!(
+                api_key,
+                ApiKey::ApiVersions
+                    | ApiKey::SaslHandshake
+                    | ApiKey::SaslAuthenticate
+                    | ApiKey::FindCoordinator
+                    | ApiKey::JoinGroup
+                    | ApiKey::SyncGroup
+                    | ApiKey::Heartbeat
+                    | ApiKey::LeaveGroup
+                    | ApiKey::OffsetCommit
+                    | ApiKey::OffsetFetch
+                    | ApiKey::DescribeGroups
+                    | ApiKey::ListGroups
+                    | ApiKey::CreateTopics
+                    | ApiKey::DeleteTopics
+                    | ApiKey::DescribeConfigs
+                    | ApiKey::AlterConfigs
+                    | ApiKey::IncrementalAlterConfigs
+                    | ApiKey::DescribeClientQuotas
+                    | ApiKey::AlterClientQuotas
+            ),
+            Self::DataPlane => matches!(
+                api_key,
+                ApiKey::ApiVersions
+                    | ApiKey::SaslHandshake
+                    | ApiKey::SaslAuthenticate
+                    | ApiKey::Metadata
+                    | ApiKey::Fetch
+                    | ApiKey::ListOffsets
+            ),
+        }
+    }
+}
+
 /// The broad operator-facing state of a node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HealthState {
@@ -56,7 +98,8 @@ impl Cluster {
     pub fn health(&self) -> HealthSnapshot {
         let metrics = self.metrics().snapshot();
         let replay_in_progress = self.replay_in_progress();
-        let coordinator_task_alive = self.group_transitions_task_alive();
+        let coordinator_task_alive =
+            coordinator_task_alive(self.role(), self.group_transitions_task_alive());
         let state = classify(
             replay_in_progress,
             coordinator_task_alive,
@@ -73,6 +116,13 @@ impl Cluster {
             coordinator_failures: metrics.coordinator_failures,
             key_domain_failures: metrics.key_domain_failures,
         }
+    }
+}
+
+const fn coordinator_task_alive(role: NodeRole, group_transitions_alive: bool) -> bool {
+    match role {
+        NodeRole::DataPlane => true,
+        NodeRole::Coordinator | NodeRole::Combined => group_transitions_alive,
     }
 }
 
@@ -94,7 +144,7 @@ const fn classify(
 
 #[cfg(test)]
 mod tests {
-    use super::{HealthState, classify};
+    use super::{HealthState, NodeRole, classify, coordinator_task_alive};
 
     #[test]
     fn replay_or_dead_coordinator_is_not_ready() {
@@ -112,5 +162,26 @@ mod tests {
     #[test]
     fn no_failures_after_replay_is_ready() {
         assert_eq!(classify(false, true, 0, 0, 0), HealthState::Ready);
+    }
+
+    #[test]
+    fn roles_own_distinct_protocol_responsibilities() {
+        use oqueue_codec::apikey::ApiKey;
+        assert!(NodeRole::Coordinator.allows(ApiKey::CreateTopics));
+        assert!(!NodeRole::Coordinator.allows(ApiKey::Produce));
+        assert!(NodeRole::DataPlane.allows(ApiKey::Fetch));
+        assert!(!NodeRole::DataPlane.allows(ApiKey::Produce));
+        assert!(!NodeRole::DataPlane.allows(ApiKey::CreateTopics));
+        assert!(NodeRole::Combined.allows(ApiKey::AlterConfigs));
+    }
+
+    #[test]
+    fn data_plane_readiness_does_not_depend_on_group_task() {
+        assert!(coordinator_task_alive(NodeRole::DataPlane, false));
+        assert!(coordinator_task_alive(NodeRole::DataPlane, true));
+        assert!(!coordinator_task_alive(NodeRole::Coordinator, false));
+        assert!(coordinator_task_alive(NodeRole::Coordinator, true));
+        assert!(!coordinator_task_alive(NodeRole::Combined, false));
+        assert!(coordinator_task_alive(NodeRole::Combined, true));
     }
 }

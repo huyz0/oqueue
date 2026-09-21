@@ -46,10 +46,11 @@ async fn administrative_authority_reaches_the_live_dispatcher_separately() {
     .expect("all sources parse");
     let store: std::sync::Arc<dyn crate::compose::Backend> =
         std::sync::Arc::new(oqueue_core::FakeObjectStore::new());
-    let cluster = crate::compose::build_cluster("h".to_owned(), 1, store)
-        .await
-        .expect("an empty fixture composes")
-        .cluster;
+    let cluster =
+        crate::compose::build_cluster("h".to_owned(), 1, store, oqueue_broker::NodeRole::Combined)
+            .await
+            .expect("an empty fixture composes")
+            .cluster;
     let rendered = format!("{:?}", security.dispatcher(std::sync::Arc::new(cluster)));
     assert!(
         rendered.contains("CreateTopics"),
@@ -448,10 +449,11 @@ async fn every_configured_source_reaches_the_dispatcher() {
     // `testing::fixture` is `#[cfg(test)]` and so not reachable from here.
     let store: std::sync::Arc<dyn crate::compose::Backend> =
         std::sync::Arc::new(oqueue_core::FakeObjectStore::new());
-    let cluster = crate::compose::build_cluster("h".to_owned(), 1, store)
-        .await
-        .expect("an empty fixture composes")
-        .cluster;
+    let cluster =
+        crate::compose::build_cluster("h".to_owned(), 1, store, oqueue_broker::NodeRole::Combined)
+            .await
+            .expect("an empty fixture composes")
+            .cluster;
     let security = from_sources(
         Some(tls()),
         Some("alice:secret\n"),
