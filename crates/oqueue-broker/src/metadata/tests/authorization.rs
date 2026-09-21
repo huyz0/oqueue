@@ -289,6 +289,7 @@ async fn a_principals_null_array_answer_is_unaffected_by_unrelated_grants() {
     }
     grants.grant(alice(), TopicId::new("mine").expect("valid"));
     let body = request_bytes(12, None, false);
+    let before = fixture.cluster.topic_lookups();
     let out = answered_as(
         &fixture.cluster,
         prelude(12),
@@ -301,5 +302,10 @@ async fn a_principals_null_array_answer_is_unaffected_by_unrelated_grants() {
     assert_eq!(
         response.topics[0].name.as_ref().expect("named").to_string(),
         "mine"
+    );
+    assert_eq!(
+        fixture.cluster.topic_lookups() - before,
+        3,
+        "unrelated tenant grants must not add catalog work"
     );
 }
