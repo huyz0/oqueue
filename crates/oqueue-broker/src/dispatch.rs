@@ -283,6 +283,7 @@ impl Dispatcher {
             ApiKey::Metadata => self.metadata_handle(prelude, body).await,
             ApiKey::CreateTopics => self.create_topics_handle(prelude, body).await,
             ApiKey::DeleteTopics => self.delete_topics_handle(prelude, body).await,
+            ApiKey::DescribeConfigs => self.describe_configs_handle(prelude, body).await,
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),

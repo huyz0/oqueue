@@ -37,7 +37,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 17] = [
+pub static ADVERTISED: [Advertised; 18] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -182,6 +182,12 @@ pub static ADVERTISED: [Advertised; 17] = [
         flexible_from: Some(4),
     },
     Advertised {
+        api_key: ApiKey::DescribeConfigs,
+        min: 1,
+        max: 4,
+        flexible_from: Some(4),
+    },
+    Advertised {
         // ⚠️ **Through v4, not the dependency's v5 ceiling.** v5 adds
         // `enable_2_pc`/`keep_prepared_txn`, both "Supported API versions:
         // none" in the schema (a future KIP's placeholder, not yet wire-
@@ -219,25 +225,23 @@ pub fn supports(api_key: ApiKey, version: i16) -> bool {
 
 #[cfg(test)]
 mod table_sanity;
-
 #[cfg(test)]
 mod tests {
     // Same justification the sibling test modules give: every `expect` is on
     // a value this table constructed from literals it controls.
     #![allow(clippy::expect_used)]
-
     use super::{ADVERTISED, Advertised, advertised_for, supports};
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
         ApiVersionsRequest, ApiVersionsResponse, CreateTopicsRequest, CreateTopicsResponse,
-        DeleteTopicsRequest, DeleteTopicsResponse, FetchRequest, FetchResponse,
-        FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
-        InitProducerIdRequest, InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse,
-        LeaveGroupRequest, LeaveGroupResponse, ListOffsetsRequest, ListOffsetsResponse,
-        MetadataRequest, MetadataResponse, OffsetCommitRequest, OffsetCommitResponse,
-        OffsetFetchRequest, OffsetFetchResponse, ProduceRequest, ProduceResponse,
-        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
-        SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
+        DeleteTopicsRequest, DeleteTopicsResponse, DescribeConfigsRequest, DescribeConfigsResponse,
+        FetchRequest, FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse,
+        HeartbeatRequest, HeartbeatResponse, InitProducerIdRequest, InitProducerIdResponse,
+        JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest, LeaveGroupResponse,
+        ListOffsetsRequest, ListOffsetsResponse, MetadataRequest, MetadataResponse,
+        OffsetCommitRequest, OffsetCommitResponse, OffsetFetchRequest, OffsetFetchResponse,
+        ProduceRequest, ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse,
+        SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -278,6 +282,10 @@ mod tests {
             ApiKey::DeleteTopics => (
                 DeleteTopicsRequest::header_version(version),
                 DeleteTopicsResponse::header_version(version),
+            ),
+            ApiKey::DescribeConfigs => (
+                DescribeConfigsRequest::header_version(version),
+                DescribeConfigsResponse::header_version(version),
             ),
             ApiKey::OffsetCommit => (
                 OffsetCommitRequest::header_version(version),
@@ -372,6 +380,7 @@ mod tests {
     /// dependency's generated code being held to the table — a
     /// `kafka-protocol` bump that moves a cutover fails here.
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn every_flexible_cutover_matches_the_dependency() {
         fn pin<T: HeaderVersion>(row: &Advertised) {
             let from = row
@@ -413,6 +422,7 @@ mod tests {
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::CreateTopics => pin::<CreateTopicsRequest>(row),
                 ApiKey::DeleteTopics => pin::<DeleteTopicsRequest>(row),
+                ApiKey::DescribeConfigs => pin::<DescribeConfigsRequest>(row),
                 ApiKey::OffsetCommit => pin::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => pin::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
@@ -451,6 +461,7 @@ mod tests {
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::CreateTopics => within::<CreateTopicsRequest>(row),
                 ApiKey::DeleteTopics => within::<DeleteTopicsRequest>(row),
+                ApiKey::DescribeConfigs => within::<DescribeConfigsRequest>(row),
                 ApiKey::OffsetCommit => within::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => within::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),

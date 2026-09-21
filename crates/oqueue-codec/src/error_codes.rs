@@ -79,6 +79,8 @@ pub const UNSUPPORTED_COMPRESSION_TYPE: i16 = 76;
 /// clients surface an unlisted `InitProducerId` code as a fatal error to
 /// the application rather than retrying it.
 pub const INVALID_REQUEST: i16 = 42;
+/// The requested configuration is not supported by this broker (40).
+pub const INVALID_CONFIG: i16 = 40;
 /// A produced sequence number skips ahead of what this producer's line
 /// expects next (45) — `M11.6`, `oqueue-coordinator`'s
 /// `RejectReason::OutOfOrder` mapped to the wire.
@@ -231,6 +233,7 @@ mod tests {
         // NONE is the protocol's "no error" sentinel, which the dependency
         // represents as the absence of a ResponseError (code 0).
         assert_eq!(super::NONE, 0);
+        assert_eq!(super::INVALID_CONFIG, ResponseError::InvalidConfig.code());
     }
 
     /// ⚠️ **Split out so the first differential test stays under fifty

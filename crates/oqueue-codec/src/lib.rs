@@ -32,6 +32,7 @@ pub mod compress;
 pub mod create_topics;
 mod decode_error;
 pub mod delete_topics;
+pub mod describe_configs;
 pub mod emit;
 pub mod error_codes;
 pub mod fetch;

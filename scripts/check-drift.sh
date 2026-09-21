@@ -644,8 +644,11 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/catalog/stored.rs|OWNER_CUSTOMER_FORMAT"]="the durable creator-owned customer catalog format discriminator, not a tunable threshold"
   ["crates/oqueue-core/src/catalog/stored.rs|RACE_VISIBILITY_ATTEMPTS"]="bounded cooperative probes before returning a retryable race outcome, not a policy threshold"
   ["crates/oqueue-codec/src/error_codes.rs|REQUEST_TIMED_OUT"]="Kafka protocol error-code value, not a tunable threshold"
+  ["crates/oqueue-codec/src/error_codes.rs|INVALID_CONFIG"]="Kafka protocol error-code value, not a tunable threshold"
   ["crates/oqueue-broker/src/fetch/partition.rs|OFFSET_UNSET"]="the protocol's unset-offset sentinel"
   ["crates/oqueue-broker/src/find_coordinator.rs|GROUP"]="the wire schema's own key_type value for a consumer-group lookup, fixed by the protocol"
+  ["crates/oqueue-broker/src/describe_configs.rs|DEFAULT_CONFIG_SOURCE"]="Kafka protocol config-source discriminator, not a tunable threshold"
+  ["crates/oqueue-broker/src/describe_configs.rs|TOPIC_RESOURCE"]="Kafka protocol resource-type discriminator, not a tunable threshold"
   # `M10.20`: moved from `records.rs` to its own `records/count.rs` when
   # `count_records` (the only reader of this constant) got its own file.
   ["crates/oqueue-codec/src/records/count.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"

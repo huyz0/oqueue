@@ -118,6 +118,30 @@ fn create_topics_body(out: &mut Vec<u8>, version: i16) {
     }
 }
 
+/// `DescribeConfigs`' one-topic request. Null configuration keys ask for all
+/// supported settings; the helper emits the versioned flexible envelope.
+fn describe_configs_body(out: &mut Vec<u8>, version: i16) {
+    use oqueue_codec::flex::{TaggedFields, put_array_len, put_string, put_tagged_fields};
+    use oqueue_codec::wire::{put_bool, put_i8};
+    let flexible = version >= 4;
+    put_array_len(out, flexible, Some(1));
+    put_i8(out, 2); // topic resource
+    put_string(out, flexible, "t");
+    put_array_len(out, flexible, None); // all supported settings
+    if flexible {
+        put_tagged_fields(out, &TaggedFields::default());
+    }
+    if version >= 1 {
+        put_bool(out, false); // include_synonyms
+    }
+    if version >= 3 {
+        put_bool(out, false); // include_documentation
+    }
+    if flexible {
+        put_tagged_fields(out, &TaggedFields::default());
+    }
+}
+
 /// The smallest valid body for `api_key` at `version`, against a cluster
 /// that has topic `"t"` — enough for a real answer, not an error dance.
 async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
@@ -140,6 +164,7 @@ async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u
                 .encode(&mut body, version)
                 .expect("encodes");
         }
+        ApiKey::DescribeConfigs => describe_configs_body(&mut body, version),
         ApiKey::Produce => produce_body(&mut body, version, cluster).await,
         ApiKey::Fetch => fetch_body(&mut body, version, cluster).await,
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
@@ -242,6 +267,7 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         ApiKey::Metadata => decode_ignoring_body::<MetadataResponse>(&mut rest, api_key, version),
         ApiKey::CreateTopics => create_topics_error_code(&mut rest, version),
         ApiKey::DeleteTopics => delete_topics_error_code(&mut rest, version),
+        ApiKey::DescribeConfigs => describe_configs_error_code(&mut rest, version),
         ApiKey::Produce => decode_ignoring_body::<ProduceResponse>(&mut rest, api_key, version),
         ApiKey::Fetch => decode_ignoring_body::<FetchResponse>(&mut rest, api_key, version),
         ApiKey::InitProducerId => {
@@ -286,6 +312,15 @@ fn delete_topics_error_code(rest: &mut &[u8], version: i16) -> i16 {
         .responses
         .first()
         .map_or(0, |response| response.error_code)
+}
+
+fn describe_configs_error_code(rest: &mut &[u8], version: i16) -> i16 {
+    use kafka_protocol::messages::DescribeConfigsResponse;
+    DescribeConfigsResponse::decode(rest, version)
+        .expect("DescribeConfigs reply decodes")
+        .results
+        .first()
+        .map_or(0, |result| result.error_code)
 }
 
 fn sasl_handshake_error_code(rest: &mut &[u8], version: i16) -> i16 {

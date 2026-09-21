@@ -31,6 +31,8 @@ async fn admin_context_tracks_whether_credentials_are_configured() {
 
 #[path = "creator_tests.rs"]
 mod creator_tests;
+#[path = "describe_configs_tests.rs"]
+mod describe_configs_tests;
 /// The reply's bytes, or a panic naming the other verdict.
 async fn replied(dispatcher: &Dispatcher, request: Vec<u8>) -> Vec<u8> {
     match dispatcher.dispatch(request).await {

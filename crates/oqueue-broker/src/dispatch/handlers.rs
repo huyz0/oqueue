@@ -148,4 +148,23 @@ impl Dispatcher {
         )
         .await
     }
+
+    /// The `DescribeConfigs` admin arm reports only settings with a live
+    /// authoritative owner and scopes topic resources through visibility.
+    pub(super) async fn describe_configs_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        let topic_grants = self.topic_grants_snapshot(principal.as_ref());
+        crate::describe_configs::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &self.admin_authz_context(principal.as_ref()),
+            &self.authz_context(principal.as_ref(), &topic_grants),
+        )
+        .await
+    }
 }
