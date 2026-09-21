@@ -53,6 +53,10 @@ pub enum ApiKey {
     LeaveGroup = 13,
     /// `SyncGroup` (14).
     SyncGroup = 14,
+    /// `DescribeGroups` (15).
+    DescribeGroups = 15,
+    /// `ListGroups` (16).
+    ListGroups = 16,
     /// `SaslHandshake` (17).
     SaslHandshake = 17,
     /// `ApiVersions` (18).
@@ -92,6 +96,8 @@ impl ApiKey {
             12 => Some(Self::Heartbeat),
             13 => Some(Self::LeaveGroup),
             14 => Some(Self::SyncGroup),
+            15 => Some(Self::DescribeGroups),
+            16 => Some(Self::ListGroups),
             17 => Some(Self::SaslHandshake),
             18 => Some(Self::ApiVersions),
             22 => Some(Self::InitProducerId),
@@ -154,6 +160,8 @@ mod tests {
             ApiKey::Heartbeat,
             ApiKey::LeaveGroup,
             ApiKey::SyncGroup,
+            ApiKey::DescribeGroups,
+            ApiKey::ListGroups,
             ApiKey::SaslHandshake,
             ApiKey::ApiVersions,
             ApiKey::InitProducerId,

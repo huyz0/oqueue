@@ -145,6 +145,35 @@ fn describe_configs_body(out: &mut Vec<u8>, version: i16) {
     }
 }
 
+/// `DescribeGroups`' one-group request. The group is intentionally unknown;
+/// the matrix proves the broker serves the API and returns its documented
+/// group-not-found response rather than an unsupported-version error.
+fn describe_groups_body(out: &mut Vec<u8>, version: i16) {
+    use oqueue_codec::flex::{TaggedFields, put_array_len, put_string, put_tagged_fields};
+    use oqueue_codec::wire::put_bool;
+    let flexible = version >= 5;
+    put_array_len(out, flexible, Some(1));
+    put_string(out, flexible, "matrix-group");
+    if version >= 3 {
+        put_bool(out, false);
+    }
+    if flexible {
+        put_tagged_fields(out, &TaggedFields::default());
+    }
+}
+
+/// `ListGroups`' empty request, including the v4 state-filter field.
+fn list_groups_body(out: &mut Vec<u8>, version: i16) {
+    use oqueue_codec::flex::{TaggedFields, put_array_len, put_tagged_fields};
+    let flexible = version >= 3;
+    if version >= 4 {
+        put_array_len(out, true, Some(0));
+    }
+    if flexible {
+        put_tagged_fields(out, &TaggedFields::default());
+    }
+}
+
 /// The smallest valid body for `api_key` at `version`, against a cluster
 /// that has topic `"t"` — enough for a real answer, not an error dance.
 async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
@@ -170,6 +199,8 @@ async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u
         ApiKey::DescribeConfigs => describe_configs_body(&mut body, version),
         ApiKey::AlterConfigs => alter_configs_body(&mut body, version),
         ApiKey::IncrementalAlterConfigs => incremental_alter_configs_body(&mut body, version),
+        ApiKey::DescribeGroups => describe_groups_body(&mut body, version),
+        ApiKey::ListGroups => list_groups_body(&mut body, version),
         ApiKey::Produce => produce_body(&mut body, version, cluster).await,
         ApiKey::Fetch => fetch_body(&mut body, version, cluster).await,
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
@@ -274,6 +305,12 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         ApiKey::CreateTopics => create_topics_error_code(&mut rest, version),
         ApiKey::DeleteTopics => delete_topics_error_code(&mut rest, version),
         ApiKey::DescribeConfigs => describe_configs_error_code(&mut rest, version),
+        ApiKey::DescribeGroups => decode_ignoring_body::<
+            kafka_protocol::messages::DescribeGroupsResponse,
+        >(&mut rest, api_key, version),
+        ApiKey::ListGroups => decode_ignoring_body::<kafka_protocol::messages::ListGroupsResponse>(
+            &mut rest, api_key, version,
+        ),
         ApiKey::Produce => decode_ignoring_body::<ProduceResponse>(&mut rest, api_key, version),
         ApiKey::Fetch => decode_ignoring_body::<FetchResponse>(&mut rest, api_key, version),
         ApiKey::InitProducerId => {

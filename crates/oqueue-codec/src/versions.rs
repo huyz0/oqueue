@@ -12,6 +12,10 @@
 
 use crate::apikey::ApiKey;
 
+#[path = "advertised.rs"]
+mod advertised;
+pub use advertised::ADVERTISED;
+
 /// One advertised API: the version range this broker serves, and where the
 /// wire goes flexible.
 ///
@@ -29,168 +33,6 @@ pub struct Advertised {
     /// tagged fields) — the per-API cutover the module doc warns about.
     pub flexible_from: Option<i16>,
 }
-
-/// Every API this broker advertises. The order is the wire-table order used by
-/// the `ApiVersions` response; uniqueness is the invariant, not enum sorting.
-///
-/// ⚠️ Produce v0-v2 were removed by KIP-896 and are not advertised; Fetch
-/// stops at v17 (the row's number) although the dependency can encode v18 —
-/// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
-/// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 20] = [
-    Advertised {
-        api_key: ApiKey::Produce,
-        min: 3,
-        max: 13,
-        flexible_from: Some(9),
-    },
-    Advertised {
-        api_key: ApiKey::Fetch,
-        min: 4,
-        max: 17,
-        flexible_from: Some(12),
-    },
-    Advertised {
-        // ⚠️ **From v1, not v0.** v0 answers an *array* of offsets per
-        // partition — the pre-KIP-79 shape, where a client asked for N and got
-        // a list — and nothing since Kafka 0.10 sends it. Advertising a
-        // version means serving it (FR-2, `matrix.rs`), so the floor is where
-        // the single-offset response begins.
-        api_key: ApiKey::ListOffsets,
-        min: 1,
-        max: 9,
-        flexible_from: Some(6),
-    },
-    Advertised {
-        api_key: ApiKey::Metadata,
-        min: 0,
-        max: 13,
-        flexible_from: Some(9),
-    },
-    Advertised {
-        api_key: ApiKey::OffsetCommit,
-        min: 2,
-        max: 9,
-        flexible_from: Some(8),
-    },
-    Advertised {
-        api_key: ApiKey::OffsetFetch,
-        min: 1,
-        max: 7,
-        flexible_from: Some(6),
-    },
-    Advertised {
-        api_key: ApiKey::FindCoordinator,
-        min: 0,
-        max: 6,
-        flexible_from: Some(3),
-    },
-    Advertised {
-        api_key: ApiKey::JoinGroup,
-        min: 0,
-        max: 9,
-        flexible_from: Some(6),
-    },
-    Advertised {
-        // ⚠️ **v0-4, flexible from v4** — `oqueue_codec::heartbeat`'s own
-        // doc, confirmed against the dependency's generated source
-        // directly (`M4.9`).
-        api_key: ApiKey::Heartbeat,
-        min: 0,
-        max: 4,
-        flexible_from: Some(4),
-    },
-    Advertised {
-        // ⚠️ **v0-5, flexible from v4** — `oqueue_codec::leave_group`'s own
-        // doc, confirmed against the dependency's generated source
-        // directly (`M4.10`): batched from v3 (real Kafka's own batching,
-        // ahead of `FindCoordinator`'s KIP-699 one), one function two
-        // frame shapes, `find_coordinator.rs`'s own precedent.
-        api_key: ApiKey::LeaveGroup,
-        min: 0,
-        max: 5,
-        flexible_from: Some(4),
-    },
-    Advertised {
-        // ⚠️ **v0-5, flexible from v4** — `oqueue_codec::sync_group`'s own
-        // doc, confirmed against the dependency's generated source
-        // directly (`M4.8`): a third cutover version in three consecutive
-        // rows (v3 `FindCoordinator`, v6 `JoinGroup`, v4 here) is why this
-        // crate reads the dependency rather than pattern-matching itself.
-        api_key: ApiKey::SyncGroup,
-        min: 0,
-        max: 5,
-        flexible_from: Some(4),
-    },
-    Advertised {
-        // ⚠️ **Never flexible, at any version** — the dependency's own
-        // `SaslHandshakeRequest::header_version` returns `1` regardless of
-        // `version` (`apikey.rs`'s own doc, `M9.3`). `flexible_from: None`
-        // is what makes that fall out of `ApiKey::is_flexible` rather than
-        // needing a second special case beside `ApiVersions`'s own.
-        api_key: ApiKey::SaslHandshake,
-        min: 0,
-        max: 1,
-        flexible_from: None,
-    },
-    Advertised {
-        api_key: ApiKey::ApiVersions,
-        min: 0,
-        max: 3,
-        flexible_from: Some(3),
-    },
-    Advertised {
-        api_key: ApiKey::CreateTopics,
-        min: 2,
-        max: 7,
-        flexible_from: Some(5),
-    },
-    Advertised {
-        api_key: ApiKey::DeleteTopics,
-        min: 1,
-        max: 6,
-        flexible_from: Some(4),
-    },
-    Advertised {
-        api_key: ApiKey::DescribeConfigs,
-        min: 1,
-        max: 4,
-        flexible_from: Some(4),
-    },
-    Advertised {
-        api_key: ApiKey::AlterConfigs,
-        min: 0,
-        max: 2,
-        flexible_from: Some(2),
-    },
-    Advertised {
-        api_key: ApiKey::IncrementalAlterConfigs,
-        min: 0,
-        max: 1,
-        flexible_from: Some(1),
-    },
-    Advertised {
-        // ⚠️ **Through v4, not the dependency's v5 ceiling.** v5 adds
-        // `enable_2_pc`/`keep_prepared_txn`, both "Supported API versions:
-        // none" in the schema (a future KIP's placeholder, not yet wire-
-        // active at any version) — advertising it would promise nothing
-        // this broker's decoder does not already serve at v4. `M11.4`
-        // is non-transactional only (FR-15, deferred); `producer_id`/
-        // `producer_epoch` (v3+) are decoded and ignored rather than
-        // gating the floor, since a client presenting them for a fresh,
-        // non-transactional init is answered the same as one that does not.
-        api_key: ApiKey::InitProducerId,
-        min: 0,
-        max: 4,
-        flexible_from: Some(2),
-    },
-    Advertised {
-        api_key: ApiKey::SaslAuthenticate,
-        min: 0,
-        max: 2,
-        flexible_from: Some(2),
-    },
-];
 
 /// The advertised row for `api_key`, or `None` for an API this broker does
 /// not serve — the caller's cue to answer `UNSUPPORTED_VERSION`.
@@ -217,15 +59,16 @@ mod tests {
     use kafka_protocol::messages::{
         AlterConfigsRequest, AlterConfigsResponse, ApiVersionsRequest, ApiVersionsResponse,
         CreateTopicsRequest, CreateTopicsResponse, DeleteTopicsRequest, DeleteTopicsResponse,
-        DescribeConfigsRequest, DescribeConfigsResponse, FetchRequest, FetchResponse,
-        FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
+        DescribeConfigsRequest, DescribeConfigsResponse, DescribeGroupsRequest,
+        DescribeGroupsResponse, FetchRequest, FetchResponse, FindCoordinatorRequest,
+        FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
         IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse, InitProducerIdRequest,
         InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest,
-        LeaveGroupResponse, ListOffsetsRequest, ListOffsetsResponse, MetadataRequest,
-        MetadataResponse, OffsetCommitRequest, OffsetCommitResponse, OffsetFetchRequest,
-        OffsetFetchResponse, ProduceRequest, ProduceResponse, SaslAuthenticateRequest,
-        SaslAuthenticateResponse, SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest,
-        SyncGroupResponse,
+        LeaveGroupResponse, ListGroupsRequest, ListGroupsResponse, ListOffsetsRequest,
+        ListOffsetsResponse, MetadataRequest, MetadataResponse, OffsetCommitRequest,
+        OffsetCommitResponse, OffsetFetchRequest, OffsetFetchResponse, ProduceRequest,
+        ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+        SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -294,6 +137,14 @@ mod tests {
             ApiKey::JoinGroup | ApiKey::Heartbeat | ApiKey::LeaveGroup | ApiKey::SyncGroup => {
                 group_protocol_header_versions(api_key, version)
             }
+            ApiKey::DescribeGroups => (
+                DescribeGroupsRequest::header_version(version),
+                DescribeGroupsResponse::header_version(version),
+            ),
+            ApiKey::ListGroups => (
+                ListGroupsRequest::header_version(version),
+                ListGroupsResponse::header_version(version),
+            ),
             ApiKey::ApiVersions => (
                 ApiVersionsRequest::header_version(version),
                 ApiVersionsResponse::header_version(version),
@@ -424,6 +275,8 @@ mod tests {
                 ApiKey::Heartbeat => pin::<HeartbeatRequest>(row),
                 ApiKey::LeaveGroup => pin::<LeaveGroupRequest>(row),
                 ApiKey::SyncGroup => pin::<SyncGroupRequest>(row),
+                ApiKey::DescribeGroups => pin::<DescribeGroupsRequest>(row),
+                ApiKey::ListGroups => pin::<ListGroupsRequest>(row),
                 ApiKey::SaslHandshake => pin_never_flexible::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => pin::<InitProducerIdRequest>(row),
@@ -465,6 +318,8 @@ mod tests {
                 ApiKey::Heartbeat => within::<HeartbeatRequest>(row),
                 ApiKey::LeaveGroup => within::<LeaveGroupRequest>(row),
                 ApiKey::SyncGroup => within::<SyncGroupRequest>(row),
+                ApiKey::DescribeGroups => within::<DescribeGroupsRequest>(row),
+                ApiKey::ListGroups => within::<ListGroupsRequest>(row),
                 ApiKey::SaslHandshake => within::<SaslHandshakeRequest>(row),
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),

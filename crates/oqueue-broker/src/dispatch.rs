@@ -298,6 +298,8 @@ impl Dispatcher {
             ApiKey::SyncGroup => self.sync_group_handle(prelude, body).await,
             ApiKey::Heartbeat => self.heartbeat_handle(prelude, body).await,
             ApiKey::LeaveGroup => self.leave_group_handle(prelude, body).await,
+            ApiKey::DescribeGroups => self.describe_groups_handle(prelude, body),
+            ApiKey::ListGroups => self.list_groups_handle(prelude, body),
             ApiKey::Produce => self.produce_handle(prelude, body).await,
             ApiKey::Fetch => self.fetch_handle(prelude, body).await,
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),

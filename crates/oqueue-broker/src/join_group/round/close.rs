@@ -8,10 +8,10 @@
 
 use super::{
     Barrier, Coordination, DeadlineClaim, GroupJoins, JoinOutcome, MAX_JOIN_REPLANS, Reprune,
-    RoundOutcome, SLOT_WAIT, SlotGuard, abandon_round, close_generation, deadline_claim,
-    finalize_close, plan, sync_wait,
+    RoundClose, RoundOutcome, SLOT_WAIT, SlotGuard, abandon_round, close_generation,
+    deadline_claim, finalize_close, plan, sync_wait,
 };
-use oqueue_core::GroupId;
+use oqueue_core::{GroupId, GroupRosterSnapshot};
 use std::sync::{Arc, OnceLock};
 use tokio::time::Instant;
 
@@ -52,33 +52,65 @@ impl GroupJoins {
         group: &GroupId,
     ) -> Option<JoinOutcome> {
         let generation = close_generation(co, group).await;
-        let mut entries = self.lock();
-        // ⚠️ On a refusal the round is destroyed, not left open — see
-        // `abandon_round`.
-        let closed = match generation {
-            Barrier::Closed(g) => finalize_close(&mut entries, group, g),
-            Barrier::Illegal => {
-                abandon_round(&mut entries, group, true);
-                None
+        let closed = {
+            let mut entries = self.lock();
+            let closed = match generation {
+                Barrier::Closed(g) => finalize_close(&mut entries, group, g),
+                Barrier::Illegal => {
+                    abandon_round(&mut entries, group, true);
+                    None
+                }
+                Barrier::Unavailable => {
+                    abandon_round(&mut entries, group, false);
+                    None
+                }
+            };
+            if let Some(close) = &closed {
+                sync_wait::publish(&entries, co.sync_groups, group, Some(close));
             }
-            Barrier::Unavailable => {
-                abandon_round(&mut entries, group, false);
-                None
-            }
+            drop(entries);
+            closed
         };
-        // ⚠️ **The closer publishes, and `M4.87` is why.** `finalize_close`
-        // empties the roster with `mem::take`, so after this point the round
-        // is installed and holds nobody — and a join that enrolled a moment
-        // ago, dropped the rounds lock, and is on its way to publishing finds
-        // nothing left to fold and writes nothing. Its ask is lost and the
-        // generation closes on whatever an earlier, smaller member published.
-        // Publishing here, under the same guard that took the roster, is what
-        // makes that unreachable rather than unlikely.
-        if let Some(close) = &closed {
-            sync_wait::publish(&entries, co.sync_groups, group, Some(close));
+        if let Some(close) = &closed
+            && !persist_roster(co.transitions, group, Some(close)).await
+        {
+            return Some(JoinOutcome::Unavailable);
         }
-        drop(entries);
         closed.map(JoinOutcome::Ready)
+    }
+
+    async fn finish_deadline_close(&self, co: Coordination<'_>, group: &GroupId) {
+        let generation = close_generation(co, group).await;
+        let closed = {
+            let mut entries = self.lock();
+            // ⚠️ On a refusal the round is destroyed, not left open — see
+            // `abandon_round`.
+            let closed = match generation {
+                Barrier::Closed(g) => finalize_close(&mut entries, group, g),
+                Barrier::Illegal => {
+                    abandon_round(&mut entries, group, true);
+                    None
+                }
+                Barrier::Unavailable => {
+                    abandon_round(&mut entries, group, false);
+                    None
+                }
+            };
+            // ⚠️ **The closer publishes, and `M4.87` is why.** `finalize_close`
+            // empties the roster with `mem::take`, so after this point the round
+            // is installed and holds nobody — and a join that enrolled a moment
+            // ago, dropped the rounds lock, and is on its way to publishing finds
+            // nothing left to fold and writes nothing. Its ask is lost and the
+            // generation closes on whatever an earlier, smaller member published.
+            // Publishing here, under the same guard that took the roster, is what
+            // makes that unreachable rather than unlikely.
+            if let Some(close) = &closed {
+                sync_wait::publish(&entries, co.sync_groups, group, Some(close));
+            }
+            drop(entries);
+            closed
+        };
+        let _ = persist_roster(co.transitions, group, closed.as_ref()).await;
     }
 
     /// Re-prunes `awaiting` for the round `own_outcome` belongs to, and says
@@ -222,24 +254,32 @@ impl GroupJoins {
             joins: self,
             group: group.clone(),
         };
-        let generation = close_generation(co, group).await;
-        let mut entries = self.lock();
-        match generation {
-            Barrier::Closed(generation) => {
-                // ⚠️ **This path published nothing at all until `M4.87`**, and
-                // it is the one that makes the lost ask a whole generation's
-                // problem rather than one request's: the member whose deadline
-                // fires closes the round for everybody, and whatever the last
-                // join happened to write is what every follower of that
-                // generation then waits on. `apply_close`'s own call carries
-                // the reasoning.
-                if let Some(close) = finalize_close(&mut entries, group, generation) {
-                    sync_wait::publish(&entries, co.sync_groups, group, Some(&close));
-                }
-            }
-            Barrier::Illegal => abandon_round(&mut entries, group, true),
-            Barrier::Unavailable => abandon_round(&mut entries, group, false),
-        }
-        drop(entries);
+        self.finish_deadline_close(co, group).await;
+    }
+}
+
+async fn persist_roster(
+    transitions: &crate::group_transitions::GroupTransitions,
+    group: &GroupId,
+    close: Option<&Arc<RoundClose>>,
+) -> bool {
+    let Some(close) = close else {
+        return true;
+    };
+    transitions
+        .set_roster(group.clone(), roster_snapshot(close))
+        .await
+        .is_ok()
+}
+
+fn roster_snapshot(close: &RoundClose) -> GroupRosterSnapshot {
+    GroupRosterSnapshot {
+        protocol_type: close.protocol_type.clone(),
+        protocol_name: close.protocol_name.clone(),
+        member_ids: close
+            .members
+            .iter()
+            .map(|member| member.member_id.clone())
+            .collect(),
     }
 }

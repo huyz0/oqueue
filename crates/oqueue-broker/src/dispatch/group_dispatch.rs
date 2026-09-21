@@ -91,4 +91,32 @@ impl Dispatcher {
         )
         .await
     }
+
+    pub(super) fn describe_groups_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::group_admin::describe(
+            &self.cluster,
+            prelude,
+            body,
+            &self.group_authz_context(principal.as_ref()),
+        )
+    }
+
+    pub(super) fn list_groups_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::group_admin::list(
+            &self.cluster,
+            prelude,
+            body,
+            &self.group_authz_context(principal.as_ref()),
+        )
+    }
 }

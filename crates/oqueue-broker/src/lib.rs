@@ -39,6 +39,7 @@ mod fencing;
 pub mod fetch;
 mod find_coordinator;
 mod flush;
+mod group_admin;
 mod group_transitions;
 mod heartbeat;
 mod incremental_alter_configs;

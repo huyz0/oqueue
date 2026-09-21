@@ -4,8 +4,9 @@ use super::{GroupTransitions, append_durably, handle_one};
 use oqueue_core::{
     CommitVersion, FakeGroupCoordinator, FakeGroupMetadataLog, FaultGroupMetadataLog,
     GroupCoordinator, GroupEvent, GroupId, GroupMetadataEntry, GroupMetadataLog,
-    GroupMetadataRecord, GroupState,
+    GroupMetadataRecord, GroupRosterSnapshot, GroupState,
 };
+use std::sync::Arc;
 
 fn group(name: &str) -> GroupId {
     GroupId::new(name).expect("valid")
@@ -78,6 +79,38 @@ async fn a_refused_durable_append_leaves_the_live_coordinator_untouched() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn a_roster_write_is_appended_and_installed_by_the_actor() {
+    let coordinator = Arc::new(FakeGroupCoordinator::new());
+    let log = Arc::new(FakeGroupMetadataLog::new());
+    let (transitions, task) = GroupTransitions::new();
+    let serving = tokio::spawn(task.serve(
+        Arc::clone(&coordinator) as Arc<dyn GroupCoordinator>,
+        Arc::clone(&log) as Arc<dyn GroupMetadataLog>,
+    ));
+    let g = group("orders");
+    let roster = GroupRosterSnapshot {
+        protocol_type: "consumer".to_owned(),
+        protocol_name: "range".to_owned(),
+        member_ids: vec!["member-1".to_owned()],
+    };
+
+    transitions
+        .set_roster(g.clone(), roster.clone())
+        .await
+        .expect("roster write");
+    assert_eq!(coordinator.roster(&g), Some(roster));
+    let entries = log.read_from(CommitVersion::ZERO, 10).await.expect("reads");
+    assert!(matches!(
+        entries[0].record(),
+        GroupMetadataRecord::GroupRosterUpdated { group, roster: Some(snapshot) }
+            if group == &g && snapshot.member_ids == vec!["member-1".to_owned()]
+    ));
+
+    drop(transitions);
+    serving.await.expect("actor exits after sender closes");
+}
+
 /// Two transitions for the same group, applied and appended in order —
 /// the property the whole actor exists for: durable order matches
 /// live-apply order, proven directly against `handle_one` called
@@ -102,7 +135,8 @@ async fn sequential_transitions_land_in_the_log_in_the_same_order_applied() {
         .iter()
         .map(|entry| match entry.record() {
             GroupMetadataRecord::GroupTransitioned { event, .. } => *event,
-            GroupMetadataRecord::OffsetCommitted { .. } => panic!("unexpected record"),
+            GroupMetadataRecord::OffsetCommitted { .. }
+            | GroupMetadataRecord::GroupRosterUpdated { .. } => panic!("unexpected record"),
         })
         .collect();
     assert_eq!(
@@ -174,9 +208,15 @@ async fn append_durably_retries_past_a_version_already_taken() {
         .await
         .expect("seeds version 0");
 
-    append_durably(&log, &g, GroupEvent::JoinBarrierComplete)
-        .await
-        .expect("retries past the taken version and lands at 1");
+    append_durably(
+        &log,
+        GroupMetadataRecord::GroupTransitioned {
+            group: g,
+            event: GroupEvent::JoinBarrierComplete,
+        },
+    )
+    .await
+    .expect("retries past the taken version and lands at 1");
     assert_eq!(log.len(), 2);
 }
 
@@ -292,4 +332,37 @@ async fn an_orphaned_transition_poisons_only_its_own_group() {
         Some(GroupState::Stable),
         "payments' own legal sequence must replay correctly regardless of orders' own failure"
     );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_poisoned_group_does_not_replay_a_later_roster() {
+    let log = FakeGroupMetadataLog::new();
+    let g = group("orders");
+    log.append(&[
+        GroupMetadataEntry::new(
+            CommitVersion::new(0),
+            GroupMetadataRecord::GroupTransitioned {
+                group: g.clone(),
+                event: GroupEvent::SyncComplete,
+            },
+        ),
+        GroupMetadataEntry::new(
+            CommitVersion::new(1),
+            GroupMetadataRecord::GroupRosterUpdated {
+                group: g.clone(),
+                roster: Some(GroupRosterSnapshot {
+                    protocol_type: "consumer".to_owned(),
+                    protocol_name: "range".to_owned(),
+                    member_ids: vec!["stale".to_owned()],
+                }),
+            },
+        ),
+    ])
+    .await
+    .expect("appends");
+
+    let coordinator = FakeGroupCoordinator::new();
+    let (_transitions, task) = GroupTransitions::new();
+    task.replay(&coordinator, &log).await.expect("replays");
+    assert_eq!(coordinator.roster(&g), None);
 }

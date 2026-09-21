@@ -8,14 +8,15 @@
 #![allow(clippy::redundant_pub_crate)]
 
 use crate::{
-    CommitVersion, Error, GroupEvent, GroupId, GroupMetadataEntry, GroupMetadataRecord, Result,
-    TopicId,
+    CommitVersion, Error, GroupEvent, GroupId, GroupMetadataEntry, GroupMetadataRecord,
+    GroupRosterSnapshot, Result, TopicId,
 };
 
 const MAGIC: [u8; 4] = *b"OQGL";
 const FORMAT: u8 = 1;
 const TAG_OFFSET: u8 = 1;
 const TAG_TRANSITION: u8 = 2;
+const TAG_ROSTER: u8 = 3;
 
 /// Encodes the entries one append carries.
 pub(crate) fn encode(entries: &[GroupMetadataEntry]) -> Result<Vec<u8>> {
@@ -44,6 +45,11 @@ pub(crate) fn encode(entries: &[GroupMetadataEntry]) -> Result<Vec<u8>> {
                 out.push(TAG_TRANSITION);
                 put_str(&mut out, group.as_str())?;
                 out.push(event_tag(*event));
+            }
+            GroupMetadataRecord::GroupRosterUpdated { group, roster } => {
+                out.push(TAG_ROSTER);
+                put_str(&mut out, group.as_str())?;
+                put_roster(&mut out, roster.as_ref())?;
             }
         }
     }
@@ -79,6 +85,11 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Vec<GroupMetadataEntry>> {
                 let group = cur.group()?;
                 let event = event_from(cur.u8()?).ok_or_else(|| cur.malformed())?;
                 GroupMetadataRecord::GroupTransitioned { group, event }
+            }
+            TAG_ROSTER => {
+                let group = cur.group()?;
+                let roster = cur.roster()?;
+                GroupMetadataRecord::GroupRosterUpdated { group, roster }
             }
             _ => return Err(Error::MalformedMetadataSegment { at }),
         };
@@ -125,6 +136,23 @@ fn put_str(out: &mut Vec<u8>, value: &str) -> Result<()> {
     Ok(())
 }
 
+fn put_roster(out: &mut Vec<u8>, roster: Option<&GroupRosterSnapshot>) -> Result<()> {
+    let Some(roster) = roster else {
+        out.push(0);
+        return Ok(());
+    };
+    out.push(1);
+    put_str(out, &roster.protocol_type)?;
+    put_str(out, &roster.protocol_name)?;
+    let count = u16::try_from(roster.member_ids.len())
+        .map_err(|_| Error::MalformedMetadataSegment { at: out.len() })?;
+    out.extend_from_slice(&count.to_be_bytes());
+    for member_id in &roster.member_ids {
+        put_str(out, member_id)?;
+    }
+    Ok(())
+}
+
 struct Cursor<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -163,6 +191,27 @@ impl<'a> Cursor<'a> {
     fn group(&mut self) -> Result<GroupId> {
         let raw = self.string()?;
         GroupId::new(raw).map_err(|_| self.malformed())
+    }
+
+    fn roster(&mut self) -> Result<Option<GroupRosterSnapshot>> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => {
+                let protocol_type = self.string()?.to_owned();
+                let protocol_name = self.string()?.to_owned();
+                let count = usize::from(u16::from_be_bytes(self.array()?));
+                let mut member_ids = Vec::with_capacity(count);
+                for _ in 0..count {
+                    member_ids.push(self.string()?.to_owned());
+                }
+                Ok(Some(GroupRosterSnapshot {
+                    protocol_type,
+                    protocol_name,
+                    member_ids,
+                }))
+            }
+            _ => Err(self.malformed()),
+        }
     }
 }
 

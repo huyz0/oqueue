@@ -138,7 +138,9 @@ pub use error::Error;
 pub use fault::{FaultConfig, StormKind};
 pub use fault_group_metadata_log::FaultGroupMetadataLog;
 pub use fault_metadata_log::{FaultMetadataLog, LogFaults};
-pub use group_coordinator::{FakeGroupCoordinator, GroupCoordinator, GroupRecord};
+pub use group_coordinator::{
+    FakeGroupCoordinator, GroupCoordinator, GroupRecord, GroupRosterSnapshot,
+};
 pub use group_grants::GroupGrants;
 pub use group_id::GroupId;
 pub use group_metadata_log::{FakeGroupMetadataLog, GroupMetadataEntry, GroupMetadataLog};

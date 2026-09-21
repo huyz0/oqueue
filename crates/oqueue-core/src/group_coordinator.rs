@@ -6,6 +6,17 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
+/// The non-sensitive membership summary persisted for group administration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupRosterSnapshot {
+    /// The protocol family negotiated by the group.
+    pub protocol_type: String,
+    /// The negotiated protocol name.
+    pub protocol_name: String,
+    /// Coordinator-assigned member ids in join order.
+    pub member_ids: Vec<String>,
+}
+
 /// One group's own state, generation, and assignment epoch.
 ///
 /// The three values [`crate::GroupState::transition`] threads together,
@@ -72,6 +83,20 @@ pub trait GroupCoordinator: Send + Sync + core::fmt::Debug {
     /// the ability to forget it, which nothing in this milestone's own
     /// scope yet builds.
     fn record(&self, group: &GroupId) -> Option<GroupRecord>;
+
+    /// A point-in-time owned snapshot of every group this coordinator knows.
+    ///
+    /// The snapshot is read-only and sans-I/O. It exists for administrative
+    /// enumeration; callers must still use [`Self::record`] when they need to
+    /// inspect one named group after applying their own authorization check.
+    fn records(&self) -> Vec<(GroupId, GroupRecord)>;
+
+    /// Returns the last durable non-sensitive roster summary, if one exists.
+    fn roster(&self, group: &GroupId) -> Option<GroupRosterSnapshot>;
+
+    /// Installs or clears a roster summary while replaying or after its
+    /// durable record has landed.
+    fn set_roster(&self, group: &GroupId, roster: Option<GroupRosterSnapshot>);
 }
 
 /// An in-memory [`GroupCoordinator`], faithful to the documented contract.
@@ -82,6 +107,7 @@ pub trait GroupCoordinator: Send + Sync + core::fmt::Debug {
 #[derive(Default)]
 pub struct FakeGroupCoordinator {
     groups: Mutex<HashMap<GroupId, GroupRecord>>,
+    rosters: Mutex<HashMap<GroupId, GroupRosterSnapshot>>,
     /// How many times [`GroupCoordinator::transition`] has been called,
     /// successful or refused — `M4.10`'s own need: "one rebalance, not
     /// three" for a batched `LeaveGroup` is not observable from the
@@ -143,6 +169,30 @@ impl GroupCoordinator for FakeGroupCoordinator {
     fn record(&self, group: &GroupId) -> Option<GroupRecord> {
         self.lock().get(group).copied()
     }
+
+    fn records(&self) -> Vec<(GroupId, GroupRecord)> {
+        self.lock()
+            .iter()
+            .map(|(group, record)| (group.clone(), *record))
+            .collect()
+    }
+
+    fn roster(&self, group: &GroupId) -> Option<GroupRosterSnapshot> {
+        self.rosters
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(group)
+            .cloned()
+    }
+
+    fn set_roster(&self, group: &GroupId, roster: Option<GroupRosterSnapshot>) {
+        let mut rosters = self.rosters.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(roster) = roster {
+            rosters.insert(group.clone(), roster);
+        } else {
+            rosters.remove(group);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -150,7 +200,9 @@ mod tests {
     #![allow(clippy::expect_used)]
 
     use super::{FakeGroupCoordinator, GroupRecord};
-    use crate::{Error, GenerationId, GroupCoordinator, GroupEvent, GroupId, GroupState};
+    use crate::{
+        Error, GenerationId, GroupCoordinator, GroupEvent, GroupId, GroupRosterSnapshot, GroupState,
+    };
 
     fn group(name: &str) -> GroupId {
         GroupId::new(name).expect("valid")
@@ -205,6 +257,37 @@ mod tests {
         c.transition(&group("orders"), GroupEvent::Join)
             .expect("legal");
         assert_eq!(c.record(&group("payments")), None);
+    }
+
+    #[test]
+    fn records_returns_owned_group_snapshots() {
+        let c = FakeGroupCoordinator::new();
+        let orders = group("orders");
+        c.transition(&orders, GroupEvent::Join).expect("legal");
+        assert_eq!(
+            c.records(),
+            vec![(orders, c.record(&group("orders")).expect("exists"))]
+        );
+    }
+
+    #[test]
+    fn roster_is_replaced_and_cleared_without_touching_group_state() {
+        let c = FakeGroupCoordinator::new();
+        let g = group("orders");
+        c.transition(&g, GroupEvent::Join).expect("legal");
+        let roster = GroupRosterSnapshot {
+            protocol_type: "consumer".to_owned(),
+            protocol_name: "range".to_owned(),
+            member_ids: vec!["member-1".to_owned()],
+        };
+        c.set_roster(&g, Some(roster.clone()));
+        assert_eq!(c.roster(&g), Some(roster));
+        c.set_roster(&g, None);
+        assert_eq!(c.roster(&g), None);
+        assert_eq!(
+            c.record(&g).expect("record").state,
+            GroupState::PreparingRebalance
+        );
     }
 
     #[test]

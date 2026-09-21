@@ -329,7 +329,8 @@ fn apply(
         // own reader of this same log — nothing this map holds. An
         // explicit no-op arm, not a `_ =>`, so a third variant lands here
         // as a compile error rather than a silent absorption.
-        GroupMetadataRecord::GroupTransitioned { .. } => {}
+        GroupMetadataRecord::GroupTransitioned { .. }
+        | GroupMetadataRecord::GroupRosterUpdated { .. } => {}
     }
 }
 

@@ -136,6 +136,8 @@ pub const INVALID_REPLICATION_FACTOR: i16 = 38;
 pub const INVALID_TOPIC_EXCEPTION: i16 = 17;
 /// The requesting principal does not own the named consumer group (30).
 pub const GROUP_AUTHORIZATION_FAILED: i16 = 30;
+/// The requested group has no coordinator record (69).
+pub const GROUP_ID_NOT_FOUND: i16 = 69;
 /// A group member id this broker's own tracking does not recognise (25).
 ///
 /// `M4.11`'s own audited fencing path, `crate::fencing`'s `Refusal` — the
@@ -234,6 +236,14 @@ mod tests {
         // represents as the absence of a ResponseError (code 0).
         assert_eq!(super::NONE, 0);
         assert_eq!(super::INVALID_CONFIG, ResponseError::InvalidConfig.code());
+    }
+
+    #[test]
+    fn group_not_found_code_matches_the_dependency() {
+        assert_eq!(
+            super::GROUP_ID_NOT_FOUND,
+            ResponseError::GroupIdNotFound.code()
+        );
     }
 
     /// ⚠️ **Split out so the first differential test stays under fifty

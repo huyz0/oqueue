@@ -44,11 +44,11 @@
 //! — commits between two files' docs say nothing about when either was
 //! written or how long the gap lasted, and a reader cannot check it against
 //! anything. What is checkable is that `offset_commit.rs` carries the
-//! caveat and this module did not until `M4.39`. `M4.55`. ⚠️ **Its membership will not survive even
-//! then, and the distinction is load-bearing**: `GroupRecord` is state, generation and assignment
-//! epoch, while `GroupJoins`'s own entries and `heartbeat.rs`'s own tracking
-//! are per-node and in no log. A `Stable` group of three consumers replays as
-//! `Stable` at its own generation, and then each consumer's next `Heartbeat`
+//! caveat and this module did not until `M4.39`. `M4.55`. ⚠️ **The live
+//! session map will not survive even then, and the distinction is load-bearing**:
+//! `GroupRecord` is state, generation and assignment epoch, while
+//! `heartbeat.rs`'s tracking is per-node. A replayed `Stable` group retains
+//! its administrative roster, and then each consumer's next `Heartbeat`
 //! is answered `UNKNOWN_MEMBER_ID` because nothing tracks it, so they rejoin
 //! and the group rebalances once. That is the intended degradation — the
 //! group is not lost and no offset is — ⚠️ **once a real engine exists;
@@ -86,7 +86,8 @@
 
 use oqueue_core::{
     AssignmentEpoch, CommitVersion, Error, GenerationId, GroupCoordinator, GroupEvent, GroupId,
-    GroupMetadataEntry, GroupMetadataLog, GroupMetadataRecord, GroupRecord, GroupState, Result,
+    GroupMetadataEntry, GroupMetadataLog, GroupMetadataRecord, GroupRecord, GroupRosterSnapshot,
+    GroupState, Result,
 };
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
@@ -106,10 +107,17 @@ const REPLAY_PAGE_SIZE: usize = 256;
 const MAX_APPEND_RETRIES: u32 = 8;
 
 /// One enqueued request: fire `event` against `group`, durably, in order.
-struct Request {
-    group: GroupId,
-    event: GroupEvent,
-    respond_to: oneshot::Sender<Result<GroupRecord>>,
+enum Request {
+    Transition {
+        group: GroupId,
+        event: GroupEvent,
+        respond_to: oneshot::Sender<Result<GroupRecord>>,
+    },
+    Roster {
+        group: GroupId,
+        roster: Option<GroupRosterSnapshot>,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
 }
 
 /// The handle every call site holds — cheap to clone (an `mpsc` sender),
@@ -158,12 +166,27 @@ impl GroupTransitions {
         // or it panicked) — `response.await` then resolves `Err` on its
         // own, which `Self::transition`'s own `unwrap_or` turns into
         // `Error::Transient` rather than a hang.
-        let _ = self.sender.send(Request {
+        let _ = self.sender.send(Request::Transition {
             group,
             event,
             respond_to,
         });
         response
+    }
+
+    /// Persists and installs the latest non-sensitive roster summary.
+    pub(crate) async fn set_roster(
+        &self,
+        group: GroupId,
+        roster: GroupRosterSnapshot,
+    ) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        let _ = self.sender.send(Request::Roster {
+            group,
+            roster: Some(roster),
+            respond_to,
+        });
+        response.await.unwrap_or(Err(Error::Transient))
     }
 
     /// Enqueues and awaits in one call — every call site that holds no
@@ -225,17 +248,30 @@ impl GroupTransitionsTask {
             let page = log.read_from(start, REPLAY_PAGE_SIZE).await?;
             let got = page.len();
             for entry in &page {
-                if let GroupMetadataRecord::GroupTransitioned { group, event } = entry.record() {
-                    if poisoned.contains(group) {
-                        continue;
-                    }
-                    match coordinator.transition(group, *event) {
-                        Ok(_) => {}
-                        Err(Error::IllegalGroupTransition { .. }) => {
-                            poisoned.insert(group.clone());
+                match entry.record() {
+                    GroupMetadataRecord::GroupTransitioned { group, event } => {
+                        if poisoned.contains(group) {
+                            continue;
                         }
-                        Err(other) => return Err(other),
+                        match coordinator.transition(group, *event) {
+                            Ok(_) => {
+                                if matches!(event, GroupEvent::AllMembersGone | GroupEvent::Expire)
+                                {
+                                    coordinator.set_roster(group, None);
+                                }
+                            }
+                            Err(Error::IllegalGroupTransition { .. }) => {
+                                poisoned.insert(group.clone());
+                            }
+                            Err(other) => return Err(other),
+                        }
                     }
+                    GroupMetadataRecord::GroupRosterUpdated { group, roster } => {
+                        if !poisoned.contains(group) {
+                            coordinator.set_roster(group, roster.clone());
+                        }
+                    }
+                    GroupMetadataRecord::OffsetCommitted { .. } => {}
                 }
             }
             // ⚠️ A short page means the log has no more —
@@ -262,14 +298,27 @@ impl GroupTransitionsTask {
         coordinator: Arc<dyn GroupCoordinator>,
         log: Arc<dyn GroupMetadataLog>,
     ) {
-        while let Some(Request {
-            group,
-            event,
-            respond_to,
-        }) = self.receiver.recv().await
-        {
-            let result = handle_one(coordinator.as_ref(), log.as_ref(), &group, event).await;
-            let _ = respond_to.send(result);
+        while let Some(request) = self.receiver.recv().await {
+            match request {
+                Request::Transition {
+                    group,
+                    event,
+                    respond_to,
+                } => {
+                    let result =
+                        handle_one(coordinator.as_ref(), log.as_ref(), &group, event).await;
+                    let _ = respond_to.send(result);
+                }
+                Request::Roster {
+                    group,
+                    roster,
+                    respond_to,
+                } => {
+                    let result =
+                        update_roster(coordinator.as_ref(), log.as_ref(), &group, roster).await;
+                    let _ = respond_to.send(result);
+                }
+            }
         }
     }
 }
@@ -312,24 +361,42 @@ async fn handle_one(
         .state
         .transition(event, current.generation, current.assignment_epoch)?;
 
-    append_durably(log, group, event).await?;
+    append_durably(
+        log,
+        GroupMetadataRecord::GroupTransitioned {
+            group: group.clone(),
+            event,
+        },
+    )
+    .await?;
 
-    coordinator.transition(group, event)
+    let record = coordinator.transition(group, event)?;
+    if matches!(event, GroupEvent::AllMembersGone | GroupEvent::Expire) {
+        coordinator.set_roster(group, None);
+    }
+    Ok(record)
+}
+
+async fn update_roster(
+    coordinator: &dyn GroupCoordinator,
+    log: &dyn GroupMetadataLog,
+    group: &GroupId,
+    roster: Option<GroupRosterSnapshot>,
+) -> Result<()> {
+    let record = GroupMetadataRecord::GroupRosterUpdated {
+        group: group.clone(),
+        roster: roster.clone(),
+    };
+    append_durably(log, record).await?;
+    coordinator.set_roster(group, roster);
+    Ok(())
 }
 
 /// Durably appends `GroupTransitioned { group, event }`, retrying a
 /// racing writer's own version — `CommittedOffsets::commit`'s own shape:
 /// the log's own [`Error::NonMonotonicCommitVersion`] validation is the
 /// real serialization point, not a lock this function holds.
-async fn append_durably(
-    log: &dyn GroupMetadataLog,
-    group: &GroupId,
-    event: GroupEvent,
-) -> Result<()> {
-    let record = GroupMetadataRecord::GroupTransitioned {
-        group: group.clone(),
-        event,
-    };
+async fn append_durably(log: &dyn GroupMetadataLog, record: GroupMetadataRecord) -> Result<()> {
     for _ in 0..MAX_APPEND_RETRIES {
         let next = match log.last_version().await? {
             Some(last) => last.advance(1)?,

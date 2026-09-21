@@ -1,7 +1,7 @@
 //! What one entry in the group metadata log is — `M4.14`, `ADR-0035`;
 //! `M4.15c` adds the second variant, `GroupTransitioned`.
 
-use crate::{GroupEvent, GroupId, TopicId};
+use crate::{GroupEvent, GroupId, GroupRosterSnapshot, TopicId};
 
 /// One event `GroupMetadataLog` durably records.
 ///
@@ -40,5 +40,12 @@ pub enum GroupMetadataRecord {
         group: GroupId,
         /// The event `GroupState::transition` accepted.
         event: GroupEvent,
+    },
+    /// The latest non-sensitive roster summary for administrative reads.
+    GroupRosterUpdated {
+        /// The group whose summary changed.
+        group: GroupId,
+        /// The new summary, or `None` after the group loses all members.
+        roster: Option<GroupRosterSnapshot>,
     },
 }

@@ -5,7 +5,8 @@
 
 use super::{decode, encode};
 use crate::{
-    CommitVersion, Error, GroupEvent, GroupId, GroupMetadataEntry, GroupMetadataRecord, TopicId,
+    CommitVersion, Error, GroupEvent, GroupId, GroupMetadataEntry, GroupMetadataRecord,
+    GroupRosterSnapshot, TopicId,
 };
 
 fn every_record() -> Vec<GroupMetadataEntry> {
@@ -30,6 +31,18 @@ fn every_record() -> Vec<GroupMetadataEntry> {
             event,
         });
     }
+    records.push(GroupMetadataRecord::GroupRosterUpdated {
+        group: group.clone(),
+        roster: Some(GroupRosterSnapshot {
+            protocol_type: "consumer".to_owned(),
+            protocol_name: "range".to_owned(),
+            member_ids: vec!["member-1".to_owned(), "member-2".to_owned()],
+        }),
+    });
+    records.push(GroupMetadataRecord::GroupRosterUpdated {
+        group,
+        roster: None,
+    });
     records
         .into_iter()
         .zip(1_u64..)
