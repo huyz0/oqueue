@@ -53,7 +53,7 @@
 //! both.
 
 use oqueue_core::{
-    Clock, Dek, KeyId, KeyProvider, OperationalMetrics, Result, Timestamp, WrappedKey,
+    Clock, Dek, KeyId, KeyProvider, OperationalMetrics, Redacted, Result, Timestamp, WrappedKey,
 };
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -377,28 +377,7 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
         // conditional on `T: Zeroize`). An earlier comment here called this
         // "the provider's allocation"; that was wrong about ownership, and it
         // is the argument that let the leak through.
-        let kms_span = tracing::info_span!(
-            target: "oqueue",
-            "kms",
-            dependency = "kms",
-            operation = "unwrap",
-            outcome = tracing::field::Empty,
-            scope = "dek",
-        );
-        let plaintext = self
-            .provider
-            .unwrap(key_id, wrapped)
-            .instrument(kms_span.clone())
-            .await;
-        kms_span.record(
-            "outcome",
-            if plaintext.is_ok() {
-                "success"
-            } else {
-                "failure"
-            },
-        );
-        let mut plaintext = plaintext?;
+        let mut plaintext = traced_unwrap(&self.provider, &self.metrics, key_id, wrapped).await?;
         let dek = Dek::from_slice(plaintext.expose());
         plaintext.zeroize();
         let now = self.clock.now();
@@ -442,4 +421,32 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
     fn entries(&self) -> MutexGuard<'_, Entries> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+async fn traced_unwrap<P: KeyProvider + ?Sized>(
+    provider: &P,
+    metrics: &OperationalMetrics,
+    key_id: &KeyId,
+    wrapped: &WrappedKey,
+) -> Result<Redacted<Vec<u8>>> {
+    let span = tracing::info_span!(
+        target: "oqueue",
+        "kms",
+        dependency = "kms",
+        operation = "unwrap",
+        outcome = tracing::field::Empty,
+        scope = "dek",
+    );
+    let result = provider
+        .unwrap(key_id, wrapped)
+        .instrument(span.clone())
+        .await;
+    if result.is_err() {
+        metrics.record_key_domain_failure();
+    }
+    span.record(
+        "outcome",
+        if result.is_ok() { "success" } else { "failure" },
+    );
+    result
 }

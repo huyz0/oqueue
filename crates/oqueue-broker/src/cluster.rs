@@ -36,6 +36,7 @@
 //! per domain, which is the segregation required by FR-42. Doc 12 prices a
 //! PUT far above the bytes in it, so this ratio is the cost model.
 
+use crate::health::NodeRole;
 use crate::join_group::GroupJoins;
 use crate::writer_id::WriterId;
 use oqueue_coordinator::{Coordinator, CoordinatorError};
@@ -137,6 +138,7 @@ pub struct Cluster {
     /// `cluster/replay.rs`'s own `group_transitions()` accessor.
     group_transitions: crate::group_transitions::GroupTransitions,
     metrics: OperationalMetrics,
+    role: NodeRole,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -293,6 +295,7 @@ impl Cluster {
             replay_task: Mutex::new(Some(replay_task)),
             group_transitions,
             metrics,
+            role: NodeRole::Combined,
         })
     }
 
@@ -451,6 +454,19 @@ impl Cluster {
     #[must_use]
     pub const fn metrics(&self) -> &OperationalMetrics {
         &self.metrics
+    }
+
+    /// The role this node advertises to health/readiness consumers.
+    #[must_use]
+    pub const fn role(&self) -> NodeRole {
+        self.role
+    }
+
+    /// Selects the role label used by the health snapshot.
+    #[must_use]
+    pub const fn with_role(mut self, role: NodeRole) -> Self {
+        self.role = role;
+        self
     }
 }
 

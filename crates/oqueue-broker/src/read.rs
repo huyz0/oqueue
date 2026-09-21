@@ -423,6 +423,9 @@ impl FetchedObjects {
             .get(key, range)
             .instrument(get_span.clone())
             .await;
+        if fetched.is_err() {
+            cluster.metrics().record_storage_failure();
+        }
         get_span.record(
             "outcome",
             if fetched.is_ok() {

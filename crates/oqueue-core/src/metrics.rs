@@ -32,6 +32,8 @@ struct State {
     coordinator_ready: AtomicBool,
     coordinator_failures: AtomicU64,
     compaction_backlog: AtomicU64,
+    storage_failures: AtomicU64,
+    key_domain_failures: AtomicU64,
     encryption_cache_hits: AtomicU64,
     encryption_cache_misses: AtomicU64,
     index_entries: AtomicU64,
@@ -82,6 +84,10 @@ pub struct OperationalMetricsSnapshot {
     pub coordinator_failures: u64,
     /// Latest observed compaction deletion backlog.
     pub compaction_backlog: u64,
+    /// Number of object-storage failures observed by the broker.
+    pub storage_failures: u64,
+    /// Number of KMS failures observed for customer-key domains.
+    pub key_domain_failures: u64,
     /// Read-side DEK cache hits.
     pub encryption_cache_hits: u64,
     /// Read-side or write-side DEK cache misses/rotations.
@@ -180,6 +186,18 @@ impl OperationalMetrics {
         }
     }
 
+    /// Records an object-storage failure for health classification.
+    pub fn record_storage_failure(&self) {
+        self.state.storage_failures.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Records a KMS failure without naming the affected customer-key domain.
+    pub fn record_key_domain_failure(&self) {
+        self.state
+            .key_domain_failures
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     /// Publishes the latest compaction deletion backlog.
     pub fn record_compaction_backlog(&self, backlog: usize) {
         self.state
@@ -230,6 +248,8 @@ impl OperationalMetrics {
             coordinator_ready: self.state.coordinator_ready.load(Ordering::Relaxed),
             coordinator_failures: self.state.coordinator_failures.load(Ordering::Relaxed),
             compaction_backlog: self.state.compaction_backlog.load(Ordering::Relaxed),
+            storage_failures: self.state.storage_failures.load(Ordering::Relaxed),
+            key_domain_failures: self.state.key_domain_failures.load(Ordering::Relaxed),
             encryption_cache_hits: self.state.encryption_cache_hits.load(Ordering::Relaxed),
             encryption_cache_misses: self.state.encryption_cache_misses.load(Ordering::Relaxed),
             index_entries: self.state.index_entries.load(Ordering::Relaxed),
@@ -268,6 +288,8 @@ mod tests {
         metrics.record_write(&topic, first_partition, 29, false);
         metrics.record_lag(&topic, first_partition, 9);
         metrics.record_coordinator_ready(true);
+        metrics.record_storage_failure();
+        metrics.record_key_domain_failure();
         metrics.record_compaction_backlog(12);
         metrics.record_dek_cache_hit();
         metrics.record_dek_cache_miss();
@@ -278,6 +300,8 @@ mod tests {
         assert_eq!(snapshot.writes.failures, 1);
         assert_eq!(snapshot.writes.total_latency_micros, 69);
         assert!(snapshot.coordinator_ready);
+        assert_eq!(snapshot.storage_failures, 1);
+        assert_eq!(snapshot.key_domain_failures, 1);
         assert_eq!(snapshot.compaction_backlog, 12);
         assert_eq!(snapshot.encryption_cache_hits, 1);
         assert_eq!(snapshot.encryption_cache_misses, 1);

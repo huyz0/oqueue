@@ -351,7 +351,7 @@ impl<C: Clock, P: KeyProvider, E: Entropy> DekCache<C, P, E> {
         // whichever way the call went: `Redacted` has no `Drop` of its own
         // (see its documentation), so this is the owner's obligation.
         let mut plaintext = Redacted::new(dek.expose().to_vec());
-        let wrapped = traced_wrap(&self.provider, key_id, &plaintext).await;
+        let wrapped = traced_wrap(&self.provider, &self.metrics, key_id, &plaintext).await;
         plaintext.zeroize();
         let wrapped = wrapped?;
 
@@ -416,6 +416,7 @@ impl<C: Clock, P: KeyProvider, E: Entropy> DekCache<C, P, E> {
 
 async fn traced_wrap<P: KeyProvider + ?Sized>(
     provider: &P,
+    metrics: &OperationalMetrics,
     key_id: &KeyId,
     plaintext: &Redacted<Vec<u8>>,
 ) -> Result<WrappedKey> {
@@ -431,6 +432,9 @@ async fn traced_wrap<P: KeyProvider + ?Sized>(
         .wrap(key_id, plaintext)
         .instrument(span.clone())
         .await;
+    if result.is_err() {
+        metrics.record_key_domain_failure();
+    }
     span.record(
         "outcome",
         if result.is_ok() { "success" } else { "failure" },

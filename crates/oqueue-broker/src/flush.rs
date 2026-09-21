@@ -72,6 +72,7 @@ impl Cluster {
             .instrument(put_span.clone())
             .await
             .map_err(|error| {
+                self.metrics().record_storage_failure();
                 let latency = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                 for span in &spans {
                     self.metrics()
