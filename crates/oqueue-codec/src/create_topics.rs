@@ -192,7 +192,9 @@ pub fn encode_response(out: &mut Vec<u8>, version: i16, response: &CreateTopicsR
         if version >= 5 {
             put_i32(out, topic.num_partitions);
             put_i16(out, topic.replication_factor);
-            put_array_len(out, flexible, None);
+            // Kafka clients decode topic-config errors as a non-null array;
+            // an empty array means the broker accepted no per-config errors.
+            put_array_len(out, flexible, Some(0));
             put_tagged_fields(out, &empty);
         }
         // v5+ topic_config_error_code is tag 0; the broker returns no config
