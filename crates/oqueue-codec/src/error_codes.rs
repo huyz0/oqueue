@@ -126,6 +126,9 @@ pub const REBALANCE_IN_PROGRESS: i16 = 27;
 /// the *explicitly-named* case answers this rather than the silent omission
 /// the *null-topic-array* case uses instead (`M9.10`).
 pub const TOPIC_AUTHORIZATION_FAILED: i16 = 29;
+/// The principal lacks the administrative authority for this cluster-wide
+/// quota operation (31).
+pub const CLUSTER_AUTHORIZATION_FAILED: i16 = 31;
 /// The topic already exists with the requested name (36).
 pub const TOPIC_ALREADY_EXISTS: i16 = 36;
 /// The requested partition count is invalid (37).

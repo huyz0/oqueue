@@ -20,7 +20,7 @@
 // `crate::wire::put_*` and the split is an implementation detail.
 pub use crate::decode_error::DecodeError;
 pub use crate::emit::{
-    put_bool, put_i8, put_i16, put_i32, put_i64, put_legacy_nullable_string, put_u32,
+    put_bool, put_f64, put_i8, put_i16, put_i32, put_i64, put_legacy_nullable_string, put_u32,
 };
 
 /// A position over a borrowed buffer, from which every read is bounds-checked
@@ -110,6 +110,17 @@ impl<'a> Cursor<'a> {
         Ok(i64::from_be_bytes([
             b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
         ]))
+    }
+
+    /// The next eight bytes as an IEEE-754 binary64.
+    ///
+    /// # Errors
+    /// [`DecodeError::UnexpectedEof`] if fewer than eight bytes remain.
+    pub fn read_f64(&mut self) -> Result<f64, DecodeError> {
+        let b = self.take(8)?;
+        Ok(f64::from_bits(u64::from_be_bytes([
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+        ])))
     }
 
     /// An `i32`-length-prefixed blob — the shape of a frame body and of
@@ -238,6 +249,15 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::{Cursor, DecodeError, put_i8, put_i16, put_i32, put_i64, put_u32};
+
+    #[test]
+    fn peek_word_reads_eight_bytes_without_consuming_them() {
+        let bytes = [1, 2, 3, 4, 5, 6, 7, 8];
+        let cursor = Cursor::new(&bytes);
+        assert_eq!(cursor.peek_word(), Some(u64::from_le_bytes(bytes)));
+        assert_eq!(cursor.position(), 0);
+        assert_eq!(Cursor::new(&bytes[..7]).peek_word(), None);
+    }
 
     #[test]
     fn fixed_width_values_round_trip_big_endian() {

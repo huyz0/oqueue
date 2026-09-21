@@ -13,6 +13,7 @@
 
 mod configs;
 mod group_protocol;
+mod quota;
 
 use configs::{alter_configs_body, config_error_code, incremental_alter_configs_body};
 
@@ -206,6 +207,9 @@ async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
         ApiKey::SaslHandshake => sasl_handshake_body(&mut body, version),
         ApiKey::SaslAuthenticate => sasl_authenticate_body(&mut body, version),
+        ApiKey::DescribeClientQuotas | ApiKey::AlterClientQuotas => {
+            quota::request_body(&mut body, api_key, version);
+        }
         ApiKey::FindCoordinator => find_coordinator_body(&mut body, version),
         ApiKey::JoinGroup => group_protocol::join_group_body(&mut body, version),
         ApiKey::SyncGroup => group_protocol::sync_group_body(&mut body, version),
@@ -337,6 +341,9 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         ApiKey::OffsetFetch => group_protocol::offset_fetch_error_code(&mut rest, version),
         ApiKey::AlterConfigs | ApiKey::IncrementalAlterConfigs => {
             config_error_code(api_key, &mut rest, version)
+        }
+        ApiKey::DescribeClientQuotas | ApiKey::AlterClientQuotas => {
+            quota::error_code(api_key, &mut rest, version)
         }
     };
     assert!(

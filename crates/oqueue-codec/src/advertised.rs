@@ -4,7 +4,7 @@ use super::Advertised;
 use crate::apikey::ApiKey;
 
 /// Every API this broker advertises, in the order used by `ApiVersions`.
-pub static ADVERTISED: [Advertised; 22] = [
+pub static ADVERTISED: [Advertised; 24] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -136,5 +136,17 @@ pub static ADVERTISED: [Advertised; 22] = [
         min: 0,
         max: 2,
         flexible_from: Some(2),
+    },
+    Advertised {
+        api_key: ApiKey::DescribeClientQuotas,
+        min: 0,
+        max: 1,
+        flexible_from: Some(1),
+    },
+    Advertised {
+        api_key: ApiKey::AlterClientQuotas,
+        min: 0,
+        max: 1,
+        flexible_from: Some(1),
     },
 ];

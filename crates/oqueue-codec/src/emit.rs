@@ -35,6 +35,11 @@ pub fn put_i64(buf: &mut Vec<u8>, v: i64) {
     buf.extend_from_slice(&v.to_be_bytes());
 }
 
+/// Appends an IEEE-754 binary64 in Kafka's big-endian wire order.
+pub fn put_f64(buf: &mut Vec<u8>, v: f64) {
+    buf.extend_from_slice(&v.to_bits().to_be_bytes());
+}
+
 /// Appends a bool as one byte (`1` true, `0` false).
 pub fn put_bool(buf: &mut Vec<u8>, v: bool) {
     buf.push(u8::from(v));

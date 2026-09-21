@@ -22,15 +22,18 @@ use std::sync::{Arc, Mutex, PoisonError};
 /// object-storage backend's own ceiling; this type answers "how many
 /// requests is this principal running right now" — rule 13's literal
 /// wording ("in-flight requests"). A rate-based client quota is real,
-/// useful work this type does not attempt, and v1 ships no wire-visible
-/// quota-management API either (`DescribeClientQuotas`/`AlterClientQuotas`,
-/// 48-49) — doc 02 §1.7 lists both as safely deferrable for an initial
-/// broker; recorded as out of scope for `M9.16` rather than silently
-/// absent.
+/// useful work this type does not attempt. M12 adds a small wire-visible
+/// administration surface for the per-principal override map.
 #[derive(Debug)]
 pub struct PrincipalQuota {
     max_in_flight: u32,
-    in_flight: Mutex<HashMap<Principal, u32>>,
+    state: Mutex<QuotaState>,
+}
+
+#[derive(Debug, Default)]
+struct QuotaState {
+    in_flight: HashMap<Principal, u32>,
+    overrides: HashMap<Principal, u32>,
 }
 
 impl PrincipalQuota {
@@ -41,8 +44,48 @@ impl PrincipalQuota {
     pub fn new(max_in_flight: u32) -> Self {
         Self {
             max_in_flight,
-            in_flight: Mutex::default(),
+            state: Mutex::default(),
         }
+    }
+
+    /// Returns the live limit for one principal, including an administrative
+    /// override when one exists.
+    #[must_use]
+    pub fn limit_for(&self, principal: &Principal) -> u32 {
+        self.lock()
+            .overrides
+            .get(principal)
+            .copied()
+            .unwrap_or(self.max_in_flight)
+    }
+
+    /// Sets or removes one principal's live override. `None` restores the
+    /// constructor's default. The change is visible to every dispatcher that
+    /// shares this quota immediately.
+    pub fn set_override(&self, principal: Principal, limit: Option<u32>) {
+        let mut state = self.lock();
+        match limit {
+            Some(limit) => {
+                state.overrides.insert(principal, limit);
+            }
+            None => {
+                state.overrides.remove(&principal);
+            }
+        }
+    }
+
+    /// Returns explicit per-principal overrides in stable order for a bounded
+    /// administrative response.
+    #[must_use]
+    pub fn overrides(&self) -> Vec<(Principal, u32)> {
+        let mut overrides: Vec<_> = self
+            .lock()
+            .overrides
+            .iter()
+            .map(|(principal, limit)| (principal.clone(), *limit))
+            .collect();
+        overrides.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+        overrides
     }
 
     /// Attempts to admit one more in-flight request for `principal` against
@@ -60,23 +103,26 @@ impl PrincipalQuota {
     /// beyond what stable Rust already gives plain `&self`/`&Arc<T>`.
     #[must_use]
     pub fn admit(quota: &Arc<Self>, principal: &Principal) -> Option<InFlight> {
-        let mut held = quota.lock();
-        let count = held.entry(principal.clone()).or_insert(0);
-        if *count >= quota.max_in_flight {
+        let mut state = quota.lock();
+        let limit = state
+            .overrides
+            .get(principal)
+            .copied()
+            .unwrap_or(quota.max_in_flight);
+        let count = state.in_flight.entry(principal.clone()).or_insert(0);
+        if *count >= limit {
             return None;
         }
         *count += 1;
-        drop(held);
+        drop(state);
         Some(InFlight {
             quota: Arc::clone(quota),
             principal: principal.clone(),
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<Principal, u32>> {
-        self.in_flight
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> std::sync::MutexGuard<'_, QuotaState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -92,10 +138,10 @@ pub struct InFlight {
 impl Drop for InFlight {
     fn drop(&mut self) {
         let mut held = self.quota.lock();
-        if let Some(count) = held.get_mut(&self.principal) {
+        if let Some(count) = held.in_flight.get_mut(&self.principal) {
             *count = count.saturating_sub(1);
             if *count == 0 {
-                held.remove(&self.principal);
+                held.in_flight.remove(&self.principal);
             }
         }
     }
@@ -109,7 +155,7 @@ impl PrincipalQuota {
     /// `admit` alone: `or_insert(0)` behaves identically whether the entry
     /// already exists at zero or was never there.
     fn tracked_principals(&self) -> usize {
-        self.lock().len()
+        self.lock().in_flight.len()
     }
 }
 
@@ -192,5 +238,32 @@ mod tests {
     fn a_zero_bound_refuses_every_request() {
         let quota = Arc::new(PrincipalQuota::new(0));
         assert!(PrincipalQuota::admit(&quota, &alice()).is_none());
+    }
+
+    #[test]
+    fn an_override_is_live_and_remove_restores_the_default() {
+        let quota = Arc::new(PrincipalQuota::new(2));
+        let a = alice();
+        quota.set_override(a.clone(), Some(1));
+        let _held = PrincipalQuota::admit(&quota, &a).expect("override admits one");
+        assert!(PrincipalQuota::admit(&quota, &a).is_none());
+        quota.set_override(a.clone(), None);
+        assert_eq!(quota.limit_for(&a), 2);
+        assert!(PrincipalQuota::admit(&quota, &a).is_some());
+    }
+
+    #[test]
+    fn overrides_are_sorted_and_principal_scoped() {
+        let quota = Arc::new(PrincipalQuota::new(4));
+        quota.set_override(bob(), Some(3));
+        quota.set_override(alice(), Some(2));
+        assert_eq!(
+            quota
+                .overrides()
+                .into_iter()
+                .map(|(principal, limit)| (principal.as_str().to_owned(), limit))
+                .collect::<Vec<_>>(),
+            vec![("alice".to_owned(), 2), ("bob".to_owned(), 3)]
+        );
     }
 }

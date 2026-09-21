@@ -57,18 +57,19 @@ mod tests {
     use super::{ADVERTISED, Advertised, advertised_for, supports};
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
-        AlterConfigsRequest, AlterConfigsResponse, ApiVersionsRequest, ApiVersionsResponse,
-        CreateTopicsRequest, CreateTopicsResponse, DeleteTopicsRequest, DeleteTopicsResponse,
-        DescribeConfigsRequest, DescribeConfigsResponse, DescribeGroupsRequest,
-        DescribeGroupsResponse, FetchRequest, FetchResponse, FindCoordinatorRequest,
-        FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
-        IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse, InitProducerIdRequest,
-        InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest,
-        LeaveGroupResponse, ListGroupsRequest, ListGroupsResponse, ListOffsetsRequest,
-        ListOffsetsResponse, MetadataRequest, MetadataResponse, OffsetCommitRequest,
-        OffsetCommitResponse, OffsetFetchRequest, OffsetFetchResponse, ProduceRequest,
-        ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
-        SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
+        AlterClientQuotasRequest, AlterClientQuotasResponse, AlterConfigsRequest,
+        AlterConfigsResponse, ApiVersionsRequest, ApiVersionsResponse, CreateTopicsRequest,
+        CreateTopicsResponse, DeleteTopicsRequest, DeleteTopicsResponse,
+        DescribeClientQuotasRequest, DescribeClientQuotasResponse, DescribeConfigsRequest,
+        DescribeConfigsResponse, DescribeGroupsRequest, DescribeGroupsResponse, FetchRequest,
+        FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest,
+        HeartbeatResponse, IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse,
+        InitProducerIdRequest, InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse,
+        LeaveGroupRequest, LeaveGroupResponse, ListGroupsRequest, ListGroupsResponse,
+        ListOffsetsRequest, ListOffsetsResponse, MetadataRequest, MetadataResponse,
+        OffsetCommitRequest, OffsetCommitResponse, OffsetFetchRequest, OffsetFetchResponse,
+        ProduceRequest, ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse,
+        SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -160,6 +161,14 @@ mod tests {
             ApiKey::SaslAuthenticate => (
                 SaslAuthenticateRequest::header_version(version),
                 SaslAuthenticateResponse::header_version(version),
+            ),
+            ApiKey::DescribeClientQuotas => (
+                DescribeClientQuotasRequest::header_version(version),
+                DescribeClientQuotasResponse::header_version(version),
+            ),
+            ApiKey::AlterClientQuotas => (
+                AlterClientQuotasRequest::header_version(version),
+                AlterClientQuotasResponse::header_version(version),
             ),
         }
     }
@@ -281,6 +290,8 @@ mod tests {
                 ApiKey::ApiVersions => pin::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => pin::<InitProducerIdRequest>(row),
                 ApiKey::SaslAuthenticate => pin::<SaslAuthenticateRequest>(row),
+                ApiKey::DescribeClientQuotas => pin::<DescribeClientQuotasRequest>(row),
+                ApiKey::AlterClientQuotas => pin::<AlterClientQuotasRequest>(row),
             }
         }
     }
@@ -324,6 +335,8 @@ mod tests {
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),
                 ApiKey::SaslAuthenticate => within::<SaslAuthenticateRequest>(row),
+                ApiKey::DescribeClientQuotas => within::<DescribeClientQuotasRequest>(row),
+                ApiKey::AlterClientQuotas => within::<AlterClientQuotasRequest>(row),
             }
         }
     }

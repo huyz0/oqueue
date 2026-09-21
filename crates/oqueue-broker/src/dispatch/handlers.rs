@@ -203,4 +203,33 @@ impl Dispatcher {
         )
         .await
     }
+
+    /// The supported per-principal in-flight quota administration arms.
+    pub(super) fn describe_client_quotas_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::quota_admin::describe(
+            self.quota.as_ref(),
+            prelude,
+            body,
+            &self.admin_authz_context(principal.as_ref()),
+        )
+    }
+
+    pub(super) fn alter_client_quotas_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::quota_admin::alter(
+            self.quota.as_ref(),
+            prelude,
+            body,
+            &self.admin_authz_context(principal.as_ref()),
+        )
+    }
 }

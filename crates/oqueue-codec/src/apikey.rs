@@ -65,6 +65,10 @@ pub enum ApiKey {
     InitProducerId = 22,
     /// `SaslAuthenticate` (36).
     SaslAuthenticate = 36,
+    /// `DescribeClientQuotas` (48).
+    DescribeClientQuotas = 48,
+    /// `AlterClientQuotas` (49).
+    AlterClientQuotas = 49,
 }
 
 impl ApiKey {
@@ -102,6 +106,8 @@ impl ApiKey {
             18 => Some(Self::ApiVersions),
             22 => Some(Self::InitProducerId),
             36 => Some(Self::SaslAuthenticate),
+            48 => Some(Self::DescribeClientQuotas),
+            49 => Some(Self::AlterClientQuotas),
             _ => None,
         }
     }
@@ -166,6 +172,8 @@ mod tests {
             ApiKey::ApiVersions,
             ApiKey::InitProducerId,
             ApiKey::SaslAuthenticate,
+            ApiKey::DescribeClientQuotas,
+            ApiKey::AlterClientQuotas,
         ] {
             assert_eq!(ApiKey::from_i16(key.as_i16()), Some(key));
         }

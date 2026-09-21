@@ -53,6 +53,7 @@ pub mod metadata;
 mod offset_commit;
 mod offset_fetch;
 pub mod produce;
+mod quota_admin;
 mod read;
 mod region;
 mod region_sealer;

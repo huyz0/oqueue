@@ -291,6 +291,8 @@ impl Dispatcher {
             ApiKey::IncrementalAlterConfigs => {
                 self.incremental_alter_configs_handle(prelude, body).await
             }
+            ApiKey::DescribeClientQuotas => self.describe_client_quotas_handle(prelude, body),
+            ApiKey::AlterClientQuotas => self.alter_client_quotas_handle(prelude, body),
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
