@@ -19,7 +19,8 @@
 //!   says the topic does not exist. No scale test creates a topic.
 
 use oqueue_core::{
-    BoxFuture, CatalogEntry, Principal, Result, TopicCatalog, TopicCreateOutcome, TopicId,
+    BoxFuture, CatalogEntry, Principal, Result, TopicCatalog, TopicCreateOutcome,
+    TopicDeleteOutcome, TopicId,
 };
 
 /// Width of the index in a synthetic name: enough for 10^8 topics, and fixed
@@ -113,6 +114,14 @@ impl TopicCatalog for SyntheticCatalog {
                 self.index_of(name.as_str()).is_none(),
             ))
         })
+    }
+
+    fn delete<'a>(
+        &'a self,
+        _name: &'a TopicId,
+        _expected_id: Option<u128>,
+    ) -> BoxFuture<'a, Result<TopicDeleteOutcome>> {
+        Box::pin(async { Ok(TopicDeleteOutcome::Missing) })
     }
 
     fn list_owned<'a>(
@@ -254,6 +263,14 @@ impl<C: TopicCatalog> TopicCatalog for Counted<C> {
     ) -> BoxFuture<'a, Result<TopicCreateOutcome>> {
         self.count().create += 1;
         self.inner.create_owned(name, partitions, creator)
+    }
+
+    fn delete<'a>(
+        &'a self,
+        name: &'a TopicId,
+        expected_id: Option<u128>,
+    ) -> BoxFuture<'a, Result<TopicDeleteOutcome>> {
+        self.inner.delete(name, expected_id)
     }
 
     fn list_owned<'a>(

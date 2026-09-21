@@ -130,4 +130,22 @@ impl Dispatcher {
         )
         .await
     }
+
+    /// The `DeleteTopics` admin arm shares the durable catalog and live
+    /// visibility policy with every dispatcher.
+    pub(super) async fn delete_topics_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        crate::delete_topics::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &self.admin_authz_context(principal.as_ref()),
+            &self.topic_grants,
+        )
+        .await
+    }
 }

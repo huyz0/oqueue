@@ -153,11 +153,13 @@ async fn byok_topics_leave_the_default_path_untouched() {
 
 async fn byok_fixture() -> Fixture {
     let catalog = Arc::new(FakeTopicCatalog::new());
-    catalog.create_with_key_domain(
-        &topic("private"),
-        1,
-        KeyDomain::customer(KeyId::new("customer-kek").expect("a key id")),
-    );
+    catalog
+        .create_with_key_domain(
+            &topic("private"),
+            1,
+            KeyDomain::customer(KeyId::new("customer-kek").expect("a key id")),
+        )
+        .expect("create private topic");
     with_store_and_catalog_and_sealer(
         &["plain", "private"],
         Arc::new(crate::testing::TestStore::new(FakeObjectStore::new())),

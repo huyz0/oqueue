@@ -26,6 +26,43 @@ async fn an_id_created_on_another_node_resolves_through_the_shared_catalog() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn a_remote_delete_cannot_leave_a_stale_topic_cache_serving() {
+    let catalog: Arc<dyn TopicCatalog> = Arc::new(FakeTopicCatalog::new());
+    let deleter = cluster_still_loading()
+        .await
+        .with_catalog(Arc::clone(&catalog));
+    let reader = cluster_still_loading()
+        .await
+        .with_catalog(Arc::clone(&catalog));
+    let entry = deleter
+        .create_topic(&topic("orders"), 3)
+        .await
+        .expect("created");
+
+    assert_eq!(reader.partition_count("orders").await, Some(3));
+    assert_eq!(
+        reader
+            .topic_name_by_id(Uuid::from_u128(entry.id()))
+            .await
+            .as_deref(),
+        Some("orders")
+    );
+
+    deleter
+        .delete_topic(&topic("orders"), Some(entry.id()))
+        .await
+        .expect("deleted");
+    reader.expire_topic_cache_for_test();
+
+    assert_eq!(reader.partition_count("orders").await, None);
+    assert_eq!(reader.topic_id("orders").await, None);
+    assert_eq!(
+        reader.topic_name_by_id(Uuid::from_u128(entry.id())).await,
+        None
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn the_cache_holds_only_topics_this_node_served() {
     let catalog = Arc::new(FakeTopicCatalog::new());
     for name in ["a", "b", "c"] {

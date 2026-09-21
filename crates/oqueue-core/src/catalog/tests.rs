@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-use super::{CatalogEntry, FakeTopicCatalog, TopicCatalog, topic_uuid};
+use super::{CatalogEntry, FakeTopicCatalog, TopicCatalog, TopicDeleteOutcome, topic_uuid};
 use crate::test_executor::block_on;
 use crate::{Principal, TopicId};
 
@@ -76,12 +76,53 @@ pub(super) fn owned_creation_is_scoped(catalog: &dyn TopicCatalog) {
     );
 }
 
+/// Deletion is durable at the seam: it hides the live row, rejects a stale
+/// UUID, and reserves the name forever.
+pub(super) fn deletion_is_durable_and_non_reusable(catalog: &dyn TopicCatalog) {
+    let name = topic("retired");
+    let entry = block_on(catalog.create(&name, 3)).expect("creates");
+    assert!(matches!(
+        block_on(catalog.delete(&name, Some(entry.id()))).expect("deletes"),
+        TopicDeleteOutcome::Deleted(deleted) if deleted == entry
+    ));
+    assert_eq!(block_on(catalog.lookup(&name)).expect("reads"), None);
+    assert_eq!(
+        block_on(catalog.lookup_id(entry.id())).expect("reads"),
+        None
+    );
+    assert!(block_on(catalog.list(None, 10)).expect("lists").is_empty());
+    assert!(matches!(
+        block_on(catalog.delete(&name, Some(entry.id()))).expect("idempotent delete"),
+        TopicDeleteOutcome::AlreadyDeleted { id } if id == entry.id()
+    ));
+    assert!(matches!(
+        block_on(catalog.create(&name, 1)),
+        Err(crate::Error::TopicNameReserved)
+    ));
+}
+
+pub(super) fn deletion_rejects_a_stale_uuid(catalog: &dyn TopicCatalog) {
+    let name = topic("orders");
+    let entry = block_on(catalog.create(&name, 1)).expect("creates");
+    assert!(matches!(
+        block_on(catalog.delete(&name, Some(entry.id() ^ 1))).expect("checks uuid"),
+        TopicDeleteOutcome::StaleId { expected, actual }
+            if expected == (entry.id() ^ 1) && actual == entry.id()
+    ));
+    assert_eq!(
+        block_on(catalog.lookup(&name)).expect("still live"),
+        Some(entry)
+    );
+}
+
 #[test]
 fn the_fake_keeps_the_contract() {
     create_is_idempotent(&FakeTopicCatalog::new());
     lookup_id_agrees_with_lookup(&FakeTopicCatalog::new());
     list_pages_in_name_order(&FakeTopicCatalog::new());
     owned_creation_is_scoped(&FakeTopicCatalog::new());
+    deletion_is_durable_and_non_reusable(&FakeTopicCatalog::new());
+    deletion_rejects_a_stale_uuid(&FakeTopicCatalog::new());
 }
 
 #[test]

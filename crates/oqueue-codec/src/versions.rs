@@ -30,13 +30,14 @@ pub struct Advertised {
     pub flexible_from: Option<i16>,
 }
 
-/// Every API this broker advertises, in ascending `api_key` order.
+/// Every API this broker advertises. The order is the wire-table order used by
+/// the `ApiVersions` response; uniqueness is the invariant, not enum sorting.
 ///
 /// ⚠️ Produce v0-v2 were removed by KIP-896 and are not advertised; Fetch
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 16] = [
+pub static ADVERTISED: [Advertised; 17] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -175,6 +176,12 @@ pub static ADVERTISED: [Advertised; 16] = [
         flexible_from: Some(5),
     },
     Advertised {
+        api_key: ApiKey::DeleteTopics,
+        min: 1,
+        max: 6,
+        flexible_from: Some(4),
+    },
+    Advertised {
         // ⚠️ **Through v4, not the dependency's v5 ceiling.** v5 adds
         // `enable_2_pc`/`keep_prepared_txn`, both "Supported API versions:
         // none" in the schema (a future KIP's placeholder, not yet wire-
@@ -211,6 +218,9 @@ pub fn supports(api_key: ApiKey, version: i16) -> bool {
 }
 
 #[cfg(test)]
+mod table_sanity;
+
+#[cfg(test)]
 mod tests {
     // Same justification the sibling test modules give: every `expect` is on
     // a value this table constructed from literals it controls.
@@ -220,13 +230,14 @@ mod tests {
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
         ApiVersionsRequest, ApiVersionsResponse, CreateTopicsRequest, CreateTopicsResponse,
-        FetchRequest, FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse,
-        HeartbeatRequest, HeartbeatResponse, InitProducerIdRequest, InitProducerIdResponse,
-        JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest, LeaveGroupResponse,
-        ListOffsetsRequest, ListOffsetsResponse, MetadataRequest, MetadataResponse,
-        OffsetCommitRequest, OffsetCommitResponse, OffsetFetchRequest, OffsetFetchResponse,
-        ProduceRequest, ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse,
-        SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
+        DeleteTopicsRequest, DeleteTopicsResponse, FetchRequest, FetchResponse,
+        FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
+        InitProducerIdRequest, InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse,
+        LeaveGroupRequest, LeaveGroupResponse, ListOffsetsRequest, ListOffsetsResponse,
+        MetadataRequest, MetadataResponse, OffsetCommitRequest, OffsetCommitResponse,
+        OffsetFetchRequest, OffsetFetchResponse, ProduceRequest, ProduceResponse,
+        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
+        SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -242,6 +253,9 @@ mod tests {
     /// for `api_key` at `version` — split out of the test below purely to
     /// keep that function under the fifty-line limit, `metadata_handle`'s
     /// own precedent in `oqueue-broker`.
+    // One exhaustive oracle table keeps every generated request/response pair
+    // visible beside the API key it verifies.
+    #[allow(clippy::too_many_lines)]
     fn dependency_header_versions(api_key: ApiKey, version: i16) -> (i16, i16) {
         match api_key {
             ApiKey::Produce => (
@@ -261,6 +275,10 @@ mod tests {
                 MetadataResponse::header_version(version),
             ),
             ApiKey::CreateTopics => create_topics_header_versions(version),
+            ApiKey::DeleteTopics => (
+                DeleteTopicsRequest::header_version(version),
+                DeleteTopicsResponse::header_version(version),
+            ),
             ApiKey::OffsetCommit => (
                 OffsetCommitRequest::header_version(version),
                 OffsetCommitResponse::header_version(version),
@@ -394,6 +412,7 @@ mod tests {
                 ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
                 ApiKey::CreateTopics => pin::<CreateTopicsRequest>(row),
+                ApiKey::DeleteTopics => pin::<DeleteTopicsRequest>(row),
                 ApiKey::OffsetCommit => pin::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => pin::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
@@ -431,6 +450,7 @@ mod tests {
                 ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
                 ApiKey::CreateTopics => within::<CreateTopicsRequest>(row),
+                ApiKey::DeleteTopics => within::<DeleteTopicsRequest>(row),
                 ApiKey::OffsetCommit => within::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => within::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),
@@ -442,30 +462,6 @@ mod tests {
                 ApiKey::ApiVersions => within::<ApiVersionsRequest>(row),
                 ApiKey::InitProducerId => within::<InitProducerIdRequest>(row),
                 ApiKey::SaslAuthenticate => within::<SaslAuthenticateRequest>(row),
-            }
-        }
-    }
-
-    #[test]
-    fn the_table_is_sorted_unique_and_sane() {
-        for pair in ADVERTISED.windows(2) {
-            assert!(
-                (pair[0].api_key as i16) < (pair[1].api_key as i16),
-                "ascending api_key order, no duplicates"
-            );
-        }
-        for row in &ADVERTISED {
-            assert!(
-                row.min <= row.max,
-                "{:?} has an inverted range",
-                row.api_key
-            );
-            if let Some(from) = row.flexible_from {
-                assert!(
-                    from >= row.min && from <= row.max + 1,
-                    "{:?}'s cutover must touch its advertised range",
-                    row.api_key
-                );
             }
         }
     }

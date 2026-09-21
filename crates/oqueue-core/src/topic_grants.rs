@@ -69,6 +69,17 @@ impl TopicGrants {
             .is_some_and(|topics| topics.contains(topic))
     }
 
+    /// Revokes a topic from every principal after a durable topic deletion.
+    ///
+    /// This is intentionally separate from [`Self::revoke`], whose principal
+    /// argument is useful for an ACL edit but cannot express a resource
+    /// deletion without first enumerating the whole policy.
+    pub fn revoke_topic(&mut self, topic: &TopicId) {
+        for topics in self.by_principal.values_mut() {
+            topics.remove(topic);
+        }
+    }
+
     /// Copies only one principal's grants into a request-local policy.
     ///
     /// A dispatcher must not clone the global multi-tenant index for every
@@ -115,6 +126,21 @@ mod tests {
         assert!(index.can_see(&principal("alice"), &topic("t")));
         let seen: Vec<_> = index.topics_for(&principal("alice")).collect();
         assert_eq!(seen, vec![&topic("t")]);
+    }
+
+    #[test]
+    fn revoking_a_topic_removes_it_from_every_principal() {
+        let mut index = TopicGrants::new();
+        let alice = principal("alice");
+        let bob = principal("bob");
+        let topic = topic("t");
+        index.grant(alice.clone(), topic.clone());
+        index.grant(bob.clone(), topic.clone());
+
+        index.revoke_topic(&topic);
+
+        assert!(!index.can_see(&alice, &topic));
+        assert!(!index.can_see(&bob, &topic));
     }
 
     #[test]

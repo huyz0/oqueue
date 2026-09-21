@@ -73,6 +73,9 @@ pub struct Cluster {
     // `.await` inside, and the lock protects data, never control flow.
     // ⚠️ Only topics this node has served — never filled with the catalog.
     topics: Mutex<topics::TopicCache>,
+    /// Serializes topic deletion with cache fills and creator-grant hydration.
+    topic_lifecycle: Arc<tokio::sync::RwLock<()>>,
+    cache_generation: AtomicU64,
     coordinator: Coordinator,
     index: IndexReader,
     store: Arc<dyn ObjectStore>,
@@ -267,6 +270,8 @@ impl Cluster {
             // In-memory until a composer passes one (`with_catalog`).
             catalog: Arc::new(FakeTopicCatalog::new()),
             topics: Mutex::new(topics::TopicCache::default()),
+            topic_lifecycle: Arc::new(tokio::sync::RwLock::new(())),
+            cache_generation: AtomicU64::new(0),
             coordinator: sequencing.coordinator,
             index: sequencing.index,
             store: seams.store,
@@ -293,6 +298,7 @@ impl Cluster {
     pub fn with_catalog(mut self, catalog: Arc<dyn TopicCatalog>) -> Self {
         self.catalog = catalog;
         self.topics = Mutex::new(topics::TopicCache::default());
+        self.cache_generation.store(0, Ordering::Relaxed);
         self
     }
 

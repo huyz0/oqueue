@@ -347,6 +347,10 @@ declare -A RUST_BOUNDS=(
   # catalog look unavailable. This is a liveness bound, not a client-visible
   # protocol timeout, and must move only with an explicit availability review.
   ["crates/oqueue-broker/src/dispatch.rs|CREATOR_HYDRATION_TIMEOUT"]="Duration::from_secs(5)"
+  # How long a resolved topic may remain locally served without rechecking the
+  # durable catalog (`M12.4`). Raising this widens cross-broker stale serving;
+  # lowering it adds catalog reads to warm topic operations.
+  ["crates/oqueue-broker/src/cluster/topics.rs|TOPIC_CACHE_TTL"]="Duration::from_secs(1)"
   # How many records a compacted object is written to hold -- the denominator
   # read amplification is measured against (`M5.1`, `ADR-0036`). Raising it
   # raises every partition's measured amplification, so it is a threshold in

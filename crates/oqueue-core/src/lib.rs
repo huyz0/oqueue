@@ -123,7 +123,7 @@ pub use bundle_stream::{BUNDLE_PART_BYTES, BundleStream, Written};
 pub use byte_range::ByteRange;
 pub use catalog::{
     CatalogEntry, FakeTopicCatalog, ObjectStoreTopicCatalog, TopicCatalog, TopicCreateOutcome,
-    topic_uuid,
+    TopicDeleteOutcome, topic_uuid,
 };
 pub use chunk::ChunkedObjectStore;
 pub use clock::{Clock, FakeClock, Timestamp};

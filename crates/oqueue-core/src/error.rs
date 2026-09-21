@@ -40,6 +40,10 @@ pub enum Error {
     #[error("topic id is empty")]
     EmptyTopicId,
 
+    /// A topic name is permanently reserved by a deletion tombstone.
+    #[error("topic name is reserved by a deletion tombstone")]
+    TopicNameReserved,
+
     /// A partition index was negative.
     #[error("partition id must not be negative, got {got}")]
     NegativePartitionId {

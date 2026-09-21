@@ -1,20 +1,27 @@
 //! A cluster's view of the topic catalog (`ADR-0049` point 2): looked up
 //! through [`TopicCatalog`] on a miss, cached only for topics this node has
-//! served.
+//! served, and revalidated when the short cache lease expires because another
+//! broker may have acknowledged a durable deletion.
 //!
 //! ⚠️ **The cache is not the catalog.** It holds what this node resolved,
 //! never every topic that exists; a topic created elsewhere is found by
-//! asking the catalog, not by waiting for it to appear here.
+//! asking the catalog, not by waiting for it to appear here. The cache is a
+//! latency optimization, not a deletion authority.
 
 use super::Cluster;
-use oqueue_core::{CatalogEntry, KeyDomain, Principal, TopicCreateOutcome, TopicId};
+use oqueue_core::{
+    CatalogEntry, KeyDomain, Principal, TopicCreateOutcome, TopicDeleteOutcome, TopicId,
+};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, PoisonError};
+use std::time::Duration;
+use tokio::time::Instant;
 use uuid::Uuid;
 
 /// How many names one `list` page asks for in [`Cluster::topic_names`].
 const LIST_PAGE: usize = 1000;
+const TOPIC_CACHE_TTL: Duration = Duration::from_secs(1);
 
 /// One served topic: its id and how many partitions it has.
 #[derive(Debug, Clone)]
@@ -22,6 +29,7 @@ struct Served {
     id: Uuid,
     partitions: usize,
     key_domain: KeyDomain,
+    cached_at: Instant,
 }
 
 /// The topics this node has served, by name and by id.
@@ -57,11 +65,16 @@ impl Cluster {
     /// `lookup_id` on a miss, never a scan.
     pub async fn topic_name_by_id(&self, id: Uuid) -> Option<String> {
         if let Some(name) = self.with_cache(|c| c.by_id.get(&id).cloned()) {
-            return Some(name);
+            if self.with_cache(|c| c.by_name.get(&name).is_some_and(cache_is_fresh)) {
+                return Some(name);
+            }
+            let topic = TopicId::new(&name).ok()?;
+            self.forget_name(&topic, id.as_u128());
         }
+        let generation = self.cache_generation.load(Ordering::Acquire);
         // ⚠️ A catalog error reads as "no such topic": see `served`.
         let entry = self.catalog.lookup_id(id.as_u128()).await.ok()??;
-        Some(self.remember(&entry))
+        self.remember_if_generation(&entry, generation)
     }
 
     /// Up to `limit` topic names, in name order — what an unscoped `Metadata`
@@ -102,20 +115,33 @@ impl Cluster {
     /// Creates `topic` with one partition if absent. Returns whether it exists
     /// afterwards — false only for an empty name or a catalog failure.
     pub async fn ensure_topic(&self, topic: &str) -> bool {
+        let _lifecycle = self.topic_lifecycle_read().await;
         let Ok(name) = TopicId::new(topic) else {
             return false;
         };
+        let generation = self.cache_generation.load(Ordering::Acquire);
         let Ok(entry) = self.catalog.create(&name, 1).await else {
             return false;
         };
-        self.remember(&entry);
+        let _ = self.remember_if_generation(&entry, generation);
         true
     }
 
     /// Creates a catalog entry without starting a partition, log, or task.
     pub async fn create_topic(&self, topic: &TopicId, partitions: u32) -> Option<CatalogEntry> {
+        let _lifecycle = self.topic_lifecycle_read().await;
+        self.create_topic_while_locked(topic, partitions).await
+    }
+
+    /// Creates a topic while the caller holds the topic lifecycle read lock.
+    pub(crate) async fn create_topic_while_locked(
+        &self,
+        topic: &TopicId,
+        partitions: u32,
+    ) -> Option<CatalogEntry> {
+        let generation = self.cache_generation.load(Ordering::Acquire);
         let entry = self.catalog.create(topic, partitions).await.ok()?;
-        self.remember(&entry);
+        let _ = self.remember_if_generation(&entry, generation);
         Some(entry)
     }
 
@@ -127,16 +153,94 @@ impl Cluster {
         partitions: u32,
         creator: &Principal,
     ) -> Option<TopicCreateOutcome> {
+        let _lifecycle = self.topic_lifecycle_read().await;
+        self.create_topic_owned_while_locked(topic, partitions, creator)
+            .await
+    }
+
+    /// Creates an owned topic while the caller holds the lifecycle read lock.
+    pub(crate) async fn create_topic_owned_while_locked(
+        &self,
+        topic: &TopicId,
+        partitions: u32,
+        creator: &Principal,
+    ) -> Option<TopicCreateOutcome> {
+        let generation = self.cache_generation.load(Ordering::Acquire);
         let outcome = self
             .catalog
             .create_owned(topic, partitions, creator)
             .await
             .ok()?;
-        self.remember(outcome.entry());
+        let _ = self.remember_if_generation(outcome.entry(), generation);
         if outcome.created() {
             self.invalidate_creator_topics(creator);
         }
         Some(outcome)
+    }
+
+    /// Durably tombstones a topic and evicts every cache that can make it
+    /// visible after deletion.
+    ///
+    /// # Errors
+    ///
+    /// Returns the catalog error when the durable tombstone or its index
+    /// cleanup cannot be acknowledged.
+    pub async fn delete_topic(
+        &self,
+        name: &TopicId,
+        expected_id: Option<u128>,
+    ) -> oqueue_core::Result<TopicDeleteOutcome> {
+        let _lifecycle = self.topic_lifecycle.write().await;
+        let outcome = match self.catalog.delete(name, expected_id).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                // The tombstone is published before index cleanup. If cleanup
+                // failed, confirm that durable absence is already visible and
+                // evict this node's serving state before returning the error.
+                if self
+                    .catalog
+                    .lookup(name)
+                    .await
+                    .ok()
+                    .is_some_and(|entry| entry.is_none())
+                {
+                    self.evict_durably_absent_topic(name);
+                }
+                return Err(error);
+            }
+        };
+        match &outcome {
+            TopicDeleteOutcome::Deleted(entry) => {
+                self.forget(entry);
+                if let Some(creator) = entry.creator() {
+                    self.invalidate_creator_topics(creator);
+                }
+            }
+            TopicDeleteOutcome::AlreadyDeleted { id } => {
+                self.forget_name(name, *id);
+                self.invalidate_all_creator_topics();
+            }
+            TopicDeleteOutcome::Missing | TopicDeleteOutcome::StaleId { .. } => {}
+        }
+        Ok(outcome)
+    }
+
+    pub(crate) async fn topic_lifecycle_read(&self) -> tokio::sync::OwnedRwLockReadGuard<()> {
+        Arc::clone(&self.topic_lifecycle).read_owned().await
+    }
+
+    /// Confirms durable absence without consulting the serving cache.
+    pub(crate) async fn topic_is_durably_absent(&self, name: &TopicId) -> Option<bool> {
+        self.catalog
+            .lookup(name)
+            .await
+            .ok()
+            .map(|entry| entry.is_none())
+    }
+
+    pub(crate) fn evict_durably_absent_topic(&self, name: &TopicId) {
+        self.forget_topic_name(name);
+        self.invalidate_all_creator_topics();
     }
 
     /// Restores the durable creator grants for one principal. The caller
@@ -176,6 +280,13 @@ impl Cluster {
             .remove(creator);
     }
 
+    fn invalidate_all_creator_topics(&self) {
+        self.creator_topic_loads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
+    }
+
     async fn load_creator_topics(&self, creator: &Principal) -> Result<Vec<TopicId>, ()> {
         let mut topics = Vec::new();
         let mut after = None;
@@ -200,6 +311,16 @@ impl Cluster {
         self.with_cache(|c| c.by_name.len())
     }
 
+    #[cfg(test)]
+    pub(crate) fn expire_topic_cache_for_test(&self) {
+        self.with_cache(|cache| {
+            let expired = Instant::now() - TOPIC_CACHE_TTL;
+            for served in cache.by_name.values_mut() {
+                served.cached_at = expired;
+            }
+        });
+    }
+
     /// The cached entry for `topic`, or the catalog's on a miss.
     ///
     /// ⚠️ **A catalog error is answered as "not found"**, which the handlers
@@ -207,32 +328,71 @@ impl Cluster {
     /// again rather than giving up, and nothing is cached on the way.
     async fn served(&self, topic: &str) -> Option<Served> {
         if let Some(hit) = self.with_cache(|c| c.by_name.get(topic).cloned()) {
-            return Some(hit);
+            if cache_is_fresh(&hit) {
+                return Some(hit);
+            }
+            let name = TopicId::new(topic).ok()?;
+            self.forget_name(&name, hit.id.as_u128());
         }
         let name = TopicId::new(topic).ok()?;
+        let generation = self.cache_generation.load(Ordering::Acquire);
         let entry = self.catalog.lookup(&name).await.ok()??;
-        self.remember(&entry);
+        let _ = self.remember_if_generation(&entry, generation);
         self.with_cache(|c| c.by_name.get(topic).cloned())
     }
 
     /// Caches `entry`, returning its name.
-    fn remember(&self, entry: &CatalogEntry) -> String {
+    fn remember_if_generation(&self, entry: &CatalogEntry, generation: u64) -> Option<String> {
         let name = entry.name().as_str().to_owned();
         let served = Served {
             id: Uuid::from_u128(entry.id()),
             partitions: usize::try_from(entry.partitions()).unwrap_or(usize::MAX),
             key_domain: entry.key_domain().clone(),
+            cached_at: Instant::now(),
         };
         self.with_cache(|c| {
+            if self.cache_generation.load(Ordering::Acquire) != generation {
+                return None;
+            }
             c.by_id.insert(served.id, name.clone());
             c.by_name.insert(name.clone(), served);
+            Some(name)
+        })
+    }
+
+    fn forget(&self, entry: &CatalogEntry) {
+        self.with_cache(|cache| {
+            self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            let id = Uuid::from_u128(entry.id());
+            cache.by_name.remove(entry.name().as_str());
+            cache.by_id.remove(&id);
         });
-        name
+    }
+
+    fn forget_name(&self, name: &TopicId, id: u128) {
+        self.with_cache(|cache| {
+            self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            cache.by_name.remove(name.as_str());
+            cache.by_id.remove(&Uuid::from_u128(id));
+        });
+    }
+
+    fn forget_topic_name(&self, name: &TopicId) {
+        self.with_cache(|cache| {
+            self.cache_generation.fetch_add(1, Ordering::AcqRel);
+            if let Some(served) = cache.by_name.remove(name.as_str()) {
+                cache.by_id.remove(&served.id);
+            }
+        });
     }
 
     fn with_cache<T>(&self, f: impl FnOnce(&mut TopicCache) -> T) -> T {
         f(&mut self.topics.lock().unwrap_or_else(PoisonError::into_inner))
     }
+}
+
+fn cache_is_fresh(served: &Served) -> bool {
+    served.cached_at.elapsed() < TOPIC_CACHE_TTL
 }
 
 const fn creator_page_is_full(len: usize) -> bool {

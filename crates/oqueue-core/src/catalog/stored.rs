@@ -1,10 +1,12 @@
 //! The topic catalog in object storage (`ADR-0049` point 3, `M7.3`).
 //!
-//! Three create-only objects per owned topic, under the shard's catalog prefix:
+//! Three live objects per owned topic, plus one permanent tombstone after
+//! deletion, under the shard's catalog prefix:
 //!
 //! - `<prefix>/topic/<hex of the name's UTF-8 bytes>` — the entry;
 //! - `<prefix>/id/<32 hex digits of the id>` — the name, so an id finds it.
 //! - `<prefix>/owner/<hex creator>/<hex name>` — the durable owner index.
+//! - `<prefix>/tombstone/<hex name>` — the reserved UUID after deletion.
 //!
 //! ⚠️ **Hex, not the name itself**: any [`TopicId`] makes a valid key, `/`
 //! included, and lowercase hex of the bytes sorts exactly as the bytes do, so
@@ -12,7 +14,7 @@
 
 use std::sync::Arc;
 
-use super::{CatalogEntry, TopicCatalog};
+use super::{CatalogEntry, TopicCatalog, TopicDeleteOutcome};
 use crate::{
     BoxFuture, ByteRange, Error, KeyDomain, MaintenanceStore, MetadataShardId, ObjectKey,
     ObjectStore, Precondition, Principal, Result, TopicCreateOutcome, TopicId,
@@ -25,18 +27,20 @@ const RACE_VISIBILITY_ATTEMPTS: u32 = 64;
 const OWNER_DEFAULT_FORMAT: u8 = 3;
 const OWNER_CUSTOMER_FORMAT: u8 = 4;
 
+mod delete;
 mod format;
 use format::{decode, encode, hex, unhex};
 
 /// A [`TopicCatalog`] over object storage, one shard's worth.
 ///
 /// ⚠️ **Creation provisions nothing** (doc 15 §2): `create` writes exactly the
-/// two objects above and starts no task, timer or log. A topic costs its
-/// catalog entry until something writes to it.
+/// two live objects above and starts no task, timer or log. A topic costs its
+/// catalog entry until something writes to it; deletion's tombstone is the
+/// only durable object added by the admin lifecycle.
 ///
-/// ⚠️ **The id key is written first**, so a topic whose entry exists has its
-/// id key (guarantee 3). A crash between the two leaves an id key alone, which
-/// `lookup_id` answers `None` for — what `lookup` answers.
+/// ⚠️ **The topic entry is written first**, so a crash before the id index is
+/// complete leaves a recoverable entry rather than an orphan reservation. A
+/// retry repairs the id index before the topic becomes visible.
 #[derive(Debug)]
 pub struct ObjectStoreTopicCatalog {
     store: Arc<dyn ObjectStore>,
@@ -64,10 +68,22 @@ impl ObjectStoreTopicCatalog {
         format!("{}/topic/", self.prefix)
     }
 
+    fn tombstones(&self) -> String {
+        format!("{}/tombstone/", self.prefix)
+    }
+
     fn topic_key(&self, name: &TopicId) -> Result<ObjectKey> {
         ObjectKey::new(format!(
             "{}{}",
             self.topics(),
+            hex(name.as_str().as_bytes())
+        ))
+    }
+
+    fn tombstone_key(&self, name: &TopicId) -> Result<ObjectKey> {
+        ObjectKey::new(format!(
+            "{}{}",
+            self.tombstones(),
             hex(name.as_str().as_bytes())
         ))
     }
@@ -114,6 +130,9 @@ impl ObjectStoreTopicCatalog {
     }
 
     async fn find(&self, name: &TopicId) -> Result<Option<CatalogEntry>> {
+        if self.tombstone_id(name).await?.is_some() {
+            return Ok(None);
+        }
         let Some(entry) = self.find_entry(name).await? else {
             return Ok(None);
         };
@@ -124,6 +143,12 @@ impl ObjectStoreTopicCatalog {
         };
         if id_bytes != name.as_str().as_bytes() {
             return Err(Error::MalformedMetadataSegment { at: 0 });
+        }
+        // The first tombstone probe only avoids unnecessary reads. A delete
+        // may publish the tombstone while those reads are in flight, so the
+        // final probe is the lookup's linearization check.
+        if self.tombstone_id(name).await?.is_some() {
+            return Ok(None);
         }
         Ok(Some(entry))
     }
@@ -162,14 +187,20 @@ impl ObjectStoreTopicCatalog {
         partitions: u32,
         key_domain: KeyDomain,
     ) -> Result<CatalogEntry> {
+        if self.tombstone_id(name).await?.is_some() {
+            return Err(Error::TopicNameReserved);
+        }
         let entry = CatalogEntry::with_key_domain(name.clone(), partitions, key_domain);
-        // ⚠️ A present id key holds these same bytes: the id is the name's.
-        self.put_absent(&self.id_key(entry.id())?, name.as_str().as_bytes().to_vec())
-            .await?;
         if self
             .put_absent(&self.topic_key(name)?, encode(&entry)?)
             .await?
         {
+            // The topic is published before its id index so a concurrent
+            // delete can see and tombstone it rather than observing a bare
+            // reservation.
+            self.put_absent(&self.id_key(entry.id())?, name.as_str().as_bytes().to_vec())
+                .await?;
+            self.reject_if_tombstoned(&entry).await?;
             return Ok(entry);
         }
         // Lost the race, or it existed: the entry that is there wins.
@@ -182,6 +213,9 @@ impl ObjectStoreTopicCatalog {
         partitions: u32,
         creator: &Principal,
     ) -> Result<TopicCreateOutcome> {
+        if self.tombstone_id(name).await?.is_some() {
+            return Err(Error::TopicNameReserved);
+        }
         let entry = CatalogEntry::with_creator(name.clone(), partitions, creator.clone());
         let body = encode(&entry)?;
         // The owner index is written first so a crash cannot publish a topic
@@ -203,20 +237,34 @@ impl ObjectStoreTopicCatalog {
         // on an orphan reservation.
         self.put_absent(&self.id_key(entry.id())?, name.as_str().as_bytes().to_vec())
             .await?;
+        self.reject_if_tombstoned(&entry).await?;
         Ok(TopicCreateOutcome { entry, created })
     }
 
-    /// The id key is the create race's reservation. A losing caller can see
-    /// that reservation while the winner is still publishing the name entry,
-    /// so keep yielding until the winner's create-only write is visible. A
-    /// caller that loses this second conditional write has proof that another
-    /// live creator owns the name; a crashed creator cannot make this caller
-    /// lose that write. A bounded probe count prevents direct catalog callers
-    /// from hanging forever; `Transient` lets each caller apply its own retry
-    /// policy, while the broker's `CreateTopics` handler also owns the request
-    /// timeout around this wait.
+    async fn reject_if_tombstoned(&self, entry: &CatalogEntry) -> Result<()> {
+        if self.tombstone_id(entry.name()).await?.is_some() {
+            self.delete_live_indexes(entry).await?;
+            return Err(Error::TopicNameReserved);
+        }
+        Ok(())
+    }
+
+    /// A losing caller can see a topic entry while the winner is still
+    /// publishing its id index, so keep yielding until the winner's create-only
+    /// write is visible. A caller that loses this second conditional write has
+    /// proof that another live creator owns the name; a crashed creator cannot
+    /// make this caller lose that write. A bounded probe count prevents direct
+    /// catalog callers from hanging forever; `Transient` lets each caller apply
+    /// its own retry policy, while the broker's `CreateTopics` handler also owns
+    /// the request timeout around this wait.
     async fn find_after_race(&self, name: &TopicId) -> Result<CatalogEntry> {
+        if self.tombstone_id(name).await?.is_some() {
+            return Err(Error::TopicNameReserved);
+        }
         for _ in 0..RACE_VISIBILITY_ATTEMPTS {
+            if self.tombstone_id(name).await?.is_some() {
+                return Err(Error::TopicNameReserved);
+            }
             if let Some(entry) = self.find_entry(name).await? {
                 self.put_absent(&self.id_key(entry.id())?, name.as_str().as_bytes().to_vec())
                     .await?;
@@ -313,18 +361,39 @@ impl ObjectStoreTopicCatalog {
 
     async fn page(&self, after: Option<&TopicId>, limit: usize) -> Result<Vec<TopicId>> {
         let prefix = self.topics();
-        let after = after.map(|name| self.topic_key(name)).transpose()?;
-        let keys = self.listing.list(&prefix, after.as_ref(), limit).await?;
-        keys.iter()
-            .map(|key| {
-                key.as_str()
+        let mut cursor = after.map(|name| self.topic_key(name)).transpose()?;
+        let mut names = Vec::with_capacity(limit);
+        while names.len() < limit {
+            let requested = limit - names.len();
+            let keys = self
+                .listing
+                .list(&prefix, cursor.as_ref(), requested)
+                .await?;
+            let Some(last) = keys.last().cloned() else {
+                return Ok(names);
+            };
+            let short = keys.len() < requested;
+            for key in keys {
+                let name = key
+                    .as_str()
                     .strip_prefix(&prefix)
                     .and_then(unhex)
                     .and_then(|bytes| String::from_utf8(bytes).ok())
                     .and_then(|name| TopicId::new(name).ok())
-                    .ok_or(Error::MalformedMetadataSegment { at: 0 })
-            })
-            .collect()
+                    .ok_or(Error::MalformedMetadataSegment { at: 0 })?;
+                if self.find(&name).await?.is_some() {
+                    names.push(name);
+                    if names.len() == limit {
+                        return Ok(names);
+                    }
+                }
+            }
+            cursor = Some(last);
+            if short {
+                return Ok(names);
+            }
+        }
+        Ok(names)
     }
 }
 
@@ -368,6 +437,14 @@ impl TopicCatalog for ObjectStoreTopicCatalog {
         creator: &'a Principal,
     ) -> BoxFuture<'a, Result<TopicCreateOutcome>> {
         Box::pin(self.insert_owned(name, partitions, creator))
+    }
+
+    fn delete<'a>(
+        &'a self,
+        name: &'a TopicId,
+        expected_id: Option<u128>,
+    ) -> BoxFuture<'a, Result<TopicDeleteOutcome>> {
+        Box::pin(self.delete_topic(name, expected_id))
     }
 
     fn list_owned<'a>(

@@ -109,6 +109,7 @@ async fn create_one(
     if context.validate_only {
         return success(&name, partitions, requested.replication_factor, [0; 16]);
     }
+    let _topic_lifecycle = context.cluster.topic_lifecycle_read().await;
     let persisted = match persist(&name, partitions, context).await {
         Ok(Some(entry)) => entry,
         Ok(None) => return invalid(error_codes::UNKNOWN_SERVER_ERROR, "catalog write failed"),
@@ -141,13 +142,13 @@ async fn persist(
         if let Some(principal) = context.principal {
             context
                 .cluster
-                .create_topic_owned(name, partitions, principal)
+                .create_topic_owned_while_locked(name, partitions, principal)
                 .await
                 .map(|outcome| (outcome.entry().clone(), outcome.created()))
         } else {
             context
                 .cluster
-                .create_topic(name, partitions)
+                .create_topic_while_locked(name, partitions)
                 .await
                 .map(|entry| (entry, true))
         }

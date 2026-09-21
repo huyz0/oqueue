@@ -190,7 +190,8 @@ impl Error {
             // slow one, and the caller that is refused is a produce that must
             // be refused rather than written unencrypted.
             | Self::EntropyUnavailable
-            | Self::Permanent => RetryClass::Never,
+            | Self::Permanent
+            | Self::TopicNameReserved => RetryClass::Never,
         }
     }
 }

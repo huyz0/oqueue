@@ -230,6 +230,9 @@ impl Dispatcher {
     ///
     /// ⚠️ **It takes the frame by value**, because the future it returns
     /// outlives this call and the connection task owns the buffer.
+    // This is the one exhaustive API router; splitting individual match arms
+    // would obscure the protocol's dispatch table without reducing work.
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn dispatch(&self, frame: Vec<u8>) -> HandlerResponse {
         let request: &[u8] = &frame;
         let Ok(prelude) = read_request_prelude(request) else {
@@ -266,10 +269,20 @@ impl Dispatcher {
         let Some(body) = Self::request_body(request) else {
             return HandlerResponse::Close;
         };
+        // DeleteTopics takes the write side inside its handler. Every other
+        // request holds the read side through its complete topic operation so
+        // a deletion cannot tombstone a topic between resolution and produce,
+        // fetch, or offset work that uses that resolution.
+        let _topic_lifecycle = if api_key == ApiKey::DeleteTopics {
+            None
+        } else {
+            Some(self.cluster.topic_lifecycle_read().await)
+        };
         match api_key {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body).await,
             ApiKey::Metadata => self.metadata_handle(prelude, body).await,
             ApiKey::CreateTopics => self.create_topics_handle(prelude, body).await,
+            ApiKey::DeleteTopics => self.delete_topics_handle(prelude, body).await,
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
@@ -299,6 +312,7 @@ impl Dispatcher {
         let Some(principal) = authenticated.as_ref() else {
             return;
         };
+        let _topic_lifecycle = self.cluster.topic_lifecycle_read().await;
         let Ok(Some(topics)) = tokio::time::timeout(
             CREATOR_HYDRATION_TIMEOUT,
             self.cluster.creator_topics(principal),
@@ -307,11 +321,27 @@ impl Dispatcher {
         else {
             return;
         };
+        let mut live = Vec::new();
+        let mut deleted = Vec::new();
+        for topic in topics {
+            // Creator loads are process-local, while deletion is durable and
+            // may have been acknowledged by another broker. Validate each
+            // cached name before restoring its grant, and remove a grant that
+            // a remote tombstone has made invalid.
+            match self.cluster.topic_is_durably_absent(&topic).await {
+                Some(false) => live.push(topic),
+                Some(true) => deleted.push(topic),
+                None => {}
+            }
+        }
         let Ok(mut grants) = self.topic_grants.write() else {
             return;
         };
-        for topic in topics {
+        for topic in live {
             grants.grant(principal.clone(), topic);
+        }
+        for topic in deleted {
+            grants.revoke_topic(&topic);
         }
     }
 

@@ -130,12 +130,33 @@ impl TopicCreateOutcome {
     }
 }
 
+/// The result of a durable topic deletion.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TopicDeleteOutcome {
+    /// The live entry was tombstoned and is no longer addressable.
+    Deleted(CatalogEntry),
+    /// The name was already tombstoned; `id` is the permanently reserved id.
+    AlreadyDeleted {
+        /// The id reserved by the tombstone.
+        id: u128,
+    },
+    /// No live entry or tombstone exists for the name.
+    Missing,
+    /// The supplied id does not identify the named live or deleted topic.
+    StaleId {
+        /// The id supplied by the caller.
+        expected: u128,
+        /// The id currently reserved by the catalog.
+        actual: u128,
+    },
+}
+
 /// A topic's id, derived from its name (`ADR-0049` point 3).
 ///
 /// ⚠️ **Derived, so two nodes creating one topic agree without talking**, and
-/// never nil — nil is the wire's "no id". ⚠️ **A deleted-and-recreated topic
-/// would reuse it**, which KIP-516 clients read as the same topic; deletion
-/// does not exist yet, and whoever builds it changes this.
+/// never nil — nil is the wire's "no id". A durable deletion tombstone
+/// permanently reserves this derived id, so a deleted-and-recreated name is
+/// refused rather than reusing it.
 ///
 /// FNV-1a over the name's bytes, 128-bit, with the UUID version nibble set to
 /// 8 (custom) and the RFC 4122 variant bits.
@@ -165,6 +186,8 @@ pub fn topic_uuid(name: &TopicId) -> u128 {
 /// 3. **`lookup_id` answers what `lookup` answers**, for every created topic.
 /// 4. **`list` pages in name order**: names strictly after `after`, at most
 ///    `limit` of them, so a caller can bound what one answer costs.
+/// 5. **`delete` is durable and non-reusing**: after its tombstone is durable,
+///    lookup and listing hide the topic and create refuses the name forever.
 pub trait TopicCatalog: Send + Sync + fmt::Debug {
     /// The entry for `name`, or `None` if it does not exist.
     fn lookup<'a>(&'a self, name: &'a TopicId) -> BoxFuture<'a, Result<Option<CatalogEntry>>>;
@@ -189,6 +212,14 @@ pub trait TopicCatalog: Send + Sync + fmt::Debug {
         partitions: u32,
         creator: &'a Principal,
     ) -> BoxFuture<'a, Result<TopicCreateOutcome>>;
+
+    /// Durably tombstones `name`, optionally requiring `expected_id` to match.
+    /// A tombstoned name is never available to create again.
+    fn delete<'a>(
+        &'a self,
+        name: &'a TopicId,
+        expected_id: Option<u128>,
+    ) -> BoxFuture<'a, Result<TopicDeleteOutcome>>;
 
     /// Up to `limit` topics durably owned by `creator`, after `after`.
     fn list_owned<'a>(
@@ -216,6 +247,7 @@ pub struct FakeTopicCatalog {
 struct Entries {
     by_name: BTreeMap<TopicId, CatalogEntry>,
     by_id: HashMap<u128, TopicId>,
+    tombstones: HashMap<TopicId, u128>,
 }
 
 impl FakeTopicCatalog {
@@ -232,20 +264,28 @@ impl FakeTopicCatalog {
     /// method because the trait's default `create` contract remains the
     /// provider-managed path until the broker's topic-creation API grows a
     /// key-domain field.
+    ///
+    /// # Errors
+    ///
+    /// Returns the object-store or catalog-format error from the durable
+    /// create path.
     pub fn create_with_key_domain(
         &self,
         name: &TopicId,
         partitions: u32,
         key_domain: KeyDomain,
-    ) -> CatalogEntry {
+    ) -> Result<CatalogEntry> {
         self.with(|e| {
+            if e.tombstones.contains_key(name) {
+                return Err(crate::Error::TopicNameReserved);
+            }
             if let Some(existing) = e.by_name.get(name) {
-                return existing.clone();
+                return Ok(existing.clone());
             }
             let entry = CatalogEntry::with_key_domain(name.clone(), partitions, key_domain);
             e.by_id.insert(entry.id(), name.clone());
             e.by_name.insert(name.clone(), entry.clone());
-            entry
+            Ok(entry)
         })
     }
 
@@ -279,7 +319,7 @@ impl TopicCatalog for FakeTopicCatalog {
         partitions: u32,
     ) -> BoxFuture<'a, Result<CatalogEntry>> {
         Box::pin(async move {
-            Ok(self.create_with_key_domain(name, partitions, KeyDomain::default_domain()))
+            self.create_with_key_domain(name, partitions, KeyDomain::default_domain())
         })
     }
 
@@ -290,21 +330,65 @@ impl TopicCatalog for FakeTopicCatalog {
         creator: &'a Principal,
     ) -> BoxFuture<'a, Result<TopicCreateOutcome>> {
         Box::pin(async move {
-            Ok(self.with(|e| {
+            self.with(|e| {
+                if e.tombstones.contains_key(name) {
+                    return Err(crate::Error::TopicNameReserved);
+                }
                 if let Some(entry) = e.by_name.get(name) {
-                    return TopicCreateOutcome {
+                    return Ok(TopicCreateOutcome {
                         entry: entry.clone(),
                         created: false,
-                    };
+                    });
                 }
                 let entry = CatalogEntry::with_creator(name.clone(), partitions, creator.clone());
                 e.by_id.insert(entry.id(), name.clone());
                 e.by_name.insert(name.clone(), entry.clone());
-                TopicCreateOutcome {
+                Ok(TopicCreateOutcome {
                     entry,
                     created: true,
+                })
+            })
+        })
+    }
+
+    fn delete<'a>(
+        &'a self,
+        name: &'a TopicId,
+        expected_id: Option<u128>,
+    ) -> BoxFuture<'a, Result<TopicDeleteOutcome>> {
+        Box::pin(async move {
+            self.with(|e| {
+                if let Some(&id) = e.tombstones.get(name) {
+                    return Ok(expected_id.map_or(
+                        TopicDeleteOutcome::AlreadyDeleted { id },
+                        |expected| {
+                            if expected == id {
+                                TopicDeleteOutcome::AlreadyDeleted { id }
+                            } else {
+                                TopicDeleteOutcome::StaleId {
+                                    expected,
+                                    actual: id,
+                                }
+                            }
+                        },
+                    ));
                 }
-            }))
+                let Some(entry) = e.by_name.get(name).cloned() else {
+                    return Ok(TopicDeleteOutcome::Missing);
+                };
+                if let Some(expected) = expected_id
+                    && expected != entry.id()
+                {
+                    return Ok(TopicDeleteOutcome::StaleId {
+                        expected,
+                        actual: entry.id(),
+                    });
+                }
+                e.tombstones.insert(name.clone(), entry.id());
+                e.by_name.remove(name);
+                e.by_id.remove(&entry.id());
+                Ok(TopicDeleteOutcome::Deleted(entry))
+            })
         })
     }
 

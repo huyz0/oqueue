@@ -135,6 +135,11 @@ async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u
                 .expect("encodes");
         }
         ApiKey::CreateTopics => create_topics_body(&mut body, version),
+        ApiKey::DeleteTopics => {
+            kafka_protocol::messages::DeleteTopicsRequest::default()
+                .encode(&mut body, version)
+                .expect("encodes");
+        }
         ApiKey::Produce => produce_body(&mut body, version, cluster).await,
         ApiKey::Fetch => fetch_body(&mut body, version, cluster).await,
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
@@ -236,6 +241,7 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         }
         ApiKey::Metadata => decode_ignoring_body::<MetadataResponse>(&mut rest, api_key, version),
         ApiKey::CreateTopics => create_topics_error_code(&mut rest, version),
+        ApiKey::DeleteTopics => delete_topics_error_code(&mut rest, version),
         ApiKey::Produce => decode_ignoring_body::<ProduceResponse>(&mut rest, api_key, version),
         ApiKey::Fetch => decode_ignoring_body::<FetchResponse>(&mut rest, api_key, version),
         ApiKey::InitProducerId => {
@@ -271,6 +277,15 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
 fn create_topics_error_code(rest: &mut &[u8], version: i16) -> i16 {
     use kafka_protocol::messages::CreateTopicsResponse;
     decode_ignoring_body::<CreateTopicsResponse>(rest, ApiKey::CreateTopics, version)
+}
+
+fn delete_topics_error_code(rest: &mut &[u8], version: i16) -> i16 {
+    use kafka_protocol::messages::DeleteTopicsResponse;
+    DeleteTopicsResponse::decode(rest, version)
+        .expect("DeleteTopics reply decodes")
+        .responses
+        .first()
+        .map_or(0, |response| response.error_code)
 }
 
 fn sasl_handshake_error_code(rest: &mut &[u8], version: i16) -> i16 {

@@ -31,6 +31,7 @@ pub mod checkpoint;
 pub mod cluster;
 pub mod connection;
 mod create_topics;
+mod delete_topics;
 pub mod dispatch;
 mod fencing;
 pub mod fetch;

@@ -7,7 +7,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
 use super::super::tests::{
-    create_is_idempotent, list_pages_in_name_order, lookup_id_agrees_with_lookup,
+    create_is_idempotent, deletion_is_durable_and_non_reusable, deletion_rejects_a_stale_uuid,
+    list_pages_in_name_order, lookup_id_agrees_with_lookup,
 };
 use super::{ObjectStoreTopicCatalog, decode, encode, hex};
 use crate::test_executor::block_on;
@@ -49,6 +50,81 @@ fn it_keeps_the_contract() {
     create_is_idempotent(&fresh());
     lookup_id_agrees_with_lookup(&fresh());
     list_pages_in_name_order(&fresh());
+    deletion_is_durable_and_non_reusable(&fresh());
+    deletion_rejects_a_stale_uuid(&fresh());
+}
+
+#[test]
+fn deletion_survives_a_fresh_catalog_and_leaves_only_the_tombstone() {
+    let store = Arc::new(FakeObjectStore::new());
+    let catalog = over(&store);
+    let name = topic("retired");
+    let entry = block_on(catalog.create(&name, 1)).expect("creates");
+    block_on(catalog.delete(&name, Some(entry.id()))).expect("deletes");
+
+    let restarted = over(&store);
+    assert_eq!(block_on(restarted.lookup(&name)).expect("lookup"), None);
+    assert_eq!(
+        block_on(restarted.lookup_id(entry.id())).expect("lookup id"),
+        None
+    );
+    assert!(
+        store
+            .keys()
+            .iter()
+            .any(|key| key.as_str().contains("/tombstone/")),
+        "the deletion reservation survives restart"
+    );
+    assert_eq!(
+        store
+            .keys()
+            .iter()
+            .filter(|key| key.as_str().contains("/tombstone/"))
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn retrying_a_tombstone_repairs_partial_index_cleanup() {
+    let store = Arc::new(FakeObjectStore::new());
+    let catalog = over(&store);
+    let alice = Principal::new("alice").expect("principal");
+    let name = topic("partial-delete");
+    let entry = block_on(catalog.create_owned(&name, 1, &alice))
+        .expect("creates")
+        .entry()
+        .clone();
+    block_on(store.put(
+        &catalog.tombstone_key(&name).expect("tombstone key"),
+        encode(&entry).expect("tombstone bytes"),
+        None,
+    ))
+    .expect("tombstone");
+
+    let retry = block_on(catalog.delete(&name, Some(entry.id()))).expect("repairs");
+    assert_eq!(
+        retry,
+        crate::TopicDeleteOutcome::AlreadyDeleted { id: entry.id() }
+    );
+    assert!(block_on(catalog.lookup(&name)).expect("lookup").is_none());
+    assert!(
+        block_on(catalog.list_owned(&alice, None, 10))
+            .expect("list")
+            .is_empty()
+    );
+    assert_eq!(
+        block_on(catalog.lookup_id(entry.id())).expect("lookup id"),
+        None
+    );
+    assert!(
+        !store
+            .keys()
+            .iter()
+            .any(|key| key.as_str().contains("/topic/")
+                || key.as_str().contains("/id/")
+                || key.as_str().contains("/owner/"))
+    );
 }
 
 #[test]
@@ -220,7 +296,8 @@ fn an_unrepresentable_customer_key_is_refused_before_catalog_encoding() {
 
 /// Guarantee 2, as far as `oqueue-core` can see it: it has no runtime to
 /// spawn on, so "starts no task and opens no log" is asserted as "writes
-/// exactly two objects under the catalog prefix, and nothing else".
+/// exactly two objects under the catalog prefix, plus the tombstone probes
+/// needed to enforce non-reuse, and nothing else.
 #[test]
 fn creation_provisions_nothing() {
     let counted = Arc::new(CountingObjectStore::new(FakeObjectStore::new()));
@@ -231,7 +308,7 @@ fn creation_provisions_nothing() {
     );
     block_on(catalog.create(&topic("orders"), 3)).expect("creates");
     assert_eq!(counted.counts().count(Operation::Put), 2);
-    assert_eq!(counted.counts().count(Operation::Get), 0);
+    assert_eq!(counted.counts().count(Operation::Get), 2);
     assert_eq!(counted.counts().count(Operation::Delete), 0);
     let keys = counted.inner().keys();
     assert_eq!(keys.len(), 2);
