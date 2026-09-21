@@ -45,6 +45,7 @@ impl Cluster {
     /// written; [`FlushError::Commit`] if it was written and its position
     /// could not be journalled.
     pub async fn flush(&self, bundle: BundleBuilder) -> Result<CommitAck, FlushError> {
+        let started = tokio::time::Instant::now();
         let sealed = bundle.seal().map_err(FlushError::Store)?;
         // ⚠️ Taken before the payload is moved out, and the reason is not
         // borrow-checking: these are the *only* record of what the object
@@ -58,15 +59,33 @@ impl Cluster {
             .put(&key, sealed.into_payload(), None)
             .await
             .map_err(|error| {
+                let latency = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                for span in &spans {
+                    self.metrics()
+                        .record_write(span.topic(), span.partition(), latency, false);
+                }
                 crate::telemetry::dependency_failure("object_store", "put", 0, None, "produce");
                 FlushError::Store(error)
             })?;
+        let committed_spans = spans.clone();
         self.coordinator()
             .commit(key, spans)
             .await
             .map_err(|error| {
+                let latency = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                for span in &committed_spans {
+                    self.metrics()
+                        .record_write(span.topic(), span.partition(), latency, false);
+                }
                 crate::telemetry::dependency_failure("coordinator", "commit", 0, None, "produce");
                 FlushError::Commit(error)
+            })
+            .inspect(|_ack| {
+                let latency = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                for span in &committed_spans {
+                    self.metrics()
+                        .record_write(span.topic(), span.partition(), latency, true);
+                }
             })
     }
 }

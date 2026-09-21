@@ -26,7 +26,8 @@
 
 use crate::entropy::{Entropy, mint_dek};
 use oqueue_core::{
-    Clock, Dek, KeyId, KeyProvider, Redacted, Result, Timestamp, TopicId, WrappedKey,
+    Clock, Dek, KeyId, KeyProvider, OperationalMetrics, Redacted, Result, Timestamp, TopicId,
+    WrappedKey,
 };
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -122,6 +123,7 @@ pub struct DekCache<C, P, E> {
     provider: P,
     entropy: E,
     live: Mutex<HashMap<TopicId, LiveDek>>,
+    metrics: OperationalMetrics,
     /// Mints since construction, for the tests that assert rotation happened.
     mints: Mutex<HashMap<TopicId, u64>>,
 }
@@ -137,7 +139,21 @@ impl<C: Clock, P: KeyProvider, E: Entropy> DekCache<C, P, E> {
             entropy,
             live: Mutex::new(HashMap::new()),
             mints: Mutex::new(HashMap::new()),
+            metrics: OperationalMetrics::default(),
         }
+    }
+
+    /// Shares an operational metrics set with the composition root.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: OperationalMetrics) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// The metrics set receiving cache observations.
+    #[must_use]
+    pub const fn metrics(&self) -> &OperationalMetrics {
+        &self.metrics
     }
 
     /// Runs `seal` against `topic`'s live DEK, minting and wrapping a new one
@@ -289,11 +305,14 @@ impl<C: Clock, P: KeyProvider, E: Entropy> DekCache<C, P, E> {
         let now = self.clock.now();
         let mut live = self.live();
         let Some(entry) = live.get_mut(topic) else {
+            self.metrics.record_dek_cache_miss();
             return Err(seal);
         };
         if !entry.usable(key_id, now) {
+            self.metrics.record_dek_cache_miss();
             return Err(seal);
         }
+        self.metrics.record_dek_cache_hit();
         let result = seal(&entry.dek, &entry.key_id, &entry.wrapped);
         // ⚠️ Charged after the seal succeeded in running, and saturating: the
         // bound must never be walked back under by an overflow.

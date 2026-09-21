@@ -14,7 +14,7 @@
 //! for a name that would otherwise need to be `replay_and_transitions.rs`.
 
 use super::Cluster;
-use oqueue_core::{GroupCoordinator, GroupMetadataLog};
+use oqueue_core::{GroupCoordinator, GroupMetadataLog, OperationalMetrics};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -198,12 +198,14 @@ impl Cluster {
 
 /// Replays committed offsets and group transitions from the group log, opens
 /// the replay gate once both have landed, then serves group transitions.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn replay_groups(
     committed_offsets: Arc<crate::offset_commit::CommittedOffsets>,
     replay_gate: Arc<crate::replay_gate::ReplayGate>,
     group_transitions_task: crate::group_transitions::GroupTransitionsTask,
     group_coordinator: Arc<dyn GroupCoordinator>,
     group_metadata_log: Arc<dyn GroupMetadataLog>,
+    metrics: OperationalMetrics,
 ) {
     // ⚠️ **Retried until both land, each at most once** (`M6.10`):
     // a group log whose store is unreachable at boot fails its
@@ -225,6 +227,7 @@ pub(super) async fn replay_groups(
         if !offsets_done {
             let replayed = committed_offsets.replay().await;
             if permanent(&replayed) {
+                metrics.record_coordinator_ready(false);
                 replay_failure("replay_offsets");
                 return;
             }
@@ -238,6 +241,7 @@ pub(super) async fn replay_groups(
                 .replay(group_coordinator.as_ref(), group_metadata_log.as_ref())
                 .await;
             if permanent(&replayed) {
+                metrics.record_coordinator_ready(false);
                 replay_failure("replay_transitions");
                 return;
             }
@@ -252,6 +256,7 @@ pub(super) async fn replay_groups(
         tokio::time::sleep(crate::DEGRADED_RETRY).await;
     }
     replay_gate.mark_ready();
+    metrics.record_coordinator_ready(true);
     group_transitions_task
         .serve(group_coordinator, group_metadata_log)
         .await;

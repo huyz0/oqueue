@@ -90,6 +90,14 @@ async fn cluster_over(group_metadata_log: Arc<dyn GroupMetadataLog>) -> Cluster 
     cluster
 }
 
+#[tokio::test(start_paused = true)]
+async fn replay_publishes_coordinator_health() {
+    let cluster = cluster_over(Arc::new(oqueue_core::FakeGroupMetadataLog::new())).await;
+    let snapshot = cluster.metrics().snapshot();
+    assert!(snapshot.coordinator_ready);
+    assert_eq!(snapshot.coordinator_failures, 0);
+}
+
 /// `M4.15c`'s own acceptance criterion, verbatim: a group's state
 /// (membership, generation) after replay matches what it was before a
 /// restart, across an interleaved multi-group sequence of heartbeat

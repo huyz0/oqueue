@@ -52,7 +52,9 @@
 //! revocation latency for outage tolerance, and there is no setting that gets
 //! both.
 
-use oqueue_core::{Clock, Dek, KeyId, KeyProvider, Result, Timestamp, WrappedKey};
+use oqueue_core::{
+    Clock, Dek, KeyId, KeyProvider, OperationalMetrics, Result, Timestamp, WrappedKey,
+};
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -211,6 +213,7 @@ pub struct UnwrappedDekCache<C, P> {
     clock: C,
     provider: P,
     entries: Mutex<Entries>,
+    metrics: OperationalMetrics,
 }
 
 impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
@@ -222,7 +225,21 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
             clock,
             provider,
             entries: Mutex::new(Entries::default()),
+            metrics: OperationalMetrics::default(),
         }
+    }
+
+    /// Shares an operational metrics set with the composition root.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: OperationalMetrics) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// The metrics set receiving cache observations.
+    #[must_use]
+    pub const fn metrics(&self) -> &OperationalMetrics {
+        &self.metrics
     }
 
     /// Runs `open` against the DEK `wrapped` names, unwrapping it through the
@@ -309,9 +326,11 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
         let now = self.clock.now();
         let mut entries = self.entries();
         let Some(entry) = entries.by_blob.get(id) else {
+            self.metrics.record_dek_cache_miss();
             return Err(open);
         };
         if !entry.fresh_at(now) {
+            self.metrics.record_dek_cache_miss();
             // ⚠️ Evicted here rather than left to be overwritten — but this
             // path only ever reaches the key being looked up, which is why it
             // is **not** what bounds the cache. An entry nobody asks for again
@@ -322,9 +341,11 @@ impl<C: Clock, P: KeyProvider> UnwrappedDekCache<C, P> {
         }
         let tick = entries.tick();
         let Some(entry) = entries.by_blob.get_mut(id) else {
+            self.metrics.record_dek_cache_miss();
             return Err(open);
         };
         entry.last_used = tick;
+        self.metrics.record_dek_cache_hit();
         let result = open(&entry.dek);
         drop(entries);
         Ok(result)

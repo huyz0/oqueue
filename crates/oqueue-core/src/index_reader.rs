@@ -1,7 +1,8 @@
 //! What a reader is given: the index, minus every way to write to it.
 
 use crate::{
-    CommitVersion, IndexedBatch, MaterializedIndex, ObjectKey, Offset, PartitionId, Result, TopicId,
+    CommitVersion, IndexedBatch, MaterializedIndex, ObjectKey, Offset, OperationalMetrics,
+    PartitionId, Result, TopicId,
 };
 use std::sync::Arc;
 
@@ -29,6 +30,7 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct IndexReader {
     index: Arc<dyn MaterializedIndex>,
+    metrics: OperationalMetrics,
 }
 
 impl IndexReader {
@@ -38,8 +40,18 @@ impl IndexReader {
     /// holds. Handing one out is how a writer publishes its index without
     /// publishing the ability to write it.
     #[must_use]
-    pub const fn new(index: Arc<dyn MaterializedIndex>) -> Self {
-        Self { index }
+    pub fn new(index: Arc<dyn MaterializedIndex>) -> Self {
+        Self {
+            index,
+            metrics: OperationalMetrics::default(),
+        }
+    }
+
+    /// Shares an operational metrics set with the composition root.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: OperationalMetrics) -> Self {
+        self.metrics = metrics;
+        self
     }
 
     /// The highest version folded in, or `None` if nothing has been.
@@ -66,7 +78,9 @@ impl IndexReader {
     /// approximation is not one.
     #[must_use]
     pub fn entries(&self) -> usize {
-        self.index.entries()
+        let entries = self.index.entries();
+        self.metrics.record_index_entries(entries);
+        entries
     }
 
     /// Where the next record for this partition lands — its high watermark.

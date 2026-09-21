@@ -41,7 +41,8 @@ use crate::writer_id::WriterId;
 use oqueue_coordinator::{Coordinator, CoordinatorError};
 use oqueue_core::{
     BundleNamer, CacheState, CoordinatorEpoch, Error, FakeTopicCatalog, GroupCoordinator,
-    GroupMetadataLog, IndexReader, ObjectStore, Offset, PartitionId, TopicCatalog, TopicId,
+    GroupMetadataLog, IndexReader, ObjectStore, Offset, OperationalMetrics, PartitionId,
+    TopicCatalog, TopicId,
 };
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -135,6 +136,7 @@ pub struct Cluster {
     /// The single-writer group-transition seam (`M4.15c`) —
     /// `cluster/replay.rs`'s own `group_transitions()` accessor.
     group_transitions: crate::group_transitions::GroupTransitions,
+    metrics: OperationalMetrics,
 }
 
 /// A coordinator and the reader over the index it folds into.
@@ -254,6 +256,7 @@ impl Cluster {
             Arc::clone(&seams.group_metadata_log),
         ));
         let replay_gate = Arc::new(crate::replay_gate::ReplayGate::new());
+        let metrics = OperationalMetrics::default();
         let (group_transitions, group_transitions_task) =
             crate::group_transitions::GroupTransitions::new();
         let replay_task = tokio::spawn(replay::replay_groups(
@@ -262,6 +265,7 @@ impl Cluster {
             group_transitions_task,
             Arc::clone(&seams.group_coordinator),
             Arc::clone(&seams.group_metadata_log),
+            metrics.clone(),
         ));
         Ok(Self {
             node_id: 0,
@@ -273,7 +277,7 @@ impl Cluster {
             topic_lifecycle: Arc::new(tokio::sync::RwLock::new(())),
             cache_generation: AtomicU64::new(0),
             coordinator: sequencing.coordinator,
-            index: sequencing.index,
+            index: sequencing.index.with_metrics(metrics.clone()),
             store: seams.store,
             region_sealer: Arc::new(RejectingRegionSealer),
             namer: Mutex::new(BundleNamer::new(writer.as_str())?),
@@ -288,6 +292,7 @@ impl Cluster {
             replay_gate,
             replay_task: Mutex::new(Some(replay_task)),
             group_transitions,
+            metrics,
         })
     }
 
@@ -440,6 +445,12 @@ impl Cluster {
     /// The namer minting this process's object keys.
     pub(crate) const fn namer(&self) -> &Mutex<BundleNamer> {
         &self.namer
+    }
+
+    /// The bounded operational measurements shared by this broker cluster.
+    #[must_use]
+    pub const fn metrics(&self) -> &OperationalMetrics {
+        &self.metrics
     }
 }
 

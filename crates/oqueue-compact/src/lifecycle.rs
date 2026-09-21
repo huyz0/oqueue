@@ -22,7 +22,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use oqueue_core::{MaterializedIndex, ObjectKey, ObjectStore, Result, Timestamp};
+use oqueue_core::{
+    MaterializedIndex, ObjectKey, ObjectStore, OperationalMetrics, Result, Timestamp,
+};
 
 use crate::GcTerms;
 
@@ -70,6 +72,7 @@ pub struct Lifecycle {
     /// Consecutive refusals per queued key.
     refusals: HashMap<ObjectKey, u32>,
     quarantined: Vec<ObjectKey>,
+    metrics: OperationalMetrics,
 }
 
 impl Lifecycle {
@@ -91,7 +94,21 @@ impl Lifecycle {
             leaving: HashSet::new(),
             refusals: HashMap::new(),
             quarantined: Vec::new(),
+            metrics: OperationalMetrics::default(),
         })
+    }
+
+    /// Shares an operational metrics set with the composition root.
+    #[must_use]
+    pub fn with_metrics(mut self, metrics: OperationalMetrics) -> Self {
+        self.metrics = metrics;
+        self
+    }
+
+    /// The metrics set receiving backlog observations.
+    #[must_use]
+    pub const fn metrics(&self) -> &OperationalMetrics {
+        &self.metrics
     }
 
     /// Records that the index dropped a reference to `object`.
@@ -108,6 +125,7 @@ impl Lifecycle {
             return;
         }
         self.logical.entry(object).or_insert(None);
+        self.metrics.record_compaction_backlog(self.backlog());
     }
 
     /// Whether the caller may create more garbage: false while the backlog is
@@ -147,6 +165,7 @@ impl Lifecycle {
         let batch: Vec<ObjectKey> = self.queue.drain(..take).collect();
         let mut report = SweepReport::default();
         if batch.is_empty() {
+            self.metrics.record_compaction_backlog(self.backlog());
             return report;
         }
         if store.delete(&batch).await.is_ok() {
@@ -177,6 +196,7 @@ impl Lifecycle {
                 self.queue.push_back(key);
             }
         }
+        self.metrics.record_compaction_backlog(self.backlog());
         report
     }
 

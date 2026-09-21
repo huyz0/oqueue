@@ -5,8 +5,8 @@
 
 use crate::support::{CountingKeyProvider, block_on, key_id};
 use oqueue_core::{
-    BoxFuture, DEK_BYTES, Dek, Error, FakeClock, FakeKeyProvider, KeyId, KeyProvider, Redacted,
-    Result, WrappedKey,
+    BoxFuture, DEK_BYTES, Dek, Error, FakeClock, FakeKeyProvider, KeyId, KeyProvider,
+    OperationalMetrics, Redacted, Result, WrappedKey,
 };
 use oqueue_crypto::{UNWRAPPED_DEK_CACHE_ENTRIES, UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
 
@@ -82,6 +82,21 @@ fn many_objects_under_one_dek_cost_one_unwrap() {
         "two hundred objects sealed under one DEK are one KMS unwrap"
     );
     assert_eq!(cache.len(), 1);
+}
+
+#[test]
+fn metrics_distinguish_a_cold_unwrap_from_a_warm_hit() {
+    let metrics = OperationalMetrics::default();
+    let cache = cache().with_metrics(metrics.clone());
+    let kek = key_id();
+    let blob = wrapped(&kek, 0x12);
+
+    assert_eq!(read(&cache, &kek, &blob), 0x12);
+    assert_eq!(read(&cache, &kek, &blob), 0x12);
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.encryption_cache_misses, 1);
+    assert_eq!(snapshot.encryption_cache_hits, 1);
 }
 
 #[test]

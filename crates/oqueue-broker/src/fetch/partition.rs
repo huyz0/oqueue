@@ -210,6 +210,11 @@ pub(crate) async fn one_partition(
             Ok(resolved) => resolved,
             Err((code, high)) => return refused(code, high),
         };
+    cluster.metrics().record_lag(
+        &topic_id,
+        partition,
+        high.saturating_sub(start.get()).cast_unsigned(),
+    );
 
     // ⚠️ The idle-poll case, and FR-12's zero-GET claim: at the watermark the
     // index names no batch, so the read returns empty without touching object

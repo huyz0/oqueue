@@ -4,7 +4,7 @@
 #![allow(clippy::expect_used)]
 
 use crate::support::{CountingKeyProvider, block_on, key_id};
-use oqueue_core::{Dek, FakeClock, FakeKeyProvider, KeyId, TopicId};
+use oqueue_core::{Dek, FakeClock, FakeKeyProvider, KeyId, OperationalMetrics, TopicId};
 use oqueue_crypto::{DEK_MAX_AGE_MS, DEK_MAX_SEALED_BYTES, DekCache, FakeEntropy};
 
 type TestCache = DekCache<FakeClock, CountingKeyProvider<FakeKeyProvider>, FakeEntropy>;
@@ -113,6 +113,21 @@ fn kms_calls_follow_rotation_not_produce_volume() {
     }
     assert_eq!(thick.provider().wraps(), 3);
     assert_eq!(thick.mints(&topic()), 3);
+}
+
+#[test]
+fn metrics_distinguish_a_rotation_miss_from_a_reused_dek_hit() {
+    let metrics = OperationalMetrics::default();
+    let cache = cache().with_metrics(metrics.clone());
+    let kek = key_id();
+    let name = topic();
+
+    seal(&cache, &name, &kek, mib());
+    seal(&cache, &name, &kek, mib());
+
+    let snapshot = metrics.snapshot();
+    assert_eq!(snapshot.encryption_cache_misses, 1);
+    assert_eq!(snapshot.encryption_cache_hits, 1);
 }
 
 /// Both bounds are pinned at the exact byte and the exact millisecond.

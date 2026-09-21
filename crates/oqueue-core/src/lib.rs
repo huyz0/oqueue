@@ -81,6 +81,7 @@ mod merge;
 mod metadata_log;
 mod metadata_record;
 mod metadata_segment;
+mod metrics;
 mod multipart;
 mod nonce;
 mod object_key;
@@ -162,6 +163,10 @@ pub use merge::MergingObjectStore;
 pub use metadata_log::{FakeMetadataLog, MetadataEntry, MetadataLog};
 pub use metadata_record::{CommittedSpan, MetadataRecord};
 pub use metadata_segment::{decode_segment, encode_segment};
+pub use metrics::{
+    MAX_SCOPED_PARTITIONS, OperationalMetrics, OperationalMetricsSnapshot, PartitionMetric,
+    WriteMetrics,
+};
 pub use multipart::{MultipartLimits, MultipartSession};
 pub use nonce::{
     MAX_OBJECT_SEQUENCE, MAX_REGION_INDEX, MAX_WRITER_EPOCH, NONCE_BYTES, Nonce, NonceMinter,

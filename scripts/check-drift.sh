@@ -293,6 +293,10 @@ fi
 # hundred lines up, where two of `m0-complete.sh`'s seven rows were wrong across
 # two drafts for the same reason.
 declare -A RUST_BOUNDS=(
+  # M12.11: maximum named partition diagnostics retained by OperationalMetrics.
+  # Raising it weakens the bounded-cardinality and memory guarantee; lowering
+  # it only discards more scoped observations.
+  ["crates/oqueue-core/src/metrics.rs|MAX_SCOPED_PARTITIONS"]="256"
   # ⚠️ `M10.18a`: the type widening that added `f32|f64|Duration` to the
   # candidate scan found this one on the first run. `object_store`'s backoff
   # multiplier, kept equal to `RetryPolicy`'s own doubling by the comment

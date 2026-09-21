@@ -10,7 +10,8 @@ use oqueue_compact::{
 use oqueue_core::{
     BoxFuture, ByteRange, CommitVersion, CommittedSpan, Error, FakeMaterializedIndex,
     FakeObjectStore, MaterializedIndex, MetadataEntry, MetadataRecord, MultipartWriter, ObjectKey,
-    ObjectMeta, ObjectStore, Offset, PartitionId, Precondition, Result, Timestamp,
+    ObjectMeta, ObjectStore, Offset, OperationalMetrics, PartitionId, Precondition, Result,
+    Timestamp,
 };
 use std::sync::Mutex;
 
@@ -135,6 +136,15 @@ async fn the_delay_runs_from_the_first_sweep_that_sees_zero() {
     assert_eq!(report.deleted, 1);
     assert_eq!(store.asked(), vec![key("obj")]);
     assert_eq!(lifecycle.backlog(), 0);
+}
+
+#[test]
+fn compaction_backlog_is_published_when_garbage_is_admitted() {
+    let metrics = OperationalMetrics::default();
+    let mut lifecycle = lifecycle(DELAY).with_metrics(metrics.clone());
+    lifecycle.release(key("queued"));
+
+    assert_eq!(metrics.snapshot().compaction_backlog, 1);
 }
 
 #[tokio::test]

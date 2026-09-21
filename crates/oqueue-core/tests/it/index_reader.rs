@@ -13,7 +13,7 @@
 use oqueue_core::Timestamp;
 use oqueue_core::{
     ByteRange, CommitVersion, CommittedSpan, FakeMaterializedIndex, IndexReader, MaterializedIndex,
-    MetadataEntry, MetadataRecord, ObjectKey, Offset, PartitionId, TopicId,
+    MetadataEntry, MetadataRecord, ObjectKey, Offset, OperationalMetrics, PartitionId, TopicId,
 };
 use std::sync::Arc;
 
@@ -99,6 +99,18 @@ fn a_reader_answers_exactly_what_the_index_it_wraps_holds() {
         vec![0, 2],
         "both objects, in offset order, through the reader"
     );
+}
+
+#[test]
+fn a_reader_publishes_index_growth_to_the_shared_metrics() {
+    let index = Arc::new(FakeMaterializedIndex::new());
+    let metrics = OperationalMetrics::default();
+    let reader = IndexReader::new(Arc::clone(&index) as Arc<dyn MaterializedIndex>)
+        .with_metrics(metrics.clone());
+
+    index.apply(&[commit(0, 2, 10)]).expect("the fold succeeds");
+    assert_eq!(reader.entries(), 1);
+    assert_eq!(metrics.snapshot().index_entries, 1);
 }
 
 /// ⚠️ A reader is reachable from an operator's error path, so its `Debug` must
