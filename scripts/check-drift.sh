@@ -696,6 +696,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_SASL_MECHANISM"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|SASL_AUTHENTICATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|TOPIC_AUTHORIZATION_FAILED"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|GROUP_AUTHORIZATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|INCONSISTENT_GROUP_PROTOCOL"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|REBALANCE_IN_PROGRESS"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|UNKNOWN_MEMBER_ID"]="Kafka's own error code, the protocol fixes it"

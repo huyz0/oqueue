@@ -14,7 +14,10 @@
 //! "durable in sense, not yet in substrate" is the honest framing this
 //! module doc used to overstate as "in-memory only" before this task.
 //!
-//! ⚠️ **Two fencing decisions, not one — `M9.7`'s seam reused, not a
+//! ⚠️ **Three authorization decisions, not one — group ownership, member
+//! fencing, and topic visibility are independent seams.** `GroupGrants`
+//! refuses a principal's commit for an unrelated group before any state is
+//! changed. Then the two older decisions apply: `M9.7`'s seam reused, not a
 //! second one invented.** Every commit is checked against `crate::fencing`
 //! (`M4.11`'s own audited path: is this member tracked, is the generation
 //! current, is the group `Stable`) *before* any topic is looked at, and
@@ -45,7 +48,7 @@
 
 #![allow(clippy::redundant_pub_crate)]
 
-use crate::authz::{AuthzContext, topic_authorized};
+use crate::authz::{AuthzContext, GroupAuthzContext, group_authorized, topic_authorized};
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use crate::fencing::{FencingContext, fence};
@@ -338,6 +341,7 @@ pub(crate) async fn handle(
     prelude: RequestPrelude,
     body: &[u8],
     authz: &AuthzContext<'_>,
+    group_authz: &GroupAuthzContext<'_>,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
@@ -350,6 +354,13 @@ pub(crate) async fn handle(
             &top_level_refusal(&request, error_codes::INVALID_REQUEST),
         );
     };
+    if !group_authorized(&group, group_authz) {
+        return reply(
+            prelude,
+            version,
+            &top_level_refusal(&request, error_codes::GROUP_AUTHORIZATION_FAILED),
+        );
+    }
 
     if let Err(refused) = fence_commit(cluster, &group, request.generation_id, request.member_id) {
         return reply(

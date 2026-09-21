@@ -4,6 +4,7 @@ mod deadline;
 mod durability;
 mod generations;
 mod parked;
+mod protocol;
 mod reopened;
 
 use super::handle;
@@ -23,6 +24,37 @@ fn prelude() -> RequestPrelude {
         api_version: VERSION,
         correlation_id: 9,
     }
+}
+#[tokio::test]
+async fn a_cross_principal_group_is_refused() {
+    let fixture = fixture(&[]).await;
+    let bob = oqueue_core::Principal::new("bob").expect("valid principal");
+    let mut grants = oqueue_core::GroupGrants::new();
+    grants.grant(
+        oqueue_core::Principal::new("alice").expect("valid principal"),
+        oqueue_core::GroupId::new("alice-group").expect("valid group"),
+    );
+    let authz = crate::authz::GroupAuthzContext {
+        principal: Some(&bob),
+        credentials_configured: true,
+        group_grants: &grants,
+    };
+    let HandlerResponse::Reply(out) = handle(
+        &fixture.cluster,
+        prelude(),
+        &follower_body("alice-group", "member"),
+        &authz,
+    )
+    .await
+    else {
+        panic!("a refused SyncGroup still replies");
+    };
+    let mut rest = &out[4..];
+    let response = KpResponse::decode(&mut rest, VERSION).expect("decodes");
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::GROUP_AUTHORIZATION_FAILED
+    );
 }
 
 /// A follower's own request: no assignments.
@@ -195,6 +227,7 @@ pub(super) async fn join_asking_as(
             correlation_id: 1,
         },
         &body,
+        &crate::authz::unconfigured_group_authz(),
     )
     .await;
     let HandlerResponse::Reply(out) = reply else {
@@ -213,7 +246,14 @@ fn decode_response(bytes: &[u8]) -> KpResponse {
 }
 
 async fn sync(cluster: &crate::cluster::Cluster, body: Vec<u8>) -> KpResponse {
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(), &body).await else {
+    let HandlerResponse::Reply(out) = handle(
+        cluster,
+        prelude(),
+        &body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
+    else {
         panic!("a SyncGroup replies");
     };
     decode_response(&out)
@@ -386,7 +426,13 @@ async fn a_follower_arriving_after_the_leader_is_answered_at_once() {
 #[tokio::test(start_paused = true)]
 async fn a_malformed_body_closes_rather_than_panicking() {
     let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(), &[0xFF; 3]).await;
+    let response = handle(
+        &fixture.cluster,
+        prelude(),
+        &[0xFF; 3],
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await;
     assert!(matches!(response, HandlerResponse::Close));
 }
 
@@ -433,50 +479,5 @@ async fn a_stale_generation_submission_is_refused_illegal_generation() {
     assert_eq!(
         response.error_code,
         oqueue_codec::error_codes::ILLEGAL_GENERATION
-    );
-}
-
-/// `protocol_type`/`protocol_name` are absent below v5 and echoed from v5
-/// on (`oqueue_codec::sync_group`'s own doc) — this test is the only one in
-/// this file at v5+, and exists specifically so that cutover is exercised
-/// on the wire at all, not only in `response_for`'s own in-memory value.
-#[tokio::test(start_paused = true)]
-async fn protocol_type_and_name_are_echoed_on_the_wire_from_v5() {
-    const V5: i16 = 5;
-    let fixture = fixture(&[]).await;
-    seat(&fixture.cluster, "orders-consumers", &["m1"]);
-    let mut assignment = KpAssignment::default();
-    assignment.member_id = StrBytes::from_static_str("m1");
-    assignment.assignment = bytes::Bytes::from_static(b"a");
-    let request = KpRequest::default()
-        .with_group_id(kafka_protocol::messages::GroupId(
-            StrBytes::from_static_str("orders-consumers"),
-        ))
-        .with_generation_id(1)
-        .with_member_id(StrBytes::from_static_str("m1"))
-        .with_protocol_type(Some(StrBytes::from_static_str("consumer")))
-        .with_protocol_name(Some(StrBytes::from_static_str("range")))
-        .with_assignments(vec![assignment]);
-    let mut body = Vec::new();
-    request.encode(&mut body, V5).expect("encodes");
-
-    let prelude = RequestPrelude {
-        api_key: 14,
-        api_version: V5,
-        correlation_id: 9,
-    };
-    let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude, &body).await else {
-        panic!("a SyncGroup replies");
-    };
-    let mut rest = &out[5..]; // v5 is flexible: a 5-byte response header.
-    let response = KpResponse::decode(&mut rest, V5).expect("decodes");
-    assert!(rest.is_empty());
-    assert_eq!(
-        response.protocol_type.as_ref().map(StrBytes::as_str),
-        Some("consumer")
-    );
-    assert_eq!(
-        response.protocol_name.as_ref().map(StrBytes::as_str),
-        Some("range")
     );
 }

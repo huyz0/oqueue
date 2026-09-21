@@ -122,6 +122,8 @@ pub const REBALANCE_IN_PROGRESS: i16 = 27;
 /// the *explicitly-named* case answers this rather than the silent omission
 /// the *null-topic-array* case uses instead (`M9.10`).
 pub const TOPIC_AUTHORIZATION_FAILED: i16 = 29;
+/// The requesting principal does not own the named consumer group (30).
+pub const GROUP_AUTHORIZATION_FAILED: i16 = 30;
 /// A group member id this broker's own tracking does not recognise (25).
 ///
 /// `M4.11`'s own audited fencing path, `crate::fencing`'s `Refusal` — the

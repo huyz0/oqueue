@@ -62,13 +62,49 @@ fn batched_body(group: &str, member_ids: &[&str]) -> Vec<u8> {
 }
 
 async fn leave(cluster: &crate::cluster::Cluster, body: &[u8]) -> KpResponse {
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(), body).await else {
+    let HandlerResponse::Reply(out) = handle(
+        cluster,
+        prelude(),
+        body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
+    else {
         panic!("a LeaveGroup replies");
     };
     let mut rest = &out[5..]; // v5 is flexible: a 5-byte response header.
     let response = KpResponse::decode(&mut rest, VERSION).expect("decodes");
     assert!(rest.is_empty());
     response
+}
+
+#[tokio::test]
+async fn a_cross_principal_group_is_refused() {
+    let fixture = fixture(&[]).await;
+    let bob = oqueue_core::Principal::new("bob").expect("valid principal");
+    let grants = oqueue_core::GroupGrants::new();
+    let authz = crate::authz::GroupAuthzContext {
+        principal: Some(&bob),
+        credentials_configured: true,
+        group_grants: &grants,
+    };
+    let HandlerResponse::Reply(out) = handle(
+        &fixture.cluster,
+        prelude(),
+        &batched_body("alice-group", &["member"]),
+        &authz,
+    )
+    .await
+    else {
+        panic!("a refused LeaveGroup still replies");
+    };
+    let mut rest = &out[5..];
+    let response = KpResponse::decode(&mut rest, VERSION).expect("decodes");
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::GROUP_AUTHORIZATION_FAILED
+    );
+    assert!(response.members.is_empty());
 }
 
 /// ⚠️ **`M4.10`'s own acceptance criterion, verbatim**: a batched
@@ -153,7 +189,14 @@ async fn the_singular_v0_2_form_also_leaves() {
         api_version: V1,
         correlation_id: 1,
     };
-    let HandlerResponse::Reply(out) = handle(&fixture.cluster, prelude, &body).await else {
+    let HandlerResponse::Reply(out) = handle(
+        &fixture.cluster,
+        prelude,
+        &body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
+    else {
         panic!("a LeaveGroup replies");
     };
     let mut rest = &out[4..]; // v1 is not flexible: a 4-byte header.
@@ -186,6 +229,12 @@ async fn leaving_an_untracked_member_is_told_unknown_member_id() {
 #[tokio::test(start_paused = true)]
 async fn a_malformed_body_closes_rather_than_panicking() {
     let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(), &[0xFF; 3]).await;
+    let response = handle(
+        &fixture.cluster,
+        prelude(),
+        &[0xFF; 3],
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await;
     assert!(matches!(response, HandlerResponse::Close));
 }

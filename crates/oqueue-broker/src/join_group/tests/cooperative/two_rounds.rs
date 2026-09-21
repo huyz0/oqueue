@@ -291,7 +291,10 @@ async fn sync(
         api_version: 3,
         correlation_id: 7,
     };
-    let HandlerResponse::Reply(out) = crate::sync_group::handle(cluster, p, &body).await else {
+    let HandlerResponse::Reply(out) =
+        crate::sync_group::handle(cluster, p, &body, &crate::authz::unconfigured_group_authz())
+            .await
+    else {
         panic!("a SyncGroup replies");
     };
     let mut rest = &out[4..];

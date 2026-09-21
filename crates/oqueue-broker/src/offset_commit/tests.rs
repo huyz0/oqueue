@@ -74,7 +74,15 @@ async fn commit(
     body: &[u8],
     authz: &AuthzContext<'_>,
 ) -> KpResponse {
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(), body, authz).await else {
+    let HandlerResponse::Reply(out) = handle(
+        cluster,
+        prelude(),
+        body,
+        authz,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
+    else {
         panic!("an OffsetCommit replies");
     };
     let mut rest = &out[5..]; // v8 is flexible: a 5-byte response header.
@@ -477,13 +485,5 @@ async fn replay_stops_after_a_trailing_empty_page_when_the_log_ends_on_a_page_bo
     );
 }
 
-/// A malformed body closes the connection rather than answering — every
-/// other handler's own policy for a frame this broker cannot decode.
-#[tokio::test(start_paused = true)]
-async fn a_malformed_body_closes_rather_than_panicking() {
-    let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(), &[0xFF; 3], &open()).await;
-    assert!(matches!(response, HandlerResponse::Close));
-}
-
+mod malformed;
 mod restart;

@@ -32,6 +32,7 @@
 mod deadline;
 mod round;
 
+use crate::authz::{GroupAuthzContext, group_authorized};
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use deadline::barrier_ms;
@@ -82,6 +83,7 @@ pub(crate) async fn handle(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
+    authz: &GroupAuthzContext<'_>,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
@@ -90,6 +92,9 @@ pub(crate) async fn handle(
     let Ok(group) = GroupId::new(request.group_id) else {
         return reply(prelude, &refusal(error_codes::INVALID_REQUEST));
     };
+    if !group_authorized(&group, authz) {
+        return reply(prelude, &refusal(error_codes::GROUP_AUTHORIZATION_FAILED));
+    }
     let member_id = member_id_for(request.member_id);
     if !request.member_id.is_empty()
         && let Err(refused) = fence_rejoin(cluster, &group, member_id.as_str())

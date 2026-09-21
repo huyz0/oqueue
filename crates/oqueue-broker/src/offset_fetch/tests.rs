@@ -9,7 +9,7 @@ use kafka_protocol::messages::OffsetFetchResponse as KpResponse;
 use kafka_protocol::messages::offset_fetch_request::OffsetFetchRequestTopic as KpTopic;
 use kafka_protocol::protocol::{Decodable, Encodable, StrBytes};
 use oqueue_codec::frame::RequestPrelude;
-use oqueue_core::{Principal, TopicGrants};
+use oqueue_core::{GroupGrants, Principal, TopicGrants};
 
 const VERSION: i16 = 6;
 
@@ -65,13 +65,56 @@ fn all_topics_body(group: &str) -> Vec<u8> {
 }
 
 fn fetch(cluster: &crate::cluster::Cluster, body: &[u8], authz: &AuthzContext<'_>) -> KpResponse {
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(), body, authz) else {
+    fetch_with_group(
+        cluster,
+        body,
+        authz,
+        &crate::authz::unconfigured_group_authz(),
+    )
+}
+
+fn fetch_with_group(
+    cluster: &crate::cluster::Cluster,
+    body: &[u8],
+    authz: &AuthzContext<'_>,
+    group_authz: &crate::authz::GroupAuthzContext<'_>,
+) -> KpResponse {
+    let HandlerResponse::Reply(out) = handle(cluster, prelude(), body, authz, group_authz) else {
         panic!("an OffsetFetch replies");
     };
     let mut rest = &out[5..]; // v6 is flexible: a 5-byte response header.
     let response = KpResponse::decode(&mut rest, VERSION).expect("decodes");
     assert!(rest.is_empty());
     response
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cross_principal_group_is_refused_before_offsets_are_read() {
+    let fixture = fixture(&[]).await;
+    let alice = Principal::new("alice").expect("valid");
+    let bob = Principal::new("bob").expect("valid");
+    let mut grants = GroupGrants::new();
+    grants.grant(
+        alice,
+        oqueue_core::GroupId::new("orders-consumers").expect("valid"),
+    );
+    let group_authz = crate::authz::GroupAuthzContext {
+        principal: Some(&bob),
+        credentials_configured: true,
+        group_grants: &grants,
+    };
+
+    let response = fetch_with_group(
+        &fixture.cluster,
+        &explicit_body("orders-consumers", &[]),
+        &open(),
+        &group_authz,
+    );
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::GROUP_AUTHORIZATION_FAILED
+    );
+    assert!(response.topics.is_empty());
 }
 
 /// Seats `member_id` for `group` at `Stable`, unless already seated, and
@@ -150,8 +193,14 @@ async fn commit(
         api_version: 8,
         correlation_id: 1,
     };
-    let HandlerResponse::Reply(out) =
-        crate::offset_commit::handle(cluster, commit_prelude, &body, &open()).await
+    let HandlerResponse::Reply(out) = crate::offset_commit::handle(
+        cluster,
+        commit_prelude,
+        &body,
+        &open(),
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
     else {
         panic!("an OffsetCommit replies");
     };
@@ -319,6 +368,12 @@ async fn a_malformed_group_id_is_a_group_level_refusal() {
 #[tokio::test(start_paused = true)]
 async fn a_malformed_body_closes_rather_than_panicking() {
     let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(), &[0xFF; 3], &open());
+    let response = handle(
+        &fixture.cluster,
+        prelude(),
+        &[0xFF; 3],
+        &open(),
+        &crate::authz::unconfigured_group_authz(),
+    );
     assert!(matches!(response, HandlerResponse::Close));
 }

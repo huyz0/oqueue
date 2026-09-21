@@ -285,15 +285,12 @@ group_handler_files() {
 # would plausibly write one in?
 #
 # ⚠️ **The pattern lives here, not inline in the gate, because a tripwire's
-# only content is its pattern.** `m4-complete.sh`'s FR-40 leg exists to fail
-# the day `M12`'s `GroupGrants` lands on the five group APIs, and `M12.md`
-# task 3a states in terms that the gate failing is the signal to promote the
-# leg to an assertion. Everything else about that leg is guarded — the walk
-# refuses a missing handler, the floor catches a loop that opened nothing —
-# and the one thing that decides the answer was guarded by nothing. Edit the
-# regex, or simply be outlived by the idiom `M12` writes, and the leg prints
-# `unmet and reported` forever while FR-40 is covered on paper by
-# `roadmap.md` and asserted by nothing. `M4.59`; `fencing_seam.py` is the
+# only content is its pattern.** `m4-complete.sh`'s FR-40 leg uses this to
+# keep the five `GroupGrants` handlers covered as their module trees move.
+# Everything else about that leg is guarded — the walk refuses a missing
+# handler, the floor catches a loop that opened nothing, and the gate has
+# named refusal tests — so a changed authorization idiom must update this
+# helper and its negative cases together. `M4.59`; `fencing_seam.py` is the
 # precedent for putting the deciding logic where a test can reach it.
 #
 # ⚠️ **Several spellings, because one identifier is not the property.** A
@@ -308,7 +305,8 @@ group_names_a_principal() {
   # `M4.87` wrote "cross-principal, since `GroupGrants` is deferred" into three
   # files under `group_handler_files`, and `m4-complete.sh`'s tripwire then
   # named all three as having gained one — a completion gate turned red by a
-  # sentence explaining that the thing it looks for is absent.
+  # sentence explaining that the thing it looks for is absent. The comments
+  # remain because the negative cases protect this distinction.
   # ⚠️ **`check-fencing-seam.sh`'s own repair, one gate over** — `M4.67`, whose
   # census matched raw text including comments and swept in two sites that were
   # correct. That is the half this inherits; `M4.67`'s *other* major was the

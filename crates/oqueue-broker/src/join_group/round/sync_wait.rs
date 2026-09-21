@@ -37,7 +37,8 @@
 //! previous writer folded `max` over every member that ever enrolled and
 //! nothing lowered it, so a member that reached `Pending` asking the ceiling
 //! and then disconnected held its group's sync backstop there for the life of
-//! the process — cross-principal, since `GroupGrants` is deferred.
+//! the process — before M12.2, cross-principal, because `GroupGrants` was
+//! deferred.
 
 use super::state::{Entry, RoundClose, RoundMember};
 use crate::sync_group::SyncGroups;

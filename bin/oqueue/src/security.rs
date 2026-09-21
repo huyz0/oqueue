@@ -30,7 +30,7 @@
 
 use oqueue_broker::Dispatcher;
 use oqueue_broker::sasl_authenticate::PlainCredentials;
-use oqueue_core::{AdminGrants, PrincipalQuota, TopicGrants};
+use oqueue_core::{AdminGrants, GroupGrants, PrincipalQuota, TopicGrants};
 use std::sync::Arc;
 use tokio_rustls::TlsAcceptor;
 
@@ -108,11 +108,13 @@ pub(crate) struct Security {
     pub(crate) acceptor: Option<TlsAcceptor>,
     credentials: PlainCredentials,
     topic_grants: TopicGrants,
+    group_grants: GroupGrants,
     admin_grants: AdminGrants,
     /// ⚠️ Recorded rather than asked of `TopicGrants`, which has no
     /// `is_empty` — and adding one to `oqueue-core` for a composition
     /// root's warning would be a library change made for the wrong reason.
     grants_configured: bool,
+    group_grants_configured: bool,
     admin_grants_configured: bool,
     quota: Option<Arc<PrincipalQuota>>,
 }
@@ -134,8 +136,10 @@ impl Security {
             acceptor: None,
             credentials: PlainCredentials::default(),
             topic_grants: TopicGrants::new(),
+            group_grants: GroupGrants::new(),
             admin_grants: AdminGrants::new(),
             grants_configured: false,
+            group_grants_configured: false,
             admin_grants_configured: false,
             quota: None,
         }
@@ -149,6 +153,7 @@ impl std::fmt::Debug for Security {
             .field("credentials_configured", &!self.credentials.is_empty())
             .field("quota_configured", &self.quota.is_some())
             .field("admin_grants_configured", &self.admin_grants_configured)
+            .field("group_grants_configured", &self.group_grants_configured)
             .finish_non_exhaustive()
     }
 }
@@ -179,6 +184,7 @@ impl Security {
         dispatcher = dispatcher
             .with_credentials(self.credentials.clone())
             .with_topic_grants(self.topic_grants.clone())
+            .with_group_grants(self.group_grants.clone())
             .with_admin_grants(self.admin_grants.clone());
         if let Some(quota) = self.quota.as_ref() {
             dispatcher = dispatcher.with_quota(Arc::clone(quota));
@@ -207,25 +213,7 @@ impl Security {
                     .to_owned(),
             );
         }
-        // ⚠️ **The one absence that fails *closed*, and so the one most
-        // likely to look like a broker bug.** With credentials configured
-        // and no grants, every authenticated client is refused every topic —
-        // safe, but indistinguishable from a broken deployment unless this
-        // says so. Found by review.
-        if !self.credentials.is_empty() && !self.grants_configured {
-            lines.push(
-                "oqueue: WARNING -- credentials are configured but no topic grants are, so \
-                 every authenticated client will be refused every topic. Set \
-                 OQUEUE_TOPIC_GRANTS."
-                    .to_owned(),
-            );
-        }
-        if !self.credentials.is_empty() && !self.admin_grants_configured {
-            lines.push(
-                "oqueue: WARNING -- no admin grants configured, so administrative operations deny by default. Set OQUEUE_ADMIN_GRANTS."
-                    .to_owned(),
-            );
-        }
+        self.append_authorization_warnings(&mut lines);
         // ⚠️ **A quota with nobody to charge it to does nothing.**
         // `admit_quota` keys on the authenticated principal, so without
         // credentials it sees none and admits everything — the same
@@ -250,6 +238,34 @@ impl Security {
             );
         }
         lines
+    }
+
+    fn append_authorization_warnings(&self, lines: &mut Vec<String>) {
+        // ⚠️ **The one absence that fails *closed*, and so the one most
+        // likely to look like a broker bug.** With credentials configured
+        // and no grants, every authenticated client is refused every topic —
+        // safe, but indistinguishable from a broken deployment unless this
+        // says so. Found by review.
+        if !self.credentials.is_empty() && !self.grants_configured {
+            lines.push(
+                "oqueue: WARNING -- credentials are configured but no topic grants are, so \
+                 every authenticated client will be refused every topic. Set \
+                 OQUEUE_TOPIC_GRANTS."
+                    .to_owned(),
+            );
+        }
+        if !self.credentials.is_empty() && !self.admin_grants_configured {
+            lines.push(
+                "oqueue: WARNING -- no admin grants configured, so administrative operations deny by default. Set OQUEUE_ADMIN_GRANTS."
+                    .to_owned(),
+            );
+        }
+        if !self.credentials.is_empty() && !self.group_grants_configured {
+            lines.push(
+                "oqueue: WARNING -- no group grants configured, so group operations deny by default. Set OQUEUE_GROUP_GRANTS."
+                    .to_owned(),
+            );
+        }
     }
 }
 

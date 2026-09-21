@@ -20,6 +20,7 @@
 
 #![allow(clippy::redundant_pub_crate)]
 
+use crate::authz::{GroupAuthzContext, group_authorized};
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use oqueue_codec::apikey::ApiKey;
@@ -57,10 +58,26 @@ const fn refused(key: &str) -> Coordinator<'_> {
     }
 }
 
+const fn refused_group(key: &str) -> Coordinator<'_> {
+    Coordinator {
+        key,
+        error_code: error_codes::GROUP_AUTHORIZATION_FAILED,
+        error_message: Some("the principal is not authorized for this group"),
+        node_id: -1,
+        host: "",
+        port: -1,
+    }
+}
+
 /// Decodes, answers every requested key with this node's own identity for a
 /// group lookup (or a refusal for a transaction lookup), and encodes — or
 /// closes on a malformed body.
-pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
+pub(crate) fn handle(
+    cluster: &Cluster,
+    prelude: RequestPrelude,
+    body: &[u8],
+    authz: &GroupAuthzContext<'_>,
+) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
         return HandlerResponse::Close;
@@ -70,10 +87,12 @@ pub(crate) fn handle(cluster: &Cluster, prelude: RequestPrelude, body: &[u8]) ->
         .keys
         .iter()
         .map(|&key| {
-            if request.key_type == GROUP {
-                resolved(cluster, key)
-            } else {
-                refused(key)
+            if request.key_type != GROUP {
+                return refused(key);
+            }
+            match oqueue_core::GroupId::new(key) {
+                Ok(group) if group_authorized(&group, authz) => resolved(cluster, key),
+                _ => refused_group(key),
             }
         })
         .collect();

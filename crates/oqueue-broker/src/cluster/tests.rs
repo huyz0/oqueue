@@ -363,8 +363,13 @@ async fn heartbeat(cluster: &Cluster, group: &str, member_id: &str, generation: 
         .encode(&mut body, HEARTBEAT_VERSION)
         .expect("encodes");
 
-    let crate::connection::HandlerResponse::Reply(out) =
-        crate::heartbeat::handle(cluster, prelude(12, HEARTBEAT_VERSION), &body).await
+    let crate::connection::HandlerResponse::Reply(out) = crate::heartbeat::handle(
+        cluster,
+        prelude(12, HEARTBEAT_VERSION),
+        &body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
     else {
         panic!("a Heartbeat replies");
     };
@@ -396,9 +401,13 @@ fn offset_fetch(cluster: &Cluster, group: &str) -> i16 {
         credentials_configured: false,
         topic_grants: &EMPTY_GRANTS,
     };
-    let crate::connection::HandlerResponse::Reply(out) =
-        crate::offset_fetch::handle(cluster, prelude(9, OFFSET_FETCH_VERSION), &body, &authz)
-    else {
+    let crate::connection::HandlerResponse::Reply(out) = crate::offset_fetch::handle(
+        cluster,
+        prelude(9, OFFSET_FETCH_VERSION),
+        &body,
+        &authz,
+        &crate::authz::unconfigured_group_authz(),
+    ) else {
         panic!("an OffsetFetch replies");
     };
     let mut rest = &out[5..]; // v7 is flexible: a 5-byte response header.

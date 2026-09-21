@@ -56,10 +56,80 @@ pub(super) async fn join(
     body: Vec<u8>,
     version: i16,
 ) -> KpResponse {
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(version), &body).await else {
+    let HandlerResponse::Reply(out) = handle(
+        cluster,
+        prelude(version),
+        &body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
+    else {
         panic!("a JoinGroup replies");
     };
     decode_response(&out, version)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cross_principal_group_is_refused() {
+    let fixture = fixture(&[]).await;
+    let bob = oqueue_core::Principal::new("bob").expect("valid principal");
+    let mut grants = oqueue_core::GroupGrants::new();
+    grants.grant(
+        oqueue_core::Principal::new("alice").expect("valid principal"),
+        oqueue_core::GroupId::new("alice-group").expect("valid group"),
+    );
+    let authz = crate::authz::GroupAuthzContext {
+        principal: Some(&bob),
+        credentials_configured: true,
+        group_grants: &grants,
+    };
+    let HandlerResponse::Reply(out) = handle(
+        &fixture.cluster,
+        prelude(VERSION),
+        &request_body("alice-group", "range", 1_000, VERSION),
+        &authz,
+    )
+    .await
+    else {
+        panic!("a refused JoinGroup still replies");
+    };
+    assert_eq!(
+        decode_response(&out, VERSION).error_code,
+        oqueue_codec::error_codes::GROUP_AUTHORIZATION_FAILED
+    );
+    assert!(
+        fixture
+            .cluster
+            .group_coordinator()
+            .record(&oqueue_core::GroupId::new("alice-group").expect("valid group"))
+            .is_none(),
+        "authorization must happen before coordinator state changes"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_authorized_group_can_complete_its_first_join() {
+    let fixture = fixture(&[]).await;
+    let alice = oqueue_core::Principal::new("alice").expect("valid principal");
+    let group = oqueue_core::GroupId::new("alice-group").expect("valid group");
+    let mut grants = oqueue_core::GroupGrants::new();
+    grants.grant(alice.clone(), group);
+    let authz = crate::authz::GroupAuthzContext {
+        principal: Some(&alice),
+        credentials_configured: true,
+        group_grants: &grants,
+    };
+    let body = request_body("alice-group", "range", 1_000, VERSION);
+    let joiner = handle(&fixture.cluster, prelude(VERSION), &body, &authz);
+
+    let ((), response) = tokio::join!(
+        tokio::time::advance(std::time::Duration::from_secs(1)),
+        joiner
+    );
+    let HandlerResponse::Reply(out) = response else {
+        panic!("an authorized JoinGroup replies");
+    };
+    assert_eq!(decode_response(&out, VERSION).error_code, 0);
 }
 
 /// ⚠️ **`M4.7`'s own acceptance criterion, verbatim**: N members' own
@@ -223,7 +293,13 @@ async fn a_rejoin_naming_an_unrecognized_member_id_is_refused_unknown_member_id(
 #[tokio::test(start_paused = true)]
 async fn a_malformed_body_closes_rather_than_panicking() {
     let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(VERSION), &[0xFF; 3]).await;
+    let response = handle(
+        &fixture.cluster,
+        prelude(VERSION),
+        &[0xFF; 3],
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await;
     assert!(matches!(response, HandlerResponse::Close));
 }
 

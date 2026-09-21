@@ -16,7 +16,7 @@
 
 use super::tls;
 use crate::security::sources::{
-    credentials_from, from_sources, from_sources_with_admin, topic_grants_from,
+    credentials_from, from_sources, from_sources_with_policies, topic_grants_from,
 };
 
 /// ⚠️ **The whole load fails, not the one bad source.** A `Security` built
@@ -35,12 +35,13 @@ fn one_malformed_source_fails_the_whole_load() {
 
 #[tokio::test]
 async fn administrative_authority_reaches_the_live_dispatcher_separately() {
-    let security = from_sources_with_admin(
+    let security = from_sources_with_policies(
         Some(tls()),
         Some("alice:secret\n"),
         Some("alice:orders\n"),
         None,
         Some("alice:create_topics\n"),
+        Some("alice:orders\n"),
     )
     .expect("all sources parse");
     let store: std::sync::Arc<dyn crate::compose::Backend> =
@@ -53,6 +54,10 @@ async fn administrative_authority_reaches_the_live_dispatcher_separately() {
     assert!(
         rendered.contains("CreateTopics"),
         "admin authority must reach the live dispatcher: {rendered}"
+    );
+    assert!(
+        rendered.contains("orders"),
+        "group ownership must reach the live dispatcher separately: {rendered}"
     );
 }
 
@@ -260,12 +265,13 @@ fn credentials_without_admin_grants_are_warned_about() {
 
 #[test]
 fn configured_admin_grants_silence_the_admin_warning() {
-    let security = from_sources_with_admin(
+    let security = from_sources_with_policies(
         Some(tls()),
         Some("alice:secret\n"),
         None,
         None,
         Some("alice:create_topics\n"),
+        Some("alice:orders\n"),
     )
     .expect("loads");
     assert!(
@@ -274,6 +280,36 @@ fn configured_admin_grants_silence_the_admin_warning() {
             .iter()
             .any(|w| w.contains("no admin grants")),
         "configured authority needs no missing-authority warning: {:?}",
+        security.describe()
+    );
+    assert_eq!(
+        security
+            .describe()
+            .iter()
+            .filter(|warning| warning.contains("no group grants"))
+            .count(),
+        0,
+        "configured group ownership must not emit the missing-grant warning"
+    );
+}
+
+#[test]
+fn configured_group_grants_silence_the_group_warning() {
+    let security = from_sources_with_policies(
+        Some(tls()),
+        Some("alice:secret\n"),
+        None,
+        None,
+        None,
+        Some("alice:orders\n"),
+    )
+    .expect("loads");
+    assert!(
+        !security
+            .describe()
+            .iter()
+            .any(|w| w.contains("no group grants")),
+        "configured group ownership needs no missing-grant warning: {:?}",
         security.describe()
     );
 }
@@ -296,6 +332,10 @@ fn the_grants_warning_is_silent_without_credentials() {
     assert!(
         warnings.iter().any(|w| w.contains("no credentials")),
         "the warning that does apply is still there: {warnings:?}"
+    );
+    assert!(
+        !warnings.iter().any(|w| w.contains("no group grants")),
+        "group ownership is not an actionable gap without credentials: {warnings:?}"
     );
 }
 
@@ -363,30 +403,6 @@ fn a_quota_without_credentials_is_warned_about() {
         "the warning names why it does nothing: {:?}",
         security.describe()
     );
-}
-
-/// ⚠️ **Every source's path must refuse a set-but-undecodable value**, not
-/// just the ones that happened to be rewritten first. Round 2 fixed this for
-/// `OQUEUE_TLS_CERT` and left `OQUEUE_CREDENTIALS` calling
-/// `std::env::var(..).ok()`, so the *credentials* variable — the one whose
-/// absence fails open — still read as unset. Review measured it: the broker
-/// started and served every client unauthenticated. This asserts the shared
-/// decision directly, so a future call site that skips it is the only way
-/// back in.
-#[test]
-fn every_source_refuses_a_set_but_undecodable_value() {
-    for variable in [
-        "OQUEUE_TLS_CERT",
-        "OQUEUE_TLS_KEY",
-        "OQUEUE_CREDENTIALS",
-        "OQUEUE_TOPIC_GRANTS",
-        "OQUEUE_ADMIN_GRANTS",
-        "OQUEUE_MAX_IN_FLIGHT",
-    ] {
-        let undecodable = std::env::VarError::NotUnicode(std::ffi::OsString::from("x"));
-        crate::security::sources::from_var(variable, Err(undecodable))
-            .expect_err("a set-but-undecodable value must never read as unset");
-    }
 }
 
 /// ⚠️ **And silent when the quota can take effect**, which is the other

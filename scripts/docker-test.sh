@@ -304,6 +304,24 @@ done <<EOF
 $(git config --list --show-scope --includes 2>/dev/null \
     | grep -vE '^(local|worktree|command)	' | cut -f2- || true)
 EOF
+# Git for Windows keeps this system-level setting outside some `--list
+# --show-scope --includes` resolutions when the command runs through its Bash
+# launcher. WSL is the same host platform in this respect: its Git has no
+# Windows system config, but it reads the same CRLF working tree. Omitting the
+# setting makes the Linux Git inside Docker report every text file as unstaged.
+# Forward the resolved value explicitly; on native Linux/macOS hosts, Git keeps
+# its normal default.
+_gc_autocrlf=""
+if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ]; then
+  _gc_autocrlf=true
+else
+  _gc_autocrlf="$(git config --get core.autocrlf 2>/dev/null || true)"
+fi
+if [ -n "$_gc_autocrlf" ]; then
+  GITCONFIG_ARGS+=(-e "GIT_CONFIG_KEY_${_gc_n}=core.autocrlf" \
+    -e "GIT_CONFIG_VALUE_${_gc_n}=${_gc_autocrlf}")
+  _gc_n=$(( _gc_n + 1 ))
+fi
 # ⚠️ **`safe.directory` rides in the same list** rather than through
 # `GIT_CONFIG_PARAMETERS`: `GIT_CONFIG_COUNT` and that variable are both read,
 # but keeping one mechanism means one place to look when the container's git
@@ -321,6 +339,9 @@ case "${OS:-}:${OSTYPE:-}" in
   Windows_NT:*|*:msys|*:win32) OQUEUE_HOST_PLATFORM=windows ;;
   *:darwin*) OQUEUE_HOST_PLATFORM=macos ;;
 esac
+if [ -n "${WSL_DISTRO_NAME:-}" ] || [ -n "${WSL_INTEROP:-}" ]; then
+  OQUEUE_HOST_PLATFORM=windows
+fi
 
 # `-it` only when there is a terminal: an agent or a CI job invokes this with
 # no TTY, and `docker run -it` fails outright there rather than degrading.

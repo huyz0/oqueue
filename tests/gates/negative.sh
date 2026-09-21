@@ -5795,7 +5795,7 @@ fi
 #
 # ⚠️ **Both directions, because a tripwire fails in both.** A pattern that
 # stops matching a check that is present leaves the leg green forever while
-# `M12` lands `GroupGrants`; one that matches a handler with no check at all
+# `M12` promotes `GroupGrants`; one that matches a handler with no check at all
 # fails every commit until someone deletes the leg. `run_case` asserts a
 # non-zero exit, so neither of these is a `run_case`: they are driven by
 # hand, the shape the `unviable:` exemption and the wrapped-or-pattern case
@@ -5996,9 +5996,22 @@ else
 fi
 
 
-run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
-run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \
-  "over the 10000 ms budget"
+# These fixtures test a wall-clock comparison, so Docker Desktop's translated
+# bind mount cannot provide meaningful evidence for them. The gate itself uses
+# the same named platform skip; keep the two negative cases honest and counted
+# as unrun on Windows/macOS rather than treating the skip as a false green.
+case "${OQUEUE_HOST_PLATFORM:-}" in
+  windows|macos)
+    skip_case check-budget.sh \
+      "timing-budget fixtures are not portable evidence on ${OQUEUE_HOST_PLATFORM}" \
+      "run scripts/docker-test.sh tests/gates/negative.sh from WSL/Linux or rely on CI" 2
+    ;;
+  *)
+    run_case "check-budget.sh (suite over budget)" setup_budget_over invoke_budget_over
+    run_case "check-budget.sh (erosion behind a compiling gate)" setup_budget_eroded_behind_a_build invoke_budget_eroded_behind_a_build \
+      "over the 10000 ms budget"
+    ;;
+esac
 # ⚠️ **What this case pins changed under it, and that is worth knowing.**
 # `M4.63` deleted the propagate-a-skip branch entirely, having measured it
 # unreachable for both cases it named — so this fixture now reaches the

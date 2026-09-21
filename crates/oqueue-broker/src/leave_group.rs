@@ -21,6 +21,7 @@
 
 #![allow(clippy::redundant_pub_crate)]
 
+use crate::authz::{GroupAuthzContext, group_authorized};
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use crate::fencing::{FencingContext, Refusal, fence};
@@ -42,6 +43,7 @@ pub(crate) async fn handle(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
+    authz: &GroupAuthzContext<'_>,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
@@ -50,6 +52,13 @@ pub(crate) async fn handle(
     let Ok(group) = GroupId::new(request.group_id) else {
         return reply(prelude, version, &refusal(error_codes::INVALID_REQUEST));
     };
+    if !group_authorized(&group, authz) {
+        return reply(
+            prelude,
+            version,
+            &refusal(error_codes::GROUP_AUTHORIZATION_FAILED),
+        );
+    }
 
     let member_ids: Vec<&str> = request.members.iter().map(|m| m.member_id).collect();
     // Checked before removal: `Heartbeats::is_tracked` would answer `false`

@@ -1,5 +1,6 @@
 #![allow(clippy::expect_used)]
 
+mod authorization;
 mod rebalancing;
 
 use super::handle;
@@ -54,8 +55,13 @@ pub(super) async fn join(
     let mut body = Vec::new();
     request.encode(&mut body, JOIN_VERSION).expect("encodes");
 
-    let HandlerResponse::Reply(out) =
-        crate::join_group::handle(cluster, prelude(11, JOIN_VERSION), &body).await
+    let HandlerResponse::Reply(out) = crate::join_group::handle(
+        cluster,
+        prelude(11, JOIN_VERSION),
+        &body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
     else {
         panic!("a JoinGroup replies");
     };
@@ -80,8 +86,13 @@ async fn sync(cluster: &crate::cluster::Cluster, group: &str, member_id: &str, g
     let mut body = Vec::new();
     request.encode(&mut body, SYNC_VERSION).expect("encodes");
 
-    let HandlerResponse::Reply(_) =
-        crate::sync_group::handle(cluster, prelude(14, SYNC_VERSION), &body).await
+    let HandlerResponse::Reply(_) = crate::sync_group::handle(
+        cluster,
+        prelude(14, SYNC_VERSION),
+        &body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
     else {
         panic!("a SyncGroup replies");
     };
@@ -108,7 +119,13 @@ pub(super) async fn heartbeat(
     generation: i32,
 ) -> i16 {
     let body = heartbeat_body(group, member_id, generation);
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(12, HEARTBEAT_VERSION), &body).await
+    let HandlerResponse::Reply(out) = handle(
+        cluster,
+        prelude(12, HEARTBEAT_VERSION),
+        &body,
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await
     else {
         panic!("a Heartbeat replies");
     };
@@ -245,8 +262,13 @@ async fn a_survivor_can_rejoin_after_an_eviction_the_group_is_not_permanently_we
 
     let cluster = std::sync::Arc::clone(&fixture.cluster);
     let rejoin = tokio::spawn(async move {
-        let HandlerResponse::Reply(out) =
-            crate::join_group::handle(&cluster, prelude(11, JOIN_VERSION), &body).await
+        let HandlerResponse::Reply(out) = crate::join_group::handle(
+            &cluster,
+            prelude(11, JOIN_VERSION),
+            &body,
+            &crate::authz::unconfigured_group_authz(),
+        )
+        .await
         else {
             panic!("a JoinGroup replies");
         };
@@ -465,6 +487,12 @@ async fn a_rebalance_outliving_the_session_timeout_does_not_expire_its_members()
 #[tokio::test(start_paused = true)]
 async fn a_malformed_body_closes_rather_than_panicking() {
     let fixture = fixture(&[]).await;
-    let response = handle(&fixture.cluster, prelude(12, HEARTBEAT_VERSION), &[0xFF; 3]).await;
+    let response = handle(
+        &fixture.cluster,
+        prelude(12, HEARTBEAT_VERSION),
+        &[0xFF; 3],
+        &crate::authz::unconfigured_group_authz(),
+    )
+    .await;
     assert!(matches!(response, HandlerResponse::Close));
 }

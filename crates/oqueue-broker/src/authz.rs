@@ -10,7 +10,7 @@
 // precedent for the same standoff.
 #![allow(clippy::redundant_pub_crate)]
 
-use oqueue_core::{Principal, TopicGrants, TopicId};
+use oqueue_core::{GroupGrants, GroupId, Principal, TopicGrants, TopicId};
 
 /// `M9.7`'s authorization inputs, bundled: a handler's own signature would
 /// otherwise carry three parameters that only ever travel together (the
@@ -25,6 +25,20 @@ pub(crate) struct AuthzContext<'a> {
     pub(crate) credentials_configured: bool,
     /// `M9.8`'s forward index.
     pub(crate) topic_grants: &'a TopicGrants,
+}
+
+/// The group-scoped authorization inputs shared by group handlers.
+///
+/// Kept separate from [`AuthzContext`] because topic visibility and group
+/// ownership are independent decisions; combining them would make a topic
+/// grant an accidental group grant at the next call site.
+pub(crate) struct GroupAuthzContext<'a> {
+    /// This connection's authenticated identity, if any.
+    pub(crate) principal: Option<&'a Principal>,
+    /// Whether credentials were configured on this broker.
+    pub(crate) credentials_configured: bool,
+    /// Principal-to-group ownership index.
+    pub(crate) group_grants: &'a GroupGrants,
 }
 
 /// Whether an explicitly-named topic may be resolved at all, before a
@@ -53,4 +67,30 @@ pub(crate) fn topic_authorized(name: &str, authz: &AuthzContext<'_>) -> bool {
         return false;
     };
     authz.topic_grants.can_see(principal, &topic_id)
+}
+
+/// Whether this principal may access a named consumer group.
+///
+/// An unconfigured broker preserves the existing library-compatible fail-open
+/// behavior. Once credentials are configured, missing authentication or a
+/// missing grant fails closed before a group handler mutates coordinator or
+/// heartbeat state.
+pub(crate) fn group_authorized(group: &GroupId, authz: &GroupAuthzContext<'_>) -> bool {
+    if !authz.credentials_configured {
+        return true;
+    }
+    let Some(principal) = authz.principal else {
+        return false;
+    };
+    authz.group_grants.allows(principal, group)
+}
+
+#[cfg(test)]
+pub(crate) fn unconfigured_group_authz() -> GroupAuthzContext<'static> {
+    static EMPTY: std::sync::OnceLock<GroupGrants> = std::sync::OnceLock::new();
+    GroupAuthzContext {
+        principal: None,
+        credentials_configured: false,
+        group_grants: EMPTY.get_or_init(GroupGrants::new),
+    }
 }

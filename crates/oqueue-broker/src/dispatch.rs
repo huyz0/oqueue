@@ -75,6 +75,8 @@ pub struct Dispatcher {
     topic_grants: std::sync::Arc<oqueue_core::TopicGrants>,
     /// Administrative authority, separate from topic visibility (`M12.1`).
     admin_grants: std::sync::Arc<oqueue_core::AdminGrants>,
+    /// Consumer-group ownership, separate from topic visibility (`M12.2`).
+    group_grants: std::sync::Arc<oqueue_core::GroupGrants>,
     /// The in-flight-request bound each authenticated principal shares
     /// across every connection it opens (`security.md` rule 13, FR-45,
     /// `M9.16`) — `None` by construction, matching `credentials`' own
@@ -109,6 +111,7 @@ impl Dispatcher {
             credentials: std::sync::Arc::default(),
             topic_grants: std::sync::Arc::default(),
             admin_grants: std::sync::Arc::default(),
+            group_grants: std::sync::Arc::default(),
             quota: None,
         }
     }
@@ -166,6 +169,13 @@ impl Dispatcher {
     #[must_use]
     pub fn with_admin_grants(mut self, admin_grants: oqueue_core::AdminGrants) -> Self {
         self.admin_grants = std::sync::Arc::new(admin_grants);
+        self
+    }
+
+    /// Supplies the independent consumer-group ownership policy.
+    #[must_use]
+    pub fn with_group_grants(mut self, group_grants: oqueue_core::GroupGrants) -> Self {
+        self.group_grants = std::sync::Arc::new(group_grants);
         self
     }
 
@@ -245,10 +255,10 @@ impl Dispatcher {
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
-            ApiKey::JoinGroup => crate::join_group::handle(&self.cluster, prelude, body).await,
-            ApiKey::SyncGroup => crate::sync_group::handle(&self.cluster, prelude, body).await,
-            ApiKey::Heartbeat => crate::heartbeat::handle(&self.cluster, prelude, body).await,
-            ApiKey::LeaveGroup => crate::leave_group::handle(&self.cluster, prelude, body).await,
+            ApiKey::JoinGroup => self.join_group_handle(prelude, body).await,
+            ApiKey::SyncGroup => self.sync_group_handle(prelude, body).await,
+            ApiKey::Heartbeat => self.heartbeat_handle(prelude, body).await,
+            ApiKey::LeaveGroup => self.leave_group_handle(prelude, body).await,
             ApiKey::Produce => self.produce_handle(prelude, body).await,
             ApiKey::Fetch => self.fetch_handle(prelude, body).await,
             ApiKey::InitProducerId => crate::init_producer_id::handle(prelude, body),
@@ -341,12 +351,6 @@ impl Dispatcher {
         .await
     }
 
-    /// `FindCoordinator`'s own arm, pulled out of `dispatch`'s `match` for
-    /// the same fifty-line-limit reason `metadata_handle` is.
-    fn find_coordinator_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
-        crate::find_coordinator::handle(&self.cluster, prelude, body)
-    }
-
     /// `ListOffsets`'s own arm — `M9.12`'s per-principal scoping, same
     /// pattern as `metadata_handle`.
     async fn listoffsets_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
@@ -399,6 +403,7 @@ impl Dispatcher {
             prelude,
             body,
             &self.authz_context(principal.as_ref()),
+            &self.group_authz_context(principal.as_ref()),
         )
         .await
     }
@@ -414,6 +419,7 @@ impl Dispatcher {
             prelude,
             body,
             &self.authz_context(principal.as_ref()),
+            &self.group_authz_context(principal.as_ref()),
         )
     }
 }
@@ -450,3 +456,5 @@ fn api_versions_response(prelude: RequestPrelude) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests;
+
+mod group_dispatch;

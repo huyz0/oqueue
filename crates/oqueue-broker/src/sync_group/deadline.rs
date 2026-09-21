@@ -64,7 +64,8 @@ pub(crate) const MIN_SYNC_WAIT_MS: u64 = 6_000;
 /// `waited_ms=3000000`, the stranding `M4.43`, `M4.47`, `M4.58`, `M4.65`,
 /// `M4.66` and `M4.74` were each written to end, restored by one request and
 /// not recoverable without a process restart — and cross-principal, since
-/// `GroupGrants` is deferred and a principal may join another's group.
+/// Before M12.2, `GroupGrants` was deferred and a principal could join
+/// another's group.
 ///
 /// ⚠️ **`heartbeat::deadline::MAX_SESSION_TIMEOUT_MS`, not a number of this
 /// module's own**, for [`MIN_SYNC_WAIT_MS`]'s reason read the other way: this

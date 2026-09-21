@@ -91,15 +91,17 @@
 #![allow(clippy::redundant_pub_crate)]
 
 pub(crate) mod deadline;
+mod reply;
 
+use crate::authz::{GroupAuthzContext, group_authorized};
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use deadline::clamp_session_timeout_ms;
-use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
-use oqueue_codec::frame::{RequestPrelude, encode_response_header};
-use oqueue_codec::heartbeat::{decode_request, encode_response};
+use oqueue_codec::frame::RequestPrelude;
+use oqueue_codec::heartbeat::decode_request;
 use oqueue_core::{GroupEvent, GroupId, GroupState};
+use reply::reply;
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use tokio::time::{Duration, Instant};
@@ -418,6 +420,7 @@ pub(crate) async fn handle(
     cluster: &Cluster,
     prelude: RequestPrelude,
     body: &[u8],
+    authz: &GroupAuthzContext<'_>,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
@@ -426,6 +429,9 @@ pub(crate) async fn handle(
     let Ok(group) = GroupId::new(request.group_id) else {
         return reply(prelude, version, error_codes::INVALID_REQUEST);
     };
+    if !group_authorized(&group, authz) {
+        return reply(prelude, version, error_codes::GROUP_AUTHORIZATION_FAILED);
+    }
 
     // Every heartbeat is what notices another member's own silence —
     // module doc's own "no background reaper" answer.
@@ -482,16 +488,6 @@ pub(crate) async fn handle(
 
     cluster.heartbeats().renew(&group, request.member_id);
     reply(prelude, version, error_codes::NONE)
-}
-
-fn reply(prelude: RequestPrelude, version: i16, error_code: i16) -> HandlerResponse {
-    let mut out = Vec::new();
-    if encode_response_header(&mut out, ApiKey::Heartbeat, version, prelude.correlation_id).is_err()
-    {
-        return HandlerResponse::Close;
-    }
-    encode_response(&mut out, version, error_code);
-    HandlerResponse::Reply(out)
 }
 
 #[cfg(test)]

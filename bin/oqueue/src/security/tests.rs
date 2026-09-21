@@ -10,8 +10,11 @@
 #![allow(clippy::expect_used)]
 
 mod composition;
+mod source_validation;
 
-use super::sources::{admin_grants_from, credentials_from, quota_from, topic_grants_from};
+use super::sources::{
+    admin_grants_from, credentials_from, group_grants_from, quota_from, topic_grants_from,
+};
 
 #[test]
 fn an_admin_grant_names_a_supported_operation() {
@@ -51,6 +54,19 @@ fn an_unknown_admin_operation_is_refused() {
 #[test]
 fn an_empty_admin_grant_source_is_refused() {
     admin_grants_from("# no authority\n").expect_err("empty authority must not silently deny all");
+}
+
+#[test]
+fn a_group_grant_names_a_principal_and_group() {
+    let grants = group_grants_from("alice:orders\n").expect("parses");
+    let alice = oqueue_core::Principal::new("alice").expect("valid principal");
+    let orders = oqueue_core::GroupId::new("orders").expect("valid group");
+    assert!(grants.allows(&alice, &orders));
+}
+
+#[test]
+fn an_empty_group_grant_source_is_refused() {
+    group_grants_from("# no group ownership\n").expect_err("empty ownership must be explicit");
 }
 
 /// A valid self-signed pair, so a test can configure credentials — which

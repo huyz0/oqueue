@@ -214,28 +214,22 @@ run_counted "FR-40: OffsetFetch's all-topics form hides another principal's topi
   offset_fetch::tests::all_topics_never_returns_a_topic_committed_by_another_principal \
   offset_fetch::tests::an_unauthorized_explicit_topic_is_refused_per_partition || finish
 
-# ── 2b. FR-40 on the five group APIs: reported, and unmet ──────────────────
-# ⚠️ **Reported rather than waived.** `M4.md` asks for cross-principal refusal
-# on each of the seven APIs this milestone adds. Two of them name a topic and
-# check `TopicGrants`; the other five scope on `GroupId`, which carries no
-# principal, so there is nothing to refuse *with*. A completion gate that
-# passed over that in a comment would be calling the milestone finished
-# against a requirement it does not meet.
+# ── 2b. FR-40 on the five group APIs: asserted ──────────────────────────────
+# ⚠️ **Promoted from a reported deferral by M12.2.** `M4.md` asks for
+# cross-principal refusal on each of the seven APIs this milestone adds. The
+# two topic APIs are asserted above; these five now have `GroupGrants` checks
+# and named refusal tests below.
 #
 # ⚠️ **It fails the day one of them gains a principal check**, which is the
 # signal to promote this to an assertion — FR-21's leg below works the same
 # way, and it is the only thing that stops a recorded deferral being
-# discharged without anyone noticing.
+# discharged without anyone noticing. The source tripwire remains in place.
 # ⚠️ **Every file of the five handlers, not five named files** — `M4.50`.
 # This loop opened `join_group/mod.rs` and called it the `JoinGroup`
 # handler; `code-structure.md` rule 16 has split the five across fourteen
 # modules, and `sync_group/barrier.rs` was created by `M4.43` *after* this
-# leg was written. Measured before the fix: a `group_authorized(..)` taking
-# an `AuthzContext` appended to `barrier.rs` left this leg printing "unmet
-# and reported". M12 task 3a can land its check in `round/plan.rs`, where
-# the roster is built, and a closed milestone's gate would go on reporting
-# the deferral open forever. `group_handler_files` is the shared walk, and
-# it refuses to answer at all if a handler has no source file.
+# leg was written. `group_handler_files` is the shared walk, and it refuses
+# to answer at all if a handler has no source file.
 handler_list="$(group_handler_files 2>&1)" || {
   fail "a group-protocol handler has no source file -- FR-40's tripwire cannot run"
   while IFS= read -r line; do note "$line"; done <<<"$handler_list"
@@ -307,15 +301,25 @@ if (( read_files != expected )); then
   fail "FR-40 tripwire read ${read_files} file(s) of ${expected} -- it proved nothing"
   finish
 fi
-if [[ -n "$scoped" ]]; then
-  fail "group API(s) now reference a principal:$scoped -- FR-40 may be satisfiable for them"
-  note "promote this leg to an assertion, and close roadmap.md's GroupGrants"
-  note "deferral (M12.md task 3a) if all five are covered"
-else
-  ok "FR-40 on the five group APIs: unmet and reported across ${read_files} file(s) (GroupGrants, M12.md task 3a)"
-  note "GroupId carries no principal, so JoinGroup/SyncGroup/Heartbeat/LeaveGroup/"
-  note "FindCoordinator cannot refuse a cross-principal caller; deferred, not waived"
+missing_handlers=""
+for handler in find_coordinator join_group sync_group heartbeat leave_group; do
+  if ! grep -qE "(^|[[:space:]/])${handler}(\.rs|/)" <<<"$scoped"; then
+    missing_handlers="$missing_handlers $handler"
+  fi
+done
+if [[ -n "$missing_handlers" ]]; then
+  fail "FR-40 principal checks missing from group handler(s):$missing_handlers"
+  note "the source tripwire read ${read_files} file(s) but did not find all five handler roots"
+  finish
 fi
+ok "FR-40 principal checks cover all five group handlers across ${read_files} file(s)"
+run_counted "FR-40: every group API refuses a cross-principal caller" 5 \
+  -p oqueue-broker --lib -- \
+  find_coordinator::tests::a_cross_principal_group_is_refused \
+  join_group::tests::a_cross_principal_group_is_refused \
+  sync_group::tests::a_cross_principal_group_is_refused \
+  heartbeat::tests::a_cross_principal_group_is_refused \
+  leave_group::tests::a_cross_principal_group_is_refused || finish
 
 # ── 3. Every fencing error is reachable in a test ───────────────────────────
 # ⚠️ **Each variant is looked for in the tests that drive the seam.** See this
@@ -464,7 +468,7 @@ if [[ -f "$roster" ]]; then
   grep -qx 'tls-sasl' "$roster" && have_tls=1
 fi
 if (( _FAILURES == 0 )) && (( have_rdkafka )) && (( have_java )) && (( have_tls )); then
-  ok "M4 completion condition holds (FR-40's five group APIs excepted and deferred, above)"
+  ok "M4 completion condition holds (FR-40's seven APIs are asserted)"
 elif (( _FAILURES == 0 )); then
   (( have_rdkafka )) || skip "librdkafka never drove a group -- FR-20 is unproven here"
   (( have_java )) || skip "the Java client never drove a group -- FR-20 is unproven here"

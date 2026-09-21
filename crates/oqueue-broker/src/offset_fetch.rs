@@ -1,30 +1,9 @@
 //! `OffsetFetch` (9), v1-7 — `M4.13`.
 //!
-//! ⚠️ **No group/member/generation fencing** — deliberately, unlike
-//! `OffsetCommit`'s own `crate::fencing` seam (`M4.12`). Real Kafka lets
-//! any authenticated client fetch a group's own committed offsets without
-//! joining it — that is how offset-lag monitoring tools work — so the only
-//! seam this handler routes through is `crate::authz::topic_authorized`
-//! (`M9.7`/`M9.9`'s own decision point), per topic.
-//!
-//! ⚠️ **Real Kafka layers a *second*, group-level check on top of that —
-//! `Group:Describe` — and this broker has nothing to check it against.**
-//! `oqueue_core::TopicGrants` scopes topics; nothing in this codebase
-//! scopes *groups*. The consequence, round-1 review's own finding: a
-//! principal holding a grant on topic `"orders"` can fetch **any** group's
-//! own committed offset for `"orders"`, including a group it was never a
-//! member of and has no relationship to at all — this task's own scope
-//! ("`OffsetFetch`... scoped by principal") is topic scoping, the same
-//! shape `Metadata`/`Produce`/`Fetch`/`ListOffsets` already have, and does
-//! not extend to inventing a second, group-level grants type nothing else
-//! in this milestone's own eighteen tasks asks for. Named here rather
-//! than left implicit in "any authenticated client may fetch" above,
-//! which is true but was read, by the reviewer, as claiming more scoping
-//! than this handler actually does. A group-level `GroupGrants` seam,
-//! mirroring `TopicGrants`'s own shape, is real and standing. ⚠️ **It was
-//! unscheduled until `M4.23`**, which found the gap writing M4's completion
-//! gate: `roadmap.md`'s deferred table now carries it, received by `M12.md`
-//! task 3a, and `m4-complete.sh` reports it rather than waiving it.
+//! Group ownership is checked before any offset state is read. Topic
+//! visibility remains a second, independent decision for each topic: a
+//! principal must own the group and see the topic before an offset is
+//! returned. This closes the `Group:Describe` gap M4 deferred to M12.
 //!
 //! ⚠️ **Two shapes, not one standing in for the other** — `M9.9`/`M9.10`'s
 //! own `Metadata` precedent, the shape this task's own acceptance
@@ -43,7 +22,7 @@
 
 #![allow(clippy::redundant_pub_crate)]
 
-use crate::authz::{AuthzContext, topic_authorized};
+use crate::authz::{AuthzContext, GroupAuthzContext, group_authorized, topic_authorized};
 use crate::cluster::Cluster;
 use crate::connection::HandlerResponse;
 use oqueue_codec::apikey::ApiKey;
@@ -67,6 +46,7 @@ pub(crate) fn handle(
     prelude: RequestPrelude,
     body: &[u8],
     authz: &AuthzContext<'_>,
+    group_authz: &GroupAuthzContext<'_>,
 ) -> HandlerResponse {
     let version = prelude.api_version;
     let Ok(request) = decode_request(body, version) else {
@@ -82,6 +62,9 @@ pub(crate) fn handle(
             },
         );
     };
+    if let Some(refusal) = group_refusal(prelude, version, &group, group_authz) {
+        return refusal;
+    }
 
     // ⚠️ **`M4.15a`'s own gate, checked here rather than through
     // `crate::fencing`** — this handler routes through no other part of
@@ -138,6 +121,24 @@ pub(crate) fn handle(
             topics,
         },
     )
+}
+
+fn group_refusal(
+    prelude: RequestPrelude,
+    version: i16,
+    group: &GroupId,
+    authz: &GroupAuthzContext<'_>,
+) -> Option<HandlerResponse> {
+    (!group_authorized(group, authz)).then(|| {
+        reply(
+            prelude,
+            version,
+            &OffsetFetchResponse {
+                error_code: error_codes::GROUP_AUTHORIZATION_FAILED,
+                topics: Vec::new(),
+            },
+        )
+    })
 }
 
 /// One explicitly-named topic's own answer: every partition named,

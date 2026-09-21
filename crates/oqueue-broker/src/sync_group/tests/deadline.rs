@@ -355,7 +355,7 @@ async fn one_member_asking_for_the_ceiling_does_not_pin_the_group_at_it() {
 /// asking the ceiling and then disconnecting held its group's sync backstop at
 /// thirty minutes for the life of the process, and every later follower parked
 /// there instead of on the number its own round asked for. Cross-principal,
-/// since `GroupGrants` is deferred.
+/// before M12.2, since `GroupGrants` was deferred.
 ///
 /// The group's number is derived from the *open round's* roster now, which is
 /// what makes this observable: the greedy member closes one round and is gone

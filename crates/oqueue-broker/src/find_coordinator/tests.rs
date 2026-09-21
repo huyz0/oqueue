@@ -18,6 +18,10 @@ fn prelude(version: i16) -> RequestPrelude {
     }
 }
 
+fn group_authz() -> crate::authz::GroupAuthzContext<'static> {
+    crate::authz::unconfigured_group_authz()
+}
+
 fn request_bytes(key: &str) -> Vec<u8> {
     let request = FindCoordinatorRequest::default().with_key(StrBytes::from_string(key.to_owned()));
     let mut out = Vec::new();
@@ -25,8 +29,13 @@ fn request_bytes(key: &str) -> Vec<u8> {
     out
 }
 
-fn answered(cluster: &crate::Cluster, version: i16, body: &[u8]) -> FindCoordinatorResponse {
-    let HandlerResponse::Reply(out) = handle(cluster, prelude(version), body) else {
+fn answered_with(
+    cluster: &crate::Cluster,
+    version: i16,
+    body: &[u8],
+    authz: &crate::authz::GroupAuthzContext<'_>,
+) -> FindCoordinatorResponse {
+    let HandlerResponse::Reply(out) = handle(cluster, prelude(version), body, authz) else {
         panic!("a well-formed FindCoordinator replies");
     };
     // Response header: v0 is 4 bytes of correlation id, v1 adds the empty
@@ -36,6 +45,10 @@ fn answered(cluster: &crate::Cluster, version: i16, body: &[u8]) -> FindCoordina
     let response = FindCoordinatorResponse::decode(&mut rest, version).expect("decodes");
     assert!(rest.is_empty());
     response
+}
+
+fn answered(cluster: &crate::Cluster, version: i16, body: &[u8]) -> FindCoordinatorResponse {
+    answered_with(cluster, version, body, &group_authz())
 }
 
 /// The response names this node's own advertised identity, not a
@@ -117,6 +130,29 @@ async fn a_group_key_type_resolves_to_this_node() {
     assert_eq!(response.node_id.0, f.cluster.node_id);
 }
 
+#[tokio::test]
+async fn a_cross_principal_group_is_refused() {
+    let f = at("h", 9092, &[]).await;
+    let bob = oqueue_core::Principal::new("bob").expect("valid principal");
+    let mut grants = oqueue_core::GroupGrants::new();
+    grants.grant(
+        oqueue_core::Principal::new("alice").expect("valid principal"),
+        oqueue_core::GroupId::new("alice-group").expect("valid group"),
+    );
+    let authz = crate::authz::GroupAuthzContext {
+        principal: Some(&bob),
+        credentials_configured: true,
+        group_grants: &grants,
+    };
+    let response = answered_with(&f.cluster, VERSION, &request_bytes("alice-group"), &authz);
+    assert_eq!(
+        response.error_code,
+        oqueue_codec::error_codes::GROUP_AUTHORIZATION_FAILED
+    );
+    assert_eq!(response.node_id.0, -1);
+    assert_eq!(response.port, -1);
+}
+
 /// `M4.4`'s own acceptance criterion: N keys in one batched request each
 /// resolve independently, and all N come back -- one key's own answer never
 /// depends on, or is lost because of, another's.
@@ -166,7 +202,7 @@ async fn a_batched_transaction_request_refuses_every_key() {
 async fn a_malformed_body_closes_the_connection() {
     let f = at("h", 9092, &[]).await;
     assert!(matches!(
-        handle(&f.cluster, prelude(VERSION), &[0xFF]),
+        handle(&f.cluster, prelude(VERSION), &[0xFF], &group_authz()),
         HandlerResponse::Close
     ));
 }

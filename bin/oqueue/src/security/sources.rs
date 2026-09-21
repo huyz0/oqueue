@@ -17,7 +17,8 @@
 use super::{Security, SecurityError};
 use oqueue_broker::sasl_authenticate::{PlainCredential, PlainCredentials};
 use oqueue_core::{
-    AdminGrants, AdminOperation, Principal, PrincipalQuota, Redacted, TopicGrants, TopicId,
+    AdminGrants, AdminOperation, GroupGrants, GroupId, Principal, PrincipalQuota, Redacted,
+    TopicGrants, TopicId,
 };
 use std::sync::Arc;
 
@@ -39,16 +40,19 @@ pub(super) fn from_sources(
     topic_grants: Option<&str>,
     quota: Option<&str>,
 ) -> Result<Security, SecurityError> {
-    from_sources_with_admin(tls, credentials, topic_grants, quota, None)
+    from_sources_with_policies(tls, credentials, topic_grants, quota, None, None)
 }
 
-/// As [`from_sources`], with the independent administrative authority source.
-pub(super) fn from_sources_with_admin(
+/// As [`from_sources`], with independent administrative and group policies.
+// This test-only seam keeps each optional policy independently configurable.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn from_sources_with_policies(
     tls: Option<(&[u8], &[u8])>,
     credentials: Option<&str>,
     topic_grants: Option<&str>,
     quota: Option<&str>,
     admin_grants: Option<&str>,
+    group_grants: Option<&str>,
 ) -> Result<Security, SecurityError> {
     // ⚠️ **Credentials without TLS is a broker that serves nobody**, so it
     // is refused rather than warned about. `sasl_authenticate::handle`
@@ -81,6 +85,11 @@ pub(super) fn from_sources_with_admin(
             .transpose()?
             .unwrap_or_default(),
         admin_grants_configured: admin_grants.is_some(),
+        group_grants: group_grants
+            .map(group_grants_from)
+            .transpose()?
+            .unwrap_or_default(),
+        group_grants_configured: group_grants.is_some(),
         quota: quota.map(quota_from).transpose()?,
     })
 }
@@ -123,12 +132,14 @@ pub(crate) fn configured() -> Result<Security, SecurityError> {
     let credentials = read_source("OQUEUE_CREDENTIALS", var("OQUEUE_CREDENTIALS")?)?;
     let topic_grants = read_source("OQUEUE_TOPIC_GRANTS", var("OQUEUE_TOPIC_GRANTS")?)?;
     let admin_grants = read_source("OQUEUE_ADMIN_GRANTS", var("OQUEUE_ADMIN_GRANTS")?)?;
-    from_sources_with_admin(
+    let group_grants = read_source("OQUEUE_GROUP_GRANTS", var("OQUEUE_GROUP_GRANTS")?)?;
+    from_sources_with_policies(
         tls.as_ref().map(|(c, k)| (c.as_slice(), k.as_slice())),
         decode("OQUEUE_CREDENTIALS", credentials)?.as_deref(),
         decode("OQUEUE_TOPIC_GRANTS", topic_grants)?.as_deref(),
         var("OQUEUE_MAX_IN_FLIGHT")?.as_deref(),
         decode("OQUEUE_ADMIN_GRANTS", admin_grants)?.as_deref(),
+        decode("OQUEUE_GROUP_GRANTS", group_grants)?.as_deref(),
     )
 }
 
@@ -359,6 +370,36 @@ pub(super) fn admin_grants_from(text: &str) -> Result<AdminGrants, SecurityError
         return Err(SecurityError::EmptySource {
             variable: VARIABLE,
             shape: "principal:operation pairs",
+        });
+    }
+    Ok(grants)
+}
+
+/// `principal:group` lines for consumer-group ownership.
+pub(super) fn group_grants_from(text: &str) -> Result<GroupGrants, SecurityError> {
+    const VARIABLE: &str = "OQUEUE_GROUP_GRANTS";
+    let mut grants = GroupGrants::new();
+    let mut empty = true;
+    for (line, name, group) in pairs(VARIABLE, "principal:group", text)? {
+        let principal = Principal::new(name).map_err(|error| SecurityError::MalformedLine {
+            variable: VARIABLE,
+            line,
+            shape: "principal:group",
+            reason: error.to_string(),
+        })?;
+        let group = GroupId::new(group).map_err(|error| SecurityError::MalformedLine {
+            variable: VARIABLE,
+            line,
+            shape: "principal:group",
+            reason: error.to_string(),
+        })?;
+        grants.grant(principal, group);
+        empty = false;
+    }
+    if empty {
+        return Err(SecurityError::EmptySource {
+            variable: VARIABLE,
+            shape: "principal:group pairs",
         });
     }
     Ok(grants)
