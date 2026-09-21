@@ -144,6 +144,17 @@ never produced.
     are used throughout this milestone's gates; grep for `<<<` and `|| rc=`
     in `scripts/*.sh` for worked examples.
 
+## M12.18 execution paths
+
+The fast portability smoke tier is `bash scripts/os-smoke.sh`. Native Linux and
+macOS run it directly; Windows runs it from WSL2 or Git Bash. Every Cargo
+command, including the full gate suite, runs through
+`scripts/docker-test.sh` on Windows. The push workflow runs the shell smoke
+tier on Ubuntu, macOS, and Windows; it does not pretend that a Windows native
+Cargo build is a supported product path. Docker Desktop timing is reported as
+the named budget skip described in rule 17, while correctness gates continue
+to run.
+
 ## What has no gate
 
 **Whether the target list is still right.** It is a product decision that should

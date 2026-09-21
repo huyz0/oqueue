@@ -24,6 +24,18 @@
 #   MEM=12g CPUS=12 PIDS=1024 TMPFS=2g  scripts/docker-test.sh ...
 set -euo pipefail
 
+# Git Bash rewrites container-only paths such as `/v` and `/work` into
+# Windows paths before Docker sees them. WSL and native Unix shells do not do
+# this. Keep container paths literal on MSYS and convert only host bind sources
+# to Docker Desktop paths.
+docker_volume() {
+  if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == mingw* || "${OSTYPE:-}" == cygwin* ]]; then
+    MSYS_NO_PATHCONV=1 docker "$@"
+  else
+    docker "$@"
+  fi
+}
+
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 # ⚠️ **Tagged by the Dockerfile's own hash, so an edited Dockerfile is a
@@ -232,7 +244,7 @@ mkdir -p "$REPO/target/review" "$REPO/target/seeds" "$REPO/target/pre-commit-hom
 # ~380 ms apiece against this image. Checking both mount points in one run
 # halves that; the fallback below still chowns each volume that actually
 # needs it, so a first-run or uid-changed host is no worse off than before.
-if ! docker run --rm -u "$HOST_UID:$HOST_GID" \
+if ! docker_volume run --rm -u "$HOST_UID:$HOST_GID" \
       -v oqueue-cargo-registry:/a -v oqueue-target:/b "$IMAGE" \
       sh -c 'test -w /a && test -w /b' 2>/dev/null; then
   # ⚠️ **Re-probed per volume here, not chowned unconditionally.** The
@@ -242,9 +254,9 @@ if ! docker run --rm -u "$HOST_UID:$HOST_GID" \
   # by review, which built two throwaway volumes, root-owned one, and
   # measured the unconditional version re-chowning the other for nothing.
   for v in oqueue-cargo-registry oqueue-target; do
-    if ! docker run --rm -u "$HOST_UID:$HOST_GID" -v "$v:/v" "$IMAGE" \
+    if ! docker_volume run --rm -u "$HOST_UID:$HOST_GID" -v "$v:/v" "$IMAGE" \
           test -w /v 2>/dev/null; then
-      docker run --rm -u 0 -v "$v:/v" "$IMAGE" \
+      docker_volume run --rm -u 0 -v "$v:/v" "$IMAGE" \
         chown -R "$HOST_UID:$HOST_GID" /v >/dev/null
     fi
   done
@@ -348,21 +360,31 @@ fi
 TTY_FLAGS=()
 [ -t 0 ] && [ -t 1 ] && TTY_FLAGS=(-it)
 
-exec docker run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
+# Git Bash converts every `/work`, `/tmp`, and `/v` argument into a Windows
+# host path before Docker sees it. Keep container paths literal, while converting
+# only the host-side bind source to the form Docker Desktop accepts.
+DOCKER_EXEC=(docker)
+DOCKER_REPO="$REPO"
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == mingw* || "${OSTYPE:-}" == cygwin* ]]; then
+  DOCKER_REPO="$(cygpath -m "$REPO")"
+  DOCKER_EXEC=(env MSYS_NO_PATHCONV=1 docker)
+fi
+
+exec "${DOCKER_EXEC[@]}" run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
   --user "$HOST_UID:$HOST_GID" \
   -e "OQUEUE_HOST_PLATFORM=$OQUEUE_HOST_PLATFORM" \
   --memory="$MEM" --memory-swap="$MEM" \
   --cpus="$CPUS" --pids-limit="$PIDS" \
   --tmpfs "/tmp:rw,exec,size=$TMPFS,mode=1777" \
-  -v "$REPO:/work" \
+  -v "$DOCKER_REPO:/work" \
   -v oqueue-cargo-registry:/usr/local/cargo/registry \
   -v oqueue-target:/work/target \
-  -v "$REPO/target/review:/work/target/review" \
-  -v "$REPO/target/seeds:/work/target/seeds" \
-  -v "$REPO/target/pre-commit-home:$REPO/target/pre-commit-home" \
+  -v "$DOCKER_REPO/target/review:/work/target/review" \
+  -v "$DOCKER_REPO/target/seeds:/work/target/seeds" \
+  -v "$DOCKER_REPO/target/pre-commit-home:/work/target/pre-commit-home" \
   ${GITCONFIG_ARGS[@]+"${GITCONFIG_ARGS[@]}"} \
   -e HOME=/tmp/home \
-  -e PRE_COMMIT_HOME="$REPO/target/pre-commit-home" \
+  -e PRE_COMMIT_HOME=/work/target/pre-commit-home \
   -e OQUEUE_RUN_ID="$RUN_ID" \
   ${OQUEUE_SEED:+-e OQUEUE_SEED="$OQUEUE_SEED"} \
   ${SWEEP_SEEDS:+-e SWEEP_SEEDS="$SWEEP_SEEDS"} \

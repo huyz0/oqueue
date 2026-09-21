@@ -550,7 +550,7 @@ require_sha256() {
 # mean anything — it would report success while enforcing nothing. `skip` stays
 # the default for genuinely optional tools; this is not one of them.
 require_python() {
-  if command -v python3 >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'pass' >/dev/null 2>&1; then
     return 0
   fi
   fail "python3 not found"

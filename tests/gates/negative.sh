@@ -63,7 +63,8 @@ source "$(dirname "${BASH_SOURCE[0]}")/../../scripts/lib.sh"
 
 cd "$REPO_ROOT"
 
-SCRATCH_ROOT="$(mktemp -d)"
+SCRATCH_ROOT="$REPO_ROOT/target/tmp/negative.$$"
+mkdir -p "$SCRATCH_ROOT"
 trap 'rm -rf "$SCRATCH_ROOT"' EXIT
 
 # new_scratch <name>: a fresh, isolated git repo under SCRATCH_ROOT with
@@ -269,22 +270,23 @@ run_case() {
   # invocation, so this suppression is scoped to exactly the command whose
   # exit code is the thing being tested, not to any setup step upstream of
   # it.
-  "$invoke_fn" "$dir" >/tmp/negative-gate-output.$$ 2>&1 || rc=$?
-  if (( rc != 0 )) && [[ -n "$expect" ]] && ! grep -qF -- "$expect" /tmp/negative-gate-output.$$; then
+  local output="$SCRATCH_ROOT/output.$$.${TOTAL}"
+  "$invoke_fn" "$dir" >"$output" 2>&1 || rc=$?
+  if (( rc != 0 )) && [[ -n "$expect" ]] && ! grep -qF -- "$expect" "$output"; then
     fail "$label failed, but not for the reason the fixture plants"
     note "expected the output to contain: $expect"
     note "captured output:"
-    sed 's/^/     /' /tmp/negative-gate-output.$$ >&2
+    sed 's/^/     /' "$output" >&2
     FAILED_CASES=$((FAILED_CASES + 1))
   elif (( rc != 0 )); then
     ok "$label fails on a broken artifact (exit $rc)"
   else
     fail "$label reported ok on a broken artifact -- this is what the suite exists to catch"
     note "captured output:"
-    sed 's/^/     /' /tmp/negative-gate-output.$$ >&2
+    sed 's/^/     /' "$output" >&2
     FAILED_CASES=$((FAILED_CASES + 1))
   fi
-  rm -f /tmp/negative-gate-output.$$
+  rm -f "$output"
 }
 
 # --- check-commit-msg.sh: a subject with no backlog task ID -----------------

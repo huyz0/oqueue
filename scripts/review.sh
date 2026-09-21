@@ -256,10 +256,13 @@ staged_hash() {
 # like a clean one.
 stage_as_repository() {
   local tree="$1" objects head
-  objects="$(cd "$REPO_ROOT" && git rev-parse --git-path objects 2>/dev/null)" || return 1
+  # `--path-format=absolute` matters on Git for Windows: the default MSYS
+  # `/e/...` path is not a valid alternates path for native Git, while the
+  # absolute `E:/...` form is accepted by Git on Windows, macOS, and Linux.
+  objects="$(cd "$REPO_ROOT" && git rev-parse --path-format=absolute --git-path objects 2>/dev/null)" || return 1
   [[ -d "$objects" ]] || return 1
   case "$objects" in
-    /*) ;;
+    /*|[A-Za-z]:/*) ;;
     *) objects="$REPO_ROOT/$objects" ;;
   esac
   rm -f "$tree/.git"
@@ -373,7 +376,10 @@ run_gates_on_staged_tree() {
   # not cover the interrupted run that motivated it. The sweep above is what
   # actually reaps that; this covers the normal and early-return paths.
   trap 'rm -rf "'"$tree"'"' RETURN
-  if ! git checkout-index -a --prefix="$tree/" 2>/dev/null; then
+  # Materialise the index bytes exactly. Git for Windows otherwise applies
+  # core.autocrlf while checking out the staged tree, turning shell fixtures
+  # into CRLF scripts that Bash cannot parse consistently.
+  if ! git -c core.autocrlf=false checkout-index -a --prefix="$tree/" 2>/dev/null; then
     printf -- '- ⚠️ could not materialise the staged tree; no gate was run\n'
     return 1
   fi
@@ -577,7 +583,7 @@ context)
   # arrives many turns later carrying one word. `M5.50` spent five rounds on a
   # documentation-only commit for exactly that reason.
   round_info=""
-  if [[ -x "$(command -v python3 || true)" ]]; then
+  if python3 -c 'pass' >/dev/null 2>&1; then
     round_info="$(python3 "$REPO_ROOT/scripts/lib/review_rounds.py" "$TASK" "$h" "$REVIEW_DIR" 2>/dev/null || true)"
   fi
   # ⚠️ Here-strings rather than `printf | sed | head` (`portability.md` rules

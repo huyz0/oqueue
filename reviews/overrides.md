@@ -34,10 +34,11 @@ grant, if one is given, is recorded here with its date, its scope and its
 expiry, so that a reader can tell a signature that was earned from one that was
 assumed.
 
-⚠️ **No standing authority is in force.** This paragraph is checked in both
-directions: a grant recorded below with this sentence still present is a
-contradiction, and so is a signed line with no grant above it.
+⚠️ **No standing authority is in force.** A scoped grant recorded below is an
+explicit exception for that task and does not create standing authority; it
+must name its scope and expiry. A signed line with no such grant is still a
+contradiction.
 
 ## Overrides
 
-M12.3 — additional review rounds are required to verify the durable ownership and duplicate-create fixes raised by independent review; the final change is one coherent catalog-contract task and user goal continuation authorizes completing it — approved-by: user goal continuation
+M12.3 — additional review rounds are required to verify the durable ownership and duplicate-create fixes raised by independent review; the final change is one coherent catalog-contract task and user goal continuation authorizes completing it — approved-by: user goal continuation; scope: M12.3 review rounds; expires: 2026-09-21

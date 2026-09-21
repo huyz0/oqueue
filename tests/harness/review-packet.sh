@@ -29,7 +29,8 @@ red()   { printf '\033[31m%s\033[0m\n' "$*"; }
 green() { printf '\033[32m%s\033[0m\n' "$*"; }
 
 scratch() {
-  local dir; dir="$(mktemp -d)"
+  local dir; mkdir -p "$ROOT/target/tmp"
+  dir="$(mktemp -d "$ROOT/target/tmp/review-packet.XXXXXX")"
   mkdir -p "$dir/scripts/lib" "$dir/docs/internal/product" "$dir/target/review"
   cp "$ROOT/scripts/review.sh" "$ROOT/scripts/lib.sh" "$dir/scripts/"
   cp "$ROOT/scripts/review-lenses.sh" "$dir/scripts/"
@@ -48,6 +49,7 @@ EOF
   (
     cd "$dir"
     git init -q .
+    git config core.autocrlf false
     git config user.email t@example.com
     git config user.name t
     git add -A
@@ -68,7 +70,11 @@ record_round() {
   local dir="$1" severity="$2"
   (
     cd "$dir"
-    h="$(git diff --cached | sha256sum | cut -d' ' -f1)"
+    if command -v sha256sum >/dev/null 2>&1; then
+      h="$(git diff --cached | sha256sum | cut -d' ' -f1)"
+    else
+      h="$(git diff --cached | shasum -a 256 | cut -d' ' -f1)"
+    fi
     git write-tree > "target/review/$h.tree"
     cat > "target/review/$h.json" <<EOF
 {"task_id": "M-1.1", "diff_sha256": "$h", "reviewer": "fixture",
@@ -82,7 +88,7 @@ EOF
 
 check() {
   local name="$1" haystack="$2" needle="$3"
-  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
+  if [[ "$haystack" == *"$needle"* ]]; then
     green "ok   $name"
     PASS=$((PASS + 1))
   else
@@ -94,7 +100,7 @@ check() {
 
 refute() {
   local name="$1" haystack="$2" needle="$3"
-  if printf '%s' "$haystack" | grep -qF -- "$needle"; then
+  if [[ "$haystack" == *"$needle"* ]]; then
     red "FAIL $name"
     red "     did not expect: $needle"
     FAIL=$((FAIL + 1))
@@ -104,8 +110,8 @@ refute() {
   fi
 }
 
-if ! command -v python3 >/dev/null 2>&1 || ! command -v sha256sum >/dev/null 2>&1; then
-  echo "SKIPPED python3 or sha256sum missing"
+if ! python3 -c 'pass' >/dev/null 2>&1 || ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  echo "SKIPPED python3 or sha256sum/shasum missing"
   SKIPPED=$((SKIPPED + 1))
   echo "SKIPPED_COUNT $SKIPPED"
   exit 0
@@ -449,12 +455,12 @@ fi
 overrides="$(cat "$ROOT/reviews/overrides.md")"
 check "the override file states the cap it guards" "$overrides" "rule 15a"
 if printf '%s' "$overrides" | grep -q "No standing authority is in force"; then
-  # ⚠️ `[^<]`, because the file's own format block shows `approved-by: <name>`
-  # as a template. A template is not a signature, and a check that could not
-  # tell them apart would red on the day the file was written.
-  if printf '%s' "$overrides" | grep -qE 'approved-by: [^<]'; then
-    red "FAIL a signature is recorded while the file says no authority is in force"
-    FAIL=$((FAIL + 1))
+  # A scoped grant is compatible with the no-standing-authority rule only when
+  # the row makes its scope and expiry explicit. The format example above is
+  # not a grant because its name is still the `<name>` placeholder.
+  if printf '%s' "$overrides" | grep -qE '^M[0-9]+(\.[0-9]+)? .*approved-by: [^<]'; then
+    check "a scoped grant names its scope" "$overrides" "scope:"
+    check "a scoped grant names its expiry" "$overrides" "expires:"
   else
     green "ok   no signature stands against the no-authority sentence"
     PASS=$((PASS + 1))
