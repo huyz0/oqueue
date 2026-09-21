@@ -24,6 +24,7 @@
 //! ([`apiversions`], [`metadata`], [`produce`], [`fetch`]) the bodies —
 //! every one byte-differentialed against `kafka-protocol`, now a test oracle.
 
+pub mod alter_configs;
 pub mod apikey;
 pub mod apiversions;
 pub mod attributes;
@@ -40,6 +41,7 @@ pub mod find_coordinator;
 pub mod flex;
 pub mod frame;
 pub mod heartbeat;
+pub mod incremental_alter_configs;
 pub mod init_producer_id;
 pub mod join_group;
 pub mod leave_group;

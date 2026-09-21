@@ -37,7 +37,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 18] = [
+pub static ADVERTISED: [Advertised; 20] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -68,54 +68,24 @@ pub static ADVERTISED: [Advertised; 18] = [
         flexible_from: Some(9),
     },
     Advertised {
-        // ⚠️ **From v2, not v0** — the dependency's own generated
-        // `OffsetCommitRequest` only models v2-9 at all (confirmed against
-        // its generated source): v0/v1 carried a different shape
-        // (`retention_time_ms` absent, a `timestamp` field per partition
-        // instead) nothing since Kafka 0.11 sends. Ceiling v9 is the
-        // *request's* own ceiling, not the response's (which the
-        // dependency models to v10) — a version this broker cannot decode
-        // a request for is not one it serves, however far the response
-        // shape alone could reach.
         api_key: ApiKey::OffsetCommit,
         min: 2,
         max: 9,
         flexible_from: Some(8),
     },
     Advertised {
-        // ⚠️ **From v1, not v0** — the dependency's own generated
-        // `OffsetFetchRequest` only models v1-9 at all (confirmed against
-        // its generated source): v0 answered a response shape with no
-        // per-partition `error_code`, nothing since Kafka 0.10.2 sends.
-        // Ceiling v7, not the dependency's v9 — v8-9 (KIP-709) batches
-        // multiple *groups* per request, a materially different feature
-        // from every other batched form this crate serves (which batch
-        // items of the same kind within one group), `oqueue_codec::offset_fetch`'s
-        // own doc.
         api_key: ApiKey::OffsetFetch,
         min: 1,
         max: 7,
         flexible_from: Some(6),
     },
     Advertised {
-        // ⚠️ v0-3 single-key (`M4.3`), v4-6 batched (KIP-699, `M4.4`) —
-        // one function, two frame shapes, `oqueue_codec::find_coordinator`'s
-        // own doc. The dependency's own ceiling is v6 and every field from
-        // v4 stays "Supported API versions: 4-6" uniformly (confirmed by
-        // reading its generated source), so there is no InitProducerId-style
-        // reason to advertise less than the full range.
         api_key: ApiKey::FindCoordinator,
         min: 0,
         max: 6,
         flexible_from: Some(3),
     },
     Advertised {
-        // ⚠️ **v0-9, flexible from v6 — not this crate's usual v2/v3
-        // cutover** — `oqueue_codec::join_group`'s own doc, confirmed
-        // against the dependency's generated source directly (`M4.5`). The
-        // codec's own ceiling is v9; nothing about this broker's handler
-        // (`M4.7`, no `skip_assignment`/no server-side assignor) narrows it
-        // the way `InitProducerId`'s v4 cap does.
         api_key: ApiKey::JoinGroup,
         min: 0,
         max: 9,
@@ -188,6 +158,18 @@ pub static ADVERTISED: [Advertised; 18] = [
         flexible_from: Some(4),
     },
     Advertised {
+        api_key: ApiKey::AlterConfigs,
+        min: 0,
+        max: 2,
+        flexible_from: Some(2),
+    },
+    Advertised {
+        api_key: ApiKey::IncrementalAlterConfigs,
+        min: 0,
+        max: 1,
+        flexible_from: Some(1),
+    },
+    Advertised {
         // ⚠️ **Through v4, not the dependency's v5 ceiling.** v5 adds
         // `enable_2_pc`/`keep_prepared_txn`, both "Supported API versions:
         // none" in the schema (a future KIP's placeholder, not yet wire-
@@ -233,15 +215,17 @@ mod tests {
     use super::{ADVERTISED, Advertised, advertised_for, supports};
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
-        ApiVersionsRequest, ApiVersionsResponse, CreateTopicsRequest, CreateTopicsResponse,
-        DeleteTopicsRequest, DeleteTopicsResponse, DescribeConfigsRequest, DescribeConfigsResponse,
-        FetchRequest, FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse,
-        HeartbeatRequest, HeartbeatResponse, InitProducerIdRequest, InitProducerIdResponse,
-        JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest, LeaveGroupResponse,
-        ListOffsetsRequest, ListOffsetsResponse, MetadataRequest, MetadataResponse,
-        OffsetCommitRequest, OffsetCommitResponse, OffsetFetchRequest, OffsetFetchResponse,
-        ProduceRequest, ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse,
-        SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
+        AlterConfigsRequest, AlterConfigsResponse, ApiVersionsRequest, ApiVersionsResponse,
+        CreateTopicsRequest, CreateTopicsResponse, DeleteTopicsRequest, DeleteTopicsResponse,
+        DescribeConfigsRequest, DescribeConfigsResponse, FetchRequest, FetchResponse,
+        FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
+        IncrementalAlterConfigsRequest, IncrementalAlterConfigsResponse, InitProducerIdRequest,
+        InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest,
+        LeaveGroupResponse, ListOffsetsRequest, ListOffsetsResponse, MetadataRequest,
+        MetadataResponse, OffsetCommitRequest, OffsetCommitResponse, OffsetFetchRequest,
+        OffsetFetchResponse, ProduceRequest, ProduceResponse, SaslAuthenticateRequest,
+        SaslAuthenticateResponse, SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest,
+        SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -286,6 +270,14 @@ mod tests {
             ApiKey::DescribeConfigs => (
                 DescribeConfigsRequest::header_version(version),
                 DescribeConfigsResponse::header_version(version),
+            ),
+            ApiKey::AlterConfigs => (
+                AlterConfigsRequest::header_version(version),
+                AlterConfigsResponse::header_version(version),
+            ),
+            ApiKey::IncrementalAlterConfigs => (
+                IncrementalAlterConfigsRequest::header_version(version),
+                IncrementalAlterConfigsResponse::header_version(version),
             ),
             ApiKey::OffsetCommit => (
                 OffsetCommitRequest::header_version(version),
@@ -423,6 +415,8 @@ mod tests {
                 ApiKey::CreateTopics => pin::<CreateTopicsRequest>(row),
                 ApiKey::DeleteTopics => pin::<DeleteTopicsRequest>(row),
                 ApiKey::DescribeConfigs => pin::<DescribeConfigsRequest>(row),
+                ApiKey::AlterConfigs => pin::<AlterConfigsRequest>(row),
+                ApiKey::IncrementalAlterConfigs => pin::<IncrementalAlterConfigsRequest>(row),
                 ApiKey::OffsetCommit => pin::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => pin::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
@@ -462,6 +456,8 @@ mod tests {
                 ApiKey::CreateTopics => within::<CreateTopicsRequest>(row),
                 ApiKey::DeleteTopics => within::<DeleteTopicsRequest>(row),
                 ApiKey::DescribeConfigs => within::<DescribeConfigsRequest>(row),
+                ApiKey::AlterConfigs => within::<AlterConfigsRequest>(row),
+                ApiKey::IncrementalAlterConfigs => within::<IncrementalAlterConfigsRequest>(row),
                 ApiKey::OffsetCommit => within::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => within::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),

@@ -273,7 +273,10 @@ impl Dispatcher {
         // request holds the read side through its complete topic operation so
         // a deletion cannot tombstone a topic between resolution and produce,
         // fetch, or offset work that uses that resolution.
-        let _topic_lifecycle = if api_key == ApiKey::DeleteTopics {
+        let _topic_lifecycle = if matches!(
+            api_key,
+            ApiKey::DeleteTopics | ApiKey::AlterConfigs | ApiKey::IncrementalAlterConfigs
+        ) {
             None
         } else {
             Some(self.cluster.topic_lifecycle_read().await)
@@ -284,6 +287,10 @@ impl Dispatcher {
             ApiKey::CreateTopics => self.create_topics_handle(prelude, body).await,
             ApiKey::DeleteTopics => self.delete_topics_handle(prelude, body).await,
             ApiKey::DescribeConfigs => self.describe_configs_handle(prelude, body).await,
+            ApiKey::AlterConfigs => self.alter_configs_handle(prelude, body).await,
+            ApiKey::IncrementalAlterConfigs => {
+                self.incremental_alter_configs_handle(prelude, body).await
+            }
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),

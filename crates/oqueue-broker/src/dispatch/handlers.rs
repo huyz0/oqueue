@@ -167,4 +167,40 @@ impl Dispatcher {
         )
         .await
     }
+
+    /// The full topic-configuration replacement admin arm.
+    pub(super) async fn alter_configs_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        let topic_grants = self.topic_grants_snapshot(principal.as_ref());
+        crate::alter_configs::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &self.admin_authz_context(principal.as_ref()),
+            &self.authz_context(principal.as_ref(), &topic_grants),
+        )
+        .await
+    }
+
+    /// The incremental topic-configuration admin arm.
+    pub(super) async fn incremental_alter_configs_handle(
+        &self,
+        prelude: RequestPrelude,
+        body: &[u8],
+    ) -> HandlerResponse {
+        let principal = self.session.principal();
+        let topic_grants = self.topic_grants_snapshot(principal.as_ref());
+        crate::incremental_alter_configs::handle(
+            &self.cluster,
+            prelude,
+            body,
+            &self.admin_authz_context(principal.as_ref()),
+            &self.authz_context(principal.as_ref(), &topic_grants),
+        )
+        .await
+    }
 }

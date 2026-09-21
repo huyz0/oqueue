@@ -2,7 +2,10 @@
 
 #![allow(clippy::expect_used)]
 
-use super::{CatalogEntry, FakeTopicCatalog, TopicCatalog, TopicDeleteOutcome, topic_uuid};
+use super::{
+    CatalogEntry, FakeTopicCatalog, TopicCatalog, TopicDeleteOutcome, TopicRetentionUpdate,
+    topic_uuid,
+};
 use crate::test_executor::block_on;
 use crate::{Principal, TopicId};
 
@@ -115,6 +118,37 @@ pub(super) fn deletion_rejects_a_stale_uuid(catalog: &dyn TopicCatalog) {
     );
 }
 
+/// Topic configuration is durable, resettable, and hidden after deletion.
+pub(super) fn retention_configuration_is_durable_and_resettable(catalog: &dyn TopicCatalog) {
+    let name = topic("configured");
+    assert_eq!(
+        block_on(catalog.topic_retention_ms(&name)).expect("default"),
+        None
+    );
+    let entry = block_on(catalog.create(&name, 1)).expect("creates");
+    assert_eq!(
+        block_on(catalog.set_topic_retention_ms(&name, Some(900_000))).expect("sets"),
+        TopicRetentionUpdate::Applied(Some(900_000))
+    );
+    assert_eq!(
+        block_on(catalog.topic_retention_ms(&name)).expect("reads"),
+        Some(900_000)
+    );
+    assert_eq!(
+        block_on(catalog.set_topic_retention_ms(&name, None)).expect("resets"),
+        TopicRetentionUpdate::Applied(None)
+    );
+    assert_eq!(
+        block_on(catalog.topic_retention_ms(&name)).expect("default after reset"),
+        None
+    );
+    block_on(catalog.delete(&name, Some(entry.id()))).expect("deletes");
+    assert_eq!(
+        block_on(catalog.set_topic_retention_ms(&name, Some(900_000))).expect("missing"),
+        TopicRetentionUpdate::Missing
+    );
+}
+
 #[test]
 fn the_fake_keeps_the_contract() {
     create_is_idempotent(&FakeTopicCatalog::new());
@@ -123,6 +157,7 @@ fn the_fake_keeps_the_contract() {
     owned_creation_is_scoped(&FakeTopicCatalog::new());
     deletion_is_durable_and_non_reusable(&FakeTopicCatalog::new());
     deletion_rejects_a_stale_uuid(&FakeTopicCatalog::new());
+    retention_configuration_is_durable_and_resettable(&FakeTopicCatalog::new());
 }
 
 #[test]

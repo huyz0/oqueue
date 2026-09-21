@@ -9,6 +9,7 @@ use std::task::{Context, Poll, Waker};
 use super::super::tests::{
     create_is_idempotent, deletion_is_durable_and_non_reusable, deletion_rejects_a_stale_uuid,
     list_pages_in_name_order, lookup_id_agrees_with_lookup,
+    retention_configuration_is_durable_and_resettable,
 };
 use super::{ObjectStoreTopicCatalog, decode, encode, hex};
 use crate::test_executor::block_on;
@@ -52,6 +53,7 @@ fn it_keeps_the_contract() {
     list_pages_in_name_order(&fresh());
     deletion_is_durable_and_non_reusable(&fresh());
     deletion_rejects_a_stale_uuid(&fresh());
+    retention_configuration_is_durable_and_resettable(&fresh());
 }
 
 #[test]

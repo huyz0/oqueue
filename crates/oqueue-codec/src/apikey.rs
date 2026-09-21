@@ -35,6 +35,10 @@ pub enum ApiKey {
     DeleteTopics = 20,
     /// `DescribeConfigs` (32).
     DescribeConfigs = 32,
+    /// `AlterConfigs` (33).
+    AlterConfigs = 33,
+    /// `IncrementalAlterConfigs` (44).
+    IncrementalAlterConfigs = 44,
     /// `OffsetCommit` (8).
     OffsetCommit = 8,
     /// `OffsetFetch` (9).
@@ -79,6 +83,8 @@ impl ApiKey {
             19 => Some(Self::CreateTopics),
             20 => Some(Self::DeleteTopics),
             32 => Some(Self::DescribeConfigs),
+            33 => Some(Self::AlterConfigs),
+            44 => Some(Self::IncrementalAlterConfigs),
             8 => Some(Self::OffsetCommit),
             9 => Some(Self::OffsetFetch),
             10 => Some(Self::FindCoordinator),
@@ -139,6 +145,8 @@ mod tests {
             ApiKey::CreateTopics,
             ApiKey::DeleteTopics,
             ApiKey::DescribeConfigs,
+            ApiKey::AlterConfigs,
+            ApiKey::IncrementalAlterConfigs,
             ApiKey::OffsetCommit,
             ApiKey::OffsetFetch,
             ApiKey::FindCoordinator,

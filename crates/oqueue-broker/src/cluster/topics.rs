@@ -11,6 +11,7 @@
 use super::Cluster;
 use oqueue_core::{
     CatalogEntry, KeyDomain, Principal, TopicCreateOutcome, TopicDeleteOutcome, TopicId,
+    TopicRetentionUpdate,
 };
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
@@ -227,6 +228,42 @@ impl Cluster {
 
     pub(crate) async fn topic_lifecycle_read(&self) -> tokio::sync::OwnedRwLockReadGuard<()> {
         Arc::clone(&self.topic_lifecycle).read_owned().await
+    }
+
+    pub(crate) async fn topic_lifecycle_write(&self) -> tokio::sync::OwnedRwLockWriteGuard<()> {
+        Arc::clone(&self.topic_lifecycle).write_owned().await
+    }
+
+    /// Reads the durable topic retention override, or `None` for the default.
+    pub(crate) async fn topic_retention_ms(
+        &self,
+        name: &TopicId,
+    ) -> oqueue_core::Result<Option<i64>> {
+        self.catalog.topic_retention_ms(name).await
+    }
+
+    /// Stores the durable topic retention override while the caller holds the
+    /// topic lifecycle write lock.
+    pub(crate) async fn set_topic_retention_ms_while_locked(
+        &self,
+        name: &TopicId,
+        retention_ms: Option<i64>,
+    ) -> oqueue_core::Result<TopicRetentionUpdate> {
+        self.catalog
+            .set_topic_retention_ms(name, retention_ms)
+            .await
+    }
+
+    /// Publishes the ordered retention-change event after the catalog write.
+    pub(crate) async fn journal_topic_retention(
+        &self,
+        name: TopicId,
+        retention_ms: Option<i64>,
+    ) -> Result<(), oqueue_coordinator::CoordinatorError> {
+        self.coordinator
+            .set_topic_retention(name, retention_ms)
+            .await
+            .map(|_| ())
     }
 
     /// Confirms durable absence without consulting the serving cache.

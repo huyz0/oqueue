@@ -51,7 +51,8 @@ async fn a_commit_is_stamped_with_the_coordinator_s_clock() {
             MetadataRecord::ManifestPublished { .. }
             | MetadataRecord::RangeCompacted { .. }
             | MetadataRecord::Trimmed { .. }
-            | MetadataRecord::EpochChanged { .. } => None,
+            | MetadataRecord::EpochChanged { .. }
+            | MetadataRecord::TopicRetentionChanged { .. } => None,
         })
         .collect();
     assert_eq!(

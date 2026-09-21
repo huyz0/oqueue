@@ -649,6 +649,11 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-broker/src/find_coordinator.rs|GROUP"]="the wire schema's own key_type value for a consumer-group lookup, fixed by the protocol"
   ["crates/oqueue-broker/src/describe_configs.rs|DEFAULT_CONFIG_SOURCE"]="Kafka protocol config-source discriminator, not a tunable threshold"
   ["crates/oqueue-broker/src/describe_configs.rs|TOPIC_RESOURCE"]="Kafka protocol resource-type discriminator, not a tunable threshold"
+  ["crates/oqueue-broker/src/alter_configs.rs|TOPIC_RESOURCE"]="Kafka protocol resource-type discriminator, not a tunable threshold"
+  ["crates/oqueue-broker/src/incremental_alter_configs.rs|TOPIC_RESOURCE"]="Kafka protocol resource-type discriminator, not a tunable threshold"
+  ["crates/oqueue-broker/src/describe_configs.rs|TOPIC_CONFIG_SOURCE"]="Kafka protocol config-source discriminator, not a tunable threshold"
+  ["crates/oqueue-broker/src/retention.rs|CONFIG_RECONCILIATION_BATCH"]="bounded reconciliation work quota, not a product threshold"
+  ["crates/oqueue-core/src/catalog/stored/config.rs|RETENTION_FORMAT"]="a metadata object format tag, fixed once written"
   # `M10.20`: moved from `records.rs` to its own `records/count.rs` when
   # `count_records` (the only reader of this constant) got its own file.
   ["crates/oqueue-codec/src/records/count.rs|MIN_RECORD_BODY_LEN"]="the shortest body the record format can express -- derived from the fields, not chosen, so it moves only if the format does"
@@ -680,6 +685,7 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_COMPACTED"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_TRIMMED"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_EPOCH"]="a record tag in the segment format, fixed once written"
+  ["crates/oqueue-core/src/metadata_segment.rs|TAG_RETENTION"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/group_segment.rs|FORMAT"]="the group-log segment format's version number (\`M6.6\`)"
   ["crates/oqueue-core/src/catalog/stored.rs|FORMAT"]="the topic catalog entry format's version number (\`M7.3\`)"
   ["crates/oqueue-core/src/group_segment.rs|TAG_OFFSET"]="a record tag in the group segment format, fixed once written"

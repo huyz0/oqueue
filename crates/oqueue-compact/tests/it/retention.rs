@@ -133,6 +133,49 @@ fn a_rebuilt_heap_produces_the_same_deadlines() {
     assert!(live.due(&index, at(0)).expect("a round").is_empty());
 }
 
+/// A changed topic replaces only its own ordered entry. The unrelated topic
+/// remains armed, and the set still contains exactly one entry per partition.
+#[test]
+fn changing_topic_retention_keeps_the_heap_bounded() {
+    let other = TopicId::new("payments").expect("a topic");
+    let index = FakeMaterializedIndex::new();
+    index
+        .apply(&[
+            commit(1, 0, 1_000),
+            MetadataEntry::new(
+                CommitVersion::new(2),
+                MetadataRecord::BatchCommitted {
+                    object: ObjectKey::new("payments-v2").expect("a key"),
+                    spans: vec![CommittedSpan::new(
+                        other.clone(),
+                        partition_n(0),
+                        10,
+                        ByteRange::bounded(0, 10).expect("a range"),
+                        None,
+                    )],
+                    written_at: at(2_000),
+                },
+            ),
+        ])
+        .expect("commits");
+    let mut heap = ExpiryHeap::rebuilt(
+        &index,
+        &[(topic(), partition_n(0)), (other.clone(), partition_n(0))],
+        RETENTION,
+    );
+
+    heap.set_topic_retention(&index, &topic(), Some(100));
+
+    assert_eq!(heap.len(), 2, "one ordered entry per armed partition");
+    assert_eq!(
+        heap.deadlines(),
+        vec![
+            (1_100, topic(), partition_n(0)),
+            (3_000, other, partition_n(0)),
+        ]
+    );
+}
+
 /// ⚠️ **A write after the heap was built moves the deadline, and the stale
 /// entry does not trim.** The heap is re-checked against the index when an
 /// entry pops; believed instead, it would reap data acknowledged a moment ago.

@@ -55,6 +55,9 @@ pub(crate) struct Built {
     pub(crate) lease: Arc<oqueue_core::ObjectStoreLease>,
 }
 
+// This is the composition root: keeping the dependency wiring together makes
+// the production seams and their order auditable in one place.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn build_cluster(
     host: String,
     port: i32,
@@ -80,7 +83,14 @@ pub(crate) async fn build_cluster(
     let serving = serving
         .fenced_by(Arc::clone(&lease))
         .reopening_with(reopener(&store, &current));
-    let retention = retention_for(coordinator.clone(), log, &store, clock)?;
+    let catalog = catalog_over(Arc::clone(&backend));
+    let retention = retention_for(
+        coordinator.clone(),
+        log,
+        &store,
+        clock,
+        Arc::clone(&catalog) as Arc<dyn oqueue_core::TopicCatalog>,
+    )?;
     eprintln!(
         "oqueue: WARNING -- consumer-group membership/generation is in memory (M4.15 owns the \
          durable one, ADR-0034). Group membership and generation do not survive a restart."
@@ -99,7 +109,7 @@ pub(crate) async fn build_cluster(
     .await
     .map_err(|error| std::io::Error::other(format!("the writer identity was refused: {error}")))?
     .with_region_sealer(Arc::new(oqueue_broker::RejectingRegionSealer::new()))
-    .with_catalog(catalog_over(backend));
+    .with_catalog(catalog);
     Ok(Built {
         cluster,
         serving,
@@ -117,13 +127,15 @@ fn retention_for(
     log: Arc<dyn oqueue_core::MetadataLog>,
     store: &Arc<dyn ObjectStore>,
     clock: Arc<dyn oqueue_core::Clock>,
+    catalog: Arc<dyn oqueue_core::TopicCatalog>,
 ) -> std::io::Result<oqueue_broker::Retention> {
-    oqueue_broker::Retention::new(
+    oqueue_broker::Retention::new_with_catalog(
         coordinator,
         log,
         Box::new(oqueue_index::MemoryIndex::new()),
         Arc::clone(store),
         clock,
+        catalog,
     )
     .map_err(|error| std::io::Error::other(format!("retention would not start: {error}")))
 }

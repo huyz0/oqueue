@@ -5,7 +5,7 @@ use crate::commit::CommitAck;
 use crate::error::{CoordinatorError, OpenRejected};
 #[cfg(doc)]
 use crate::serve::REBUILD_PAGE_ENTRIES;
-use crate::serve::{CommitRequest, CoordinatorLoop, Request, TrimRequest};
+use crate::serve::{CommitRequest, CoordinatorLoop, Request, RetentionRequest, TrimRequest};
 use crate::subscribe::{DELTA_BUFFER_ENTRIES, DeltaStream, IndexWatch};
 use oqueue_core::{
     Clock, CommitVersion, CommittedSpan, CoordinatorEpoch, IndexReader, MaterializedIndex,
@@ -339,6 +339,30 @@ impl Coordinator {
                 topic,
                 partition,
                 start,
+                reply,
+            }))
+            .await
+            .map_err(|_| CoordinatorError::Unavailable)?;
+        answer.await.map_err(|_| CoordinatorError::Unavailable)?
+    }
+
+    /// Journals a topic retention configuration change before the admin API
+    /// acknowledges it (`M12.6`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `Unavailable` when the coordinator cannot accept or complete
+    /// the journal request.
+    pub async fn set_topic_retention(
+        &self,
+        topic: TopicId,
+        retention_ms: Option<i64>,
+    ) -> Result<CommitVersion, CoordinatorError> {
+        let (reply, answer) = oneshot::channel();
+        self.commits
+            .send(Request::Retention(RetentionRequest {
+                topic,
+                retention_ms,
                 reply,
             }))
             .await

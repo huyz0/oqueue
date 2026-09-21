@@ -68,7 +68,11 @@ impl ObjectStoreTopicCatalog {
 
     pub(super) async fn delete_live_indexes(&self, entry: &CatalogEntry) -> Result<()> {
         let name = entry.name();
-        let mut keys = vec![self.topic_key(name)?, self.id_key(entry.id())?];
+        let mut keys = vec![
+            self.topic_key(name)?,
+            self.id_key(entry.id())?,
+            self.retention_key(name)?,
+        ];
         if let Some(creator) = entry.creator() {
             keys.push(self.owner_key(creator, name)?);
         }

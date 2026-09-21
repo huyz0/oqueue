@@ -18,6 +18,7 @@ use super::{CatalogEntry, TopicCatalog, TopicDeleteOutcome};
 use crate::{
     BoxFuture, ByteRange, Error, KeyDomain, MaintenanceStore, MetadataShardId, ObjectKey,
     ObjectStore, Precondition, Principal, Result, TopicCreateOutcome, TopicId,
+    TopicRetentionUpdate,
 };
 
 /// The entry format's version, the body's first byte.
@@ -27,6 +28,7 @@ const RACE_VISIBILITY_ATTEMPTS: u32 = 64;
 const OWNER_DEFAULT_FORMAT: u8 = 3;
 const OWNER_CUSTOMER_FORMAT: u8 = 4;
 
+mod config;
 mod delete;
 mod format;
 use format::{decode, encode, hex, unhex};
@@ -445,6 +447,18 @@ impl TopicCatalog for ObjectStoreTopicCatalog {
         expected_id: Option<u128>,
     ) -> BoxFuture<'a, Result<TopicDeleteOutcome>> {
         Box::pin(self.delete_topic(name, expected_id))
+    }
+
+    fn topic_retention_ms<'a>(&'a self, name: &'a TopicId) -> BoxFuture<'a, Result<Option<i64>>> {
+        Box::pin(self.read_retention(name))
+    }
+
+    fn set_topic_retention_ms<'a>(
+        &'a self,
+        name: &'a TopicId,
+        retention_ms: Option<i64>,
+    ) -> BoxFuture<'a, Result<TopicRetentionUpdate>> {
+        Box::pin(self.write_retention(name, retention_ms))
     }
 
     fn list_owned<'a>(

@@ -24,7 +24,7 @@ use oqueue_coordinator::{
 };
 use oqueue_core::{
     Clock, CommitVersion, MaterializedIndex, MetadataEntry, MetadataLog, MetadataRecord, ObjectKey,
-    ObjectStore, Offset, PartitionId, Result, TopicId,
+    ObjectStore, Offset, PartitionId, Result, TopicCatalog, TopicId,
 };
 
 /// How often a retention round runs.
@@ -34,6 +34,13 @@ use oqueue_core::{
 /// is a delay no retention measured in days can notice.
 pub const RETENTION_ROUND_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Maximum number of armed topics whose durable setting is reconciled by one
+/// round.
+///
+/// Event delivery is the normal path; this bounded pass repairs a catalog
+/// write whose metadata event was unavailable without scanning every topic.
+pub const CONFIG_RECONCILIATION_BATCH: usize = 64;
+
 /// Retention for one metadata shard, until its coordinator stops.
 pub struct Retention {
     coordinator: Coordinator,
@@ -42,8 +49,10 @@ pub struct Retention {
     index: Box<dyn MaterializedIndex>,
     store: Arc<dyn ObjectStore>,
     clock: Arc<dyn Clock>,
+    catalog: Arc<dyn TopicCatalog>,
     heap: ExpiryHeap,
     lifecycle: Lifecycle,
+    reconciliation_cursor: Option<TopicId>,
     /// Whether `index` holds the log. ⚠️ **False after a failed rebuild, and
     /// then nothing is trimmed or swept**: an empty follower names no object,
     /// so a sweep against it would start every released object's clock —
@@ -79,6 +88,31 @@ impl Retention {
         store: Arc<dyn ObjectStore>,
         clock: Arc<dyn Clock>,
     ) -> Result<Self> {
+        Self::new_with_catalog(
+            coordinator,
+            log,
+            index,
+            store,
+            clock,
+            Arc::new(oqueue_core::FakeTopicCatalog::new()),
+        )
+    }
+
+    /// Constructs retention over the broker's durable topic catalog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the configured garbage-collection safety terms
+    /// cannot be constructed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_catalog(
+        coordinator: Coordinator,
+        log: Arc<dyn MetadataLog>,
+        index: Box<dyn MaterializedIndex>,
+        store: Arc<dyn ObjectStore>,
+        clock: Arc<dyn Clock>,
+        catalog: Arc<dyn TopicCatalog>,
+    ) -> Result<Self> {
         let lifecycle = Lifecycle::new(DELETION_DELAY_MS, GcTerms::CONFIGURED)?;
         let stream = coordinator.subscribe();
         index.clear();
@@ -89,8 +123,10 @@ impl Retention {
             index,
             store,
             clock,
+            catalog,
             heap: ExpiryHeap::new(DEFAULT_RETENTION_MS),
             lifecycle,
+            reconciliation_cursor: None,
             synced: false,
         })
     }
@@ -136,15 +172,28 @@ impl Retention {
             self.rebuild().await;
             return;
         }
-        self.arm(&entry);
+        self.arm(&entry).await;
     }
 
-    fn arm(&mut self, entry: &MetadataEntry) {
-        if let MetadataRecord::BatchCommitted { spans, .. } = entry.record() {
-            for span in spans {
-                self.heap
-                    .track(&*self.index, span.topic(), span.partition());
+    async fn arm(&mut self, entry: &MetadataEntry) {
+        match entry.record() {
+            MetadataRecord::BatchCommitted { spans, .. } => {
+                for span in spans {
+                    if let Ok(retention_ms) = self.catalog.topic_retention_ms(span.topic()).await {
+                        self.heap
+                            .set_topic_retention(&*self.index, span.topic(), retention_ms);
+                    }
+                    self.heap
+                        .track(&*self.index, span.topic(), span.partition());
+                }
             }
+            MetadataRecord::TopicRetentionChanged { topic, .. } => {
+                if let Ok(retention_ms) = self.catalog.topic_retention_ms(topic).await {
+                    self.heap
+                        .set_topic_retention(&*self.index, topic, retention_ms);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -175,7 +224,7 @@ impl Retention {
                 return;
             }
             for entry in &page {
-                self.arm(entry);
+                self.arm(entry).await;
             }
             from = next;
         }
@@ -191,6 +240,7 @@ impl Retention {
             }
         }
         let now = self.clock.now();
+        self.reconcile_configurations().await;
         // ⚠️ **Backpressure before the heap is popped**: a popped partition
         // that is then not trimmed stays unarmed until its next commit.
         if self.lifecycle.admits() {
@@ -222,6 +272,24 @@ impl Retention {
         }
         self.lifecycle.sweep(&*self.index, &*self.store, now).await;
         true
+    }
+
+    async fn reconcile_configurations(&mut self) {
+        let topics = self.heap.topics_after(
+            self.reconciliation_cursor.as_ref(),
+            CONFIG_RECONCILIATION_BATCH,
+        );
+        if topics.is_empty() {
+            self.reconciliation_cursor = None;
+            return;
+        }
+        for topic in &topics {
+            if let Ok(retention_ms) = self.catalog.topic_retention_ms(topic).await {
+                self.heap
+                    .set_topic_retention(&*self.index, topic, retention_ms);
+            }
+        }
+        self.reconciliation_cursor = topics.last().cloned();
     }
 
     /// The objects behind every entry a trim to `start` drops.

@@ -12,10 +12,11 @@ use oqueue_codec::describe_configs::{
 use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header};
 use oqueue_compact::DEFAULT_RETENTION_MS;
-use oqueue_core::AdminOperation;
+use oqueue_core::{AdminOperation, TopicId};
 
 const TOPIC_RESOURCE: i8 = 2;
 const DEFAULT_CONFIG_SOURCE: i8 = 5;
+const TOPIC_CONFIG_SOURCE: i8 = 2;
 const RETENTION_MS: &str = "retention.ms";
 
 /// Decodes, authorizes, resolves, and describes supported topic settings.
@@ -94,7 +95,18 @@ async fn describe_one(
     {
         return invalid(error_codes::UNKNOWN_TOPIC_OR_PARTITION, "unknown topic");
     }
-    let Ok(configs) = supported_configs(resource.config_names.as_deref()) else {
+    let Ok(topic) = TopicId::new(&resource.resource_name) else {
+        return invalid(error_codes::UNKNOWN_TOPIC_OR_PARTITION, "unknown topic");
+    };
+    let Ok(retention_ms) = cluster.topic_retention_ms(&topic).await else {
+        return invalid(
+            error_codes::UNKNOWN_SERVER_ERROR,
+            "configuration unavailable",
+        );
+    };
+    let Ok(configs) =
+        supported_configs_with_retention(resource.config_names.as_deref(), retention_ms)
+    else {
         return invalid(error_codes::INVALID_CONFIG, "configuration is unsupported");
     };
     DescribeConfigsResponseResource {
@@ -106,7 +118,15 @@ async fn describe_one(
     }
 }
 
+#[cfg(test)]
 fn supported_configs(names: Option<&[String]>) -> Result<Vec<ConfigEntry>, ()> {
+    supported_configs_with_retention(names, None)
+}
+
+fn supported_configs_with_retention(
+    names: Option<&[String]>,
+    configured_retention_ms: Option<i64>,
+) -> Result<Vec<ConfigEntry>, ()> {
     let requested = names.unwrap_or(&[]);
     if requested.is_empty() && names.is_some() {
         return Ok(Vec::new());
@@ -116,9 +136,14 @@ fn supported_configs(names: Option<&[String]>) -> Result<Vec<ConfigEntry>, ()> {
     }
     Ok(vec![ConfigEntry {
         name: RETENTION_MS.to_owned(),
-        value: Some(DEFAULT_RETENTION_MS.to_string()),
-        read_only: true,
-        config_source: DEFAULT_CONFIG_SOURCE,
+        value: Some(
+            configured_retention_ms
+                .unwrap_or(DEFAULT_RETENTION_MS)
+                .to_string(),
+        ),
+        read_only: false,
+        config_source: configured_retention_ms
+            .map_or(DEFAULT_CONFIG_SOURCE, |_| TOPIC_CONFIG_SOURCE),
         is_sensitive: false,
     }])
 }

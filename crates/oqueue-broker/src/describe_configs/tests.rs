@@ -54,8 +54,36 @@ async fn authorized_topic_reports_the_authoritative_retention_default() {
     assert_eq!(result.configs.len(), 1);
     assert_eq!(result.configs[0].name, "retention.ms");
     assert_eq!(result.configs[0].value.as_deref(), Some("604800000"));
-    assert!(result.configs[0].read_only);
+    assert!(!result.configs[0].read_only);
     assert!(!result.configs[0].is_sensitive);
+}
+
+#[tokio::test]
+async fn configured_topic_reports_the_durable_override() {
+    let fixture = fixture(&[]).await;
+    let topic = topic("orders");
+    fixture
+        .cluster
+        .create_topic(&topic, 1)
+        .await
+        .expect("topic");
+    fixture
+        .cluster
+        .set_topic_retention_ms_while_locked(&topic, Some(900_000))
+        .await
+        .expect("retention");
+    let grants = TopicGrants::new();
+    let result = describe_one(
+        &fixture.cluster,
+        &topic_resource(None),
+        true,
+        &authz(&grants, None, false),
+    )
+    .await;
+    assert_eq!(result.error_code, error_codes::NONE);
+    assert_eq!(result.configs[0].value.as_deref(), Some("900000"));
+    assert_eq!(result.configs[0].config_source, 2);
+    assert!(!result.configs[0].read_only);
 }
 
 #[tokio::test]

@@ -38,6 +38,8 @@ pub(crate) enum Request {
     DropCache(oneshot::Sender<()>),
     /// Journal a trim of one partition (`M5.90`).
     Trim(TrimRequest),
+    /// Journal a topic retention configuration change (`M12.6`).
+    Retention(RetentionRequest),
 }
 
 /// A retention round's trim, and where to send its answer.
@@ -46,6 +48,14 @@ pub(crate) struct TrimRequest {
     pub(crate) topic: TopicId,
     pub(crate) partition: PartitionId,
     pub(crate) start: Offset,
+    pub(crate) reply: oneshot::Sender<Result<CommitVersion, CoordinatorError>>,
+}
+
+/// A topic retention change, and where to send its version.
+#[derive(Debug)]
+pub(crate) struct RetentionRequest {
+    pub(crate) topic: TopicId,
+    pub(crate) retention_ms: Option<i64>,
     pub(crate) reply: oneshot::Sender<Result<CommitVersion, CoordinatorError>>,
 }
 
@@ -160,6 +170,16 @@ impl CoordinatorLoop {
                     // journaled or not whether or not anyone still waits.
                     drop(trim.reply.send(outcome));
                 }
+                Request::Retention(retention) => {
+                    let outcome = match self.may_write().await {
+                        Ok(()) => {
+                            self.serve_retention(retention.topic, retention.retention_ms)
+                                .await
+                        }
+                        Err(refused) => Err(refused),
+                    };
+                    drop(retention.reply.send(outcome));
+                }
                 Request::DropCache(reply) => {
                     self.index.clear();
                     self.publish_applied();
@@ -265,6 +285,28 @@ impl CoordinatorLoop {
         let staged = self
             .allocator
             .stage_trim(topic, partition, start)
+            .map_err(CoordinatorError::Unassignable)?;
+        if !self.leads() {
+            return Err(CoordinatorError::Fenced);
+        }
+        self.journal(staged.entry()).await?;
+        self.still_leads_after_append()?;
+        let entry = staged.entry().clone();
+        let (version, _) = self.allocator.apply(staged);
+        self.last_committed = Some(version);
+        self.publish(entry).await;
+        Ok(version)
+    }
+
+    /// Stage → journal → publish a topic configuration event.
+    async fn serve_retention(
+        &mut self,
+        topic: TopicId,
+        retention_ms: Option<i64>,
+    ) -> Result<CommitVersion, CoordinatorError> {
+        let staged = self
+            .allocator
+            .stage_retention(topic, retention_ms)
             .map_err(CoordinatorError::Unassignable)?;
         if !self.leads() {
             return Err(CoordinatorError::Fenced);

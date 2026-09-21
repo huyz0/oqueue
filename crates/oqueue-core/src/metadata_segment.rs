@@ -27,6 +27,7 @@ const TAG_MANIFEST: u8 = 2;
 const TAG_COMPACTED: u8 = 3;
 const TAG_TRIMMED: u8 = 4;
 const TAG_EPOCH: u8 = 5;
+const TAG_RETENTION: u8 = 6;
 
 /// Encodes the entries one append carries.
 ///
@@ -79,41 +80,88 @@ fn encode_record(record: &MetadataRecord, out: &mut Vec<u8>) -> Result<()> {
             spans,
             written_at,
         } => encode_batch(object, spans, *written_at, out)?,
-        MetadataRecord::ManifestPublished {
-            topic,
-            partition,
-            manifest,
-            upto,
-        } => {
-            out.push(TAG_MANIFEST);
-            put_partition(out, topic, *partition)?;
-            put_str(out, manifest.as_str())?;
-            out.extend_from_slice(&upto.get().to_be_bytes());
+        MetadataRecord::ManifestPublished { .. } => encode_manifest(record, out)?,
+        MetadataRecord::RangeCompacted { .. } => encode_compacted(record, out)?,
+        MetadataRecord::Trimmed { .. } => encode_trimmed(record, out)?,
+        MetadataRecord::EpochChanged { .. } => encode_epoch(record, out),
+        MetadataRecord::TopicRetentionChanged { .. } => encode_retention(record, out)?,
+    }
+    Ok(())
+}
+
+fn encode_manifest(record: &MetadataRecord, out: &mut Vec<u8>) -> Result<()> {
+    let MetadataRecord::ManifestPublished {
+        topic,
+        partition,
+        manifest,
+        upto,
+    } = record
+    else {
+        unreachable!("record tag selected the manifest encoder")
+    };
+    out.push(TAG_MANIFEST);
+    put_partition(out, topic, *partition)?;
+    put_str(out, manifest.as_str())?;
+    out.extend_from_slice(&upto.get().to_be_bytes());
+    Ok(())
+}
+
+fn encode_compacted(record: &MetadataRecord, out: &mut Vec<u8>) -> Result<()> {
+    let MetadataRecord::RangeCompacted {
+        topic,
+        partition,
+        retiring,
+        installing,
+    } = record
+    else {
+        unreachable!("record tag selected the compacted encoder")
+    };
+    out.push(TAG_COMPACTED);
+    put_partition(out, topic, *partition)?;
+    put_refs(out, retiring)?;
+    put_refs(out, installing)?;
+    Ok(())
+}
+
+fn encode_trimmed(record: &MetadataRecord, out: &mut Vec<u8>) -> Result<()> {
+    let MetadataRecord::Trimmed {
+        topic,
+        partition,
+        start,
+    } = record
+    else {
+        unreachable!("record tag selected the trimmed encoder")
+    };
+    out.push(TAG_TRIMMED);
+    put_partition(out, topic, *partition)?;
+    out.extend_from_slice(&start.get().to_be_bytes());
+    Ok(())
+}
+
+fn encode_epoch(record: &MetadataRecord, out: &mut Vec<u8>) {
+    let MetadataRecord::EpochChanged { epoch } = record else {
+        unreachable!("record tag selected the epoch encoder")
+    };
+    out.push(TAG_EPOCH);
+    out.extend_from_slice(&epoch.get().to_be_bytes());
+}
+
+fn encode_retention(record: &MetadataRecord, out: &mut Vec<u8>) -> Result<()> {
+    let MetadataRecord::TopicRetentionChanged {
+        topic,
+        retention_ms,
+    } = record
+    else {
+        unreachable!("record tag selected the retention encoder")
+    };
+    out.push(TAG_RETENTION);
+    put_str(out, topic.as_str())?;
+    match retention_ms {
+        Some(value) => {
+            out.push(1);
+            out.extend_from_slice(&value.to_be_bytes());
         }
-        MetadataRecord::RangeCompacted {
-            topic,
-            partition,
-            retiring,
-            installing,
-        } => {
-            out.push(TAG_COMPACTED);
-            put_partition(out, topic, *partition)?;
-            put_refs(out, retiring)?;
-            put_refs(out, installing)?;
-        }
-        MetadataRecord::Trimmed {
-            topic,
-            partition,
-            start,
-        } => {
-            out.push(TAG_TRIMMED);
-            put_partition(out, topic, *partition)?;
-            out.extend_from_slice(&start.get().to_be_bytes());
-        }
-        MetadataRecord::EpochChanged { epoch } => {
-            out.push(TAG_EPOCH);
-            out.extend_from_slice(&epoch.get().to_be_bytes());
-        }
+        None => out.push(0),
     }
     Ok(())
 }
@@ -138,41 +186,65 @@ fn decode_record(cur: &mut Cursor<'_>) -> Result<MetadataRecord> {
     let at = cur.at;
     Ok(match cur.u8()? {
         TAG_BATCH => decode_batch(cur)?,
-        TAG_MANIFEST => {
-            let (topic, partition) = cur.partition()?;
-            let manifest = cur.key()?;
-            let upto = cur.offset()?;
-            MetadataRecord::ManifestPublished {
-                topic,
-                partition,
-                manifest,
-                upto,
-            }
-        }
-        TAG_COMPACTED => {
-            let (topic, partition) = cur.partition()?;
-            let retiring = cur.refs()?;
-            let installing = cur.refs()?;
-            MetadataRecord::RangeCompacted {
-                topic,
-                partition,
-                retiring,
-                installing,
-            }
-        }
-        TAG_TRIMMED => {
-            let (topic, partition) = cur.partition()?;
-            let start = cur.offset()?;
-            MetadataRecord::Trimmed {
-                topic,
-                partition,
-                start,
-            }
-        }
-        TAG_EPOCH => MetadataRecord::EpochChanged {
-            epoch: CoordinatorEpoch::new(cur.u64()?),
-        },
+        TAG_MANIFEST => decode_manifest(cur)?,
+        TAG_COMPACTED => decode_compacted(cur)?,
+        TAG_TRIMMED => decode_trimmed(cur)?,
+        TAG_EPOCH => decode_epoch(cur)?,
+        TAG_RETENTION => decode_retention(cur)?,
         _ => return Err(Error::MalformedMetadataSegment { at }),
+    })
+}
+
+fn decode_manifest(cur: &mut Cursor<'_>) -> Result<MetadataRecord> {
+    let (topic, partition) = cur.partition()?;
+    let manifest = cur.key()?;
+    let upto = cur.offset()?;
+    Ok(MetadataRecord::ManifestPublished {
+        topic,
+        partition,
+        manifest,
+        upto,
+    })
+}
+
+fn decode_compacted(cur: &mut Cursor<'_>) -> Result<MetadataRecord> {
+    let (topic, partition) = cur.partition()?;
+    let retiring = cur.refs()?;
+    let installing = cur.refs()?;
+    Ok(MetadataRecord::RangeCompacted {
+        topic,
+        partition,
+        retiring,
+        installing,
+    })
+}
+
+fn decode_trimmed(cur: &mut Cursor<'_>) -> Result<MetadataRecord> {
+    let (topic, partition) = cur.partition()?;
+    let start = cur.offset()?;
+    Ok(MetadataRecord::Trimmed {
+        topic,
+        partition,
+        start,
+    })
+}
+
+fn decode_epoch(cur: &mut Cursor<'_>) -> Result<MetadataRecord> {
+    Ok(MetadataRecord::EpochChanged {
+        epoch: CoordinatorEpoch::new(cur.u64()?),
+    })
+}
+
+fn decode_retention(cur: &mut Cursor<'_>) -> Result<MetadataRecord> {
+    let topic = cur.topic()?;
+    let retention_ms = match cur.u8()? {
+        0 => None,
+        1 => Some(cur_i64(cur)?),
+        _ => return Err(cur.malformed()),
+    };
+    Ok(MetadataRecord::TopicRetentionChanged {
+        topic,
+        retention_ms,
     })
 }
 
@@ -330,6 +402,11 @@ impl<'a> Cursor<'a> {
     fn key(&mut self) -> Result<ObjectKey> {
         let raw = self.string()?;
         self.checked(ObjectKey::new(raw))
+    }
+
+    fn topic(&mut self) -> Result<TopicId> {
+        let raw = self.string()?;
+        self.checked(TopicId::new(raw))
     }
 
     fn offset(&mut self) -> Result<Offset> {

@@ -151,6 +151,15 @@ pub enum TopicDeleteOutcome {
     },
 }
 
+/// Result of changing a live topic's retention override.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TopicRetentionUpdate {
+    /// The topic was live when the update was linearized.
+    Applied(Option<i64>),
+    /// A tombstone or missing topic won the update race.
+    Missing,
+}
+
 /// A topic's id, derived from its name (`ADR-0049` point 3).
 ///
 /// ⚠️ **Derived, so two nodes creating one topic agree without talking**, and
@@ -221,6 +230,18 @@ pub trait TopicCatalog: Send + Sync + fmt::Debug {
         expected_id: Option<u128>,
     ) -> BoxFuture<'a, Result<TopicDeleteOutcome>>;
 
+    /// Reads the configured topic retention override, or `None` for the
+    /// effective broker default and for a topic that is not live.
+    fn topic_retention_ms<'a>(&'a self, name: &'a TopicId) -> BoxFuture<'a, Result<Option<i64>>>;
+
+    /// Stores or removes the topic retention override and returns its new
+    /// configured value. A missing or tombstoned topic returns `None`.
+    fn set_topic_retention_ms<'a>(
+        &'a self,
+        name: &'a TopicId,
+        retention_ms: Option<i64>,
+    ) -> BoxFuture<'a, Result<TopicRetentionUpdate>>;
+
     /// Up to `limit` topics durably owned by `creator`, after `after`.
     fn list_owned<'a>(
         &'a self,
@@ -248,6 +269,7 @@ struct Entries {
     by_name: BTreeMap<TopicId, CatalogEntry>,
     by_id: HashMap<u128, TopicId>,
     tombstones: HashMap<TopicId, u128>,
+    retention_ms: HashMap<TopicId, i64>,
 }
 
 impl FakeTopicCatalog {
@@ -387,8 +409,43 @@ impl TopicCatalog for FakeTopicCatalog {
                 e.tombstones.insert(name.clone(), entry.id());
                 e.by_name.remove(name);
                 e.by_id.remove(&entry.id());
+                e.retention_ms.remove(name);
                 Ok(TopicDeleteOutcome::Deleted(entry))
             })
+        })
+    }
+
+    fn topic_retention_ms<'a>(&'a self, name: &'a TopicId) -> BoxFuture<'a, Result<Option<i64>>> {
+        Box::pin(async move {
+            Ok(self.with(|e| {
+                e.by_name
+                    .contains_key(name)
+                    .then(|| e.retention_ms.get(name).copied())
+                    .flatten()
+            }))
+        })
+    }
+
+    fn set_topic_retention_ms<'a>(
+        &'a self,
+        name: &'a TopicId,
+        retention_ms: Option<i64>,
+    ) -> BoxFuture<'a, Result<TopicRetentionUpdate>> {
+        Box::pin(async move {
+            Ok(self.with(|e| {
+                if !e.by_name.contains_key(name) {
+                    return TopicRetentionUpdate::Missing;
+                }
+                match retention_ms {
+                    Some(value) => {
+                        e.retention_ms.insert(name.clone(), value);
+                    }
+                    None => {
+                        e.retention_ms.remove(name);
+                    }
+                }
+                TopicRetentionUpdate::Applied(retention_ms)
+            }))
         })
     }
 

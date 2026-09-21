@@ -20,7 +20,7 @@
 
 use oqueue_core::{
     BoxFuture, CatalogEntry, Principal, Result, TopicCatalog, TopicCreateOutcome,
-    TopicDeleteOutcome, TopicId,
+    TopicDeleteOutcome, TopicId, TopicRetentionUpdate,
 };
 
 /// Width of the index in a synthetic name: enough for 10^8 topics, and fixed
@@ -122,6 +122,18 @@ impl TopicCatalog for SyntheticCatalog {
         _expected_id: Option<u128>,
     ) -> BoxFuture<'a, Result<TopicDeleteOutcome>> {
         Box::pin(async { Ok(TopicDeleteOutcome::Missing) })
+    }
+
+    fn topic_retention_ms<'a>(&'a self, _name: &'a TopicId) -> BoxFuture<'a, Result<Option<i64>>> {
+        Box::pin(async { Ok(None) })
+    }
+
+    fn set_topic_retention_ms<'a>(
+        &'a self,
+        _name: &'a TopicId,
+        _retention_ms: Option<i64>,
+    ) -> BoxFuture<'a, Result<TopicRetentionUpdate>> {
+        Box::pin(async { Ok(TopicRetentionUpdate::Missing) })
     }
 
     fn list_owned<'a>(
@@ -271,6 +283,18 @@ impl<C: TopicCatalog> TopicCatalog for Counted<C> {
         expected_id: Option<u128>,
     ) -> BoxFuture<'a, Result<TopicDeleteOutcome>> {
         self.inner.delete(name, expected_id)
+    }
+
+    fn topic_retention_ms<'a>(&'a self, name: &'a TopicId) -> BoxFuture<'a, Result<Option<i64>>> {
+        self.inner.topic_retention_ms(name)
+    }
+
+    fn set_topic_retention_ms<'a>(
+        &'a self,
+        name: &'a TopicId,
+        retention_ms: Option<i64>,
+    ) -> BoxFuture<'a, Result<TopicRetentionUpdate>> {
+        self.inner.set_topic_retention_ms(name, retention_ms)
     }
 
     fn list_owned<'a>(

@@ -313,6 +313,28 @@ impl Allocator {
         })
     }
 
+    /// Stages a topic retention event, taking a version but no partition
+    /// offsets.
+    pub(crate) fn stage_retention(
+        &self,
+        topic: TopicId,
+        retention_ms: Option<i64>,
+    ) -> Result<Staged> {
+        Ok(Staged {
+            entry: MetadataEntry::new(
+                self.next_version,
+                MetadataRecord::TopicRetentionChanged {
+                    topic,
+                    retention_ms,
+                },
+            ),
+            assignments: Vec::new(),
+            ends: Vec::new(),
+            producer_ends: Vec::new(),
+            next_version: self.next_version.advance(1)?,
+        })
+    }
+
     /// Takes the position [`stage`](Self::stage) computed, once it is durable.
     ///
     /// ⚠️ **Infallible, and that is the design.** Every way this could fail was

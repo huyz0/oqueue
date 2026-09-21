@@ -258,4 +258,16 @@ pub enum MetadataRecord {
         /// The incarnation now holding the log.
         epoch: CoordinatorEpoch,
     },
+    /// A topic's effective retention override changed.
+    ///
+    /// This is a durable control-plane event, not partition data. Replaying
+    /// it advances only the metadata version line; retention consumers use the
+    /// catalog value as the authority and therefore apply duplicate or stale
+    /// deliveries safely.
+    TopicRetentionChanged {
+        /// The topic whose retention changed.
+        topic: TopicId,
+        /// The configured override, or `None` for the broker default.
+        retention_ms: Option<i64>,
+    },
 }

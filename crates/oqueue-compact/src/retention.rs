@@ -24,8 +24,7 @@
 //! trim. Progressive trims of an active partition's oldest objects need
 //! per-object times, which is `M5.16`'s half.
 
-use core::cmp::Reverse;
-use std::collections::{BinaryHeap, HashMap};
+use std::collections::{BTreeSet, HashMap};
 
 use oqueue_core::{MaterializedIndex, MetadataRecord, PartitionId, Result, Timestamp, TopicId};
 
@@ -73,9 +72,11 @@ pub const DEFAULT_RETENTION_MS: i64 = 604_800_000;
 /// the idle case FR-33 exists for. Found by `M5.18`'s first round.
 #[derive(Debug, Default)]
 pub struct ExpiryHeap {
-    due: BinaryHeap<Reverse<(i64, TopicId, PartitionId)>>,
+    due: BTreeSet<(i64, TopicId, PartitionId)>,
     armed: HashMap<(TopicId, PartitionId), i64>,
+    topics: BTreeSet<TopicId>,
     retention_ms: i64,
+    topic_retention_ms: HashMap<TopicId, i64>,
     popped: usize,
 }
 
@@ -85,9 +86,11 @@ impl ExpiryHeap {
     #[must_use]
     pub fn new(retention_ms: i64) -> Self {
         Self {
-            due: BinaryHeap::new(),
+            due: BTreeSet::new(),
             armed: HashMap::new(),
+            topics: BTreeSet::new(),
             retention_ms,
+            topic_retention_ms: HashMap::new(),
             popped: 0,
         }
     }
@@ -125,7 +128,44 @@ impl ExpiryHeap {
         }
         if let Some(deadline) = self.deadline(index, topic, partition) {
             self.armed.insert(key, deadline);
-            self.due.push(Reverse((deadline, topic.clone(), partition)));
+            self.topics.insert(topic.clone());
+            self.due.insert((deadline, topic.clone(), partition));
+        }
+    }
+
+    /// Applies a topic retention override and re-arms its existing partitions
+    /// against the new deadline. The caller supplies the current index because
+    /// the heap is derived state and must never invent a partition's extent.
+    pub fn set_topic_retention<I>(&mut self, index: &I, topic: &TopicId, retention_ms: Option<i64>)
+    where
+        I: MaterializedIndex + ?Sized,
+    {
+        let changed = match retention_ms {
+            Some(value) => self.topic_retention_ms.get(topic) != Some(&value),
+            None => self.topic_retention_ms.contains_key(topic),
+        };
+        if !changed {
+            return;
+        }
+        match retention_ms {
+            Some(value) => {
+                self.topic_retention_ms.insert(topic.clone(), value);
+            }
+            None => {
+                self.topic_retention_ms.remove(topic);
+            }
+        }
+        let partitions: Vec<_> = self
+            .armed
+            .keys()
+            .filter(|(armed_topic, _)| armed_topic == topic)
+            .map(|(_, partition)| *partition)
+            .collect();
+        for partition in partitions {
+            if let Some(deadline) = self.armed.remove(&(topic.clone(), partition)) {
+                self.due.remove(&(deadline, topic.clone(), partition));
+            }
+            self.track(index, topic, partition);
         }
     }
 
@@ -152,6 +192,31 @@ impl ExpiryHeap {
             .collect();
         all.sort();
         all
+    }
+
+    /// The topics represented by armed partitions, in stable order and at
+    /// most `limit` entries. This is the bounded reconciliation surface used
+    /// by the broker; it never enumerates the catalog.
+    #[must_use]
+    pub fn topics(&self, limit: usize) -> Vec<TopicId> {
+        self.topics.iter().take(limit).cloned().collect()
+    }
+
+    /// Returns up to `limit` topics after `after`, wrapping to the beginning.
+    #[must_use]
+    pub fn topics_after(&self, after: Option<&TopicId>, limit: usize) -> Vec<TopicId> {
+        let iter: Box<dyn Iterator<Item = &TopicId> + '_> = match after {
+            Some(topic) => Box::new(
+                self.topics
+                    .range((std::ops::Bound::Excluded(topic), std::ops::Bound::Unbounded)),
+            ),
+            None => Box::new(self.topics.iter()),
+        };
+        let mut topics: Vec<_> = iter.take(limit).cloned().collect();
+        if topics.len() < limit && after.is_some() {
+            topics.extend(self.topics.iter().take(limit - topics.len()).cloned());
+        }
+        topics
     }
 
     /// How many heap entries the last [`due`](Self::due) popped — what a round
@@ -186,13 +251,12 @@ impl ExpiryHeap {
         // when it flipped it (`M5.18`).
         let mut rearm: Vec<(TopicId, PartitionId)> = Vec::new();
         self.popped = 0;
-        while let Some(Reverse((deadline, _, _))) = self.due.peek() {
-            if *deadline > now.as_millis() {
+        while let Some((deadline, topic, partition)) = self.due.iter().next().cloned() {
+            if deadline > now.as_millis() {
                 break;
             }
-            let Some(Reverse((pushed, topic, partition))) = self.due.pop() else {
-                break;
-            };
+            self.due.remove(&(deadline, topic.clone(), partition));
+            let pushed = deadline;
             self.popped += 1;
             let key = (topic, partition);
             // ⚠️ Every entry is its partition's armed one — `track` never
@@ -205,6 +269,13 @@ impl ExpiryHeap {
             let (topic, partition) = key;
             if self.deadline(index, &topic, partition) == Some(pushed) {
                 self.armed.remove(&(topic.clone(), partition));
+                if !self
+                    .armed
+                    .keys()
+                    .any(|(armed_topic, _)| armed_topic == &topic)
+                {
+                    self.topics.remove(&topic);
+                }
                 let end = index.end_offset(&topic, partition);
                 if index.log_start(&topic, partition) < end {
                     trims.push(MetadataRecord::Trimmed {
@@ -216,6 +287,13 @@ impl ExpiryHeap {
             } else {
                 // Written to since, and not re-armed by the caller.
                 self.armed.remove(&(topic.clone(), partition));
+                if !self
+                    .armed
+                    .keys()
+                    .any(|(armed_topic, _)| armed_topic == &topic)
+                {
+                    self.topics.remove(&topic);
+                }
                 rearm.push((topic, partition));
             }
         }
@@ -243,6 +321,11 @@ impl ExpiryHeap {
         if span.max() == Timestamp::EPOCH {
             return None;
         }
-        span.max().as_millis().checked_add(self.retention_ms)
+        span.max().as_millis().checked_add(
+            self.topic_retention_ms
+                .get(topic)
+                .copied()
+                .unwrap_or(self.retention_ms),
+        )
     }
 }

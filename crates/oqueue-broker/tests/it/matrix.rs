@@ -11,7 +11,10 @@
 
 #![allow(clippy::expect_used)]
 
+mod configs;
 mod group_protocol;
+
+use configs::{alter_configs_body, config_error_code, incremental_alter_configs_body};
 
 use crate::support::broker;
 use kafka_protocol::messages::fetch_request::{FetchPartition, FetchTopic};
@@ -165,6 +168,8 @@ async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u
                 .expect("encodes");
         }
         ApiKey::DescribeConfigs => describe_configs_body(&mut body, version),
+        ApiKey::AlterConfigs => alter_configs_body(&mut body, version),
+        ApiKey::IncrementalAlterConfigs => incremental_alter_configs_body(&mut body, version),
         ApiKey::Produce => produce_body(&mut body, version, cluster).await,
         ApiKey::Fetch => fetch_body(&mut body, version, cluster).await,
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
@@ -248,6 +253,7 @@ fn response_header_len(api_key: ApiKey, version: i16) -> usize {
 /// a reply that only *looks* like one (wrong header, mis-versioned body)
 /// fails here rather than passing as opaque bytes. Returns `ApiVersions`'
 /// top-level error code, 0 for the APIs that have none.
+#[allow(clippy::too_many_lines)]
 fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
     use kafka_protocol::messages::{FetchResponse, MetadataResponse, ProduceResponse};
     let mut rest = &reply[response_header_len(api_key, version)..];
@@ -292,6 +298,9 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         }
         ApiKey::OffsetCommit => group_protocol::offset_commit_error_code(&mut rest, version),
         ApiKey::OffsetFetch => group_protocol::offset_fetch_error_code(&mut rest, version),
+        ApiKey::AlterConfigs | ApiKey::IncrementalAlterConfigs => {
+            config_error_code(api_key, &mut rest, version)
+        }
     };
     assert!(
         rest.is_empty(),

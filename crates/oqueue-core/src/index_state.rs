@@ -290,7 +290,7 @@ impl IndexState {
                 start,
             } => batch.stage_effect(topic, *partition, Effect::Trimmed { start: *start }),
             // An event about the log, not about any partition.
-            MetadataRecord::EpochChanged { .. } => {}
+            MetadataRecord::EpochChanged { .. } | MetadataRecord::TopicRetentionChanged { .. } => {}
         }
         Ok(())
     }

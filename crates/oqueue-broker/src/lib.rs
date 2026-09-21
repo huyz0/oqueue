@@ -26,6 +26,7 @@
 //! left for an operator to discover.
 #![forbid(unsafe_code)]
 
+mod alter_configs;
 mod authz;
 pub mod checkpoint;
 pub mod cluster;
@@ -40,6 +41,7 @@ mod find_coordinator;
 mod flush;
 mod group_transitions;
 mod heartbeat;
+mod incremental_alter_configs;
 mod ingest;
 mod init_producer_id;
 mod join_group;

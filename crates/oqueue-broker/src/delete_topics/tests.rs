@@ -7,7 +7,7 @@ use oqueue_codec::delete_topics::DeletableTopic;
 use oqueue_codec::error_codes;
 use oqueue_core::{
     BoxFuture, CatalogEntry, Error, FakeTopicCatalog, Principal, TopicCatalog, TopicCreateOutcome,
-    TopicDeleteOutcome, TopicGrants, TopicId,
+    TopicDeleteOutcome, TopicGrants, TopicId, TopicRetentionUpdate,
 };
 use std::sync::RwLock;
 use std::time::Duration;
@@ -332,6 +332,21 @@ impl TopicCatalog for CleanupErrorCatalog {
             }
             Err(Error::Permanent)
         })
+    }
+
+    fn topic_retention_ms<'a>(
+        &'a self,
+        name: &'a TopicId,
+    ) -> BoxFuture<'a, oqueue_core::Result<Option<i64>>> {
+        Box::pin(async move { self.inner.topic_retention_ms(name).await })
+    }
+
+    fn set_topic_retention_ms<'a>(
+        &'a self,
+        name: &'a TopicId,
+        retention_ms: Option<i64>,
+    ) -> BoxFuture<'a, oqueue_core::Result<TopicRetentionUpdate>> {
+        Box::pin(async move { self.inner.set_topic_retention_ms(name, retention_ms).await })
     }
 
     fn list_owned<'a>(

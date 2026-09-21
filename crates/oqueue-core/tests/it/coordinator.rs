@@ -456,7 +456,8 @@ fn a_commit_record_carries_spans_and_the_object_it_came_from() {
         MetadataRecord::EpochChanged { .. }
         | MetadataRecord::ManifestPublished { .. }
         | MetadataRecord::RangeCompacted { .. }
-        | MetadataRecord::Trimmed { .. } => {
+        | MetadataRecord::Trimmed { .. }
+        | MetadataRecord::TopicRetentionChanged { .. } => {
             panic!("constructed a BatchCommitted")
         }
     }
