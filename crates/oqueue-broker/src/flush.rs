@@ -57,10 +57,16 @@ impl Cluster {
         self.store()
             .put(&key, sealed.into_payload(), None)
             .await
-            .map_err(FlushError::Store)?;
+            .map_err(|error| {
+                crate::telemetry::dependency_failure("object_store", "put", 0, None, "produce");
+                FlushError::Store(error)
+            })?;
         self.coordinator()
             .commit(key, spans)
             .await
-            .map_err(FlushError::Commit)
+            .map_err(|error| {
+                crate::telemetry::dependency_failure("coordinator", "commit", 0, None, "produce");
+                FlushError::Commit(error)
+            })
     }
 }

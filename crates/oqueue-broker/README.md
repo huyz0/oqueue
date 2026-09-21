@@ -21,6 +21,7 @@ Because *almost* everything else in this workspace is sans-I/O — ⚠️ **"by 
 - `rustls` — `tls.rs`'s TLS termination (`M9.5`, `ADR-0012`'s `ring` default build).
 - `rustls-pki-types` — the certificate/key types `tls.rs` parses PEM into.
 - `tokio-rustls` — wraps a stream in `rustls`'s handshake; generic over `S: AsyncRead + AsyncWrite`, the same seam `serve_connection` already is, so no `tokio` "net" feature is needed here.
+- `tracing` — the fixed-schema operational event seam (`M12.10`, `ADR-0065`).
 
 ⚠️ **`kafka-protocol` is a `dev-dependency` now, not runtime (`ADR-0019`).**
 `ADR-0017` had it as the dispatcher's generated message layer; `M2.31`-`M2.34`

@@ -63,6 +63,7 @@ pub mod sasl_authenticate;
 mod sasl_handshake;
 pub mod session;
 mod sync_group;
+mod telemetry;
 #[cfg(test)]
 mod testing;
 pub mod tls;

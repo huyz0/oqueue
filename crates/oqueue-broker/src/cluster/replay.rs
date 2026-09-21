@@ -225,7 +225,11 @@ pub(super) async fn replay_groups(
         if !offsets_done {
             let replayed = committed_offsets.replay().await;
             if permanent(&replayed) {
+                replay_failure("replay_offsets");
                 return;
+            }
+            if replayed.is_err() {
+                replay_failure("retry_replay_offsets");
             }
             offsets_done = replayed.is_ok();
         }
@@ -234,7 +238,11 @@ pub(super) async fn replay_groups(
                 .replay(group_coordinator.as_ref(), group_metadata_log.as_ref())
                 .await;
             if permanent(&replayed) {
+                replay_failure("replay_transitions");
                 return;
+            }
+            if replayed.is_err() {
+                replay_failure("retry_replay_transitions");
             }
             transitions_done = replayed.is_ok();
         }
@@ -247,4 +255,38 @@ pub(super) async fn replay_groups(
     group_transitions_task
         .serve(group_coordinator, group_metadata_log)
         .await;
+}
+
+fn replay_failure(operation: &'static str) {
+    crate::telemetry::dependency_failure("group_log", operation, 0, None, "coordinator");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::replay_failure;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tracing::{Event, Subscriber};
+    use tracing_subscriber::{
+        layer::{Context, Layer},
+        prelude::*,
+    };
+
+    struct Count(Arc<AtomicUsize>);
+
+    impl<S: Subscriber> Layer<S> for Count {
+        fn on_event(&self, _event: &Event<'_>, _ctx: Context<'_, S>) {
+            self.0.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    fn replay_failures_emit_dependency_events() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let subscriber = tracing_subscriber::registry().with(Count(Arc::clone(&count)));
+        tracing::subscriber::with_default(subscriber, || replay_failure("replay_offsets"));
+        assert_eq!(count.load(Ordering::Relaxed), 1);
+    }
 }

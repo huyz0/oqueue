@@ -157,6 +157,14 @@ tokio = { version = "1", default-features = false, features = [
     "macros",
     "time",
 ] }
+# Structured operational events. The library emits through `tracing`; the
+# composition root owns subscriber initialization (`M12.10`, ADR-0065).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "fmt",
+    "json",
+    "std",
+] }
 
 # ⚠️ **Dev-only, and only for `oqueue-store`'s simulated transport** (`M10.2`).
 # `object_store`'s `HttpRequestBody` exposes `as_bytes()` only for the `Bytes`

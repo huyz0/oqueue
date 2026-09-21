@@ -35,6 +35,7 @@ the entire system be tested with no network, no credentials and no container.
 - `oqueue-store` — `S3Store` and `GcsStore`, selected by `OQUEUE_STORE`. ⚠️ **Unset means an in-memory store, which is not durable** — the banner names it and `serve` warns that every acknowledged record is lost at exit. ⚠️ **A value that is neither `s3` nor `gcs` is refused**, not defaulted: `OQUEUE_STORE=S3` is a typo, and a typo must not start a broker that loses records.
 - `tokio` — the runtime under `serve`'s listener; `net` arrived exactly when this binary bound one.
 - `tokio-rustls` — the acceptor `serve` terminates TLS with (`M4.18`). ⚠️ **No new C toolchain**: the `ring` provider `ADR-0012` chose is already here beneath `oqueue-crypto` and `oqueue-store`, and this manifest pulls the same one.
+- `tracing-subscriber` — initializes the JSON operational-event subscriber for serving (`M12.10`, `ADR-0065`); the no-argument banner remains plain stdout before initialization.
 - `thiserror` — the security configuration's own error type, spelled the way every other crate here spells one.
 - `mimalloc` — the global allocator. ⚠️ C, compiled by `cc` at build time;
   within NFR-42 ("cargo and a C compiler") and recorded in ADR-0007.

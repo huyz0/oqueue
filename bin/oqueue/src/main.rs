@@ -255,6 +255,7 @@ fn main() {
         // decision) -- the harness's capture proxy needs clients steered
         // through it rather than at the socket this process bound.
         (Some("serve"), Some(addr)) => {
+            let _ = init_telemetry();
             // ⚠️ **Read before the listener binds, and fatal if it cannot
             // be.** `behavior.md` rule 8: a malformed credential, grant or
             // quota source must stop the process, never degrade to running
@@ -282,6 +283,16 @@ fn main() {
     }
 }
 
+fn init_telemetry() -> bool {
+    tracing_subscriber::fmt()
+        .json()
+        .with_target(false)
+        .with_current_span(false)
+        .with_span_list(false)
+        .try_init()
+        .is_ok()
+}
+
 /// The no-argument behaviour: the banner, and nothing else.
 ///
 /// ⚠️ ~~There is no broker.~~ — `serve` above runs one (`M2.25`). This stays
@@ -306,7 +317,7 @@ fn run(wiring: &Wiring) {
 // Sites below are on values this test constructed from literals it controls.
 #[allow(clippy::expect_used)]
 mod tests {
-    use super::{KeyProvider, Wiring, selection_from, store_for};
+    use super::{KeyProvider, Wiring, init_telemetry, selection_from, store_for};
     use oqueue_core::{Error, KeyId, Redacted};
     use std::future::Future;
     use std::task::{Context, Poll, Waker};
@@ -321,6 +332,12 @@ mod tests {
                 Poll::Pending => std::hint::spin_loop(),
             }
         }
+    }
+
+    #[test]
+    fn serving_telemetry_can_be_initialized() {
+        assert!(init_telemetry());
+        assert!(!init_telemetry());
     }
 
     /// ⚠️ **A named backend never silently becomes the in-memory one.** The

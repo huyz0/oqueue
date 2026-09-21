@@ -44,6 +44,7 @@ uuid = { version = "1", default-features = false }
 tokio-rustls.workspace = true
 rustls.workspace = true
 rustls-pki-types.workspace = true
+tracing.workspace = true
 
 # ⚠️ **Test-only now (`ADR-0019`).** `ADR-0017` had this as the dispatcher's
 # generated message layer; `M2.31`-`M2.34` hand-rolled every message this
@@ -66,6 +67,7 @@ tokio = { version = "1", features = ["io-util", "sync", "rt", "rt-multi-thread",
 # toolchain and no dependencies of its own. Set as the allocator of that one
 # test binary only, never of a library.
 stats_alloc = "0.1"
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

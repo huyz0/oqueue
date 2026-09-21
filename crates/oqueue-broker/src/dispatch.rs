@@ -250,7 +250,14 @@ impl Dispatcher {
         if api_key == ApiKey::ApiVersions {
             return HandlerResponse::Reply(api_versions_response(prelude));
         }
+        let principal = self.session.principal();
         if self.unauthorized(api_key) {
+            crate::telemetry::admin_decision(
+                api_key,
+                "denied",
+                prelude.correlation_id,
+                principal.as_ref(),
+            );
             return HandlerResponse::Close;
         }
         // `security.md` rule 13, FR-45, `M9.16`: the second bound every API
@@ -281,7 +288,7 @@ impl Dispatcher {
         } else {
             Some(self.cluster.topic_lifecycle_read().await)
         };
-        match api_key {
+        let response = match api_key {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body).await,
             ApiKey::Metadata => self.metadata_handle(prelude, body).await,
             ApiKey::CreateTopics => self.create_topics_handle(prelude, body).await,
@@ -316,7 +323,19 @@ impl Dispatcher {
             // Answered above by the early return; named rather than a
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
-        }
+        };
+        let outcome = if matches!(&response, HandlerResponse::Reply(_)) {
+            "completed"
+        } else {
+            "closed"
+        };
+        crate::telemetry::admin_decision(
+            api_key,
+            outcome,
+            prelude.correlation_id,
+            principal.as_ref(),
+        );
+        response
     }
 
     async fn hydrate_creator_grants(&self) {
