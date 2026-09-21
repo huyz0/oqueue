@@ -43,10 +43,13 @@ use oqueue_core::{
     BundleNamer, CacheState, CoordinatorEpoch, Error, FakeTopicCatalog, GroupCoordinator,
     GroupMetadataLog, IndexReader, ObjectStore, Offset, PartitionId, TopicCatalog, TopicId,
 };
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub use crate::region_sealer::{RegionSealer, RejectingRegionSealer, SealedRegionOwned};
+
+type CreatorTopicsLoad = Arc<tokio::sync::OnceCell<Result<Vec<TopicId>, ()>>>;
 
 /// One node's view of the cluster.
 ///
@@ -85,6 +88,9 @@ pub struct Cluster {
     /// — bounded by its limit since `M7.4`, never by the catalog. ⚠️ It
     /// counts names, not catalog calls; the scale tests count those.
     topic_lookups: AtomicU64,
+    /// One cancellation-safe, single-flight durable creator-index load per
+    /// authenticated principal. The result is shared by every dispatcher.
+    creator_topic_loads: Mutex<HashMap<oqueue_core::Principal, CreatorTopicsLoad>>,
     /// The consumer-group state machine's own seam (`M4.2`, `ADR-0034`) —
     /// `ADR-0033`'s "every group resolves to this node" made real: one
     /// coordinator instance, shared by every connection's `Dispatcher` the
@@ -268,6 +274,7 @@ impl Cluster {
             namer: Mutex::new(BundleNamer::new(writer.as_str())?),
             reaped_reads: AtomicU64::new(0),
             topic_lookups: AtomicU64::new(0),
+            creator_topic_loads: Mutex::new(HashMap::new()),
             group_coordinator: seams.group_coordinator,
             group_joins: GroupJoins::default(),
             sync_groups: crate::sync_group::SyncGroups::default(),

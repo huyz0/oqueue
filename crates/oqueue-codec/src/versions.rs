@@ -36,7 +36,7 @@ pub struct Advertised {
 /// stops at v17 (the row's number) although the dependency can encode v18 —
 /// advertising tracks what `M2.23`/`M2.24` implement and `M2.25`'s harness
 /// exercises, never the dependency's ceiling.
-pub static ADVERTISED: [Advertised; 15] = [
+pub static ADVERTISED: [Advertised; 16] = [
     Advertised {
         api_key: ApiKey::Produce,
         min: 3,
@@ -169,6 +169,12 @@ pub static ADVERTISED: [Advertised; 15] = [
         flexible_from: Some(3),
     },
     Advertised {
+        api_key: ApiKey::CreateTopics,
+        min: 2,
+        max: 7,
+        flexible_from: Some(5),
+    },
+    Advertised {
         // ⚠️ **Through v4, not the dependency's v5 ceiling.** v5 adds
         // `enable_2_pc`/`keep_prepared_txn`, both "Supported API versions:
         // none" in the schema (a future KIP's placeholder, not yet wire-
@@ -213,14 +219,14 @@ mod tests {
     use super::{ADVERTISED, Advertised, advertised_for, supports};
     use crate::apikey::ApiKey;
     use kafka_protocol::messages::{
-        ApiVersionsRequest, ApiVersionsResponse, FetchRequest, FetchResponse,
-        FindCoordinatorRequest, FindCoordinatorResponse, HeartbeatRequest, HeartbeatResponse,
-        InitProducerIdRequest, InitProducerIdResponse, JoinGroupRequest, JoinGroupResponse,
-        LeaveGroupRequest, LeaveGroupResponse, ListOffsetsRequest, ListOffsetsResponse,
-        MetadataRequest, MetadataResponse, OffsetCommitRequest, OffsetCommitResponse,
-        OffsetFetchRequest, OffsetFetchResponse, ProduceRequest, ProduceResponse,
-        SaslAuthenticateRequest, SaslAuthenticateResponse, SaslHandshakeRequest,
-        SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
+        ApiVersionsRequest, ApiVersionsResponse, CreateTopicsRequest, CreateTopicsResponse,
+        FetchRequest, FetchResponse, FindCoordinatorRequest, FindCoordinatorResponse,
+        HeartbeatRequest, HeartbeatResponse, InitProducerIdRequest, InitProducerIdResponse,
+        JoinGroupRequest, JoinGroupResponse, LeaveGroupRequest, LeaveGroupResponse,
+        ListOffsetsRequest, ListOffsetsResponse, MetadataRequest, MetadataResponse,
+        OffsetCommitRequest, OffsetCommitResponse, OffsetFetchRequest, OffsetFetchResponse,
+        ProduceRequest, ProduceResponse, SaslAuthenticateRequest, SaslAuthenticateResponse,
+        SaslHandshakeRequest, SaslHandshakeResponse, SyncGroupRequest, SyncGroupResponse,
     };
     use kafka_protocol::protocol::{HeaderVersion, Message};
 
@@ -254,6 +260,7 @@ mod tests {
                 MetadataRequest::header_version(version),
                 MetadataResponse::header_version(version),
             ),
+            ApiKey::CreateTopics => create_topics_header_versions(version),
             ApiKey::OffsetCommit => (
                 OffsetCommitRequest::header_version(version),
                 OffsetCommitResponse::header_version(version),
@@ -286,6 +293,13 @@ mod tests {
                 SaslAuthenticateResponse::header_version(version),
             ),
         }
+    }
+
+    fn create_topics_header_versions(version: i16) -> (i16, i16) {
+        (
+            CreateTopicsRequest::header_version(version),
+            CreateTopicsResponse::header_version(version),
+        )
     }
 
     /// The four classic group-protocol messages' own header versions --
@@ -379,6 +393,7 @@ mod tests {
                 ApiKey::Fetch => pin::<FetchRequest>(row),
                 ApiKey::ListOffsets => pin::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => pin::<MetadataRequest>(row),
+                ApiKey::CreateTopics => pin::<CreateTopicsRequest>(row),
                 ApiKey::OffsetCommit => pin::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => pin::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => pin::<FindCoordinatorRequest>(row),
@@ -415,6 +430,7 @@ mod tests {
                 ApiKey::Fetch => within::<FetchRequest>(row),
                 ApiKey::ListOffsets => within::<ListOffsetsRequest>(row),
                 ApiKey::Metadata => within::<MetadataRequest>(row),
+                ApiKey::CreateTopics => within::<CreateTopicsRequest>(row),
                 ApiKey::OffsetCommit => within::<OffsetCommitRequest>(row),
                 ApiKey::OffsetFetch => within::<OffsetFetchRequest>(row),
                 ApiKey::FindCoordinator => within::<FindCoordinatorRequest>(row),

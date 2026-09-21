@@ -1,0 +1,12 @@
+{
+  "commits": [
+    "87ca037f024083203590c873ab0924da0a87a7e4",
+    "c02036cf0ee6915afb6da44fe8e0dbe498813716",
+    "345909a562e424556b75823e41f303f0ade3218d"
+  ],
+  "findings": [],
+  "milestone": "M12",
+  "recorded_at": "2026-09-21T00:34:34Z",
+  "reviewer": "independent M12 checkpoint review",
+  "verdict": "pass"
+}

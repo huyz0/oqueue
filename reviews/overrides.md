@@ -40,4 +40,4 @@ contradiction, and so is a signed line with no grant above it.
 
 ## Overrides
 
-_None yet._
+M12.3 — additional review rounds are required to verify the durable ownership and duplicate-create fixes raised by independent review; the final change is one coherent catalog-contract task and user goal continuation authorizes completing it — approved-by: user goal continuation

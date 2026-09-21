@@ -6,20 +6,21 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::Mutex;
 
-use crate::{BoxFuture, KeyDomain, Result, TopicId};
+use crate::{BoxFuture, KeyDomain, Principal, Result, TopicId};
 
 mod stored;
 
 pub use stored::ObjectStoreTopicCatalog;
 
-/// One topic's catalog entry: its name, its id, partition count, and key
-/// domain.
+/// One topic's catalog entry: its name, its id, partition count, key domain,
+/// and optional durable creator.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CatalogEntry {
     name: TopicId,
     id: u128,
     partitions: u32,
     key_domain: KeyDomain,
+    creator: Option<Principal>,
 }
 
 impl CatalogEntry {
@@ -33,6 +34,7 @@ impl CatalogEntry {
             id,
             partitions,
             key_domain: KeyDomain::default_domain(),
+            creator: None,
         }
     }
 
@@ -45,7 +47,29 @@ impl CatalogEntry {
             id,
             partitions,
             key_domain,
+            creator: None,
         }
+    }
+
+    /// The entry for a topic created by `creator`.
+    #[must_use]
+    pub fn with_creator(name: TopicId, partitions: u32, creator: Principal) -> Self {
+        let mut entry = Self::new(name, partitions);
+        entry.creator = Some(creator);
+        entry
+    }
+
+    /// The entry for a customer-key topic created by `creator`.
+    #[must_use]
+    pub fn with_key_domain_and_creator(
+        name: TopicId,
+        partitions: u32,
+        key_domain: KeyDomain,
+        creator: Principal,
+    ) -> Self {
+        let mut entry = Self::with_key_domain(name, partitions, key_domain);
+        entry.creator = Some(creator);
+        entry
     }
 
     /// The topic's name.
@@ -70,6 +94,39 @@ impl CatalogEntry {
     #[must_use]
     pub const fn key_domain(&self) -> &KeyDomain {
         &self.key_domain
+    }
+
+    /// The principal that durably created this topic, if any.
+    #[must_use]
+    pub const fn creator(&self) -> Option<&Principal> {
+        self.creator.as_ref()
+    }
+}
+
+/// The result of an owned create operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TopicCreateOutcome {
+    entry: CatalogEntry,
+    created: bool,
+}
+
+impl TopicCreateOutcome {
+    /// Builds a create result for an alternative catalog implementation.
+    #[must_use]
+    pub const fn new(entry: CatalogEntry, created: bool) -> Self {
+        Self { entry, created }
+    }
+
+    /// The entry that exists after the operation.
+    #[must_use]
+    pub const fn entry(&self) -> &CatalogEntry {
+        &self.entry
+    }
+
+    /// Whether this caller won the conditional create.
+    #[must_use]
+    pub const fn created(&self) -> bool {
+        self.created
     }
 }
 
@@ -122,6 +179,24 @@ pub trait TopicCatalog: Send + Sync + fmt::Debug {
         name: &'a TopicId,
         partitions: u32,
     ) -> BoxFuture<'a, Result<CatalogEntry>>;
+
+    /// Creates `name` on behalf of `creator`, returning whether this caller
+    /// won the conditional create. A losing caller receives the existing
+    /// entry and never changes its creator.
+    fn create_owned<'a>(
+        &'a self,
+        name: &'a TopicId,
+        partitions: u32,
+        creator: &'a Principal,
+    ) -> BoxFuture<'a, Result<TopicCreateOutcome>>;
+
+    /// Up to `limit` topics durably owned by `creator`, after `after`.
+    fn list_owned<'a>(
+        &'a self,
+        creator: &'a Principal,
+        after: Option<&'a TopicId>,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<TopicId>>>;
 
     /// Up to `limit` topic names after `after`, in name order.
     fn list<'a>(
@@ -205,6 +280,50 @@ impl TopicCatalog for FakeTopicCatalog {
     ) -> BoxFuture<'a, Result<CatalogEntry>> {
         Box::pin(async move {
             Ok(self.create_with_key_domain(name, partitions, KeyDomain::default_domain()))
+        })
+    }
+
+    fn create_owned<'a>(
+        &'a self,
+        name: &'a TopicId,
+        partitions: u32,
+        creator: &'a Principal,
+    ) -> BoxFuture<'a, Result<TopicCreateOutcome>> {
+        Box::pin(async move {
+            Ok(self.with(|e| {
+                if let Some(entry) = e.by_name.get(name) {
+                    return TopicCreateOutcome {
+                        entry: entry.clone(),
+                        created: false,
+                    };
+                }
+                let entry = CatalogEntry::with_creator(name.clone(), partitions, creator.clone());
+                e.by_id.insert(entry.id(), name.clone());
+                e.by_name.insert(name.clone(), entry.clone());
+                TopicCreateOutcome {
+                    entry,
+                    created: true,
+                }
+            }))
+        })
+    }
+
+    fn list_owned<'a>(
+        &'a self,
+        creator: &'a Principal,
+        after: Option<&'a TopicId>,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<TopicId>>> {
+        Box::pin(async move {
+            Ok(self.with(|e| {
+                let from = after.map_or(std::ops::Bound::Unbounded, std::ops::Bound::Excluded);
+                e.by_name
+                    .range((from, std::ops::Bound::Unbounded))
+                    .filter(|(_, entry)| entry.creator() == Some(creator))
+                    .take(limit)
+                    .map(|(name, _)| name.clone())
+                    .collect()
+            }))
         })
     }
 

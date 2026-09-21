@@ -29,6 +29,8 @@ pub enum ApiKey {
     ListOffsets = 2,
     /// Metadata (3).
     Metadata = 3,
+    /// `CreateTopics` (19).
+    CreateTopics = 19,
     /// `OffsetCommit` (8).
     OffsetCommit = 8,
     /// `OffsetFetch` (9).
@@ -70,6 +72,7 @@ impl ApiKey {
             1 => Some(Self::Fetch),
             2 => Some(Self::ListOffsets),
             3 => Some(Self::Metadata),
+            19 => Some(Self::CreateTopics),
             8 => Some(Self::OffsetCommit),
             9 => Some(Self::OffsetFetch),
             10 => Some(Self::FindCoordinator),
@@ -127,6 +130,7 @@ mod tests {
             ApiKey::Fetch,
             ApiKey::ListOffsets,
             ApiKey::Metadata,
+            ApiKey::CreateTopics,
             ApiKey::OffsetCommit,
             ApiKey::OffsetFetch,
             ApiKey::FindCoordinator,
@@ -151,7 +155,7 @@ mod tests {
         // API looks like, and leaving it in both is how the round trip
         // above starts lying. `8` (`OffsetCommit`, `M4.12`) never needed
         // that move -- it was never in this array to begin with.
-        for unserved in [19, 20, -1, 32512] {
+        for unserved in [20, -1, 32512] {
             assert_eq!(ApiKey::from_i16(unserved), None);
         }
     }

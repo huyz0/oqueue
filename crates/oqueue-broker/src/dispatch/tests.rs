@@ -14,6 +14,23 @@ async fn dispatcher() -> (Dispatcher, Fixture) {
     (dispatcher, fixture)
 }
 
+#[tokio::test]
+async fn admin_context_tracks_whether_credentials_are_configured() {
+    let (dispatcher, _fixture) = dispatcher().await;
+    assert!(!dispatcher.admin_authz_context(None).credentials_configured);
+
+    let configured =
+        dispatcher.with_credentials(crate::sasl_authenticate::PlainCredentials::new(vec![
+            crate::sasl_authenticate::PlainCredential {
+                principal: oqueue_core::Principal::new("alice").expect("principal"),
+                password: oqueue_core::Redacted::new("secret".to_owned()),
+            },
+        ]));
+    assert!(configured.admin_authz_context(None).credentials_configured);
+}
+
+#[path = "creator_tests.rs"]
+mod creator_tests;
 /// The reply's bytes, or a panic naming the other verdict.
 async fn replied(dispatcher: &Dispatcher, request: Vec<u8>) -> Vec<u8> {
     match dispatcher.dispatch(request).await {
@@ -350,7 +367,7 @@ mod authorization {
         let dispatcher = Dispatcher {
             tls: true,
             credentials: std::sync::Arc::new(one_credential()),
-            topic_grants: std::sync::Arc::new(grants),
+            topic_grants: std::sync::Arc::new(std::sync::RwLock::new(grants)),
             ..dispatcher
         };
         let auth = dispatcher
@@ -422,7 +439,7 @@ mod authorization {
         let dispatcher = Dispatcher {
             tls: true,
             credentials: std::sync::Arc::new(one_credential()),
-            topic_grants: std::sync::Arc::new(grants),
+            topic_grants: std::sync::Arc::new(std::sync::RwLock::new(grants)),
             ..dispatcher
         };
         let auth = dispatcher

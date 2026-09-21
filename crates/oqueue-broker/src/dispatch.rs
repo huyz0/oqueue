@@ -36,6 +36,9 @@ use oqueue_codec::apikey::ApiKey;
 use oqueue_codec::error_codes;
 use oqueue_codec::frame::{RequestPrelude, encode_response_header, read_request_prelude};
 use oqueue_codec::versions::supports;
+use std::time::Duration;
+
+const CREATOR_HYDRATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The result of [`Dispatcher::admit_quota`] — not `Option<Option<InFlight>>`
 /// (clippy's `option_option`, `-D pedantic`): a refusal and "admitted,
@@ -72,7 +75,7 @@ pub struct Dispatcher {
     /// own default: nothing configured means nothing to consult, and
     /// `Metadata`'s own fail-open rule (`credentials` empty) means this
     /// field is not even read until a credential source exists.
-    topic_grants: std::sync::Arc<oqueue_core::TopicGrants>,
+    topic_grants: std::sync::Arc<std::sync::RwLock<oqueue_core::TopicGrants>>,
     /// Administrative authority, separate from topic visibility (`M12.1`).
     admin_grants: std::sync::Arc<oqueue_core::AdminGrants>,
     /// Consumer-group ownership, separate from topic visibility (`M12.2`).
@@ -109,7 +112,9 @@ impl Dispatcher {
             session: crate::session::Session::default(),
             tls: false,
             credentials: std::sync::Arc::default(),
-            topic_grants: std::sync::Arc::default(),
+            topic_grants: std::sync::Arc::new(std::sync::RwLock::new(
+                oqueue_core::TopicGrants::new(),
+            )),
             admin_grants: std::sync::Arc::default(),
             group_grants: std::sync::Arc::default(),
             quota: None,
@@ -161,7 +166,18 @@ impl Dispatcher {
     /// configuration.
     #[must_use]
     pub fn with_topic_grants(mut self, topic_grants: oqueue_core::TopicGrants) -> Self {
-        self.topic_grants = std::sync::Arc::new(topic_grants);
+        self.topic_grants = std::sync::Arc::new(std::sync::RwLock::new(topic_grants));
+        self
+    }
+
+    /// Supplies a policy shared by every connection of one broker, so a
+    /// successful `CreateTopics` grant is visible to later requests.
+    #[must_use]
+    pub fn with_shared_topic_grants(
+        mut self,
+        topic_grants: std::sync::Arc<std::sync::RwLock<oqueue_core::TopicGrants>>,
+    ) -> Self {
+        self.topic_grants = topic_grants;
         self
     }
 
@@ -246,12 +262,14 @@ impl Dispatcher {
             QuotaAdmission::Admitted(in_flight) => in_flight,
             QuotaAdmission::Refused => return HandlerResponse::Close,
         };
+        self.hydrate_creator_grants().await;
         let Some(body) = Self::request_body(request) else {
             return HandlerResponse::Close;
         };
         match api_key {
             ApiKey::ListOffsets => self.listoffsets_handle(prelude, body).await,
             ApiKey::Metadata => self.metadata_handle(prelude, body).await,
+            ApiKey::CreateTopics => self.create_topics_handle(prelude, body).await,
             ApiKey::OffsetCommit => self.offset_commit_handle(prelude, body).await,
             ApiKey::OffsetFetch => self.offset_fetch_handle(prelude, body),
             ApiKey::FindCoordinator => self.find_coordinator_handle(prelude, body),
@@ -273,6 +291,27 @@ impl Dispatcher {
             // Answered above by the early return; named rather than a
             // wildcard so an eighth API cannot be silently swallowed here.
             ApiKey::ApiVersions => HandlerResponse::Close,
+        }
+    }
+
+    async fn hydrate_creator_grants(&self) {
+        let authenticated = self.session.principal();
+        let Some(principal) = authenticated.as_ref() else {
+            return;
+        };
+        let Ok(Some(topics)) = tokio::time::timeout(
+            CREATOR_HYDRATION_TIMEOUT,
+            self.cluster.creator_topics(principal),
+        )
+        .await
+        else {
+            return;
+        };
+        let Ok(mut grants) = self.topic_grants.write() else {
+            return;
+        };
+        for topic in topics {
+            grants.grant(principal.clone(), topic);
         }
     }
 
@@ -327,100 +366,34 @@ impl Dispatcher {
     fn authz_context<'a>(
         &'a self,
         principal: Option<&'a oqueue_core::Principal>,
+        topic_grants: &'a oqueue_core::TopicGrants,
     ) -> crate::authz::AuthzContext<'a> {
         crate::authz::AuthzContext {
             principal,
             credentials_configured: !self.credentials.is_empty(),
-            topic_grants: &self.topic_grants,
+            topic_grants,
         }
     }
 
-    /// `Metadata`'s own arm, pulled out of `dispatch`'s `match` purely to
-    /// keep that function under the fifty-line limit — building
-    /// [`crate::authz::AuthzContext`] needs the session's current
-    /// principal bound to a local first, which the match arm's own line
-    /// budget could not absorb alongside every other API.
-    async fn metadata_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
-        let principal = self.session.principal();
-        crate::metadata::handle(
-            &self.cluster,
-            prelude,
-            body,
-            &self.authz_context(principal.as_ref()),
+    fn topic_grants_snapshot(
+        &self,
+        principal: Option<&oqueue_core::Principal>,
+    ) -> oqueue_core::TopicGrants {
+        self.topic_grants.read().map_or_else(
+            |error| error.into_inner().for_principal(principal),
+            |grants| grants.for_principal(principal),
         )
-        .await
     }
 
-    /// `ListOffsets`'s own arm — `M9.12`'s per-principal scoping, same
-    /// pattern as `metadata_handle`.
-    async fn listoffsets_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
-        let principal = self.session.principal();
-        crate::listoffsets::handle(
-            &self.cluster,
-            prelude,
-            body,
-            &self.authz_context(principal.as_ref()),
-        )
-        .await
-    }
-
-    /// `Produce`'s own arm — `M9.12`'s per-principal scoping, same pattern
-    /// as `metadata_handle`.
-    async fn produce_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
-        let principal = self.session.principal();
-        crate::produce::handle(
-            &self.cluster,
-            &self.session,
-            prelude,
-            body,
-            &self.authz_context(principal.as_ref()),
-        )
-        .await
-    }
-
-    /// `Fetch`'s own arm — `M9.12`'s per-principal scoping, same pattern as
-    /// `metadata_handle`.
-    async fn fetch_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
-        let principal = self.session.principal();
-        crate::fetch::handle(
-            &self.cluster,
-            &self.session,
-            prelude,
-            body,
-            &self.authz_context(principal.as_ref()),
-        )
-        .await
-    }
-
-    /// `OffsetCommit`'s own arm — `M4.12`'s own per-principal scoping,
-    /// `M9.12`'s pattern reused for a group-protocol handler rather than
-    /// invented again. `async` since `M4.14`: a commit now durably appends
-    /// to a `GroupMetadataLog` before it is acknowledged.
-    async fn offset_commit_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
-        let principal = self.session.principal();
-        crate::offset_commit::handle(
-            &self.cluster,
-            prelude,
-            body,
-            &self.authz_context(principal.as_ref()),
-            &self.group_authz_context(principal.as_ref()),
-        )
-        .await
-    }
-
-    /// `OffsetFetch`'s own arm — `M4.13`'s own per-principal scoping,
-    /// `offset_commit_handle`'s own pattern, no fencing involved
-    /// (`crate::offset_fetch`'s own module doc: any authenticated client
-    /// may fetch a group's own committed offsets without joining it).
-    fn offset_fetch_handle(&self, prelude: RequestPrelude, body: &[u8]) -> HandlerResponse {
-        let principal = self.session.principal();
-        crate::offset_fetch::handle(
-            &self.cluster,
-            prelude,
-            body,
-            &self.authz_context(principal.as_ref()),
-            &self.group_authz_context(principal.as_ref()),
-        )
+    fn admin_authz_context<'a>(
+        &'a self,
+        principal: Option<&'a oqueue_core::Principal>,
+    ) -> crate::authz::AdminAuthzContext<'a> {
+        crate::authz::AdminAuthzContext {
+            principal,
+            credentials_configured: !self.credentials.is_empty(),
+            admin_grants: &self.admin_grants,
+        }
     }
 }
 
@@ -458,3 +431,4 @@ fn api_versions_response(prelude: RequestPrelude) -> Vec<u8> {
 mod tests;
 
 mod group_dispatch;
+mod handlers;

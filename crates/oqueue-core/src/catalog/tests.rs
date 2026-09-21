@@ -3,8 +3,8 @@
 #![allow(clippy::expect_used)]
 
 use super::{CatalogEntry, FakeTopicCatalog, TopicCatalog, topic_uuid};
-use crate::TopicId;
 use crate::test_executor::block_on;
+use crate::{Principal, TopicId};
 
 fn topic(name: &str) -> TopicId {
     TopicId::new(name).expect("a topic")
@@ -55,11 +55,33 @@ pub(super) fn list_pages_in_name_order(catalog: &dyn TopicCatalog) {
     );
 }
 
+/// Owned creation is durable, idempotent, and scoped to the winner.
+pub(super) fn owned_creation_is_scoped(catalog: &dyn TopicCatalog) {
+    let alice = Principal::new("alice").expect("principal");
+    let bob = Principal::new("bob").expect("principal");
+    let first = block_on(catalog.create_owned(&topic("owned"), 2, &alice)).expect("creates");
+    assert!(first.created());
+    assert_eq!(first.entry().creator(), Some(&alice));
+    let again = block_on(catalog.create_owned(&topic("owned"), 9, &bob)).expect("answers");
+    assert!(!again.created());
+    assert_eq!(again.entry(), first.entry());
+    assert_eq!(
+        block_on(catalog.list_owned(&alice, None, 10)).expect("lists"),
+        vec![topic("owned")]
+    );
+    assert!(
+        block_on(catalog.list_owned(&bob, None, 10))
+            .expect("lists")
+            .is_empty()
+    );
+}
+
 #[test]
 fn the_fake_keeps_the_contract() {
     create_is_idempotent(&FakeTopicCatalog::new());
     lookup_id_agrees_with_lookup(&FakeTopicCatalog::new());
     list_pages_in_name_order(&FakeTopicCatalog::new());
+    owned_creation_is_scoped(&FakeTopicCatalog::new());
 }
 
 #[test]

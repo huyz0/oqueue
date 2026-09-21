@@ -30,6 +30,7 @@ mod authz;
 pub mod checkpoint;
 pub mod cluster;
 pub mod connection;
+mod create_topics;
 pub mod dispatch;
 mod fencing;
 pub mod fetch;

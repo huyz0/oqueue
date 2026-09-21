@@ -341,6 +341,12 @@ declare -A RUST_BOUNDS=(
   # buys, and a chain is data a writer produced -- a cycle in one is a read
   # that never returns. Lowering it refuses history a correct writer wrote.
   ["crates/oqueue-broker/src/read/manifest.rs|MAX_MANIFEST_HOPS"]="16"
+  # How long authenticated request dispatch waits for durable creator-index
+  # hydration (`M12.3`). Raising this lets a stalled object store hold every
+  # authenticated request longer; lowering it makes a healthy but slow
+  # catalog look unavailable. This is a liveness bound, not a client-visible
+  # protocol timeout, and must move only with an explicit availability review.
+  ["crates/oqueue-broker/src/dispatch.rs|CREATOR_HYDRATION_TIMEOUT"]="Duration::from_secs(5)"
   # How many records a compacted object is written to hold -- the denominator
   # read amplification is measured against (`M5.1`, `ADR-0036`). Raising it
   # raises every partition's measured amplification, so it is a threshold in
@@ -630,6 +636,10 @@ declare -A RUST_BOUNDS=(
 declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/catalog/stored.rs|DEFAULT_FORMAT"]="the durable catalog format discriminator, not a tunable threshold"
   ["crates/oqueue-core/src/catalog/stored.rs|CUSTOMER_FORMAT"]="the durable customer-domain catalog format discriminator, not a tunable threshold"
+  ["crates/oqueue-core/src/catalog/stored.rs|OWNER_DEFAULT_FORMAT"]="the durable creator-owned default catalog format discriminator, not a tunable threshold"
+  ["crates/oqueue-core/src/catalog/stored.rs|OWNER_CUSTOMER_FORMAT"]="the durable creator-owned customer catalog format discriminator, not a tunable threshold"
+  ["crates/oqueue-core/src/catalog/stored.rs|RACE_VISIBILITY_ATTEMPTS"]="bounded cooperative probes before returning a retryable race outcome, not a policy threshold"
+  ["crates/oqueue-codec/src/error_codes.rs|REQUEST_TIMED_OUT"]="Kafka protocol error-code value, not a tunable threshold"
   ["crates/oqueue-broker/src/fetch/partition.rs|OFFSET_UNSET"]="the protocol's unset-offset sentinel"
   ["crates/oqueue-broker/src/find_coordinator.rs|GROUP"]="the wire schema's own key_type value for a consumer-group lookup, fixed by the protocol"
   # `M10.20`: moved from `records.rs` to its own `records/count.rs` when
@@ -657,14 +667,14 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-core/src/composite.rs|COMPOSITE_TRAILER_LEN"]="the trailer's own width, fixed by the format"
   ["crates/oqueue-core/src/partition_manifest.rs|PARTITION_MANIFEST_VERSION"]="the partition manifest format's version number"
   ["crates/oqueue-core/src/partition_manifest.rs|PARTITION_MANIFEST_TRAILER_LEN"]="the trailer's own width, fixed by the format"
-  ["crates/oqueue-core/src/metadata_segment.rs|FORMAT"]="the metadata-log segment format's version number (`M6.1`)"
+  ["crates/oqueue-core/src/metadata_segment.rs|FORMAT"]="the metadata-log segment format's version number (\`M6.1\`)"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_BATCH"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_MANIFEST"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_COMPACTED"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_TRIMMED"]="a record tag in the segment format, fixed once written"
   ["crates/oqueue-core/src/metadata_segment.rs|TAG_EPOCH"]="a record tag in the segment format, fixed once written"
-  ["crates/oqueue-core/src/group_segment.rs|FORMAT"]="the group-log segment format's version number (`M6.6`)"
-  ["crates/oqueue-core/src/catalog/stored.rs|FORMAT"]="the topic catalog entry format's version number (`M7.3`)"
+  ["crates/oqueue-core/src/group_segment.rs|FORMAT"]="the group-log segment format's version number (\`M6.6\`)"
+  ["crates/oqueue-core/src/catalog/stored.rs|FORMAT"]="the topic catalog entry format's version number (\`M7.3\`)"
   ["crates/oqueue-core/src/group_segment.rs|TAG_OFFSET"]="a record tag in the group segment format, fixed once written"
   ["crates/oqueue-core/src/group_segment.rs|TAG_TRANSITION"]="a record tag in the group segment format, fixed once written"
   ["crates/oqueue-core/src/lease.rs|SEARCH_PROBES"]="twice the probes a 64-bit bisection needs -- a loop bound, not a policy"
@@ -696,6 +706,10 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/error_codes.rs|UNSUPPORTED_SASL_MECHANISM"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|SASL_AUTHENTICATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|TOPIC_AUTHORIZATION_FAILED"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|TOPIC_ALREADY_EXISTS"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|INVALID_PARTITIONS"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|INVALID_REPLICATION_FACTOR"]="Kafka's own error code, the protocol fixes it"
+  ["crates/oqueue-codec/src/error_codes.rs|INVALID_TOPIC_EXCEPTION"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|GROUP_AUTHORIZATION_FAILED"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|INCONSISTENT_GROUP_PROTOCOL"]="Kafka's own error code, the protocol fixes it"
   ["crates/oqueue-codec/src/error_codes.rs|REBALANCE_IN_PROGRESS"]="Kafka's own error code, the protocol fixes it"
@@ -713,6 +727,8 @@ declare -A NOT_A_BOUND=(
   ["crates/oqueue-codec/src/listoffsets.rs|LATEST_TIMESTAMP"]="the protocol's latest-timestamp sentinel"
   ["crates/oqueue-codec/src/listoffsets.rs|EARLIEST_TIMESTAMP"]="the protocol's earliest-timestamp sentinel"
   ["crates/oqueue-codec/src/metadata.rs|AUTHORIZED_OPERATIONS_OMITTED"]="the protocol's authorized-operations sentinel"
+  ["crates/oqueue-broker/src/create_topics.rs|MAX_TOPIC_NAME_LEN"]="Kafka's bounded topic-name policy for this broker"
+  ["crates/oqueue-broker/src/create_topics.rs|MAX_PARTITIONS"]="the product's bounded topic-partition policy (NFR-10)"
   ["crates/oqueue-codec/src/produce.rs|LOG_APPEND_TIME_UNSET"]="the protocol's log-append-time sentinel"
   # --- varint.rs: fixed by the encoding
   ["crates/oqueue-codec/src/varint.rs|MAX_VARINT_BYTES"]="the widest legal varint, fixed by the encoding"

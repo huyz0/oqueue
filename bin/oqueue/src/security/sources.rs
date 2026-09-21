@@ -76,10 +76,12 @@ pub(super) fn from_sources_with_policies(
             .map(credentials_from)
             .transpose()?
             .unwrap_or_default(),
-        topic_grants: topic_grants
-            .map(topic_grants_from)
-            .transpose()?
-            .unwrap_or_default(),
+        topic_grants: Arc::new(std::sync::RwLock::new(
+            topic_grants
+                .map(topic_grants_from)
+                .transpose()?
+                .unwrap_or_default(),
+        )),
         admin_grants: admin_grants
             .map(admin_grants_from)
             .transpose()?

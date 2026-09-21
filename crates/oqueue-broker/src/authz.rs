@@ -10,7 +10,9 @@
 // precedent for the same standoff.
 #![allow(clippy::redundant_pub_crate)]
 
-use oqueue_core::{GroupGrants, GroupId, Principal, TopicGrants, TopicId};
+use oqueue_core::{
+    AdminGrants, AdminOperation, GroupGrants, GroupId, Principal, TopicGrants, TopicId,
+};
 
 /// `M9.7`'s authorization inputs, bundled: a handler's own signature would
 /// otherwise carry three parameters that only ever travel together (the
@@ -39,6 +41,16 @@ pub(crate) struct GroupAuthzContext<'a> {
     pub(crate) credentials_configured: bool,
     /// Principal-to-group ownership index.
     pub(crate) group_grants: &'a GroupGrants,
+}
+
+/// Administrative authority carried to an admin API handler.
+pub(crate) struct AdminAuthzContext<'a> {
+    /// This connection's authenticated identity, if any.
+    pub(crate) principal: Option<&'a Principal>,
+    /// Whether credentials were configured.
+    pub(crate) credentials_configured: bool,
+    /// Principal-to-operation authority.
+    pub(crate) admin_grants: &'a AdminGrants,
 }
 
 /// Whether an explicitly-named topic may be resolved at all, before a
@@ -85,6 +97,16 @@ pub(crate) fn group_authorized(group: &GroupId, authz: &GroupAuthzContext<'_>) -
     authz.group_grants.allows(principal, group)
 }
 
+/// Whether this principal may perform one administrative operation.
+pub(crate) fn admin_authorized(operation: AdminOperation, authz: &AdminAuthzContext<'_>) -> bool {
+    if !authz.credentials_configured {
+        return true;
+    }
+    authz
+        .principal
+        .is_some_and(|principal| authz.admin_grants.allows(principal, operation))
+}
+
 #[cfg(test)]
 pub(crate) fn unconfigured_group_authz() -> GroupAuthzContext<'static> {
     static EMPTY: std::sync::OnceLock<GroupGrants> = std::sync::OnceLock::new();
@@ -92,5 +114,51 @@ pub(crate) fn unconfigured_group_authz() -> GroupAuthzContext<'static> {
         principal: None,
         credentials_configured: false,
         group_grants: EMPTY.get_or_init(GroupGrants::new),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::{AdminAuthzContext, admin_authorized};
+    use oqueue_core::{AdminGrants, AdminOperation, Principal};
+
+    fn principal(name: &str) -> Principal {
+        Principal::new(name).expect("valid principal")
+    }
+
+    #[test]
+    fn administrative_authority_fails_open_only_when_credentials_are_unconfigured() {
+        let empty = AdminGrants::new();
+        assert!(admin_authorized(
+            AdminOperation::CreateTopics,
+            &AdminAuthzContext {
+                principal: None,
+                credentials_configured: false,
+                admin_grants: &empty,
+            },
+        ));
+
+        let alice = principal("alice");
+        assert!(!admin_authorized(
+            AdminOperation::CreateTopics,
+            &AdminAuthzContext {
+                principal: Some(&alice),
+                credentials_configured: true,
+                admin_grants: &empty,
+            },
+        ));
+
+        let mut grants = AdminGrants::new();
+        grants.grant(alice.clone(), AdminOperation::CreateTopics);
+        assert!(admin_authorized(
+            AdminOperation::CreateTopics,
+            &AdminAuthzContext {
+                principal: Some(&alice),
+                credentials_configured: true,
+                admin_grants: &grants,
+            },
+        ));
     }
 }

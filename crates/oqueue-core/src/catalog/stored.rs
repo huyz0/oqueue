@@ -1,26 +1,32 @@
 //! The topic catalog in object storage (`ADR-0049` point 3, `M7.3`).
 //!
-//! Two create-only objects per topic, under the shard's catalog prefix:
+//! Three create-only objects per owned topic, under the shard's catalog prefix:
 //!
 //! - `<prefix>/topic/<hex of the name's UTF-8 bytes>` — the entry;
 //! - `<prefix>/id/<32 hex digits of the id>` — the name, so an id finds it.
+//! - `<prefix>/owner/<hex creator>/<hex name>` — the durable owner index.
 //!
 //! ⚠️ **Hex, not the name itself**: any [`TopicId`] makes a valid key, `/`
 //! included, and lowercase hex of the bytes sorts exactly as the bytes do, so
 //! a key listing *is* name order.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use super::{CatalogEntry, TopicCatalog};
 use crate::{
     BoxFuture, ByteRange, Error, KeyDomain, MaintenanceStore, MetadataShardId, ObjectKey,
-    ObjectStore, Precondition, Result, TopicId,
+    ObjectStore, Precondition, Principal, Result, TopicCreateOutcome, TopicId,
 };
 
 /// The entry format's version, the body's first byte.
 const DEFAULT_FORMAT: u8 = 1;
 const CUSTOMER_FORMAT: u8 = 2;
+const RACE_VISIBILITY_ATTEMPTS: u32 = 64;
+const OWNER_DEFAULT_FORMAT: u8 = 3;
+const OWNER_CUSTOMER_FORMAT: u8 = 4;
+
+mod format;
+use format::{decode, encode, hex, unhex};
 
 /// A [`TopicCatalog`] over object storage, one shard's worth.
 ///
@@ -70,6 +76,22 @@ impl ObjectStoreTopicCatalog {
         ObjectKey::new(format!("{}/id/{id:032x}", self.prefix))
     }
 
+    fn owner_prefix(&self, creator: &Principal) -> String {
+        format!(
+            "{}/owner/{}/",
+            self.prefix,
+            hex(creator.as_str().as_bytes())
+        )
+    }
+
+    fn owner_key(&self, creator: &Principal, name: &TopicId) -> Result<ObjectKey> {
+        ObjectKey::new(format!(
+            "{}{}",
+            self.owner_prefix(creator),
+            hex(name.as_str().as_bytes())
+        ))
+    }
+
     /// The object under `key`, or `None` if there is none.
     async fn read(&self, key: &ObjectKey) -> Result<Option<Vec<u8>>> {
         match self.store.get(key, ByteRange::Full).await {
@@ -79,7 +101,7 @@ impl ObjectStoreTopicCatalog {
         }
     }
 
-    async fn find(&self, name: &TopicId) -> Result<Option<CatalogEntry>> {
+    async fn find_entry(&self, name: &TopicId) -> Result<Option<CatalogEntry>> {
         let Some(bytes) = self.read(&self.topic_key(name)?).await? else {
             return Ok(None);
         };
@@ -87,6 +109,21 @@ impl ObjectStoreTopicCatalog {
         // ⚠️ An entry naming another topic is a corrupt store, not an answer.
         if entry.name() != name {
             return Err(Error::MalformedMetadataSegment { at: 5 });
+        }
+        Ok(Some(entry))
+    }
+
+    async fn find(&self, name: &TopicId) -> Result<Option<CatalogEntry>> {
+        let Some(entry) = self.find_entry(name).await? else {
+            return Ok(None);
+        };
+        let Some(id_bytes) = self.read(&self.id_key(entry.id())?).await? else {
+            // An owned create publishes its topic before the id index. Keep
+            // that intermediate state invisible until the index is durable.
+            return Ok(None);
+        };
+        if id_bytes != name.as_str().as_bytes() {
+            return Err(Error::MalformedMetadataSegment { at: 0 });
         }
         Ok(Some(entry))
     }
@@ -136,9 +173,125 @@ impl ObjectStoreTopicCatalog {
             return Ok(entry);
         }
         // Lost the race, or it existed: the entry that is there wins.
-        self.find(name)
-            .await?
-            .ok_or(Error::MalformedMetadataSegment { at: 0 })
+        self.find_after_race(name).await
+    }
+
+    async fn insert_owned(
+        &self,
+        name: &TopicId,
+        partitions: u32,
+        creator: &Principal,
+    ) -> Result<TopicCreateOutcome> {
+        let entry = CatalogEntry::with_creator(name.clone(), partitions, creator.clone());
+        let body = encode(&entry)?;
+        // The owner index is written first so a crash cannot publish a topic
+        // whose creator is invisible after restart. Stale index keys are
+        // filtered by list_owned against the topic entry. The topic entry is
+        // published before the id reservation: an interruption before the
+        // final id write leaves no reservation that can block a retry.
+        self.put_absent(&self.owner_key(creator, name)?, Vec::new())
+            .await?;
+        let created = self.put_absent(&self.topic_key(name)?, body).await?;
+        if !created {
+            return Ok(TopicCreateOutcome {
+                entry: self.find_after_race(name).await?,
+                created: false,
+            });
+        }
+        // If this final write is interrupted, the topic and owner index are
+        // already durable and a retry observes the topic instead of waiting
+        // on an orphan reservation.
+        self.put_absent(&self.id_key(entry.id())?, name.as_str().as_bytes().to_vec())
+            .await?;
+        Ok(TopicCreateOutcome { entry, created })
+    }
+
+    /// The id key is the create race's reservation. A losing caller can see
+    /// that reservation while the winner is still publishing the name entry,
+    /// so keep yielding until the winner's create-only write is visible. A
+    /// caller that loses this second conditional write has proof that another
+    /// live creator owns the name; a crashed creator cannot make this caller
+    /// lose that write. A bounded probe count prevents direct catalog callers
+    /// from hanging forever; `Transient` lets each caller apply its own retry
+    /// policy, while the broker's `CreateTopics` handler also owns the request
+    /// timeout around this wait.
+    async fn find_after_race(&self, name: &TopicId) -> Result<CatalogEntry> {
+        for _ in 0..RACE_VISIBILITY_ATTEMPTS {
+            if let Some(entry) = self.find_entry(name).await? {
+                self.put_absent(&self.id_key(entry.id())?, name.as_str().as_bytes().to_vec())
+                    .await?;
+                if self.find(name).await?.is_some() {
+                    return Ok(entry);
+                }
+            }
+            cooperative_yield().await;
+        }
+        Err(Error::Transient)
+    }
+
+    async fn owned_page(
+        &self,
+        creator: &Principal,
+        after: Option<&TopicId>,
+        limit: usize,
+    ) -> Result<Vec<TopicId>> {
+        let prefix = self.owner_prefix(creator);
+        let after = after
+            .map(|name| self.owner_key(creator, name))
+            .transpose()?;
+        let mut names = Vec::with_capacity(limit);
+        let mut cursor = after;
+        while Self::owned_page_needs_more(names.len(), limit) {
+            let want = Self::owned_page_remaining(limit, names.len());
+            let keys = self.listing.list(&prefix, cursor.as_ref(), want).await?;
+            let Some(last) = keys.last().cloned() else {
+                return Ok(names);
+            };
+            for key in keys {
+                let Some(hex_name) = key.as_str().strip_prefix(&prefix) else {
+                    return Err(Error::MalformedMetadataSegment { at: 0 });
+                };
+                let Some(bytes) = unhex(hex_name) else {
+                    return Err(Error::MalformedMetadataSegment { at: prefix.len() });
+                };
+                let Some(text) = String::from_utf8(bytes).ok() else {
+                    return Err(Error::MalformedMetadataSegment { at: prefix.len() });
+                };
+                let Some(name) = TopicId::new(text).ok() else {
+                    return Err(Error::MalformedMetadataSegment { at: prefix.len() });
+                };
+                if self
+                    .find(&name)
+                    .await?
+                    .is_some_and(|entry| entry.creator() == Some(creator))
+                {
+                    names.push(name);
+                    if Self::owned_page_reached_limit(names.len(), limit) {
+                        break;
+                    }
+                }
+            }
+            cursor = Some(last);
+            if Self::owned_page_reached_limit(names.len(), limit) {
+                return Ok(names);
+            }
+            if cursor.is_none() {
+                return Ok(names);
+            }
+        }
+        Ok(names)
+    }
+
+    const fn owned_page_needs_more(names_len: usize, limit: usize) -> bool {
+        names_len < limit
+    }
+
+    const fn owned_page_remaining(limit: usize, names_len: usize) -> usize {
+        limit - names_len
+    }
+
+    const fn owned_page_reached_limit(names_len: usize, limit: usize) -> bool {
+        names_len == limit
     }
 
     /// Creates a topic in a customer key domain, or returns the existing
@@ -175,6 +328,22 @@ impl ObjectStoreTopicCatalog {
     }
 }
 
+/// Gives the executor another chance to poll the creator that is publishing
+/// the name entry, without depending on a particular async runtime.
+async fn cooperative_yield() {
+    let mut yielded = false;
+    std::future::poll_fn(|cx| {
+        if yielded {
+            std::task::Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            std::task::Poll::Pending
+        }
+    })
+    .await;
+}
+
 impl TopicCatalog for ObjectStoreTopicCatalog {
     fn lookup<'a>(&'a self, name: &'a TopicId) -> BoxFuture<'a, Result<Option<CatalogEntry>>> {
         Box::pin(self.find(name))
@@ -192,6 +361,24 @@ impl TopicCatalog for ObjectStoreTopicCatalog {
         Box::pin(self.insert(name, partitions))
     }
 
+    fn create_owned<'a>(
+        &'a self,
+        name: &'a TopicId,
+        partitions: u32,
+        creator: &'a Principal,
+    ) -> BoxFuture<'a, Result<TopicCreateOutcome>> {
+        Box::pin(self.insert_owned(name, partitions, creator))
+    }
+
+    fn list_owned<'a>(
+        &'a self,
+        creator: &'a Principal,
+        after: Option<&'a TopicId>,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<TopicId>>> {
+        Box::pin(self.owned_page(creator, after, limit))
+    }
+
     fn list<'a>(
         &'a self,
         after: Option<&'a TopicId>,
@@ -199,130 +386,6 @@ impl TopicCatalog for ObjectStoreTopicCatalog {
     ) -> BoxFuture<'a, Result<Vec<TopicId>>> {
         Box::pin(self.page(after, limit))
     }
-}
-
-/// The default format remains byte-identical: `DEFAULT_FORMAT`, partition
-/// count big-endian, then the name's bytes. Customer entries use a v2 shape
-/// with explicit name and key-id lengths so both metadata fields can be read
-/// back without guessing a boundary.
-fn encode(entry: &CatalogEntry) -> Result<Vec<u8>> {
-    let name = entry.name().as_str().as_bytes();
-    match entry.key_domain() {
-        KeyDomain::Default => {
-            let mut out = vec![DEFAULT_FORMAT];
-            out.extend_from_slice(&entry.partitions().to_be_bytes());
-            out.extend_from_slice(name);
-            Ok(out)
-        }
-        KeyDomain::Customer(key_id) => {
-            let key = key_id.as_str().as_bytes();
-            let mut out = vec![CUSTOMER_FORMAT];
-            out.extend_from_slice(&entry.partitions().to_be_bytes());
-            let name_len =
-                u16::try_from(name.len()).map_err(|_| Error::MalformedMetadataSegment { at: 5 })?;
-            out.extend_from_slice(&name_len.to_be_bytes());
-            out.extend_from_slice(name);
-            let key_len = u16::try_from(key.len())
-                .map_err(|_| Error::MalformedMetadataSegment { at: 7 + name.len() })?;
-            out.extend_from_slice(&key_len.to_be_bytes());
-            out.extend_from_slice(key);
-            Ok(out)
-        }
-    }
-}
-
-/// ⚠️ **Refused whole, never misread**: an unknown format, a short body, or a
-/// name that is not a topic's is [`Error::MalformedMetadataSegment`].
-fn decode(bytes: &[u8]) -> Result<CatalogEntry> {
-    let format = *bytes
-        .first()
-        .ok_or(Error::MalformedMetadataSegment { at: 0 })?;
-    let partitions: [u8; 4] = bytes
-        .get(1..5)
-        .and_then(|raw| raw.try_into().ok())
-        .ok_or(Error::MalformedMetadataSegment { at: 1 })?;
-    let partitions = u32::from_be_bytes(partitions);
-    match format {
-        DEFAULT_FORMAT => decode_default(bytes, partitions),
-        CUSTOMER_FORMAT => decode_customer(bytes, partitions),
-        _ => Err(Error::MalformedMetadataSegment { at: 0 }),
-    }
-}
-
-fn decode_default(bytes: &[u8], partitions: u32) -> Result<CatalogEntry> {
-    let name = bytes
-        .get(5..)
-        .and_then(|raw| String::from_utf8(raw.to_vec()).ok())
-        .and_then(|name| TopicId::new(name).ok())
-        .ok_or(Error::MalformedMetadataSegment { at: 5 })?;
-    Ok(CatalogEntry::new(name, partitions))
-}
-
-fn decode_customer(bytes: &[u8], partitions: u32) -> Result<CatalogEntry> {
-    let name_len = bytes
-        .get(5..7)
-        .and_then(|raw| raw.try_into().ok())
-        .map(u16::from_be_bytes)
-        .ok_or(Error::MalformedMetadataSegment { at: 5 })?;
-    let name_len = usize::from(name_len);
-    let name_end = 7usize
-        .checked_add(name_len)
-        .ok_or(Error::MalformedMetadataSegment { at: 7 })?;
-    let name = bytes
-        .get(7..name_end)
-        .and_then(|raw| String::from_utf8(raw.to_vec()).ok())
-        .and_then(|name| TopicId::new(name).ok())
-        .ok_or(Error::MalformedMetadataSegment { at: 7 })?;
-    let key_len_at = name_end;
-    let key_len = bytes
-        .get(key_len_at..key_len_at + 2)
-        .and_then(|raw| raw.try_into().ok())
-        .map(u16::from_be_bytes)
-        .ok_or(Error::MalformedMetadataSegment { at: key_len_at })?;
-    let key_start = key_len_at + 2;
-    let key_end = key_start
-        .checked_add(usize::from(key_len))
-        .ok_or(Error::MalformedMetadataSegment { at: key_start })?;
-    let key = bytes
-        .get(key_start..key_end)
-        .and_then(|raw| String::from_utf8(raw.to_vec()).ok())
-        .and_then(|key| crate::KeyId::new(key).ok())
-        .ok_or(Error::MalformedMetadataSegment { at: key_start })?;
-    if key_end != bytes.len() {
-        return Err(Error::MalformedMetadataSegment { at: key_end });
-    }
-    Ok(CatalogEntry::with_key_domain(
-        name,
-        partitions,
-        KeyDomain::customer(key),
-    ))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
-/// ⚠️ Lowercase only, as [`hex`] writes: anything else is not one of ours.
-fn unhex(text: &str) -> Option<Vec<u8>> {
-    let digit = |c: u8| match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        _ => None,
-    };
-    let raw = text.as_bytes();
-    if !raw.len().is_multiple_of(2) {
-        return None;
-    }
-    raw.chunks_exact(2)
-        .map(|pair| match pair {
-            [high, low] => Some(digit(*high)? << 4 | digit(*low)?),
-            _ => None,
-        })
-        .collect()
 }
 
 #[cfg(test)]

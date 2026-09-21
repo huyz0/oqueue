@@ -95,6 +95,29 @@ fn sasl_authenticate_body(out: &mut Vec<u8>, version: i16) {
         .expect("encodes");
 }
 
+/// `CreateTopics`' one-topic catalog-only request. Empty assignments and
+/// configs select the broker's single-node defaults.
+fn create_topics_body(out: &mut Vec<u8>, version: i16) {
+    use oqueue_codec::flex::{TaggedFields, put_array_len, put_string, put_tagged_fields};
+    use oqueue_codec::wire::{put_i16, put_i32};
+    let flexible = version >= 5;
+    put_array_len(out, flexible, Some(1));
+    let name = format!("created-v{version}");
+    put_string(out, flexible, &name);
+    put_i32(out, 1);
+    put_i16(out, -1);
+    put_array_len(out, flexible, Some(0));
+    put_array_len(out, flexible, Some(0));
+    if flexible {
+        put_tagged_fields(out, &TaggedFields::default());
+    }
+    put_i32(out, 10_000);
+    out.push(0);
+    if flexible {
+        put_tagged_fields(out, &TaggedFields::default());
+    }
+}
+
 /// The smallest valid body for `api_key` at `version`, against a cluster
 /// that has topic `"t"` — enough for a real answer, not an error dance.
 async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u8> {
@@ -111,6 +134,7 @@ async fn minimal_body(api_key: ApiKey, version: i16, cluster: &Cluster) -> Vec<u
                 .encode(&mut body, version)
                 .expect("encodes");
         }
+        ApiKey::CreateTopics => create_topics_body(&mut body, version),
         ApiKey::Produce => produce_body(&mut body, version, cluster).await,
         ApiKey::Fetch => fetch_body(&mut body, version, cluster).await,
         ApiKey::InitProducerId => init_producer_id_body(&mut body, version),
@@ -211,6 +235,7 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .error_code
         }
         ApiKey::Metadata => decode_ignoring_body::<MetadataResponse>(&mut rest, api_key, version),
+        ApiKey::CreateTopics => create_topics_error_code(&mut rest, version),
         ApiKey::Produce => decode_ignoring_body::<ProduceResponse>(&mut rest, api_key, version),
         ApiKey::Fetch => decode_ignoring_body::<FetchResponse>(&mut rest, api_key, version),
         ApiKey::InitProducerId => {
@@ -218,11 +243,7 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
                 .expect("InitProducerId reply decodes")
                 .error_code
         }
-        ApiKey::SaslHandshake => {
-            kafka_protocol::messages::SaslHandshakeResponse::decode(&mut rest, version)
-                .expect("SaslHandshake reply decodes")
-                .error_code
-        }
+        ApiKey::SaslHandshake => sasl_handshake_error_code(&mut rest, version),
         ApiKey::SaslAuthenticate => {
             kafka_protocol::messages::SaslAuthenticateResponse::decode(&mut rest, version)
                 .expect("SaslAuthenticate reply decodes")
@@ -245,6 +266,18 @@ fn decode_reply(api_key: ApiKey, version: i16, reply: &[u8]) -> i16 {
         "{api_key:?} v{version}: nothing after the body"
     );
     error_code
+}
+
+fn create_topics_error_code(rest: &mut &[u8], version: i16) -> i16 {
+    use kafka_protocol::messages::CreateTopicsResponse;
+    decode_ignoring_body::<CreateTopicsResponse>(rest, ApiKey::CreateTopics, version)
+}
+
+fn sasl_handshake_error_code(rest: &mut &[u8], version: i16) -> i16 {
+    use kafka_protocol::messages::SaslHandshakeResponse;
+    SaslHandshakeResponse::decode(rest, version)
+        .expect("SaslHandshake reply decodes")
+        .error_code
 }
 
 /// `FindCoordinator`'s own decode -- its own function for the same

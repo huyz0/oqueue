@@ -13,17 +13,9 @@ use std::collections::{HashMap, HashSet};
 /// from the start, so there is nothing to filter.
 ///
 /// ⚠️ **This is the index, not its maintenance schedule.** `grant`/`revoke`
-/// are the seam "topic create," "topic delete," and "ACL change"
-/// (`M9.md`'s own maintenance triggers for this task) call incrementally —
-/// nothing in this milestone calls them yet. v1 ships no `CreateTopics`,
-/// `DescribeAcls`, `CreateAcls`, or `DeleteAcls` wire API (keys 19, 29-31),
-/// so topic ownership is configuration a composer reads once at startup, the
-/// same "from configuration, never invented here" shape `M9.4`'s
-/// `PlainCredentials` already established for credentials — `M9.9` is where
-/// this index is actually attached to a running `Cluster` and its
-/// `Metadata` handler; wiring `grant`/`revoke` to a live topic lifecycle is
-/// real, not-yet-scoped work for whichever milestone gives this broker a
-/// `CreateTopics` API.
+/// are the seam "topic create," "topic delete," and "ACL change" call
+/// incrementally. `M12.3` now grants a successful creator visibility in the
+/// shared live policy; deletion and explicit ACL APIs remain later work.
 #[derive(Debug, Default, Clone)]
 pub struct TopicGrants {
     by_principal: HashMap<Principal, HashSet<TopicId>>,
@@ -75,6 +67,22 @@ impl TopicGrants {
         self.by_principal
             .get(principal)
             .is_some_and(|topics| topics.contains(topic))
+    }
+
+    /// Copies only one principal's grants into a request-local policy.
+    ///
+    /// A dispatcher must not clone the global multi-tenant index for every
+    /// request: NFR-12 charges the request for the topics this principal can
+    /// see, not for every tenant's grants.
+    #[must_use]
+    pub fn for_principal(&self, principal: Option<&Principal>) -> Self {
+        let mut scoped = Self::new();
+        if let Some(principal) = principal {
+            for topic in self.topics_for(principal) {
+                scoped.grant(principal.clone(), topic.clone());
+            }
+        }
+        scoped
     }
 }
 
@@ -187,5 +195,18 @@ mod tests {
         index.grant(principal("alice"), topic("alice-2"));
 
         assert_eq!(index.topics_for(&principal("alice")).count(), 2);
+    }
+
+    #[test]
+    fn a_scoped_copy_contains_only_the_requested_principal() {
+        let mut index = TopicGrants::new();
+        index.grant(principal("alice"), topic("alice-only"));
+        index.grant(principal("bob"), topic("bob-only"));
+
+        let alice = principal("alice");
+        let scoped = index.for_principal(Some(&alice));
+        assert!(scoped.can_see(&alice, &topic("alice-only")));
+        assert!(!scoped.can_see(&alice, &topic("bob-only")));
+        assert_eq!(scoped.topics_for(&principal("bob")).count(), 0);
     }
 }

@@ -15,6 +15,8 @@ pub const OFFSET_OUT_OF_RANGE: i16 = 1;
 pub const CORRUPT_MESSAGE: i16 = 2;
 /// The topic or partition does not exist on this broker (3).
 pub const UNKNOWN_TOPIC_OR_PARTITION: i16 = 3;
+/// The request exceeded its client-supplied deadline (7).
+pub const REQUEST_TIMED_OUT: i16 = 7;
 /// The `acks` value is not one the protocol defines (21).
 pub const INVALID_REQUIRED_ACKS: i16 = 21;
 /// The requested API version is not supported (35). The one code
@@ -122,6 +124,14 @@ pub const REBALANCE_IN_PROGRESS: i16 = 27;
 /// the *explicitly-named* case answers this rather than the silent omission
 /// the *null-topic-array* case uses instead (`M9.10`).
 pub const TOPIC_AUTHORIZATION_FAILED: i16 = 29;
+/// The topic already exists with the requested name (36).
+pub const TOPIC_ALREADY_EXISTS: i16 = 36;
+/// The requested partition count is invalid (37).
+pub const INVALID_PARTITIONS: i16 = 37;
+/// The requested replication factor is invalid (38).
+pub const INVALID_REPLICATION_FACTOR: i16 = 38;
+/// The topic name or topic request is invalid (17).
+pub const INVALID_TOPIC_EXCEPTION: i16 = 17;
 /// The requesting principal does not own the named consumer group (30).
 pub const GROUP_AUTHORIZATION_FAILED: i16 = 30;
 /// A group member id this broker's own tracking does not recognise (25).
@@ -262,6 +272,34 @@ mod tests {
         assert_eq!(
             super::TOPIC_AUTHORIZATION_FAILED,
             ResponseError::TopicAuthorizationFailed.code()
+        );
+    }
+
+    #[test]
+    fn create_topic_codes_match_the_dependency() {
+        assert_eq!(
+            super::TOPIC_ALREADY_EXISTS,
+            ResponseError::TopicAlreadyExists.code()
+        );
+        assert_eq!(
+            super::INVALID_PARTITIONS,
+            ResponseError::InvalidPartitions.code()
+        );
+        assert_eq!(
+            super::INVALID_REPLICATION_FACTOR,
+            ResponseError::InvalidReplicationFactor.code()
+        );
+        assert_eq!(
+            super::INVALID_TOPIC_EXCEPTION,
+            ResponseError::InvalidTopicException.code()
+        );
+    }
+
+    #[test]
+    fn request_timeout_code_matches_the_dependency() {
+        assert_eq!(
+            super::REQUEST_TIMED_OUT,
+            ResponseError::RequestTimedOut.code()
         );
     }
 

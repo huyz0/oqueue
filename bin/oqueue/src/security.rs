@@ -107,7 +107,7 @@ pub(crate) struct Security {
     /// `None` means cleartext — see [`Security::describe`].
     pub(crate) acceptor: Option<TlsAcceptor>,
     credentials: PlainCredentials,
-    topic_grants: TopicGrants,
+    topic_grants: Arc<std::sync::RwLock<TopicGrants>>,
     group_grants: GroupGrants,
     admin_grants: AdminGrants,
     /// ⚠️ Recorded rather than asked of `TopicGrants`, which has no
@@ -135,7 +135,7 @@ impl Security {
         Self {
             acceptor: None,
             credentials: PlainCredentials::default(),
-            topic_grants: TopicGrants::new(),
+            topic_grants: Arc::new(std::sync::RwLock::new(TopicGrants::new())),
             group_grants: GroupGrants::new(),
             admin_grants: AdminGrants::new(),
             grants_configured: false,
@@ -183,7 +183,7 @@ impl Security {
         }
         dispatcher = dispatcher
             .with_credentials(self.credentials.clone())
-            .with_topic_grants(self.topic_grants.clone())
+            .with_shared_topic_grants(Arc::clone(&self.topic_grants))
             .with_group_grants(self.group_grants.clone())
             .with_admin_grants(self.admin_grants.clone());
         if let Some(quota) = self.quota.as_ref() {

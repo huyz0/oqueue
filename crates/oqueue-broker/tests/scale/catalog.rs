@@ -18,7 +18,9 @@
 //!   returns the entry asked for without recording it, so a later `lookup`
 //!   says the topic does not exist. No scale test creates a topic.
 
-use oqueue_core::{BoxFuture, CatalogEntry, Result, TopicCatalog, TopicId};
+use oqueue_core::{
+    BoxFuture, CatalogEntry, Principal, Result, TopicCatalog, TopicCreateOutcome, TopicId,
+};
 
 /// Width of the index in a synthetic name: enough for 10^8 topics, and fixed
 /// so name order and index order agree.
@@ -94,6 +96,32 @@ impl TopicCatalog for SyntheticCatalog {
                 .index_of(name.as_str())
                 .map_or_else(|| CatalogEntry::new(name.clone(), partitions), Self::entry))
         })
+    }
+
+    fn create_owned<'a>(
+        &'a self,
+        name: &'a TopicId,
+        partitions: u32,
+        creator: &'a Principal,
+    ) -> BoxFuture<'a, Result<TopicCreateOutcome>> {
+        Box::pin(async move {
+            Ok(TopicCreateOutcome::new(
+                self.index_of(name.as_str()).map_or_else(
+                    || CatalogEntry::with_creator(name.clone(), partitions, creator.clone()),
+                    Self::entry,
+                ),
+                self.index_of(name.as_str()).is_none(),
+            ))
+        })
+    }
+
+    fn list_owned<'a>(
+        &'a self,
+        _creator: &'a Principal,
+        _after: Option<&'a TopicId>,
+        _limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<TopicId>>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 
     fn list<'a>(
@@ -216,6 +244,26 @@ impl<C: TopicCatalog> TopicCatalog for Counted<C> {
     ) -> BoxFuture<'a, Result<CatalogEntry>> {
         self.count().create += 1;
         self.inner.create(name, partitions)
+    }
+
+    fn create_owned<'a>(
+        &'a self,
+        name: &'a TopicId,
+        partitions: u32,
+        creator: &'a Principal,
+    ) -> BoxFuture<'a, Result<TopicCreateOutcome>> {
+        self.count().create += 1;
+        self.inner.create_owned(name, partitions, creator)
+    }
+
+    fn list_owned<'a>(
+        &'a self,
+        creator: &'a Principal,
+        after: Option<&'a TopicId>,
+        limit: usize,
+    ) -> BoxFuture<'a, Result<Vec<TopicId>>> {
+        self.count().list += 1;
+        self.inner.list_owned(creator, after, limit)
     }
 
     fn list<'a>(

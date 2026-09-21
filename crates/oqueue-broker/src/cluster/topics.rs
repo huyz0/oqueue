@@ -7,10 +7,10 @@
 //! asking the catalog, not by waiting for it to appear here.
 
 use super::Cluster;
-use oqueue_core::{CatalogEntry, KeyDomain, TopicId};
+use oqueue_core::{CatalogEntry, KeyDomain, Principal, TopicCreateOutcome, TopicId};
 use std::collections::HashMap;
-use std::sync::PoisonError;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, PoisonError};
 use uuid::Uuid;
 
 /// How many names one `list` page asks for in [`Cluster::topic_names`].
@@ -112,6 +112,88 @@ impl Cluster {
         true
     }
 
+    /// Creates a catalog entry without starting a partition, log, or task.
+    pub async fn create_topic(&self, topic: &TopicId, partitions: u32) -> Option<CatalogEntry> {
+        let entry = self.catalog.create(topic, partitions).await.ok()?;
+        self.remember(&entry);
+        Some(entry)
+    }
+
+    /// Creates a topic on behalf of an authenticated principal, preserving
+    /// whether this caller won the durable conditional write.
+    pub async fn create_topic_owned(
+        &self,
+        topic: &TopicId,
+        partitions: u32,
+        creator: &Principal,
+    ) -> Option<TopicCreateOutcome> {
+        let outcome = self
+            .catalog
+            .create_owned(topic, partitions, creator)
+            .await
+            .ok()?;
+        self.remember(outcome.entry());
+        if outcome.created() {
+            self.invalidate_creator_topics(creator);
+        }
+        Some(outcome)
+    }
+
+    /// Restores the durable creator grants for one principal. The caller
+    /// performs the actual grant update so the broker's shared live index
+    /// remains outside this cluster's catalog seam.
+    pub async fn creator_topics(&self, creator: &Principal) -> Option<Vec<TopicId>> {
+        let load = self
+            .creator_topic_loads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .entry(creator.clone())
+            .or_insert_with(|| Arc::new(tokio::sync::OnceCell::new()))
+            .clone();
+        let result = load
+            .get_or_init(|| async { self.load_creator_topics(creator).await })
+            .await;
+        let topics = result.as_ref().ok().cloned();
+        if topics.is_none() {
+            let mut loads = self
+                .creator_topic_loads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner);
+            if loads
+                .get(creator)
+                .is_some_and(|current| Arc::ptr_eq(current, &load))
+            {
+                loads.remove(creator);
+            }
+        }
+        topics
+    }
+
+    pub(crate) fn invalidate_creator_topics(&self, creator: &Principal) {
+        self.creator_topic_loads
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(creator);
+    }
+
+    async fn load_creator_topics(&self, creator: &Principal) -> Result<Vec<TopicId>, ()> {
+        let mut topics = Vec::new();
+        let mut after = None;
+        loop {
+            let page = self
+                .catalog
+                .list_owned(creator, after.as_ref(), 1_000)
+                .await
+                .map_err(|_| ())?;
+            let full = creator_page_is_full(page.len());
+            after = page.last().cloned();
+            topics.extend(page);
+            if creator_page_is_done(full, after.as_ref()) {
+                return Ok(topics);
+            }
+        }
+    }
+
     /// How many topics this node's cache holds.
     #[cfg(test)]
     pub(crate) fn cached_topics(&self) -> usize {
@@ -150,5 +232,31 @@ impl Cluster {
 
     fn with_cache<T>(&self, f: impl FnOnce(&mut TopicCache) -> T) -> T {
         f(&mut self.topics.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+}
+
+const fn creator_page_is_full(len: usize) -> bool {
+    len == LIST_PAGE
+}
+
+const fn creator_page_is_done(full: bool, after: Option<&TopicId>) -> bool {
+    !full || after.is_none()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used)]
+
+    use super::{creator_page_is_done, creator_page_is_full};
+    use oqueue_core::TopicId;
+
+    #[test]
+    fn creator_page_fullness_and_end_conditions_are_exact() {
+        let topic = TopicId::new("last").expect("topic");
+        assert!(creator_page_is_full(1_000));
+        assert!(!creator_page_is_full(999));
+        assert!(!creator_page_is_done(true, Some(&topic)));
+        assert!(creator_page_is_done(false, Some(&topic)));
+        assert!(creator_page_is_done(true, None));
     }
 }
