@@ -1,0 +1,30 @@
+{
+  "commits": [
+    "87ca037f024083203590c873ab0924da0a87a7e4",
+    "c02036cf0ee6915afb6da44fe8e0dbe498813716",
+    "345909a562e424556b75823e41f303f0ade3218d",
+    "f1130c9fefcb7e8ff07eef679e12bd32aae4c697",
+    "66eb069702c2ecf0fbcf20b105b5f31d7cc4854f",
+    "7f1bc811d0077abf44fe1db985367d3da5c7e6b3",
+    "8b4a2316f41711dd3088676486b17422c0677e99",
+    "fc18d40a41feffc4fac7c8f0c08f592bb9510f72",
+    "fe8a99439dc33e9b1987e04cf9fd47bb192fc3b8",
+    "7679a19582020a07ec3ff2f0a37c589459079491",
+    "4c747b8aeb12eef56d7046012b4f4619e22c4551",
+    "16bc01e5d26b9929936f1da1c814c6760afa08c0",
+    "15dccd8f5d6683c3174b894c6152328c536bfe6a",
+    "f7add85f886e2066d095d4f1174cccb3503eca67",
+    "35cd789c4358c9b71e5521c3e68c1af5505068b2",
+    "e621737a88294d4aac869d456ed6c9318364941b",
+    "8464f74750ce8096abb995d82183fd88144c2625",
+    "c11949fdfba579d0f128141f613a0f27b71f4a14",
+    "3cddcca1a3ae16fd5952f3c0e3493e4110123b9f",
+    "e1643b871cb553360ac477a92648b26058c39eb7"
+  ],
+  "findings": [],
+  "milestone": "M12",
+  "notes": "Whole-milestone review of the final M12 state. The 20 work commits are coherent: authorization precedes lifecycle/configuration, telemetry and role behavior are wired before the real-client and diagnostics evidence, and the OS-portable test/gate path is retained. The heartbeat gate correction was found by running the completion gate, added as M12.19, and verified to execute the previously filtered test. The closing state marks all M12 backlog rows done and the roadmap milestone complete. Per-commit hooks passed the deterministic gates; the real AdminClient/Kafka CLI harness and diagnostics checker were rerun, and the final completion gate is run after this tracked verdict is staged.",
+  "recorded_at": "2026-09-22T00:19:10Z",
+  "reviewer": "independent-milestone-reviewer",
+  "verdict": "pass"
+}
