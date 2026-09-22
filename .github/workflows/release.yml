@@ -81,10 +81,12 @@ jobs:
         run: cargo install cargo-zigbuild --version 0.20.1 --locked
       - name: build the native glibc-floor release target
         run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
+      - name: derive the trusted artifact name
+        run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)" >> "$GITHUB_ENV"
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
-          name: m13-target-linux-x86_64
+          name: ${{ env.ARTIFACT_NAME }}
           path: target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue
           if-no-files-found: error
 
@@ -130,9 +132,11 @@ jobs:
         run: cargo install cargo-zigbuild --version 0.20.1 --locked
       - name: build the native glibc-floor release target
         run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
+      - name: derive the trusted artifact name
+        run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)" >> "$GITHUB_ENV"
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
-          name: m13-target-linux-aarch64
+          name: ${{ env.ARTIFACT_NAME }}
           path: target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue
           if-no-files-found: error

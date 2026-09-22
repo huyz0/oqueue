@@ -12,6 +12,7 @@ if [[ "$#" -gt 1 || ( "$#" -eq 1 && "$1" != --completion-gate ) ]]; then
 fi
 
 OQUEUE_RELEASE_MATRIX_NO_CHECKER=1 bash "$ROOT/tests/release-matrix.sh" >/dev/null
+bash "$ROOT/tests/release-artifact-name.sh" >/dev/null
 release="$ROOT/.github/workflows/release.yml"
 os_smoke="$ROOT/.github/workflows/os-smoke.yml"
 grep -Fq 'target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue' "$release"

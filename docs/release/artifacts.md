@@ -58,6 +58,16 @@ Linux and macOS. macOS is a development platform only and produces no release
 artifact; Windows uses the portable shell tier because WSL2 is the supported
 development path.
 
+## Artifact names
+
+Every shipped binary uses
+`oqueue-{version}-{os}-{arch}-{libc}-{variant}-{format}`. For example,
+`oqueue-0.0.0-linux-x86_64-glibc2.28-default-bin` and its FIPS counterpart
+are distinct identities. `scripts/release-artifact-name.sh` reads the version
+from `[workspace.package]`, validates every other field against the supported
+matrix, and is the source used by both Linux upload jobs; macOS has no release
+artifact name.
+
 ## glibc build floor
 
 The Linux release command is `cargo zigbuild --locked --release` with the
