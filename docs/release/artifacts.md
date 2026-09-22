@@ -68,6 +68,13 @@ from `[workspace.package]`, validates every other field against the supported
 matrix, and is the source used by both Linux upload jobs; macOS has no release
 artifact name.
 
+## Reproducibility
+
+The x86_64 release job runs `scripts/release-repro.sh`, which builds the same
+commit twice in separate target directories and records the two artifact paths,
+SHA-256 values, command digest, and output digest. A byte mismatch fails the
+job; the evidence is not satisfied by comparing a version string.
+
 ## glibc build floor
 
 The Linux release command is `cargo zigbuild --locked --release` with the

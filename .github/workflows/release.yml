@@ -79,6 +79,8 @@ jobs:
           version: 0.14.1
       - name: install the pinned cargo-zigbuild
         run: cargo install cargo-zigbuild --version 0.20.1 --locked
+      - name: compare repeated x86_64 release builds
+        run: OQUEUE_M13_EVIDENCE_DIR=target/repro scripts/release-repro.sh
       - name: build the native glibc-floor release target
         run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
       - name: derive the trusted artifact name
