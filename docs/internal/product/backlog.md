@@ -30,6 +30,31 @@ re-derived rather than copied when a milestone opens. Read the plan's
 "Decisions required first" before writing any of that milestone's code; see
 [`sdd.md`](../standards/sdd.md) §Decomposition.
 
+## M13: Release engineering and the artifact matrix
+
+15 rows against a plan of 15. ADR-0070 resolves the glibc-floor opening
+decision: Linux release artifacts target glibc 2.28, while musl remains an
+explicit evaluation rather than an accidental second release target. A finding
+filed while M13 runs is dispositioned when filed (`milestone/SKILL.md`).
+
+| ID | Task | Acceptance | State |
+|---|---|---|---|
+| M13.0 | M13 opening: decision, decomposition, and red completion gate | Serves NFR-40, NFR-41, NFR-42, NFR-43, FR-43. ADR-0070 is accepted; the plan records the resolved glibc floor; these 15 authoritative rows exist; `scripts/gates/m13-complete.sh` exists and exits non-zero because release-build, clean-build, FIPS, smoke, matrix, artifact, and upgrade evidence is not yet present. | done |
+| M13.1 | First-class Linux release targets and native matrix | Serves NFR-40, NFR-42. Declare x86_64-unknown-linux-gnu and aarch64-unknown-linux-gnu as first-class release targets, use native arm64 and x86_64 jobs for shipped artifacts, and document why cross compilation is not the release path. | todo |
+| M13.2 | Pinned glibc-floor release build | Serves NFR-41, NFR-42. Wire cargo-zigbuild or an equivalent pinned toolchain to glibc 2.28, prove the target suffix is present in the release command, and ensure the build does not inherit the runner's libc. | todo |
+| M13.3 | Release ISA baselines and allocator safety | Serves NFR-40, NFR-42. Verify x86-64-v2 and aarch64 +lse,+crc baselines in release artifacts, keep higher CPU features behind runtime dispatch, and either exclude heap-profiling from release artifacts or set `JEMALLOC_SYS_WITH_LG_PAGE=16` for every such build. | todo |
+| M13.4 | Clean-container default build | Serves NFR-42. A clean container with only cargo, the pinned Rust toolchain, and a C compiler builds the default workspace with `--locked`; CMake, Go, and FIPS-only dependencies are absent from that job. | todo |
+| M13.5 | Separate FIPS artifact and differential verification | Serves FR-43. Build the FIPS artifact in its isolated job with its CMake/Go toolchain, assert `fips_mode_enabled()` at runtime, and prove FIPS and non-FIPS artifacts read each other's region data without changing the format. | todo |
+| M13.6 | Musl evaluation and native aarch64 coverage | Serves NFR-40, NFR-42. Evaluate the aarch64-musl question and either reject it with the allocator consequence recorded or adopt it with a non-default allocator; restore native aarch64 coverage of `oqueue-store` and record the answer to build question #37. | todo |
+| M13.7 | Oldest-supported-distribution smoke test | Serves NFR-41. Start the release artifact on the oldest supported glibc-2.28 distribution and exercise a real startup/request path; a host build that merely links is insufficient. | todo |
+| M13.8 | Linux and macOS CI matrix | Serves NFR-40, NFR-43. CI builds and tests both Linux architectures and runs the fast test tiers on macOS, with named capability skips only where the platform cannot provide a release artifact. | todo |
+| M13.9 | Trusted artifact naming and versioning | Serves NFR-40, NFR-42. Define and test the `oqueue-{version}-{os}-{arch}-{libc}-{variant}-{format}` convention, where version, OS, architecture, glibc 2.28 baseline, and `default`/`fips` status are all present; no default/FIPS collision or checksum/name mismatch is accepted. | todo |
+| M13.10 | Reproducibility check | Serves NFR-42. Two builds from the same commit in the declared release environment are compared byte-for-byte with both artifact identities and SHA-256 values recorded; if byte identity is explicitly declined, both artifacts must pass the same startup, Kafka produce/fetch, object-format cross-read, and FIPS differential suite, with SHA-256 digests of the exact commands and outputs recorded. Matching only a version string is insufficient, and any nondeterminism is surfaced. | todo |
+| M13.11 | Checksums and signing | Serves NFR-42. Every published artifact has a deterministic checksum manifest and a verified signature path; verification fails closed for a changed artifact or mismatched name. | todo |
+| M13.12 | Container images from release artifacts | Serves NFR-40, NFR-42. Build the expected deployment container images from the release binaries, assert the image architecture, and verify the image starts the same artifact without introducing an unrecorded build path. | todo |
+| M13.13 | Tested upgrade path | Serves NFR-40, NFR-42. Document and test upgrades across object-format compatibility boundaries, state that no durable local state is migrated, and identify the rolling-upgrade ordering and refusal behavior for incompatible artifacts. | todo |
+| M13.14 | M13 closing review and evidence | Serves FR-43, NFR-40, NFR-41, NFR-42, NFR-43. A fresh milestone review covers every M13 commit, dispositions findings and handoffs, and `scripts/docker-test.sh scripts/gates/m13-complete.sh` exits 0 with no skipped acceptance leg. | todo |
+
 ## M12: Admin API and operability
 
 19 rows against a plan of 19. ADR-0058 resolves the opening decisions: topic

@@ -88,7 +88,7 @@ before that milestone's opening commit replaced it.
 | 12 | [M7](milestones/M7.md) | Metadata sharding and scale | non-functional | M6, M9 | 17 | `scripts/gates/m7-complete.sh` | complete |
 | 13 | [M8](milestones/M8.md) | Encryption: BYOK and the FIPS build | feature | M3, M5, M9 | 18 | `scripts/gates/m8-complete.sh` | complete |
 | 14 | [M12](milestones/M12.md) | Admin API and operability | functional | M4, M9 | 20 | `scripts/gates/m12-complete.sh` | complete |
-| 15 | [M13](milestones/M13.md) | Release engineering and the artifact matrix | build | M12 | 15 | `scripts/gates/m13-complete.sh` | not started |
+| 15 | [M13](milestones/M13.md) | Release engineering and the artifact matrix | build | M12 | 15 | `scripts/gates/m13-complete.sh` | in progress |
 | 16 | [M14](milestones/M14.md) | Performance and cost validation | non-functional | M5, M13 | 16 | `scripts/gates/m14-complete.sh` | not started |
 | 17 | [M15](milestones/M15.md) | v1 hardening: chaos, soak, and the release gate | non-functional | M14 | 16 | `scripts/gates/m15-complete.sh` | not started |
 
