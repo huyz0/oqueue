@@ -1,0 +1,37 @@
+{
+  "milestone": "M13",
+  "commits": [
+    "8c392fafd269190d0db8698da3ac77b5ceb2a060",
+    "cea85518499bfb5f621b4acfcf11b5aa44128a60",
+    "0164ac62b58db370e0275d9dbc5f437fcb133419",
+    "f220e0e2cc869f3acc621a88c4aec2bcd923cbda",
+    "092e0ecc5850ab6a26941d94c153c653d7d23e9a",
+    "1588b181d6505706f9b1ea7a374a164f9235434d",
+    "d306359af94a2d884e833cd207ca2875ab681b7a",
+    "9e34eadf2a872fbb11ddb6ba90429ea4e462005f",
+    "f83ef87b4f29b1043cd8cc1f223c9fb6163de75b",
+    "de85d5466f7d5e1a361f60f2e410d542fa89bc00",
+    "ccff24d4f9c867503b097b8e4f9939043b1ba9d2",
+    "be2fbc7663598fc1829228c6b50045f36ddf1f28",
+    "0533004a0b4ac000da99abd66ae65b2d81ab1ae7",
+    "f65a57a93e2a3918c5d7f4f5bd25acfc1ba17fec",
+    "0eac52f5e3ede95001b33014a1712680a133689f"
+  ],
+  "findings": [
+    {
+      "id": "M13-BOOKKEEPING-001",
+      "severity": "blocking",
+      "summary": "The native release evidence bundle and final completion-gate run remain external to this workspace.",
+      "evidence": "The workflow and gate handoff are implemented and contract-tested, but this host has no native aarch64 runner or signed release secret. The completion gate correctly fails closed without the bundle, so M13 cannot be marked complete until the native workflow produces it and the full gate exits 0.",
+      "task_id": "M13.15"
+    }
+  ],
+  "notes": [
+    "The 15-commit M13 sequence is coherent: native x86_64/aarch64 release jobs produce the four canonical artifacts, images, and reproducibility evidence; the aggregate job recomputes hashes, signs the combined manifest, mounts the bundle read-only, and runs the completion gate without rebuilding ARM evidence.",
+    "The final staged wrapper probe exercises the actual docker-test.sh argument handoff, including the read-only mount and container-side evidence path; the aggregate contract test also covers success and missing/bad-provenance failure paths.",
+    "M13 completion remains dependent on the external GitHub native ARM/FIPS workflow evidence and release secret. That is an intentional execution prerequisite, not a code defect; the local gate should remain red until that evidence bundle is supplied."
+  ],
+  "recorded_at": "2026-09-23T00:00:00+10:00",
+  "reviewer": "Codex independent milestone reviewer",
+  "verdict": "pass"
+}
