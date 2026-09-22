@@ -1,0 +1,90 @@
+name: release-targets
+
+"on":
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  linux-x86_64:
+    name: Linux x86_64 native release target
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TARGET: x86_64-unknown-linux-gnu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: install the pinned repository toolchain
+        run: |
+          set -euo pipefail
+          mapfile -t channels < <(
+            python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])'
+          )
+          test "${#channels[@]}" -eq 1
+          toolchain="${channels[0]}"
+          mapfile -t declared_targets < <(
+            python3 -c 'import tomllib; print("\n".join(sorted(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["targets"])))'
+          )
+          target_declared=false
+          for declared in "${declared_targets[@]}"; do
+            [[ "$declared" == "$RELEASE_TARGET" ]] && target_declared=true
+          done
+          test "$target_declared" = true
+          rustup toolchain install "$toolchain" --profile minimal
+          rustup target add --toolchain "$toolchain" "$RELEASE_TARGET"
+          rustup show active-toolchain
+      - name: build the native release target
+        run: cargo build --locked --release --target "$RELEASE_TARGET"
+      - name: retain the native validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m13-target-linux-x86_64
+          path: target/${{ env.RELEASE_TARGET }}/release/oqueue
+          if-no-files-found: error
+
+  linux-aarch64:
+    name: Linux aarch64 native release target
+    runs-on: ubuntu-24.04-arm
+    env:
+      RELEASE_TARGET: aarch64-unknown-linux-gnu
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: install the pinned repository toolchain
+        run: |
+          set -euo pipefail
+          mapfile -t channels < <(
+            python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])'
+          )
+          test "${#channels[@]}" -eq 1
+          toolchain="${channels[0]}"
+          mapfile -t declared_targets < <(
+            python3 -c 'import tomllib; print("\n".join(sorted(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["targets"])))'
+          )
+          target_declared=false
+          for declared in "${declared_targets[@]}"; do
+            [[ "$declared" == "$RELEASE_TARGET" ]] && target_declared=true
+          done
+          test "$target_declared" = true
+          rustup toolchain install "$toolchain" --profile minimal
+          rustup target add --toolchain "$toolchain" "$RELEASE_TARGET"
+          rustup show active-toolchain
+      - name: build the native release target
+        run: cargo build --locked --release --target "$RELEASE_TARGET"
+      - name: retain the native validation artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: m13-target-linux-aarch64
+          path: target/${{ env.RELEASE_TARGET }}/release/oqueue
+          if-no-files-found: error
