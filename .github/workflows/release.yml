@@ -33,6 +33,16 @@ jobs:
       - name: build in the FIPS-only container
         run: docker build --file docker/release-fips.Dockerfile --tag oqueue-release-fips:${GITHUB_SHA} .
 
+  oldest-smoke:
+    name: Oldest supported glibc smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run the smoke contract test
+        run: bash tests/release-smoke.sh
+      - name: build and exercise the artifact on glibc 2.28
+        run: scripts/release-smoke.sh
+
   linux-x86_64:
     name: Linux x86_64 native release target
     runs-on: ubuntu-latest

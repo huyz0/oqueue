@@ -41,6 +41,14 @@ architecture that ships it. The decision and its alternatives are recorded in
 It may be evaluated again if a product requirement or measured allocator work
 justifies reopening the decision.
 
+## Oldest-distribution smoke
+
+The release smoke image uses Rocky Linux 8, whose glibc is the 2.28 floor
+committed by NFR-41. It builds the default release artifact inside that image
+and runs the real binary through the role smoke harness, including a Kafka
+ApiVersions request over the listening socket. A successful link on the host
+does not satisfy this leg.
+
 ## glibc build floor
 
 The Linux release command is `cargo zigbuild --locked --release` with the
