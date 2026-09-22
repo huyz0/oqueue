@@ -21,3 +21,29 @@ jobs:
           python-version: "3.x"
       - name: run the portable shell smoke tier
         run: bash scripts/os-smoke.sh
+
+  fast:
+    name: fast tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: run the portable shell smoke tier
+        run: bash scripts/os-smoke.sh
+      - name: install the pinned repository toolchain
+        run: |
+          set -euo pipefail
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$toolchain" --profile minimal
+          rustup show active-toolchain
+      - name: run the fast workspace test tier
+        run: cargo test --locked --workspace

@@ -49,6 +49,15 @@ and runs the real binary through the role smoke harness, including a Kafka
 ApiVersions request over the listening socket. A successful link on the host
 does not satisfy this leg.
 
+## CI matrix
+
+The release workflow builds and tests the Linux x86_64 and native aarch64
+artifacts. The push-triggered OS smoke workflow runs the portable shell smoke
+tier on Linux, macOS, and Windows, and runs the fast workspace test tier on
+Linux and macOS. macOS is a development platform only and produces no release
+artifact; Windows uses the portable shell tier because WSL2 is the supported
+development path.
+
 ## glibc build floor
 
 The Linux release command is `cargo zigbuild --locked --release` with the

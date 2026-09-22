@@ -72,6 +72,8 @@ jobs:
           rustup toolchain install "$toolchain" --profile minimal
           rustup target add --toolchain "$toolchain" "$RELEASE_TARGET"
           rustup show active-toolchain
+      - name: run the Linux x86_64 fast test tier
+        run: cargo test --locked --workspace
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.1
@@ -98,8 +100,6 @@ jobs:
       - uses: actions/checkout@v4
       - name: run the native ARM coverage contract test
         run: bash tests/release-arm64-coverage.sh
-      - name: test the store crate on native ARM
-        run: cargo test --locked -p oqueue-store --all-targets
       - name: install the pinned repository toolchain
         run: |
           set -euo pipefail
@@ -119,6 +119,10 @@ jobs:
           rustup toolchain install "$toolchain" --profile minimal
           rustup target add --toolchain "$toolchain" "$RELEASE_TARGET"
           rustup show active-toolchain
+      - name: test the store crate on native ARM
+        run: cargo test --locked -p oqueue-store --all-targets
+      - name: run the Linux aarch64 fast test tier
+        run: cargo test --locked --workspace
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.1
