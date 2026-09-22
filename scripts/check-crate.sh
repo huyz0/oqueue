@@ -179,7 +179,13 @@ clippy_rc=0
 # run the same script, so the flag cannot live only on the CI side -- which
 # means a dependency added without regenerating the lockfile fails here, at the
 # commit, and the remedy is to run a plain `cargo check` and stage `Cargo.lock`.
-clippy_out="$(cargo clippy --locked "${scope[@]}" --all-targets --all-features \
+# ⚠️ **No `--all-features` here.** The shipped/default configuration is the
+# portable gate configuration; the optional FIPS configuration requires CMake
+# and Go by design and is compiled, tested, and linted in
+# `docker/release-fips.Dockerfile`. The non-FIPS optional configurations are
+# checked explicitly below, so removing `--all-features` does not leave
+# `gzip`, `snappy`, or `heap-profiling` uncompiled.
+clippy_out="$(cargo clippy --locked "${scope[@]}" --all-targets \
   -- -D warnings 2>&1)" || clippy_rc=$?
 if (( clippy_rc == 0 )); then
   ok "clippy ($label)"
@@ -198,15 +204,10 @@ test_rc=0
 # lib + bins + tests + doc tests, which is what should gate a commit. Benches
 # and examples are still compiled: clippy runs `--all-targets` immediately
 # above, so nothing goes uncompiled by being left out here.
-# ⚠️ **No `--all-features` here, unlike clippy above, and the asymmetry is
-# deliberate -- it is the split `M0.13` forced.** Clippy *checks*; the tests
-# *run*, and what should be run is the configuration that ships. With
-# `--all-features` the gate ran a `bin/oqueue` linked against jemalloc and never
-# once ran the mimalloc build that is actually shipped -- the default feature
-# set was compiled by nothing.
-#
-#   clippy --all-features  compiles and lints every `cfg(feature)` line
-#   test (default)         runs the configuration that ships
+# Clippy and tests both cover the configuration that ships. The optional FIPS
+# configuration is covered by the isolated release builder above. The other
+# optional configurations are checked below when this is the workspace gate or
+# when their owning crate is requested directly.
 #
 # ⚠️ **An earlier version of this comment justified the split by jemalloc's ARM
 # page-size trap, and that reason was wrong -- twice, in opposite directions.**
@@ -218,21 +219,48 @@ test_rc=0
 # problem -- it is M13's, where a build host and a deployment host can differ.
 # ADR-0007, doc 18 §3.5.
 #
-# ⚠️ Three costs, all real. A *failing test* behind a feature flag reports green;
-# a doc example on a feature-gated item is compiled by nothing, since clippy
-# `--all-targets` skips doc tests; and ⚠️ **`#[cfg(not(feature = ...))]` code is
-# linted by nothing at all** -- `--all-features` cfg's it out of the only clippy
-# run, and `cargo test` does not apply `[workspace.lints.clippy]`. This commit
-# introduces exactly such a branch (`bin/oqueue/src/main.rs`'s mimalloc arm), so
-# an `unwrap()` there would pass both gates under `unwrap_used = "deny"`.
-# The moment any of the three bites, this needs a per-feature matrix rather than
-# a blanket flag.
+# ⚠️ Feature-specific code is covered by its owning configuration: the default
+# branch is linted here, and the FIPS branch is linted in the isolated builder.
+# That split keeps the portable gate honest without leaving the optional branch
+# unchecked.
 test_out="$(cargo test --locked "${scope[@]}" 2>&1)" || test_rc=$?
 if (( test_rc == 0 )); then
   ok "tests ($label)"
 else
   fail "tests ($label): failing"
   printf '%s\n' "$test_out" | tail -60 >&2
+fi
+
+run_optional_config() {
+  local label="$1"
+  shift
+  local output=""
+  local rc=0
+  output="$(cargo "$@" 2>&1)" || rc=$?
+  if (( rc == 0 )); then
+    ok "$label"
+  else
+    fail "$label"
+    printf '%s\n' "$output" | tail -60 >&2
+  fi
+}
+
+if [[ -z "$CRATE" || "$CRATE" == "oqueue-codec" ]]; then
+  run_optional_config \
+    "clippy (oqueue-codec gzip+snappy)" \
+    clippy --locked -p oqueue-codec --features gzip,snappy --all-targets -- -D warnings
+  run_optional_config \
+    "tests (oqueue-codec gzip+snappy)" \
+    test --locked -p oqueue-codec --features gzip,snappy
+fi
+
+if [[ -z "$CRATE" || "$CRATE" == "oqueue" ]]; then
+  run_optional_config \
+    "clippy (oqueue heap-profiling)" \
+    clippy --locked -p oqueue --features heap-profiling --all-targets -- -D warnings
+  run_optional_config \
+    "tests (oqueue heap-profiling)" \
+    test --locked -p oqueue --features heap-profiling
 fi
 
 finish

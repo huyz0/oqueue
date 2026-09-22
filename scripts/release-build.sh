@@ -29,7 +29,7 @@ for target in "${selected_targets[@]}"; do
       ;;
   esac
   target_with_floor="$target.$GLIBC_FLOOR"
-  printf 'M13_RELEASE_COMMAND target=%s rustflags=%s command=cargo zigbuild --locked --release --no-default-features --target %s\n' \
+  printf 'M13_RELEASE_COMMAND target=%s rustflags=%s command=cargo zigbuild --locked --release -p oqueue --no-default-features --features software-aead,ring --target %s\n' \
     "$target_with_floor" "$rustflags" "$target_with_floor"
 done
 
@@ -63,5 +63,5 @@ for target in "${selected_targets[@]}"; do
   esac
   target_with_floor="$target.$GLIBC_FLOOR"
   RUSTFLAGS="--cfg tokio_unstable $rustflags" cargo zigbuild --locked --release \
-    --no-default-features --target "$target_with_floor"
+    -p oqueue --no-default-features --features software-aead,ring --target "$target_with_floor"
 done

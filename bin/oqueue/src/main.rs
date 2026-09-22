@@ -215,7 +215,20 @@ fn store_for(
     }
 }
 
+#[allow(
+    clippy::missing_const_for_fn,
+    reason = "the FIPS build performs a runtime provider check"
+)]
+fn assert_fips_runtime() {
+    #[cfg(feature = "fips")]
+    assert!(
+        oqueue_crypto::fips_mode_enabled(),
+        "FIPS artifact must use the FIPS provider"
+    );
+}
+
 fn main() {
+    assert_fips_runtime();
     // The composition root's job, in the order it will always happen: choose
     // the concrete implementations, then hand them to the shell that runs them.
     let wiring = match Wiring::unencrypted() {

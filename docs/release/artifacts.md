@@ -46,3 +46,21 @@ contains cargo, the pinned Rust toolchain, and a C compiler but no CMake or Go.
 `scripts/release-clean-build.sh` checks that boundary before running the
 locked, default-feature-free release build. FIPS tooling belongs to a separate
 builder and cannot leak into this job.
+
+## FIPS variant and object-format differential
+
+The FIPS artifact is built only by `docker/release-fips.Dockerfile` through
+`scripts/release-fips-build.sh`. That builder adds CMake and Go for
+`aws-lc-rs`; the default builder does not. The composition-root command is
+`cargo build --locked --release --no-default-features --features fips -p oqueue`,
+which selects AWS-LC for both region AEAD and Rustls and runs the binary's
+runtime `fips_mode_enabled()` assertion at startup. The TLS seams also verify
+the installed process provider's `CryptoProvider::fips()` result and fail
+closed if another provider was installed first.
+
+The FIPS and default builds share the region format, not an implementation
+format: both use the same AES-256-GCM algorithm code, nonce, associated-data
+encoding, tag, and ciphertext layout. `crates/oqueue-crypto/tests/it/region.rs`
+pins one ciphertext literal and opens that literal; the test is run in both
+feature configurations. A change that makes either provider produce a
+different region representation fails the pinned-vector test.

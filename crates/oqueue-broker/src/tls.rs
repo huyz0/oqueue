@@ -1,4 +1,4 @@
-//! TLS termination — `M9.5`, `ADR-0012`'s `ring` default build.
+//! TLS termination — `M9.5`, with Ring by default and AWS-LC for FIPS builds.
 //!
 //! ⚠️ **The capability, not the deployment.** This module builds a
 //! [`rustls::ServerConfig`] from certificate/key material and exposes
@@ -17,8 +17,8 @@
 //! `oqueue-store`'s** (`crates/oqueue-store/src/tls.rs`) — that function is
 //! `pub(crate)`, deliberately not reachable outside its own crate (its own
 //! doc: "no reason to be reachable outside this crate at all"). The
-//! underlying `rustls::crypto::ring::default_provider().install_default()`
-//! call is safe to make from more than one crate in the same process by
+//! underlying provider `install_default()` call is safe to make from more
+//! than one crate in the same process by
 //! design — it is `Once`-guarded here exactly the way `oqueue-store`'s own
 //! copy is, and a second install from a different crate is the ordinary,
 //! expected case the `Once` exists for, not a race either copy needs to
@@ -32,8 +32,8 @@ pub use tokio_rustls::TlsAcceptor;
 
 static INSTALL: Once = Once::new();
 
-/// Installs `ring`'s [`rustls::crypto::CryptoProvider`] as the process
-/// default, if none has been installed yet. Call this before building any
+/// Installs the build's [`rustls::crypto::CryptoProvider`] as the process
+/// default — AWS-LC for FIPS builds, Ring otherwise. Call this before building any
 /// [`ServerConfig`](rustls::ServerConfig) — `rustls` needs one before it
 /// can construct a TLS session, and `default-features = false` on this
 /// workspace's `rustls` pin (`ADR-0012`) means none is chosen at compile
@@ -41,7 +41,19 @@ static INSTALL: Once = Once::new();
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) fn install_ring_provider() {
     INSTALL.call_once(|| {
+        #[cfg(feature = "fips")]
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        #[cfg(not(feature = "fips"))]
         let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let Some(provider) = rustls::crypto::CryptoProvider::get_default() else {
+            panic!("TLS provider installation left no process default");
+        };
+        assert_eq!(
+            provider.fips(),
+            cfg!(feature = "fips"),
+            "TLS provider does not match the artifact's FIPS mode"
+        );
     });
 }
 

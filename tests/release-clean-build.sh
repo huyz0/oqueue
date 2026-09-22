@@ -19,7 +19,7 @@ capture="$tmp/command"
 PATH="$fake_bin" CLEAN_BUILD_CAPTURE="$capture" \
   "$BASH_BIN" "$ROOT/scripts/release-clean-build.sh"
 actual="$(< "$capture")"
-[[ "$actual" == 'build --locked --release --no-default-features' ]]
+[[ "$actual" == 'build --locked --release -p oqueue --no-default-features --features software-aead,ring' ]]
 
 forbidden_bin="$tmp/forbidden-bin"
 mkdir -p "$forbidden_bin"

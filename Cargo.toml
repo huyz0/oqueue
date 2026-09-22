@@ -103,6 +103,10 @@ aes-gcm = { version = "0.11", default-features = false, features = [
     "aes",
     "alloc",
 ] }
+# M13.5's isolated FIPS provider. The feature is enabled only by the
+# composition-root `fips` feature; the default build never compiles this
+# CMake/Go-backed dependency.
+aws-lc-rs = { version = "1", default-features = false }
 # The platform's own CSPRNG, behind `oqueue-crypto`'s `Entropy` seam and used
 # by nothing else (`M8.5`). A fresh DEK is 32 unpredictable bytes and there is
 # no other source of them that is not a userspace PRNG with a seed to leak.
@@ -192,7 +196,6 @@ reqwest = { version = "0.13", default-features = false, features = [
 # reqwest re-exports no such API. `default-features = false` avoids rustls's
 # own default, which is `aws_lc_rs` (ADR-0012, same reasoning).
 rustls = { version = "0.23", default-features = false, features = [
-    "ring",
     "std",
     "tls12",
 ] }

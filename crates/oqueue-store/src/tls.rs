@@ -1,4 +1,4 @@
-//! Installs `ring` as the process's `rustls` crypto provider.
+//! Installs the selected `rustls` crypto provider.
 //!
 //! ⚠️ **Why this exists as code, not just a Cargo feature.** ADR-0012 picks
 //! `ring` over `aws-lc-rs` for the default build, but neither `reqwest`'s nor
@@ -13,8 +13,8 @@ use std::sync::Once;
 
 static INSTALL: Once = Once::new();
 
-/// Installs `ring`'s [`rustls::crypto::CryptoProvider`] as the process
-/// default, if none has been installed yet.
+/// Installs the build's [`rustls::crypto::CryptoProvider`] as the process
+/// default: AWS-LC in FIPS builds, Ring otherwise.
 ///
 /// Call this before constructing any client that will make an HTTPS
 /// connection (every `oqueue-store` backend's constructor does). Idempotent
@@ -36,7 +36,19 @@ static INSTALL: Once = Once::new();
 #[allow(clippy::redundant_pub_crate)]
 pub(crate) fn install_ring_provider() {
     INSTALL.call_once(|| {
+        #[cfg(feature = "fips")]
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        #[cfg(not(feature = "fips"))]
         let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let Some(provider) = rustls::crypto::CryptoProvider::get_default() else {
+            panic!("TLS provider installation left no process default");
+        };
+        assert_eq!(
+            provider.fips(),
+            cfg!(feature = "fips"),
+            "TLS provider does not match the artifact's FIPS mode"
+        );
     });
 }
 

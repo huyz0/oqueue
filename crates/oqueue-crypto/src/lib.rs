@@ -36,6 +36,23 @@ pub use providers::{AwsKmsApi, AwsKmsProvider, GcpCloudKmsApi, GcpKmsProvider};
 pub use region::{RegionAad, TAG_BYTES, open, seal};
 pub use unwrap_cache::{UNWRAPPED_DEK_CACHE_ENTRIES, UNWRAPPED_DEK_TTL_MS, UnwrappedDekCache};
 
+/// Whether the linked AWS-LC implementation reports its FIPS mode at runtime.
+#[must_use]
+#[allow(
+    clippy::missing_const_for_fn,
+    reason = "the FIPS build queries AWS-LC at runtime"
+)]
+pub fn fips_mode_enabled() -> bool {
+    #[cfg(feature = "fips")]
+    {
+        aws_lc_rs::try_fips_mode().is_ok()
+    }
+    #[cfg(not(feature = "fips"))]
+    {
+        false
+    }
+}
+
 use oqueue_core::{BoxFuture, Error, KeyId, KeyProvider, Redacted, Result, WrappedKey};
 
 /// The [`KeyProvider`] for a deployment with encryption turned off.

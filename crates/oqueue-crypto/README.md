@@ -16,6 +16,9 @@ Because BYOK is a per-topic opt-in and server-side encryption cannot express it:
   `Aes256Gcm::generate_nonce` and every other random-nonce constructor stay out
   of scope; no build script, so the default build's toolchain stays cargo plus
   a C compiler (NFR-42, ADR-0012).
+- `aws-lc-rs` — the optional AWS-LC FIPS AEAD provider used only by the
+  isolated `fips` release feature; its CMake/Go build requirements are kept out
+  of the default artifact path (`M13.5`).
 - `getrandom` — the OS CSPRNG behind `entropy::OsEntropy`, the source of a
   fresh DEK's 32 bytes (`M8.5`). ⚠️ **This is a direct dependency now, so "the
   crate cannot reach a random source" is no longer the thing keeping nonces

@@ -8,8 +8,8 @@ trap 'rm -rf "$tmp"' EXIT
 
 plan="$(OQUEUE_RELEASE_PLAN_ONLY=1 "$ROOT/scripts/release-build.sh")"
 
-expected_x86='M13_RELEASE_COMMAND target=x86_64-unknown-linux-gnu.2.28 rustflags=-C target-cpu=x86-64-v2 command=cargo zigbuild --locked --release --no-default-features --target x86_64-unknown-linux-gnu.2.28'
-expected_arm='M13_RELEASE_COMMAND target=aarch64-unknown-linux-gnu.2.28 rustflags=-C target-feature=+lse,+crc command=cargo zigbuild --locked --release --no-default-features --target aarch64-unknown-linux-gnu.2.28'
+expected_x86='M13_RELEASE_COMMAND target=x86_64-unknown-linux-gnu.2.28 rustflags=-C target-cpu=x86-64-v2 command=cargo zigbuild --locked --release -p oqueue --no-default-features --features software-aead,ring --target x86_64-unknown-linux-gnu.2.28'
+expected_arm='M13_RELEASE_COMMAND target=aarch64-unknown-linux-gnu.2.28 rustflags=-C target-feature=+lse,+crc command=cargo zigbuild --locked --release -p oqueue --no-default-features --features software-aead,ring --target aarch64-unknown-linux-gnu.2.28'
 
 grep -Fqx "$expected_x86" <<< "$plan"
 grep -Fqx "$expected_arm" <<< "$plan"
@@ -33,7 +33,7 @@ PATH="$fake_bin:$PATH" RELEASE_BUILD_CAPTURE="$capture" \
   OQUEUE_RELEASE_TARGET=x86_64-unknown-linux-gnu \
   "$ROOT/scripts/release-build.sh"
 actual="$(< "$capture")"
-expected_actual='--cfg tokio_unstable -C target-cpu=x86-64-v2|zigbuild --locked --release --no-default-features --target x86_64-unknown-linux-gnu.2.28'
+expected_actual='--cfg tokio_unstable -C target-cpu=x86-64-v2|zigbuild --locked --release -p oqueue --no-default-features --features software-aead,ring --target x86_64-unknown-linux-gnu.2.28'
 [[ "$actual" == "$expected_actual" ]]
 
 capture="$tmp/arm-command"
@@ -41,7 +41,7 @@ PATH="$fake_bin:$PATH" RELEASE_BUILD_CAPTURE="$capture" \
   OQUEUE_RELEASE_TARGET=aarch64-unknown-linux-gnu \
   "$ROOT/scripts/release-build.sh"
 actual="$(< "$capture")"
-expected_actual='--cfg tokio_unstable -C target-feature=+lse,+crc|zigbuild --locked --release --no-default-features --target aarch64-unknown-linux-gnu.2.28'
+expected_actual='--cfg tokio_unstable -C target-feature=+lse,+crc|zigbuild --locked --release -p oqueue --no-default-features --features software-aead,ring --target aarch64-unknown-linux-gnu.2.28'
 [[ "$actual" == "$expected_actual" ]]
 
 if PATH="$fake_bin:$PATH" FAKE_ZIG_VERSION=0.14.0 \

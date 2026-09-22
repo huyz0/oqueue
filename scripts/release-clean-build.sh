@@ -9,4 +9,5 @@ for forbidden in cmake go; do
   fi
 done
 
-exec cargo build --locked --release --no-default-features
+exec cargo build --locked --release -p oqueue --no-default-features \
+  --features software-aead,ring

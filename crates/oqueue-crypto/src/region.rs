@@ -17,8 +17,12 @@
 //! names a **format**, not a library, and `M13` changes neither the code nor
 //! the bytes on either side of it (`ADR-0050` point 7).
 
+#[cfg(all(feature = "software-aead", not(feature = "fips")))]
 use aes_gcm::Aes256Gcm;
+#[cfg(all(feature = "software-aead", not(feature = "fips")))]
 use aes_gcm::aead::{Aead as _, KeyInit as _, Payload};
+#[cfg(feature = "fips")]
+use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce as FipsNonce, UnboundKey};
 use oqueue_core::{Dek, Error, KeyId, Nonce, ParsedNonce, PartitionId, RegionAlg, Result, TopicId};
 
 /// How many bytes sealing adds to a region: AES-GCM's 128-bit tag, appended.
@@ -192,20 +196,33 @@ pub fn seal(dek: &Dek, nonce: Nonce, aad: RegionAad<'_>, plaintext: &[u8]) -> Re
             // ⚠️ The nonce is spent here: `nonce` is owned by this call and
             // dies with it, so nothing downstream holds a value that still
             // looks usable.
-            let bytes = *nonce.as_bytes();
-            Aes256Gcm::new(dek.expose().into())
-                .encrypt(
-                    &bytes.into(),
-                    Payload {
-                        msg: plaintext,
-                        aad: &aad.encode(),
-                    },
+            #[cfg(all(feature = "software-aead", not(feature = "fips")))]
+            {
+                let bytes = *nonce.as_bytes();
+                Aes256Gcm::new(dek.expose().into())
+                    .encrypt(
+                        &bytes.into(),
+                        Payload {
+                            msg: plaintext,
+                            aad: &aad.encode(),
+                        },
+                    )
+                    .map_err(|_| Error::RegionSealFailed)
+            }
+            #[cfg(feature = "fips")]
+            {
+                let key = UnboundKey::new(&AES_256_GCM, dek.expose())
+                    .map(LessSafeKey::new)
+                    .map_err(|_| Error::RegionSealFailed)?;
+                let mut sealed = plaintext.to_vec();
+                key.seal_in_place_append_tag(
+                    FipsNonce::assume_unique_for_key(*nonce.as_bytes()),
+                    Aad::from(aad.encode()),
+                    &mut sealed,
                 )
-                // Only reachable for a region longer than GCM's own
-                // per-message bound, which `ADR-0050` point 3's 64 GiB
-                // rotation bound already sits under — an error, never a
-                // partial seal.
-                .map_err(|_| Error::RegionSealFailed)
+                .map_err(|_| Error::RegionSealFailed)?;
+                Ok(sealed)
+            }
         }
     }
 }
@@ -235,17 +252,38 @@ pub fn seal(dek: &Dek, nonce: Nonce, aad: RegionAad<'_>, plaintext: &[u8]) -> Re
 pub fn open(dek: &Dek, nonce: ParsedNonce, aad: RegionAad<'_>, sealed: &[u8]) -> Result<Vec<u8>> {
     match aad.alg {
         RegionAlg::None => Err(Error::RegionNotEncrypted),
-        RegionAlg::Aes256Gcm => Aes256Gcm::new(dek.expose().into())
-            .decrypt(
-                nonce.as_bytes().into(),
-                Payload {
-                    msg: sealed,
-                    aad: &aad.encode(),
-                },
-            )
-            // ⚠️ Bytes too short to hold a tag land here too, and that is
-            // deliberate: a truncated region is exactly as unauthentic as a
-            // forged one, and a caller has the same thing to do about it.
-            .map_err(|_| Error::RegionOpenFailed),
+        RegionAlg::Aes256Gcm => {
+            #[cfg(all(feature = "software-aead", not(feature = "fips")))]
+            {
+                Aes256Gcm::new(dek.expose().into())
+                    .decrypt(
+                        nonce.as_bytes().into(),
+                        Payload {
+                            msg: sealed,
+                            aad: &aad.encode(),
+                        },
+                    )
+                    // ⚠️ Bytes too short to hold a tag land here too, and
+                    // that is deliberate: a truncated region is exactly as
+                    // unauthentic as a forged one, and a caller has the same
+                    // thing to do about it.
+                    .map_err(|_| Error::RegionOpenFailed)
+            }
+            #[cfg(feature = "fips")]
+            {
+                let key = UnboundKey::new(&AES_256_GCM, dek.expose())
+                    .map(LessSafeKey::new)
+                    .map_err(|_| Error::RegionOpenFailed)?;
+                let mut plaintext = sealed.to_vec();
+                let opened = key
+                    .open_in_place(
+                        FipsNonce::assume_unique_for_key(*nonce.as_bytes()),
+                        Aad::from(aad.encode()),
+                        &mut plaintext,
+                    )
+                    .map_err(|_| Error::RegionOpenFailed)?;
+                Ok(opened.to_vec())
+            }
+        }
     }
 }

@@ -44,8 +44,9 @@ place a concrete type is chosen" property rests entirely on review.
    links it, so the counting allocator it sets is imposed on no one.
 4. ⚠️ **Assuming `cargo build --workspace` covers aarch64.** It does not link
    there — no cross-linker until `M13`.
-5. ⚠️ **Assuming the `heap-profiling` build is *run* by anything.** Every gate
-   compiles it (`check-crate.sh` lints `--all-features`); none executes it,
+5. ⚠️ **Assuming the `heap-profiling` build is *run* by anything.** The
+   workspace gate compiles and tests it explicitly (`check-crate.sh` enables
+   the feature for this package); none executes the release binary with it,
    because what a gate should run is what ships. ⚠️ Not because it would abort —
    jemalloc bakes in the *build host's* page size, so a gate that builds and
    runs on one machine never mismatches itself. The trap is a build host and a

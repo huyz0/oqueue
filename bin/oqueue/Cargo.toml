@@ -12,10 +12,10 @@ license.workspace = true
 # which concrete type goes behind which seam is their whole job (FR-50).
 [dependencies]
 oqueue-core = { path = "../../crates/oqueue-core" }
-oqueue-crypto = { path = "../../crates/oqueue-crypto" }
+oqueue-crypto = { path = "../../crates/oqueue-crypto", default-features = false }
 # `serve` composes the I/O shell (M2.25): the connection task, the
 # dispatcher and the cluster all live there.
-oqueue-broker = { path = "../../crates/oqueue-broker" }
+oqueue-broker = { path = "../../crates/oqueue-broker", default-features = false }
 # M3.14: the concrete choices `serve` now has to make. The coordinator's loop
 # is spawned here because `async-concurrency.md` rule 13 says a spawned task
 # needs an owner, and this is the only place that knows who that is; the
@@ -27,7 +27,7 @@ oqueue-index = { path = "../../crates/oqueue-index" }
 # that act: `M3` is the milestone where a record is acknowledged only after it
 # is in object storage, so this is the first time the binary must *hand* an
 # `ObjectStore` to something.
-oqueue-store = { path = "../../crates/oqueue-store" }
+oqueue-store = { path = "../../crates/oqueue-store", default-features = false }
 # `M4.18`: the composition root terminates TLS, so it needs the acceptor type
 # `oqueue-broker`'s own `tls` module hands back. ⚠️ No new C toolchain — the
 # `ring` provider `ADR-0012` chose is already in this tree via `oqueue-crypto`
@@ -49,7 +49,10 @@ tikv-jemallocator = { workspace = true, optional = true }
 tracing-subscriber.workspace = true
 
 [features]
-default = []
+default = ["software-aead", "ring"]
+software-aead = ["oqueue-crypto/software-aead"]
+ring = ["oqueue-store/ring", "oqueue-broker/ring"]
+fips = ["oqueue-crypto/fips", "oqueue-store/fips", "oqueue-broker/fips"]
 ## Swaps the global allocator for jemalloc, whose `prof` support is what makes
 ## a "memory grows under a specific consumer pattern" bug findable.
 ## ⚠️ Needs `JEMALLOC_SYS_WITH_LG_PAGE=16` whenever the deployment host may have

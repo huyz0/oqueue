@@ -13,7 +13,8 @@ oqueue-core = { path = "../oqueue-core" }
 # AES-256-GCM for `region::seal`/`region::open` (`M8.3`). Version, features and
 # the no-C-toolchain argument are in the workspace root, beside every other
 # third-party version.
-aes-gcm.workspace = true
+aes-gcm = { workspace = true, optional = true }
+aws-lc-rs = { workspace = true, optional = true, features = ["fips"] }
 # The OS random source behind `entropy::OsEntropy`, the seam a fresh DEK's 32
 # bytes come from (`M8.5`). The workspace root carries the argument.
 getrandom.workspace = true
@@ -31,3 +32,8 @@ tracing.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+default = ["software-aead"]
+software-aead = ["dep:aes-gcm"]
+fips = ["dep:aws-lc-rs"]
