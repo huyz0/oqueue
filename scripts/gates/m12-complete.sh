@@ -52,7 +52,7 @@ if command -v cargo >/dev/null 2>&1; then
     "find_coordinator::tests::a_cross_principal_group_is_refused"
     "join_group::tests::a_cross_principal_group_is_refused"
     "sync_group::tests::a_cross_principal_group_is_refused"
-    "heartbeat::tests::a_cross_principal_group_is_refused"
+    "heartbeat::tests::authorization::a_cross_principal_group_is_refused"
     "leave_group::tests::a_cross_principal_group_is_refused"
   )
   for test in "${group_tests[@]}"; do

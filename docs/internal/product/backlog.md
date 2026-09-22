@@ -60,6 +60,7 @@ responsibilities. A finding filed while M12 runs is dispositioned when filed
 | M12.16 | Diagnostic runbooks and scenario review | Serves FR-52. Write and verify runbooks for stalled partition, lagging group, coordinator failover, compaction backlog, and KMS outage/revocation; each names injection, signals, query steps, and a distinguishing observation obtainable without source. | done |
 | M12.17 | M12 closing review and evidence | Serves all M12 requirements. A fresh milestone review covers every M12 commit, dispositions findings and handoffs, and `scripts/docker-test.sh scripts/gates/m12-complete.sh` exits 0 with no skipped acceptance leg. | done |
 | M12.18 | OS-portable tests and gates | Serves NFR-12. Every test and gate has one documented execution path on Linux, macOS, and Windows-through-WSL/Docker; text parsers tolerate checkout line endings; shell pipelines, hashing, clocks, temp paths, permissions, and missing tools have portable implementations; a cross-OS smoke matrix proves the same gate verdicts without weakening any check or budget. | done |
+| M12.19 | Correct the heartbeat authorization gate path | Serves FR-40. The M12 completion gate invokes the fully-qualified heartbeat authorization test so the five group-authorization legs cannot pass after running zero tests; the corrected leg is executed and green. | done |
 
 ## M8: Encryption, BYOK, and the key seam
 
