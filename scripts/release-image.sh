@@ -87,6 +87,6 @@ image_sha256="$(docker_exec run --rm --entrypoint /bin/sh "$tag" \
 docker_exec run --rm "$tag" >/dev/null
 
 printf '%s\n' \
-  "M13_RELEASE_IMAGE status=pass architecture=$image_arch startup=pass binary_match=pass artifact_sha256=$artifact_sha256 image_id=$image_id" \
+  "M13_RELEASE_IMAGE status=pass architecture=$image_arch startup=pass binary_match=pass artifact=$(basename "$artifact") artifact_sha256=$artifact_sha256 image_id=$image_id" \
   > "$EVIDENCE_DIR/image.tsv"
 printf '%s\n' "$(<"$EVIDENCE_DIR/image.tsv")"

@@ -20,6 +20,8 @@ OQUEUE_RELEASE_MATRIX_NO_CHECKER=1 bash "$ROOT/tests/release-matrix.sh" >/dev/nu
 bash "$ROOT/tests/release-artifact-name.sh" >/dev/null
 bash "$ROOT/tests/release-attest.sh" >/dev/null
 bash "$ROOT/tests/release-image.sh" >/dev/null
+bash "$ROOT/tests/release-upgrade.sh" >/dev/null
+bash "$ROOT/tests/release-verify.sh" >/dev/null
 release="$ROOT/.github/workflows/release.yml"
 os_smoke="$ROOT/.github/workflows/os-smoke.yml"
 grep -Fq 'target/${RELEASE_TARGET}.2.28/release/oqueue' "$release"
