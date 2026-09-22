@@ -33,3 +33,10 @@ target suffix `.2.28`, for example
 `cargo-zigbuild` 0.20.1 and Zig 0.14.1, and refuses to build when either tool
 reports a different version. The suffix selects the glibc 2.28 sysroot; the
 runner's libc is not the release link target.
+
+Release code generation is pinned by target: x86_64 uses
+`-C target-cpu=x86-64-v2`, while aarch64 uses `-C target-feature=+lse,+crc`.
+The command also passes `--no-default-features`; the shipping path excludes
+the optional `heap-profiling` feature. A profiling build is not a release
+artifact and, if requested for diagnostics, must set
+`JEMALLOC_SYS_WITH_LG_PAGE=16` as required by ADR-0007.

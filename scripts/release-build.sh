@@ -21,15 +21,16 @@ fi
 
 for target in "${selected_targets[@]}"; do
   case "$target" in
-    x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu) ;;
+    x86_64-unknown-linux-gnu) rustflags='-C target-cpu=x86-64-v2' ;;
+    aarch64-unknown-linux-gnu) rustflags='-C target-feature=+lse,+crc' ;;
     *)
       printf 'release-build: unsupported target %s\n' "$target" >&2
       exit 2
       ;;
   esac
   target_with_floor="$target.$GLIBC_FLOOR"
-  printf 'M13_RELEASE_COMMAND target=%s command=cargo zigbuild --locked --release --target %s\n' \
-    "$target_with_floor" "$target_with_floor"
+  printf 'M13_RELEASE_COMMAND target=%s rustflags=%s command=cargo zigbuild --locked --release --no-default-features --target %s\n' \
+    "$target_with_floor" "$rustflags" "$target_with_floor"
 done
 
 if [[ "${OQUEUE_RELEASE_PLAN_ONLY:-0}" == 1 ]]; then
@@ -56,6 +57,11 @@ if ! cargo_zigbuild_version="$(cargo zigbuild --version 2>/dev/null)" || \
 fi
 
 for target in "${selected_targets[@]}"; do
+  case "$target" in
+    x86_64-unknown-linux-gnu) rustflags='-C target-cpu=x86-64-v2' ;;
+    aarch64-unknown-linux-gnu) rustflags='-C target-feature=+lse,+crc' ;;
+  esac
   target_with_floor="$target.$GLIBC_FLOOR"
-  cargo zigbuild --locked --release --target "$target_with_floor"
+  RUSTFLAGS="--cfg tokio_unstable $rustflags" cargo zigbuild --locked --release \
+    --no-default-features --target "$target_with_floor"
 done
