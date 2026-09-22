@@ -66,7 +66,9 @@ for pass in a b; do
     cat "$log" >&2
     exit 1
   fi
-  built_artifact="$build_dir/$TARGET.2.28/release/oqueue"
+  # cargo-zigbuild uses the Cargo target triple as the output directory;
+  # the glibc floor is a linker/build constraint, not part of that directory.
+  built_artifact="$build_dir/$TARGET/release/oqueue"
   [[ -f "$built_artifact" ]] || {
     printf 'release-repro: build %s did not produce %s\n' "$pass" "$built_artifact" >&2
     exit 1

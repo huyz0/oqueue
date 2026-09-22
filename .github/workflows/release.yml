@@ -93,7 +93,7 @@ jobs:
         run: |
           OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
           mkdir -p target/m13-job/artifacts
-          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" \
+          cp "target/${RELEASE_TARGET}/release/oqueue" \
             "target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)"
       - name: derive the trusted artifact name
         run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)" >> "$GITHUB_ENV"
@@ -110,7 +110,7 @@ jobs:
           trap 'rm -f "$private_key" "$public_key"' EXIT
           printf '%s\n' "$OQUEUE_RELEASE_PRIVATE_KEY" > "$private_key"
           canonical="target/attest/$ARTIFACT_NAME"
-          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$canonical"
+          cp "target/${RELEASE_TARGET}/release/oqueue" "$canonical"
           manifest=target/attest/SHA256SUMS
           scripts/release-attest.sh create --key "$private_key" --manifest "$manifest" "$canonical"
           openssl pkey -in "$private_key" -pubout -out "$public_key"
@@ -127,11 +127,11 @@ jobs:
         run: |
           OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" OQUEUE_RELEASE_FEATURES=fips scripts/release-build.sh
           fips_artifact="target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 fips bin)"
-          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$fips_artifact"
+          cp "target/${RELEASE_TARGET}/release/oqueue" "$fips_artifact"
           OQUEUE_M13_EVIDENCE_DIR=target/runtime-image-fips \
             scripts/release-image.sh --artifact "$fips_artifact" \
             --tag "oqueue-runtime:${GITHUB_SHA}-x86_64-fips" --expected-architecture amd64
-          target="target/${RELEASE_TARGET}.2.28/release/oqueue"
+          target="target/${RELEASE_TARGET}/release/oqueue"
           "$target" >/dev/null
           cargo test --locked -p oqueue-crypto --no-default-features --features fips --test it
       - name: assemble x86_64 native evidence bundle
@@ -202,7 +202,7 @@ jobs:
         run: |
           OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
           mkdir -p target/m13-job/artifacts
-          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" \
+          cp "target/${RELEASE_TARGET}/release/oqueue" \
             "target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)"
       - name: derive the trusted artifact name
         run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)" >> "$GITHUB_ENV"
@@ -219,7 +219,7 @@ jobs:
           trap 'rm -f "$private_key" "$public_key"' EXIT
           printf '%s\n' "$OQUEUE_RELEASE_PRIVATE_KEY" > "$private_key"
           canonical="target/attest/$ARTIFACT_NAME"
-          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$canonical"
+          cp "target/${RELEASE_TARGET}/release/oqueue" "$canonical"
           manifest=target/attest/SHA256SUMS
           scripts/release-attest.sh create --key "$private_key" --manifest "$manifest" "$canonical"
           openssl pkey -in "$private_key" -pubout -out "$public_key"
@@ -236,11 +236,11 @@ jobs:
         run: |
           OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" OQUEUE_RELEASE_FEATURES=fips scripts/release-build.sh
           fips_artifact="target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 fips bin)"
-          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$fips_artifact"
+          cp "target/${RELEASE_TARGET}/release/oqueue" "$fips_artifact"
           OQUEUE_M13_EVIDENCE_DIR=target/runtime-image-fips \
             scripts/release-image.sh --artifact "$fips_artifact" \
             --tag "oqueue-runtime:${GITHUB_SHA}-aarch64-fips" --expected-architecture arm64
-          target="target/${RELEASE_TARGET}.2.28/release/oqueue"
+          target="target/${RELEASE_TARGET}/release/oqueue"
           "$target" >/dev/null
           cargo test --locked -p oqueue-crypto --no-default-features --features fips --test it
       - name: compare repeated native aarch64 release builds

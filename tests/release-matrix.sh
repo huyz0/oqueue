@@ -26,6 +26,13 @@ grep -Fq 'runs-on: ubuntu-latest' <<<"$x86"
 grep -Fq 'cargo test --locked --workspace' <<<"$x86"
 grep -Fq 'runs-on: ubuntu-24.04-arm' <<<"$arm"
 grep -Fq 'cargo test --locked --workspace' <<<"$arm"
+for block in "$x86" "$arm"; do
+  [[ "$(grep -Fc 'target/${RELEASE_TARGET}/release/oqueue' <<<"$block")" -eq 4 ]]
+  if grep -Fq 'target/${RELEASE_TARGET}.2.28/release/oqueue' <<<"$block"; then
+    printf '%s\n' 'release jobs must use Cargo target directories without the glibc suffix' >&2
+    exit 1
+  fi
+done
 grep -Fq 'os: [ubuntu-latest, macos-latest, windows-latest]' <<<"$smoke"
 grep -Fq 'bash scripts/os-smoke.sh' <<<"$smoke"
 if grep -Fq 'cargo ' <<<"$smoke"; then

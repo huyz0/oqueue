@@ -28,7 +28,7 @@ fake="$scratch/fake-release-build.sh"
 printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -euo pipefail' \
-  'artifact="${CARGO_TARGET_DIR:?}/${OQUEUE_RELEASE_TARGET:?}.2.28/release/oqueue"' \
+  'artifact="${CARGO_TARGET_DIR:?}/${OQUEUE_RELEASE_TARGET:?}/release/oqueue"' \
   'mkdir -p "$(dirname "$artifact")"' \
   'printf "%s\\n" "deterministic release artifact" > "$artifact"' \
   'printf "%s\\n" "fake-build ${OQUEUE_REPRO_BUILD_ID:?}"' \

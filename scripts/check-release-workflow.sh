@@ -31,7 +31,11 @@ bash "$ROOT/tests/release-aggregate.sh" >/dev/null
 bash "$ROOT/tests/release-verify.sh" >/dev/null
 release="$ROOT/.github/workflows/release.yml"
 os_smoke="$ROOT/.github/workflows/os-smoke.yml"
-grep -Fq 'target/${RELEASE_TARGET}.2.28/release/oqueue' "$release"
+grep -Fq 'target/${RELEASE_TARGET}/release/oqueue' "$release"
+if grep -Fq 'target/${RELEASE_TARGET}.2.28/release/oqueue' "$release"; then
+  printf '%s\n' 'check-release-workflow: Cargo output paths must not include the glibc suffix' >&2
+  exit 1
+fi
 grep -Fq 'docker build --file docker/release-default.Dockerfile' "$release"
 grep -Fq 'docker build --file docker/release-fips.Dockerfile' "$release"
 grep -Fq 'bash tests/release-attest.sh' "$release"
