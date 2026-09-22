@@ -339,3 +339,10 @@ jobs:
         env:
           OQUEUE_M13_EVIDENCE_INPUT_DIR: ${{ github.workspace }}/target/m13-evidence
         run: scripts/docker-test.sh scripts/gates/m13-complete.sh
+      - name: retain signed aggregate M13 evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: m13-release-evidence
+          path: target/m13-evidence
+          if-no-files-found: error
+          retention-days: 90

@@ -20,6 +20,7 @@ x86="$(job_block "$release" linux-x86_64)"
 arm="$(job_block "$release" linux-aarch64)"
 smoke="$(job_block "$os_smoke" smoke)"
 fast="$(job_block "$os_smoke" fast)"
+aggregate="$(job_block "$release" aggregate)"
 
 grep -Fq 'runs-on: ubuntu-latest' <<<"$x86"
 grep -Fq 'cargo test --locked --workspace' <<<"$x86"
@@ -36,6 +37,14 @@ grep -Fq 'rustup show active-toolchain' <<<"$fast"
 grep -Fq 'rustup toolchain install "$toolchain" --profile minimal' <<<"$fast"
 grep -Fq 'cargo test --locked --workspace' <<<"$fast"
 grep -Fq 'bash scripts/os-smoke.sh' <<<"$fast"
+
+gate_line="$(awk '/scripts\/docker-test\.sh scripts\/gates\/m13-complete\.sh/{print NR; exit}' <<<"$aggregate")"
+upload_line="$(awk '/uses: actions\/upload-artifact@v4/{print NR; exit}' <<<"$aggregate")"
+[[ -n "$gate_line" && -n "$upload_line" && "$upload_line" -gt "$gate_line" ]]
+grep -Fq 'name: m13-release-evidence' <<<"$aggregate"
+grep -Fq 'path: target/m13-evidence' <<<"$aggregate"
+grep -Fq 'if-no-files-found: error' <<<"$aggregate"
+grep -Fq 'retention-days: 90' <<<"$aggregate"
 
 for block in "$x86" "$arm" "$fast"; do
   toolchain_line="$(awk '/rustup show active-toolchain/{print NR; exit}' <<<"$block")"

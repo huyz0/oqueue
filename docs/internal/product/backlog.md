@@ -32,7 +32,7 @@ re-derived rather than copied when a milestone opens. Read the plan's
 
 ## M13: Release engineering and the artifact matrix
 
-15 rows against a plan of 15. ADR-0070 resolves the glibc-floor opening
+17 rows against a plan of 15. ADR-0070 resolves the glibc-floor opening
 decision: Linux release artifacts target glibc 2.28, while musl remains an
 explicit evaluation rather than an accidental second release target. A finding
 filed while M13 runs is dispositioned when filed (`milestone/SKILL.md`).
@@ -54,7 +54,8 @@ filed while M13 runs is dispositioned when filed (`milestone/SKILL.md`).
 | M13.12 | Container images from release artifacts | Serves NFR-40, NFR-42. **Done:** `scripts/release-image.sh` builds runtime images from the already-built Linux binary, asserts native amd64/arm64 image metadata, compares the image binary hash with the release artifact, and starts the image; the contract rejects architecture and binary mismatches and forbids source-build commands. | done |
 | M13.13 | Tested upgrade path | Serves NFR-40, NFR-42. Document and test upgrades across object-format compatibility boundaries, state that no durable local state is migrated, and identify the rolling-upgrade ordering and refusal behavior for incompatible artifacts. | done |
 | M13.14 | M13 closing review and evidence | Serves FR-43, NFR-40, NFR-41, NFR-42, NFR-43. A fresh milestone review covers every M13 commit, dispositions findings and handoffs, and `scripts/docker-test.sh scripts/gates/m13-complete.sh` exits 0 with no skipped acceptance leg. | done |
-| M13.15 | Native release evidence and final M13 gate | Serves FR-43, NFR-40, NFR-41, NFR-42, NFR-43. Run the native x86_64/aarch64 release workflow, retain the signed aggregate evidence bundle, and run `OQUEUE_M13_EVIDENCE_INPUT_DIR=... scripts/docker-test.sh scripts/gates/m13-complete.sh` with no skipped acceptance leg before marking M13 complete. | todo |
+| M13.15 | Retain the signed aggregate release evidence | Serves FR-43, NFR-40, NFR-41, NFR-42, NFR-43. After the aggregate completion gate passes, the release workflow uploads `target/m13-evidence` as `m13-release-evidence` with missing files treated as an error and a 90-day retention period; the workflow contract test proves upload ordering and configuration. | done |
+| M13.16 | Native release evidence and final M13 gate | Serves FR-43, NFR-40, NFR-41, NFR-42, NFR-43. Run the native x86_64/aarch64 release workflow, retain its signed aggregate evidence bundle, and run `OQUEUE_M13_EVIDENCE_INPUT_DIR=... scripts/docker-test.sh scripts/gates/m13-complete.sh` with no skipped acceptance leg before marking M13 complete. | todo |
 
 ## M12: Admin API and operability
 

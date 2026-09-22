@@ -42,3 +42,4 @@ contradiction.
 ## Overrides
 
 M12.3 — additional review rounds are required to verify the durable ownership and duplicate-create fixes raised by independent review; the final change is one coherent catalog-contract task and user goal continuation authorizes completing it — approved-by: user goal continuation; scope: M12.3 review rounds; expires: 2026-09-21
+M13.15 — one additional review round is authorized because the Windows staged-scratch packet reported failures that were green in the prescribed Linux container; the change remains one aggregate-evidence retention task, and this grant expires with its commit — approved-by: user explicit unblock authorization on 2026-09-23; scope: M13.15 review round four only; expires: 2026-09-23
