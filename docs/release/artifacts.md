@@ -83,6 +83,15 @@ artifact name and signs the resulting manifest with the release private key.
 accepts the manifest. The private key is supplied by the release environment;
 it is never stored in the repository or printed by the scripts.
 
+## Runtime images
+
+The Linux release jobs pass their built binary to `scripts/release-image.sh`.
+That script creates an isolated Docker build context containing only the binary,
+asserts the native `amd64` or `arm64` image metadata, compares the image's
+binary SHA-256 with the release artifact, and starts the image with its
+no-argument banner path.
+The runtime image has no source tree or compiler build step.
+
 ## glibc build floor
 
 The Linux release command is `cargo zigbuild --locked --release` with the

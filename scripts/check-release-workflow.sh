@@ -6,14 +6,20 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_DIR="${OQUEUE_M13_EVIDENCE_DIR:-$ROOT/target/tmp/release-workflow.$$}"
 mkdir -p "$EVIDENCE_DIR"
 
-if [[ "$#" -gt 1 || ( "$#" -eq 1 && "$1" != --completion-gate ) ]]; then
-  printf '%s\n' 'usage: check-release-workflow.sh [--completion-gate]' >&2
-  exit 2
-fi
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --completion-gate|workflow.tsv) shift ;;
+    *)
+      printf '%s\n' 'usage: check-release-workflow.sh [workflow.tsv] [--completion-gate]' >&2
+      exit 2
+      ;;
+  esac
+done
 
 OQUEUE_RELEASE_MATRIX_NO_CHECKER=1 bash "$ROOT/tests/release-matrix.sh" >/dev/null
 bash "$ROOT/tests/release-artifact-name.sh" >/dev/null
 bash "$ROOT/tests/release-attest.sh" >/dev/null
+bash "$ROOT/tests/release-image.sh" >/dev/null
 release="$ROOT/.github/workflows/release.yml"
 os_smoke="$ROOT/.github/workflows/os-smoke.yml"
 grep -Fq 'target/${RELEASE_TARGET}.2.28/release/oqueue' "$release"
@@ -23,6 +29,9 @@ grep -Fq 'bash tests/release-attest.sh' "$release"
 grep -Fq 'target/attest/${{ env.ARTIFACT_NAME }}' "$release"
 grep -Fq 'target/attest/SHA256SUMS' "$release"
 grep -Fq 'target/attest/SHA256SUMS.sig' "$release"
+grep -Fq 'scripts/release-image.sh --artifact "target/${RELEASE_TARGET}.2.28/release/oqueue"' "$release"
+grep -Fq -- '--expected-architecture amd64' "$release"
+grep -Fq -- '--expected-architecture arm64' "$release"
 grep -Fq 'run: scripts/release-smoke.sh' "$release"
 grep -Fq 'os: [ubuntu-latest, macos-latest]' "$os_smoke"
 grep -Fq 'os: [ubuntu-latest, macos-latest, windows-latest]' "$os_smoke"
