@@ -155,9 +155,9 @@ The cost of this decision is that macOS-only build breakage is caught by CI rath
 |---|---|---|
 | `x86_64-unknown-linux-gnu` | ubuntu native + zigbuild | glibc floor 2.28, `target-cpu=x86-64-v2` |
 | `aarch64-unknown-linux-gnu` | **ubuntu-24.04-arm native** | glibc floor 2.28, `+lse,+crc` |
-| `x86_64-unknown-linux-musl` | ubuntu native | **mandatory `#[global_allocator]`** (§3) |
-| `aarch64-unknown-linux-musl` | ubuntu-24.04-arm native | same |
-| OCI image, multi-arch | both | manifest list; distroless or scratch from the musl build |
+| `x86_64-unknown-linux-musl` | — | **not shipped by M13; future evaluation requires a measured non-default allocator** (§3) |
+| `aarch64-unknown-linux-musl` | — | **not shipped by M13; see ADR-0071** |
+| OCI image, multi-arch | — | no musl-based image is produced by M13 |
 | — | — | **no macOS, no Windows release artifacts** (§6) |
 
 Both Linux architectures are first-class. Graviton is a plausible deployment target for a cost-sensitive broker, and [18](18-rust-performance-methodology.md) §3.4's LSE finding means the ARM build is not an afterthought.
@@ -179,7 +179,7 @@ Both Linux architectures are first-class. Graviton is a plausible deployment tar
 ## 9. Open questions
 
 - ~~**Which TLS backend?**~~ — **resolved 2026-08-17, `ADR-0012`: `ring`** for the default build, with `aws-lc-rs` behind a `fips` feature for `M8`'s artifact only — `docs/internal/product/decisions/0012-object-store-tls-provider.md`, struck the same way in `docs/researches/10-open-questions.md` #36 (build) by `M1.45`. This entry was never updated when that one was; both should read the same now. ⚠️ **`M1.42` found a cost the ADR itself missed**: `ring`'s build script needs a *target* `cc`, so any crate holding it drops out of the aarch64 check without one.
-- **Does `object_store`'s dependency tree cross-compile cleanly to aarch64-musl?** The four-way matrix in §7 is asserted, not verified. One CI run settles it, and it should be done before the matrix is promised.
+- ~~**Does `object_store`'s dependency tree cross-compile cleanly to aarch64-musl?**~~ **Resolved by M13.6 and ADR-0071:** the project does not promise or ship an aarch64-musl artifact. The supported ARM artifact is built natively as `aarch64-unknown-linux-gnu`, and the native ARM job runs `oqueue-store`'s full test targets. Reopening musl requires a non-default allocator decision and measured concurrent-load evidence.
 - **Is a `-v3` artifact worth publishing later?** Only measurement answers it, and only after runtime dispatch (§5) is in place so the comparison is meaningful.
 - **glibc floor: 2.28 or 2.34?** 2.28 covers RHEL 8, which reaches EOL in 2029. If we don't intend to support RHEL 8, 2.34 is a freer choice. A product decision, not a technical one.
 

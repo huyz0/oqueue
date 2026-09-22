@@ -25,6 +25,22 @@ container packaging are separate M13 contracts. They must not be inferred
 from the runner image or from this target matrix; the later M13 tasks record
 and verify each one explicitly.
 
+## Musl decision and native ARM coverage
+
+M13.6 rejects `aarch64-unknown-linux-musl` as a shipped release artifact. The
+default musl allocator is documented at 10–40× worse under concurrent load for
+this workload, and adopting musl would therefore require a separately measured
+non-default allocator and a second release matrix. The supported ARM artifact
+is native `aarch64-unknown-linux-gnu` with the pinned glibc floor; the native
+ARM release job runs `cargo test --locked -p oqueue-store --all-targets` so the
+crate previously excluded from cross-target checks is covered on the
+architecture that ships it. The decision and its alternatives are recorded in
+[ADR-0071](../internal/product/decisions/0071-musl-release-target.md).
+
+`aarch64-unknown-linux-musl` is therefore **not a shipped release artifact**.
+It may be evaluated again if a product requirement or measured allocator work
+justifies reopening the decision.
+
 ## glibc build floor
 
 The Linux release command is `cargo zigbuild --locked --release` with the
