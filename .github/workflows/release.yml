@@ -13,6 +13,16 @@ env:
   CARGO_INCREMENTAL: "0"
 
 jobs:
+  clean-default:
+    name: Clean default release build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: run the clean-builder contract test
+        run: bash tests/release-clean-build.sh
+      - name: build in the default-only container
+        run: docker build --file docker/release-default.Dockerfile --tag oqueue-release-default:${GITHUB_SHA} .
+
   linux-x86_64:
     name: Linux x86_64 native release target
     runs-on: ubuntu-latest

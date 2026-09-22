@@ -40,3 +40,9 @@ The command also passes `--no-default-features`; the shipping path excludes
 the optional `heap-profiling` feature. A profiling build is not a release
 artifact and, if requested for diagnostics, must set
 `JEMALLOC_SYS_WITH_LG_PAGE=16` as required by ADR-0007.
+
+The default build also runs in `docker/release-default.Dockerfile`, which
+contains cargo, the pinned Rust toolchain, and a C compiler but no CMake or Go.
+`scripts/release-clean-build.sh` checks that boundary before running the
+locked, default-feature-free release build. FIPS tooling belongs to a separate
+builder and cannot leak into this job.
