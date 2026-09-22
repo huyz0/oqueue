@@ -75,6 +75,14 @@ commit twice in separate target directories and records the two artifact paths,
 SHA-256 values, command digest, and output digest. A byte mismatch fails the
 job; the evidence is not satisfied by comparing a version string.
 
+## Checksums and signatures
+
+`scripts/release-attest.sh create` sorts one SHA-256 record per canonical
+artifact name and signs the resulting manifest with the release private key.
+`verify` checks the signature and recomputes every artifact hash before it
+accepts the manifest. The private key is supplied by the release environment;
+it is never stored in the repository or printed by the scripts.
+
 ## glibc build floor
 
 The Linux release command is `cargo zigbuild --locked --release` with the

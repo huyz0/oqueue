@@ -13,11 +13,16 @@ fi
 
 OQUEUE_RELEASE_MATRIX_NO_CHECKER=1 bash "$ROOT/tests/release-matrix.sh" >/dev/null
 bash "$ROOT/tests/release-artifact-name.sh" >/dev/null
+bash "$ROOT/tests/release-attest.sh" >/dev/null
 release="$ROOT/.github/workflows/release.yml"
 os_smoke="$ROOT/.github/workflows/os-smoke.yml"
-grep -Fq 'target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue' "$release"
+grep -Fq 'target/${RELEASE_TARGET}.2.28/release/oqueue' "$release"
 grep -Fq 'docker build --file docker/release-default.Dockerfile' "$release"
 grep -Fq 'docker build --file docker/release-fips.Dockerfile' "$release"
+grep -Fq 'bash tests/release-attest.sh' "$release"
+grep -Fq 'target/attest/${{ env.ARTIFACT_NAME }}' "$release"
+grep -Fq 'target/attest/SHA256SUMS' "$release"
+grep -Fq 'target/attest/SHA256SUMS.sig' "$release"
 grep -Fq 'run: scripts/release-smoke.sh' "$release"
 grep -Fq 'os: [ubuntu-latest, macos-latest]' "$os_smoke"
 grep -Fq 'os: [ubuntu-latest, macos-latest, windows-latest]' "$os_smoke"

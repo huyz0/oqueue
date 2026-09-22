@@ -20,6 +20,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: run the clean-builder contract test
         run: bash tests/release-clean-build.sh
+      - name: run the checksum and signature contract test
+        run: bash tests/release-attest.sh
       - name: build in the default-only container
         run: docker build --file docker/release-default.Dockerfile --tag oqueue-release-default:${GITHUB_SHA} .
 
@@ -85,11 +87,33 @@ jobs:
         run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
       - name: derive the trusted artifact name
         run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)" >> "$GITHUB_ENV"
+      - name: sign and verify the x86_64 artifact
+        env:
+          OQUEUE_RELEASE_PRIVATE_KEY: ${{ secrets.OQUEUE_RELEASE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$OQUEUE_RELEASE_PRIVATE_KEY"
+          mkdir -p target/attest
+          private_key="$RUNNER_TEMP/oqueue-release-private.pem"
+          public_key="$RUNNER_TEMP/oqueue-release-public.pem"
+          umask 077
+          trap 'rm -f "$private_key" "$public_key"' EXIT
+          printf '%s\n' "$OQUEUE_RELEASE_PRIVATE_KEY" > "$private_key"
+          canonical="target/attest/$ARTIFACT_NAME"
+          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$canonical"
+          manifest=target/attest/SHA256SUMS
+          scripts/release-attest.sh create --key "$private_key" --manifest "$manifest" "$canonical"
+          openssl pkey -in "$private_key" -pubout -out "$public_key"
+          scripts/release-attest.sh verify --key "$public_key" --manifest "$manifest" \
+            --signature "$manifest.sig" "$canonical"
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue
+          path: |
+            target/attest/${{ env.ARTIFACT_NAME }}
+            target/attest/SHA256SUMS
+            target/attest/SHA256SUMS.sig
           if-no-files-found: error
 
   linux-aarch64:
@@ -136,9 +160,31 @@ jobs:
         run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
       - name: derive the trusted artifact name
         run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)" >> "$GITHUB_ENV"
+      - name: sign and verify the aarch64 artifact
+        env:
+          OQUEUE_RELEASE_PRIVATE_KEY: ${{ secrets.OQUEUE_RELEASE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "$OQUEUE_RELEASE_PRIVATE_KEY"
+          mkdir -p target/attest
+          private_key="$RUNNER_TEMP/oqueue-release-private.pem"
+          public_key="$RUNNER_TEMP/oqueue-release-public.pem"
+          umask 077
+          trap 'rm -f "$private_key" "$public_key"' EXIT
+          printf '%s\n' "$OQUEUE_RELEASE_PRIVATE_KEY" > "$private_key"
+          canonical="target/attest/$ARTIFACT_NAME"
+          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$canonical"
+          manifest=target/attest/SHA256SUMS
+          scripts/release-attest.sh create --key "$private_key" --manifest "$manifest" "$canonical"
+          openssl pkey -in "$private_key" -pubout -out "$public_key"
+          scripts/release-attest.sh verify --key "$public_key" --manifest "$manifest" \
+            --signature "$manifest.sig" "$canonical"
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ env.ARTIFACT_NAME }}
-          path: target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue
+          path: |
+            target/attest/${{ env.ARTIFACT_NAME }}
+            target/attest/SHA256SUMS
+            target/attest/SHA256SUMS.sig
           if-no-files-found: error
