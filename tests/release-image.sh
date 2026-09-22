@@ -76,7 +76,8 @@ if grep -Eq 'cargo|git|\.github|Cargo\.toml' "$log"; then
 fi
 
 for expected in \
-  'scripts/release-image.sh --artifact "target/${RELEASE_TARGET}.2.28/release/oqueue"' \
+  'scripts/release-image.sh --artifact "target/m13-job/artifacts/$ARTIFACT_NAME"' \
+  'scripts/release-image.sh --artifact "$fips_artifact"' \
   '--expected-architecture amd64' \
   '--expected-architecture arm64'; do
   grep -Fq -- "$expected" "$ROOT/.github/workflows/release.yml"

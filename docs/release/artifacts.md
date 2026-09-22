@@ -131,3 +131,24 @@ encoding, tag, and ciphertext layout. `crates/oqueue-crypto/tests/it/region.rs`
 pins one ciphertext literal and opens that literal; the test is run in both
 feature configurations. A change that makes either provider produce a
 different region representation fails the pinned-vector test.
+
+## Aggregate completion evidence
+
+The native `linux-x86_64` and `linux-aarch64` jobs retain their two
+architecture-specific canonical artifacts, image records, and reproducibility
+outputs. The aggregate job combines them with a `provenance.tsv` record into
+one bundle. The record must name the same commit and explicitly report both
+native architectures; it is not a cross-build or an image-emulation
+substitute. `scripts/release-aggregate.sh` recomputes all four SHA-256 values
+and writes `build.tsv` only after those claims and files are present.
+
+After the release jobs have populated the bundle, the full completion gate can
+run in the resource-capped container without rebuilding or emulating ARM:
+
+```bash
+OQUEUE_M13_EVIDENCE_INPUT_DIR=target/m13-evidence \
+  scripts/docker-test.sh scripts/gates/m13-complete.sh
+```
+
+The input bundle is mounted read-only. Without it, the gate fails closed and
+does not manufacture release, FIPS, smoke, image, or reproducibility evidence.

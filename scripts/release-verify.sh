@@ -6,15 +6,21 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 EVIDENCE_DIR="${OQUEUE_M13_EVIDENCE_DIR:-$ROOT/target/tmp/release-verify.$$}"
 mkdir -p "$EVIDENCE_DIR"
 
-[[ "$#" -ge 1 && "$1" == verify ]] || {
-  printf '%s\n' 'usage: release-verify.sh verify [--completion-gate]' >&2
-  exit 2
-}
-shift
+output_name=verify.tsv
+if [[ "$#" -ge 1 && "$1" == verify ]]; then
+  shift
+elif [[ "$#" -ge 1 && "$1" != --completion-gate ]]; then
+  output_name="$1"
+  shift
+  [[ "$output_name" == "$(basename "$output_name")" && "$output_name" == verify.tsv ]] || {
+    printf '%s\n' 'usage: release-verify.sh [verify|verify.tsv] [--completion-gate]' >&2
+    exit 2
+  }
+fi
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --completion-gate) shift ;;
-    *) printf '%s\n' 'usage: release-verify.sh verify [--completion-gate]' >&2; exit 2 ;;
+    *) printf '%s\n' 'usage: release-verify.sh [verify|verify.tsv] [--completion-gate]' >&2; exit 2 ;;
   esac
 done
 
@@ -79,6 +85,9 @@ repro_a="$(sed -n 's/.* build_a=\([^ ]*\).*/\1/p' <<< "$repro_line")"
 repro_b="$(sed -n 's/.* build_b=\([^ ]*\).*/\1/p' <<< "$repro_line")"
 repro_sha_a="$(sed -n 's/.* sha256_a=\([^ ]*\).*/\1/p' <<< "$repro_line")"
 repro_sha_b="$(sed -n 's/.* sha256_b=\([^ ]*\).*/\1/p' <<< "$repro_line")"
+repro_root="$(dirname "$repro_evidence")"
+if [[ "$repro_a" != /* ]]; then repro_a="$repro_root/$repro_a"; fi
+if [[ "$repro_b" != /* ]]; then repro_b="$repro_root/$repro_b"; fi
 [[ -f "$repro_a" && -f "$repro_b" && "$repro_a" != "$repro_b" ]] || {
   printf '%s\n' 'release-verify: reproducibility build outputs are missing or identical' >&2
   exit 1
@@ -119,7 +128,7 @@ bash "$ROOT/scripts/release-upgrade.sh" --completion-gate >/dev/null
 
 printf '%s\n' \
   "M13_RELEASE_VERIFY status=pass run_id=$run_id naming=pass musl=pass checksums=pass signatures=pass images=pass upgrade=pass" \
-  > "$EVIDENCE_DIR/verify.tsv"
-printf '%s\n' "${artifact_lines[@]}" >> "$EVIDENCE_DIR/verify.tsv"
-printf '%s\n' "$repro_line" >> "$EVIDENCE_DIR/verify.tsv"
-printf '%s\n' "$(<"$EVIDENCE_DIR/verify.tsv")"
+  > "$EVIDENCE_DIR/$output_name"
+printf '%s\n' "${artifact_lines[@]}" >> "$EVIDENCE_DIR/$output_name"
+printf '%s\n' "$repro_line" >> "$EVIDENCE_DIR/$output_name"
+printf '%s\n' "$(<"$EVIDENCE_DIR/$output_name")"

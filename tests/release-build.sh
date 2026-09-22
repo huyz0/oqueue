@@ -36,6 +36,13 @@ actual="$(< "$capture")"
 expected_actual='--cfg tokio_unstable -C target-cpu=x86-64-v2|zigbuild --locked --release -p oqueue --no-default-features --features software-aead,ring --target x86_64-unknown-linux-gnu.2.28'
 [[ "$actual" == "$expected_actual" ]]
 
+PATH="$fake_bin:$PATH" RELEASE_BUILD_CAPTURE="$capture" \
+  OQUEUE_RELEASE_FEATURES=fips OQUEUE_RELEASE_TARGET=x86_64-unknown-linux-gnu \
+  "$ROOT/scripts/release-build.sh"
+actual="$(< "$capture")"
+expected_actual='--cfg tokio_unstable -C target-cpu=x86-64-v2|zigbuild --locked --release -p oqueue --no-default-features --features fips --target x86_64-unknown-linux-gnu.2.28'
+[[ "$actual" == "$expected_actual" ]]
+
 capture="$tmp/arm-command"
 PATH="$fake_bin:$PATH" RELEASE_BUILD_CAPTURE="$capture" \
   OQUEUE_RELEASE_TARGET=aarch64-unknown-linux-gnu \
@@ -56,4 +63,14 @@ if PATH="$fake_bin:$PATH" FAKE_CARGO_ZIGBUILD_VERSION='cargo-zigbuild 0.20.0' \
   printf '%s\n' 'release-build accepted an unexpected cargo-zigbuild version' >&2
   exit 1
 fi
+
+build_evidence="$tmp/native-build.tsv"
+printf '%s\n' \
+  'M13_RELEASE_BUILD status=pass run_id=0123456789abcdef0123456789abcdef01234567 default_x86_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa fips_x86_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb default_aarch64_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc fips_aarch64_sha256=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd clean_container=pass fips=pass fips_mode=pass fips_cross_read=pass nonfips_cross_read=pass isa=pass allocator=pass' \
+  > "$build_evidence"
+handoff="$tmp/handoff"
+OQUEUE_M13_BUILD_EVIDENCE="$build_evidence" OQUEUE_M13_EVIDENCE_DIR="$handoff" \
+  "$ROOT/scripts/release-build.sh" build.tsv --completion-gate >/dev/null
+cmp -s "$build_evidence" "$handoff/build.tsv"
+
 printf '%s\n' 'release-build planner: ok'

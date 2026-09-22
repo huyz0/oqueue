@@ -74,4 +74,19 @@ if STUB_ARCH="$stub_arch" STUB_LOG="$scratch/failing-docker.log" PATH="$stub_dir
 fi
 test ! -f "$failed_evidence/smoke.tsv"
 
+missing_gate_evidence="$scratch/missing-gate-evidence"
+if OQUEUE_M13_EVIDENCE_DIR="$missing_gate_evidence" bash "$script" smoke.tsv --completion-gate \
+    >/dev/null 2>&1; then
+  printf '%s\n' 'release-smoke completion gate ran without native evidence' >&2
+  exit 1
+fi
+test ! -e "$missing_gate_evidence/smoke.tsv"
+
+native_evidence="$scratch/native-smoke.tsv"
+printf '%s\n' 'M13_RELEASE_SMOKE status=pass glibc_floor=2.28 request=pass' > "$native_evidence"
+named_evidence="$scratch/named-evidence"
+OQUEUE_M13_SMOKE_EVIDENCE="$native_evidence" OQUEUE_M13_EVIDENCE_DIR="$named_evidence" \
+  bash "$script" smoke.tsv --completion-gate >/dev/null
+cmp -s "$native_evidence" "$named_evidence/smoke.tsv"
+
 printf '%s\n' 'release-smoke: ok'

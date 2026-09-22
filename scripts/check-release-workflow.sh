@@ -21,6 +21,13 @@ bash "$ROOT/tests/release-artifact-name.sh" >/dev/null
 bash "$ROOT/tests/release-attest.sh" >/dev/null
 bash "$ROOT/tests/release-image.sh" >/dev/null
 bash "$ROOT/tests/release-upgrade.sh" >/dev/null
+# The aggregator derives the build record from four files and native provenance;
+# its contract test is the producer-side half of the completion evidence path.
+bash "$ROOT/tests/release-aggregate.sh" >/dev/null
+# The contract test creates an isolated artifact bundle, manifest, signature,
+# image records, and reproducibility inputs before invoking release-verify.sh;
+# this is deliberately not aggregate verification against an empty gate
+# directory. The completion gate consumes the native-job bundle separately.
 bash "$ROOT/tests/release-verify.sh" >/dev/null
 release="$ROOT/.github/workflows/release.yml"
 os_smoke="$ROOT/.github/workflows/os-smoke.yml"
@@ -31,10 +38,16 @@ grep -Fq 'bash tests/release-attest.sh' "$release"
 grep -Fq 'target/attest/${{ env.ARTIFACT_NAME }}' "$release"
 grep -Fq 'target/attest/SHA256SUMS' "$release"
 grep -Fq 'target/attest/SHA256SUMS.sig' "$release"
-grep -Fq 'scripts/release-image.sh --artifact "target/${RELEASE_TARGET}.2.28/release/oqueue"' "$release"
+grep -Fq 'scripts/release-image.sh --artifact "target/m13-job/artifacts/$ARTIFACT_NAME"' "$release"
+grep -Fq 'scripts/release-image.sh --artifact "$fips_artifact"' "$release"
 grep -Fq -- '--expected-architecture amd64' "$release"
 grep -Fq -- '--expected-architecture arm64' "$release"
-grep -Fq 'run: scripts/release-smoke.sh' "$release"
+grep -Fq 'scripts/release-smoke.sh' "$release"
+grep -Fq 'name: m13-linux-x86_64' "$release"
+grep -Fq 'name: m13-linux-aarch64' "$release"
+grep -Fq 'name: m13-smoke' "$release"
+grep -Fq 'scripts/release-aggregate.sh --input "$bundle" --output "$bundle"' "$release"
+grep -Fq 'OQUEUE_M13_EVIDENCE_INPUT_DIR: ${{ github.workspace }}/target/m13-evidence' "$release"
 grep -Fq 'os: [ubuntu-latest, macos-latest]' "$os_smoke"
 grep -Fq 'os: [ubuntu-latest, macos-latest, windows-latest]' "$os_smoke"
 if grep -Eq '^  [a-z0-9-]*macos[a-z0-9-]*:' "$release" || \

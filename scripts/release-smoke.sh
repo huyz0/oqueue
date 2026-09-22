@@ -7,6 +7,34 @@ IMAGE="${OQUEUE_RELEASE_SMOKE_IMAGE:-oqueue-release-smoke:glibc-2.28}"
 EVIDENCE_DIR="${OQUEUE_M13_EVIDENCE_DIR:-$ROOT/target/tmp/release-smoke.$$}"
 mkdir -p "$EVIDENCE_DIR"
 
+completion_gate=0
+output_name=smoke.tsv
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --completion-gate) completion_gate=1; shift ;;
+    smoke.tsv) output_name=smoke.tsv; shift ;;
+    *) printf '%s\n' 'usage: release-smoke.sh [smoke.tsv] [--completion-gate]' >&2; exit 2 ;;
+  esac
+done
+
+if [[ "$completion_gate" == 1 ]]; then
+  source_evidence="${OQUEUE_M13_SMOKE_EVIDENCE:-}"
+  [[ -n "$source_evidence" && -f "$source_evidence" ]] || {
+    printf '%s\n' 'release-smoke: completion gate requires native smoke evidence via OQUEUE_M13_SMOKE_EVIDENCE' >&2
+    exit 1
+  }
+  [[ "$(grep -Ec '^M13_RELEASE_SMOKE ' "$source_evidence" || true)" == 1 ]] || {
+    printf '%s\n' 'release-smoke: native smoke evidence must contain exactly one smoke record' >&2
+    exit 1
+  }
+  destination="$EVIDENCE_DIR/$output_name"
+  if [[ "$source_evidence" != "$destination" ]]; then
+    cp "$source_evidence" "$destination"
+  fi
+  cat "$destination"
+  exit 0
+fi
+
 docker_exec() {
   if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == mingw* || "${OSTYPE:-}" == cygwin* ]]; then
     MSYS_NO_PATHCONV=1 docker "$@"
@@ -45,5 +73,5 @@ fi
 docker_exec run --rm "$IMAGE" 2>&1 | tee "$EVIDENCE_DIR/role-smoke.log"
 
 printf '%s\n' 'M13_RELEASE_SMOKE status=pass glibc_floor=2.28 request=pass' \
-  > "$EVIDENCE_DIR/smoke.tsv"
-printf '%s\n' "$(<"$EVIDENCE_DIR/smoke.tsv")"
+  > "$EVIDENCE_DIR/$output_name"
+printf '%s\n' "$(<"$EVIDENCE_DIR/$output_name")"

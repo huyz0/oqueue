@@ -43,7 +43,13 @@ jobs:
       - name: run the smoke contract test
         run: bash tests/release-smoke.sh
       - name: build and exercise the artifact on glibc 2.28
-        run: scripts/release-smoke.sh
+        run: OQUEUE_M13_EVIDENCE_DIR=target/m13-smoke scripts/release-smoke.sh
+      - name: retain smoke evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: m13-smoke
+          path: target/m13-smoke
+          if-no-files-found: error
 
   linux-x86_64:
     name: Linux x86_64 native release target
@@ -84,7 +90,11 @@ jobs:
       - name: compare repeated x86_64 release builds
         run: OQUEUE_M13_EVIDENCE_DIR=target/repro scripts/release-repro.sh
       - name: build the native glibc-floor release target
-        run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
+        run: |
+          OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
+          mkdir -p target/m13-job/artifacts
+          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" \
+            "target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)"
       - name: derive the trusted artifact name
         run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)" >> "$GITHUB_ENV"
       - name: sign and verify the x86_64 artifact
@@ -109,8 +119,29 @@ jobs:
       - name: build and exercise the x86_64 runtime image from the artifact
         run: |
           OQUEUE_M13_EVIDENCE_DIR=target/runtime-image \
-            scripts/release-image.sh --artifact "target/${RELEASE_TARGET}.2.28/release/oqueue" \
+            scripts/release-image.sh --artifact "target/m13-job/artifacts/$ARTIFACT_NAME" \
             --tag "oqueue-runtime:${GITHUB_SHA}-x86_64" --expected-architecture amd64
+      - name: install native FIPS build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake golang
+      - name: build and exercise the native x86_64 FIPS artifact
+        run: |
+          OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" OQUEUE_RELEASE_FEATURES=fips scripts/release-build.sh
+          fips_artifact="target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 fips bin)"
+          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$fips_artifact"
+          OQUEUE_M13_EVIDENCE_DIR=target/runtime-image-fips \
+            scripts/release-image.sh --artifact "$fips_artifact" \
+            --tag "oqueue-runtime:${GITHUB_SHA}-x86_64-fips" --expected-architecture amd64
+          target="target/${RELEASE_TARGET}.2.28/release/oqueue"
+          "$target" >/dev/null
+          cargo test --locked -p oqueue-crypto --no-default-features --features fips --test it
+      - name: assemble x86_64 native evidence bundle
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          mkdir -p target/m13-job/artifacts target/m13-job/repro
+          cat target/runtime-image/image.tsv target/runtime-image-fips/image.tsv \
+            > target/m13-job/images.tsv
+          cp -R target/repro/. target/m13-job/repro/
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
@@ -119,6 +150,12 @@ jobs:
             target/attest/${{ env.ARTIFACT_NAME }}
             target/attest/SHA256SUMS
             target/attest/SHA256SUMS.sig
+          if-no-files-found: error
+      - name: retain x86_64 M13 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: m13-linux-x86_64
+          path: target/m13-job
           if-no-files-found: error
 
   linux-aarch64:
@@ -162,7 +199,11 @@ jobs:
       - name: install the pinned cargo-zigbuild
         run: cargo install cargo-zigbuild --version 0.20.1 --locked
       - name: build the native glibc-floor release target
-        run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
+        run: |
+          OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
+          mkdir -p target/m13-job/artifacts
+          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" \
+            "target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)"
       - name: derive the trusted artifact name
         run: echo "ARTIFACT_NAME=$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)" >> "$GITHUB_ENV"
       - name: sign and verify the aarch64 artifact
@@ -187,8 +228,31 @@ jobs:
       - name: build and exercise the aarch64 runtime image from the artifact
         run: |
           OQUEUE_M13_EVIDENCE_DIR=target/runtime-image \
-            scripts/release-image.sh --artifact "target/${RELEASE_TARGET}.2.28/release/oqueue" \
+            scripts/release-image.sh --artifact "target/m13-job/artifacts/$ARTIFACT_NAME" \
             --tag "oqueue-runtime:${GITHUB_SHA}-aarch64" --expected-architecture arm64
+      - name: install native FIPS build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake golang
+      - name: build and exercise the native aarch64 FIPS artifact
+        run: |
+          OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" OQUEUE_RELEASE_FEATURES=fips scripts/release-build.sh
+          fips_artifact="target/m13-job/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 fips bin)"
+          cp "target/${RELEASE_TARGET}.2.28/release/oqueue" "$fips_artifact"
+          OQUEUE_M13_EVIDENCE_DIR=target/runtime-image-fips \
+            scripts/release-image.sh --artifact "$fips_artifact" \
+            --tag "oqueue-runtime:${GITHUB_SHA}-aarch64-fips" --expected-architecture arm64
+          target="target/${RELEASE_TARGET}.2.28/release/oqueue"
+          "$target" >/dev/null
+          cargo test --locked -p oqueue-crypto --no-default-features --features fips --test it
+      - name: compare repeated native aarch64 release builds
+        run: OQUEUE_M13_EVIDENCE_DIR=target/repro scripts/release-repro.sh
+      - name: assemble aarch64 native evidence bundle
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          mkdir -p target/m13-job/artifacts target/m13-job/repro
+          cat target/runtime-image/image.tsv target/runtime-image-fips/image.tsv \
+            > target/m13-job/images.tsv
+          cp -R target/repro/. target/m13-job/repro/
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
@@ -198,3 +262,80 @@ jobs:
             target/attest/SHA256SUMS
             target/attest/SHA256SUMS.sig
           if-no-files-found: error
+      - name: retain aarch64 M13 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: m13-linux-aarch64
+          path: target/m13-job
+          if-no-files-found: error
+
+  aggregate:
+    name: Aggregate native release evidence and completion gate
+    needs: [clean-default, clean-fips, oldest-smoke, linux-x86_64, linux-aarch64]
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: download native evidence bundles
+        uses: actions/download-artifact@v4
+        with:
+          name: m13-linux-x86_64
+          path: target/m13-input/x86_64
+      - uses: actions/download-artifact@v4
+        with:
+          name: m13-linux-aarch64
+          path: target/m13-input/aarch64
+      - uses: actions/download-artifact@v4
+        with:
+          name: m13-smoke
+          path: target/m13-input/smoke
+      - name: install the pinned repository toolchain
+        run: |
+          set -euo pipefail
+          toolchain="$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')"
+          rustup toolchain install "$toolchain" --profile minimal
+          rustup show active-toolchain
+      - name: assemble and attest the complete evidence bundle
+        env:
+          OQUEUE_RELEASE_PRIVATE_KEY: ${{ secrets.OQUEUE_RELEASE_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          input=target/m13-input
+          bundle=target/m13-evidence
+          mkdir -p "$bundle/artifacts" "$bundle/repro"
+          for variant in default fips; do
+            cp "$input/x86_64/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 "$variant" bin)" "$bundle/artifacts/"
+            cp "$input/aarch64/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 "$variant" bin)" "$bundle/artifacts/"
+          done
+          cat "$input/x86_64/images.tsv" "$input/aarch64/images.tsv" > "$bundle/artifacts/images.tsv"
+          cp -R "$input/x86_64/repro/." "$bundle/repro/"
+          cp "$input/smoke/smoke.tsv" "$bundle/smoke.tsv"
+          test "$(grep -Ec '^M13_RELEASE_IMAGE ' "$bundle/artifacts/images.tsv")" = 4
+          test -s "$bundle/smoke.tsv"
+          printf '%s\n' \
+            "M13_RELEASE_PROVENANCE status=pass run_id=$GITHUB_SHA native_x86=pass native_aarch64=pass clean_container=pass fips=pass fips_mode=pass fips_cross_read=pass nonfips_cross_read=pass isa=pass allocator=pass" \
+            > "$bundle/provenance.tsv"
+          test -n "$OQUEUE_RELEASE_PRIVATE_KEY"
+          private_key="$RUNNER_TEMP/oqueue-release-private.pem"
+          public_key="$bundle/artifacts/release-public.pem"
+          umask 077
+          printf '%s\n' "$OQUEUE_RELEASE_PRIVATE_KEY" > "$private_key"
+          scripts/release-attest.sh create --key "$private_key" --manifest "$bundle/artifacts/SHA256SUMS" \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)" \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 fips bin)" \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)" \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 fips bin)"
+          openssl pkey -in "$private_key" -pubout -out "$public_key"
+          scripts/release-aggregate.sh --input "$bundle" --output "$bundle"
+          scripts/release-attest.sh verify --key "$public_key" --manifest "$bundle/artifacts/SHA256SUMS" \
+            --signature "$bundle/artifacts/SHA256SUMS.sig" -- \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 default bin)" \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux x86_64 glibc2.28 fips bin)" \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 default bin)" \
+            "$bundle/artifacts/$(scripts/release-artifact-name.sh linux aarch64 glibc2.28 fips bin)"
+      - name: run the resource-capped completion gate against native evidence
+        env:
+          OQUEUE_M13_EVIDENCE_INPUT_DIR: ${{ github.workspace }}/target/m13-evidence
+        run: scripts/docker-test.sh scripts/gates/m13-complete.sh

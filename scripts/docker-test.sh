@@ -365,9 +365,28 @@ TTY_FLAGS=()
 # only the host-side bind source to the form Docker Desktop accepts.
 DOCKER_EXEC=(docker)
 DOCKER_REPO="$REPO"
+M13_EVIDENCE_ARGS=()
 if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == mingw* || "${OSTYPE:-}" == cygwin* ]]; then
   DOCKER_REPO="$(cygpath -m "$REPO")"
   DOCKER_EXEC=(env MSYS_NO_PATHCONV=1 docker)
+fi
+
+# A native release matrix may have produced an evidence bundle on the host
+# before this containment wrapper runs. Mount it read-only into the container
+# and pass the container path, so m13-complete.sh can validate ARM/FIPS output
+# without rebuilding it under x86 emulation. No bundle means the completion
+# gate remains fail-closed and reports the missing native evidence.
+if [[ -n "${OQUEUE_M13_EVIDENCE_INPUT_DIR:-}" ]]; then
+  evidence_source="$(cd "$OQUEUE_M13_EVIDENCE_INPUT_DIR" 2>/dev/null && pwd)" || {
+    echo "docker-test: M13 evidence bundle directory not found: $OQUEUE_M13_EVIDENCE_INPUT_DIR" >&2
+    exit 1
+  }
+  evidence_mount="$evidence_source"
+  if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == mingw* || "${OSTYPE:-}" == cygwin* ]]; then
+    evidence_mount="$(cygpath -m "$evidence_source")"
+  fi
+  M13_EVIDENCE_ARGS=(-v "$evidence_mount:/work/target/m13-input:ro" \
+    -e OQUEUE_M13_EVIDENCE_INPUT_DIR=/work/target/m13-input)
 fi
 
 exec "${DOCKER_EXEC[@]}" run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
@@ -382,6 +401,7 @@ exec "${DOCKER_EXEC[@]}" run --rm ${TTY_FLAGS[@]+"${TTY_FLAGS[@]}"} \
   -v "$DOCKER_REPO/target/review:/work/target/review" \
   -v "$DOCKER_REPO/target/seeds:/work/target/seeds" \
   -v "$DOCKER_REPO/target/pre-commit-home:/work/target/pre-commit-home" \
+  ${M13_EVIDENCE_ARGS[@]+"${M13_EVIDENCE_ARGS[@]}"} \
   ${GITCONFIG_ARGS[@]+"${GITCONFIG_ARGS[@]}"} \
   -e HOME=/tmp/home \
   -e PRE_COMMIT_HOME=/work/target/pre-commit-home \

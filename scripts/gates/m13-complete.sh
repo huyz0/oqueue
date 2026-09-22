@@ -8,6 +8,26 @@ EVIDENCE_DIR="$REPO_ROOT/target/tmp/m13-gate.$$"
 mkdir -p "$EVIDENCE_DIR"
 trap 'rm -rf "$EVIDENCE_DIR"' EXIT
 
+# Native Linux jobs produce the ARM/FIPS artifacts outside this gate.  A
+# completion run may point at that immutable bundle; the release scripts then
+# validate and copy its records instead of fabricating cross-build evidence.
+EVIDENCE_INPUT_DIR="${OQUEUE_M13_EVIDENCE_INPUT_DIR:-}"
+INPUT_ERROR=""
+if [[ -n "$EVIDENCE_INPUT_DIR" ]]; then
+  if [[ ! -d "$EVIDENCE_INPUT_DIR" ]]; then
+    INPUT_ERROR="M13 evidence bundle is not a directory: $EVIDENCE_INPUT_DIR"
+  else
+    export OQUEUE_M13_BUILD_EVIDENCE="$EVIDENCE_INPUT_DIR/build.tsv"
+    export OQUEUE_M13_SMOKE_EVIDENCE="$EVIDENCE_INPUT_DIR/smoke.tsv"
+    export OQUEUE_M13_ARTIFACT_DIR="$EVIDENCE_INPUT_DIR/artifacts"
+    export OQUEUE_M13_REPRO_EVIDENCE="$EVIDENCE_INPUT_DIR/repro.tsv"
+    export OQUEUE_M13_MANIFEST="$EVIDENCE_INPUT_DIR/artifacts/SHA256SUMS"
+    export OQUEUE_M13_SIGNATURE="$EVIDENCE_INPUT_DIR/artifacts/SHA256SUMS.sig"
+    export OQUEUE_M13_PUBLIC_KEY="$EVIDENCE_INPUT_DIR/artifacts/release-public.pem"
+    export OQUEUE_M13_IMAGE_EVIDENCE="$EVIDENCE_INPUT_DIR/artifacts/images.tsv"
+  fi
+fi
+
 mr_rc=0
 bash "$REPO_ROOT/scripts/check-milestone-review.sh" --milestone M13 || mr_rc=$?
 if (( mr_rc == 0 )); then
@@ -39,6 +59,7 @@ require_file "release artifact policy" "$REPO_ROOT/docs/release/artifacts.md"
 require_file "release workflow" "$REPO_ROOT/.github/workflows/release.yml"
 require_script "release build" "$REPO_ROOT/scripts/release-build.sh"
 require_script "release verification" "$REPO_ROOT/scripts/release-verify.sh"
+require_script "release evidence aggregation" "$REPO_ROOT/scripts/release-aggregate.sh"
 require_script "oldest-distribution smoke" "$REPO_ROOT/scripts/release-smoke.sh"
 require_script "release workflow checker" "$REPO_ROOT/scripts/check-release-workflow.sh"
 
@@ -85,6 +106,10 @@ run_required() {
     note "$output"
   fi
 }
+
+if [[ -n "$INPUT_ERROR" ]]; then
+  fail "$INPUT_ERROR"
+fi
 
 # Presence, exit status, and raw workflow text are not evidence: an executable
 # no-op script, a skipped leg, or a requirement hidden in a comment must not

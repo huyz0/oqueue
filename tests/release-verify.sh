@@ -51,6 +51,13 @@ test "$(grep -Ec '^M13_ARTIFACT ' "$scratch/out/verify.tsv")" = 4
 grep -Fq "run_id=$run_id" "$scratch/out/verify.tsv"
 grep -Fq 'M13_REPRODUCIBILITY ' "$scratch/out/verify.tsv"
 
+OQUEUE_M13_EVIDENCE_DIR="$scratch/named-out" OQUEUE_M13_BUILD_EVIDENCE="$scratch/build.tsv" \
+  OQUEUE_M13_ARTIFACT_DIR="$scratch/artifacts" OQUEUE_M13_REPRO_EVIDENCE="$scratch/repro.tsv" \
+  bash "$script" verify.tsv --completion-gate >/dev/null
+test "$(grep -Ec '^M13_ARTIFACT ' "$scratch/named-out/verify.tsv")" = 4
+grep -Fq "run_id=$run_id" "$scratch/named-out/verify.tsv"
+grep -Fq 'M13_REPRODUCIBILITY ' "$scratch/named-out/verify.tsv"
+
 cp "$scratch/artifacts/images.tsv" "$scratch/duplicate-images.tsv"
 tail -n 1 "$scratch/artifacts/images.tsv" >> "$scratch/duplicate-images.tsv"
 if OQUEUE_M13_EVIDENCE_DIR="$scratch/duplicate-out" OQUEUE_M13_BUILD_EVIDENCE="$scratch/build.tsv" \
