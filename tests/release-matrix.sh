@@ -35,6 +35,7 @@ for block in "$x86" "$arm"; do
 done
 grep -Fq 'os: [ubuntu-latest, macos-latest, windows-latest]' <<<"$smoke"
 grep -Fq 'bash scripts/os-smoke.sh' <<<"$smoke"
+grep -Fq 'bash tests/release-attest.sh' <<<"$smoke"
 if grep -Fq 'cargo ' <<<"$smoke"; then
   printf '%s\n' 'Windows smoke job must not run the native Cargo tier' >&2
   exit 1

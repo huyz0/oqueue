@@ -32,7 +32,7 @@ re-derived rather than copied when a milestone opens. Read the plan's
 
 ## M13: Release engineering and the artifact matrix
 
-19 rows against a plan of 15. ADR-0070 resolves the glibc-floor opening
+20 rows against a plan of 15. ADR-0070 resolves the glibc-floor opening
 decision: Linux release artifacts target glibc 2.28, while musl remains an
 explicit evaluation rather than an accidental second release target. A finding
 filed while M13 runs is dispositioned when filed (`milestone/SKILL.md`).
@@ -58,6 +58,7 @@ filed while M13 runs is dispositioned when filed (`milestone/SKILL.md`).
 | M13.16 | Correct release artifact lookups | Serves NFR-42. Reproducibility and both native architecture jobs must locate the exact binary emitted by cargo-zigbuild: `<CARGO_TARGET_DIR>/<target-triple>/release/oqueue`; the glibc `.2.28` suffix is not part of Cargo's output directory. `tests/release-repro.sh` and `tests/release-matrix.sh` model that layout and reject the former suffix-bearing lookups; repeated artifacts are still compared byte-for-byte. | done |
 | M13.17 | Native release evidence and final M13 gate | Serves FR-43, NFR-40, NFR-41, NFR-42, NFR-43. Run the native x86_64/aarch64 release workflow, retain its signed aggregate evidence bundle, and run `OQUEUE_M13_EVIDENCE_INPUT_DIR=... scripts/docker-test.sh scripts/gates/m13-complete.sh` with no skipped acceptance leg before marking M13 complete. | todo |
 | M13.18 | M13 boundary review and disposition | Serves FR-43, NFR-40, NFR-41, NFR-42, NFR-43. A fresh independent milestone review covers all M13 commits including the native-evidence fixes; blocking/major findings are fixed or argued, and non-reopening findings are handed to the next milestone. | todo |
+| M13.19 | Make signature mutation fixture deterministic across OSes | Serves NFR-43. The release-attestation contract test must change a signature byte deterministically rather than writing a fixed byte that may already match; the OS smoke workflow runs `tests/release-attest.sh` on Linux, macOS, and Windows, where it still rejects a mutated signature. `tests/release-matrix.sh` asserts this workflow wiring and remains green in the contained Linux suite. | done |
 
 ## M12: Admin API and operability
 

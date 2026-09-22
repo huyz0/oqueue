@@ -21,6 +21,8 @@ jobs:
           python-version: "3.x"
       - name: run the portable shell smoke tier
         run: bash scripts/os-smoke.sh
+      - name: verify portable release signature tests
+        run: bash tests/release-attest.sh
 
   fast:
     name: fast tests (${{ matrix.os }})

@@ -51,7 +51,12 @@ if bash "$script" verify --key "$scratch/public.pem" --manifest "$scratch/SHA256
 fi
 cp "$scratch/SHA256SUMS.good" "$scratch/SHA256SUMS"
 cp "$scratch/SHA256SUMS.sig" "$scratch/SHA256SUMS.sig.good"
-printf '\001' | dd of="$scratch/SHA256SUMS.sig" bs=1 seek=0 conv=notrunc >/dev/null 2>&1
+signature_first_byte="$(od -An -N1 -tu1 "$scratch/SHA256SUMS.sig" | tr -d '[:space:]')"
+[[ "$signature_first_byte" =~ ^[0-9]+$ ]]
+signature_mutated_byte=$(((signature_first_byte + 1) % 256))
+printf -v signature_mutated_octal '\\%03o' "$signature_mutated_byte"
+printf '%b' "$signature_mutated_octal" | \
+  dd of="$scratch/SHA256SUMS.sig" bs=1 seek=0 conv=notrunc >/dev/null 2>&1
 if bash "$script" verify --key "$scratch/public.pem" --manifest "$scratch/SHA256SUMS" \
     --signature "$scratch/SHA256SUMS.sig" "$artifact_a" "$artifact_b" >/dev/null 2>&1; then
   printf '%s\n' 'release-attest accepted a mutated signature' >&2
