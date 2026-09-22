@@ -24,3 +24,12 @@ The glibc floor, ISA baseline, allocator mode, artifact naming, signing, and
 container packaging are separate M13 contracts. They must not be inferred
 from the runner image or from this target matrix; the later M13 tasks record
 and verify each one explicitly.
+
+## glibc build floor
+
+The Linux release command is `cargo zigbuild --locked --release` with the
+target suffix `.2.28`, for example
+`--target x86_64-unknown-linux-gnu.2.28`. `scripts/release-build.sh` pins
+`cargo-zigbuild` 0.20.1 and Zig 0.14.1, and refuses to build when either tool
+reports a different version. The suffix selects the glibc 2.28 sysroot; the
+runner's libc is not the release link target.

@@ -42,13 +42,18 @@ jobs:
           rustup toolchain install "$toolchain" --profile minimal
           rustup target add --toolchain "$toolchain" "$RELEASE_TARGET"
           rustup show active-toolchain
-      - name: build the native release target
-        run: cargo build --locked --release --target "$RELEASE_TARGET"
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+      - name: install the pinned cargo-zigbuild
+        run: cargo install cargo-zigbuild --version 0.20.1 --locked
+      - name: build the native glibc-floor release target
+        run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
           name: m13-target-linux-x86_64
-          path: target/${{ env.RELEASE_TARGET }}/release/oqueue
+          path: target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue
           if-no-files-found: error
 
   linux-aarch64:
@@ -80,11 +85,16 @@ jobs:
           rustup toolchain install "$toolchain" --profile minimal
           rustup target add --toolchain "$toolchain" "$RELEASE_TARGET"
           rustup show active-toolchain
-      - name: build the native release target
-        run: cargo build --locked --release --target "$RELEASE_TARGET"
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.1
+      - name: install the pinned cargo-zigbuild
+        run: cargo install cargo-zigbuild --version 0.20.1 --locked
+      - name: build the native glibc-floor release target
+        run: OQUEUE_RELEASE_TARGET="$RELEASE_TARGET" scripts/release-build.sh
       - name: retain the native validation artifact
         uses: actions/upload-artifact@v4
         with:
           name: m13-target-linux-aarch64
-          path: target/${{ env.RELEASE_TARGET }}/release/oqueue
+          path: target/${{ env.RELEASE_TARGET }}.2.28/release/oqueue
           if-no-files-found: error
