@@ -140,7 +140,11 @@ if ! (OQUEUE_M13_EVIDENCE_INPUT_DIR="$mounted" IMAGE=fixture \
   printf '%s\n' 'docker-test wrapper probe failed' >&2
   exit 1
 fi
-grep -Fq -- "-v $mounted:/work/target/m13-input:ro" "$docker_capture"
+expected_mount="$mounted"
+if [[ "${OSTYPE:-}" == msys* || "${OSTYPE:-}" == mingw* || "${OSTYPE:-}" == cygwin* ]]; then
+  expected_mount="$(cygpath -m "$mounted")"
+fi
+grep -Fq -- "-v $expected_mount:/work/target/m13-input:ro" "$docker_capture"
 grep -Fq -- '-e OQUEUE_M13_EVIDENCE_INPUT_DIR=/work/target/m13-input' "$docker_capture"
 
 printf '%s\n' 'release-aggregate: ok'

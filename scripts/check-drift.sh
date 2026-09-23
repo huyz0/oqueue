@@ -70,6 +70,7 @@
 # today as one made settable in this commit. Non-negotiable 2 is a property
 # of the tree, not of a diff, so this scans every tracked file every run.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+require_python || finish
 
 cd "$REPO_ROOT"
 

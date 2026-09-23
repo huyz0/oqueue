@@ -21,6 +21,8 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
+source "$ROOT/scripts/lib.sh"
+set +e
 PASS=0
 FAIL=0
 SKIPPED=0
@@ -110,8 +112,12 @@ refute() {
   fi
 }
 
-if ! python3 -c 'pass' >/dev/null 2>&1 || ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
-  echo "SKIPPED python3 or sha256sum/shasum missing"
+if ! require_python; then
+  echo "FAIL review packet harness requires Python 3"
+  exit 1
+fi
+if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+  echo "SKIPPED sha256sum/shasum missing"
   SKIPPED=$((SKIPPED + 1))
   echo "SKIPPED_COUNT $SKIPPED"
   exit 0
@@ -124,6 +130,23 @@ check "round one names itself" "$out" "This is round 1 of 3"
 check "round one shows the staged diff" "$out" "## The staged diff"
 refute "round one claims no delta" "$out" "## What changed since the last round"
 refute "round one lists no open findings" "$out" "## What earlier rounds left open"
+rm -rf "$dir"
+
+# --- recording a verdict uses a portable host identity --------------------
+dir="$(scratch)"
+packet "$dir" "recording fixture" > /dev/null
+if command -v sha256sum >/dev/null 2>&1; then
+  hash="$(cd "$dir" && git diff --cached | sha256sum | cut -d' ' -f1)"
+else
+  hash="$(cd "$dir" && git diff --cached | shasum -a 256 | cut -d' ' -f1)"
+fi
+verdict="$dir/target/review/verdict.json"
+printf '{"task_id":"M-1.1","diff_sha256":"%s","reviewer":"fixture","verdict":"pass","findings":[]}\n' \
+  "$hash" > "$verdict"
+out="$(cd "$dir" && bash scripts/review.sh record --file "$verdict" --task M-1.1 2>&1)"
+check "a verdict records on this host" "$out" "verdict recorded for $hash"
+check "the recording identity is retained" \
+  "$(<"$dir/target/review/$hash.json")" "OQUEUE_SESSION unset"
 rm -rf "$dir"
 
 # --- round two: a prior verdict with its tree, so a delta ------------------
@@ -342,7 +365,22 @@ if git diff --cached --name-only 2>/dev/null | grep -qx 'file.txt'; then
 fi
 printf 'skip nothing is staged against HEAD here\n'
 EOF
+mkdir -p "$gates/scripts/gates"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' > "$gates/scripts/gates/mode-probe.sh"
+cat > "$gates/scripts/check-hhh-mode.sh" <<'EOF'
+#!/usr/bin/env bash
+cd "$(dirname "$0")/.." || exit 1
+mode="$(git ls-files --stage -- scripts/gates/mode-probe.sh | awk '{print $1}')"
+if [[ "$mode" == 100755 ]]; then
+  printf '  ok  the staged snapshot retains executable mode\n'
+  exit 0
+fi
+printf 'FAIL staged executable mode became %s\n' "${mode:-missing}"
+exit 1
+EOF
 chmod +x "$gates/scripts"/check-*.sh
+git -C "$gates" add -- scripts/gates/mode-probe.sh
+git -C "$gates" update-index --chmod=+x -- scripts/gates/mode-probe.sh
 out="$(packet "$gates" "a change to review")"
 check "a gate that could not run says so" "$out" \
   "check-aaa-unrunnable.sh: **not run here** — coverage (cargo-llvm-cov not installed)"
@@ -359,6 +397,8 @@ check "a gate can read the staged tree" "$out" "check-eee-tracked.sh: passed"
 check "and can diff against HEAD" "$out" "check-fff-head.sh: passed"
 check "the diff under review is what is staged there" "$out" \
   "check-ggg-diff.sh: passed"
+check "executable bits survive staged-tree materialization" "$out" \
+  "check-hhh-mode.sh: passed"
 rm -rf "$gates"
 
 # ── A gate the packet refuses to run says so, and is not run ───────────────

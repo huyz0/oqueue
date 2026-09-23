@@ -244,18 +244,19 @@ staged_hash() {
 #
 # ⚠️ **An alternates file, not a clone.** `git init` plus
 # `objects/info/alternates` pointing at the real object store costs no copy and
-# no pack transfer, which matters because this runs on every packet. What it
-# buys is `HEAD`: the two gates that diff against it — `check-core-contract`
-# and `check-tests-kept` — need the parent commit's objects reachable, and
-# `git add -A` then makes the index differ from `HEAD` by exactly the staged
-# diff, which is the comparison they are written against.
+# no pack transfer, which matters because this runs on every packet. It makes
+# both the parent commit and the staged tree readable in the scratch repo:
+# `check-core-contract` and `check-tests-kept` diff against `HEAD`, while
+# `check-milestone-exit` needs the staged executable modes intact. `read-tree`
+# imports the staged tree object exactly rather than re-inferring it from the
+# host filesystem.
 #
 # ⚠️ **A failure here is reported, never swallowed.** A scratch tree that is
 # not a repository leaves every git-reading gate skipping, and the caller says
 # so — the whole point of this task is that an unreadable tree must not look
 # like a clean one.
 stage_as_repository() {
-  local tree="$1" objects head
+  local tree="$1" objects head staged_tree
   # `--path-format=absolute` matters on Git for Windows: the default MSYS
   # `/e/...` path is not a valid alternates path for native Git, while the
   # absolute `E:/...` form is accepted by Git on Windows, macOS, and Linux.
@@ -274,27 +275,23 @@ stage_as_repository() {
   if head="$(cd "$REPO_ROOT" && git rev-parse --verify HEAD 2>/dev/null)"; then
     clean_git -C "$tree" update-ref HEAD "$head" || return 1
   fi
-  # `add -A` against the checked-out staged bytes, so `git diff --cached` here
-  # is the diff under review.
-  #
-  # ⚠️ **`--force`, so the materialised `.gitignore` cannot remove a path.**
-  # Every file here came from `git checkout-index`, so every one of them is
-  # tracked — but a path that is tracked *and* ignored would be skipped by a
-  # plain `add`, and would then read as a staged deletion to every diff-reading
-  # gate. There are none today; `--force` is what keeps that true of tomorrow
-  # rather than of today.
-  clean_git -C "$tree" add -A --force || return 1
+  # Preserve the exact staged tree, including executable modes. Re-adding the
+  # checkout from the filesystem loses 100755 on Git for Windows, whose
+  # core.filemode is false by default; check-milestone-exit then reports every
+  # completion gate as non-executable even though the source index is correct.
+  staged_tree="$(clean_git -C "$REPO_ROOT" write-tree)" || return 1
+  clean_git -C "$tree" read-tree "$staged_tree" || return 1
 }
 
 # `git`, with the caller's git environment removed.
 #
 # ⚠️ **Because an inherited variable here writes to the *real* repository.**
-# With `GIT_INDEX_FILE` set, `git -C "$tree" add -A` writes the scratch tree's
-# entries into the real index, pointing at blobs in the scratch object store —
-# and the `RETURN` trap then deletes those objects, leaving the change under
-# review unreadable. With `GIT_DIR` set, `git init "$tree"` re-initialises the
-# real repository and creates nothing at `$tree` at all. Both return zero, so
-# neither trips the failure branch. Measured in `M5.67`'s first round.
+# With `GIT_INDEX_FILE` set, `git -C "$tree" read-tree` writes the scratch
+# index into the real repository — and with `GIT_OBJECT_DIRECTORY` it may
+# write the staged tree there too. With `GIT_DIR` set, `git init "$tree"`
+# re-initialises the real repository and creates nothing at `$tree` at all.
+# All return zero, so none trips the failure branch. Measured in `M5.67`'s
+# first round.
 clean_git() {
   env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE -u GIT_OBJECT_DIRECTORY \
       -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR -u GIT_NAMESPACE \
@@ -741,7 +738,7 @@ record)
   # instead of the 1 that every gate in this repository promises.
   rc=0
   python3 - "$FILE" "$h" "$REVIEW_DIR/$h.json" "$TASK" <<'PYEOF' || rc=$?
-import hashlib, json, os, subprocess, sys
+import hashlib, json, os, platform, subprocess, sys
 
 src, expected_hash, dest, asked_task = sys.argv[1:5]
 problems = []
@@ -841,7 +838,7 @@ v.setdefault("reviewer", "unknown")
 # show *whose* verdict sits in the index when the staged bytes moved, which
 # is how two sessions sharing one index stops being invisible.
 v["recorded_by"] = os.environ.get("OQUEUE_SESSION") or (
-    f"{os.uname().nodename}:ppid-{os.getppid()} (OQUEUE_SESSION unset)")
+    f"{platform.node()}:ppid-{os.getppid()} (OQUEUE_SESSION unset)")
 
 with open(dest, "w") as fh:
     json.dump(v, fh, indent=2, sort_keys=True)

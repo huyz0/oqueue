@@ -45,6 +45,21 @@ grep -Fq 'rustup show active-toolchain' <<<"$fast"
 grep -Fq 'rustup toolchain install "$toolchain" --profile minimal' <<<"$fast"
 grep -Fq 'cargo test --locked --workspace' <<<"$fast"
 grep -Fq 'bash scripts/os-smoke.sh' <<<"$fast"
+for block in "$smoke" "$fast"; do
+  grep -Fq "if: runner.os == 'macOS'" <<<"$block"
+  grep -Fq 'brew install bash' <<<"$block"
+  grep -Fq 'bash_bin="$(brew --prefix)/bin/bash"' <<<"$block"
+  grep -Fq '"$bash_bin" -c' <<<"$block"
+  grep -Fq 'BASH_VERSINFO[0] >= 4' <<<"$block"
+  grep -Fq 'echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"' <<<"$block"
+  install_line="$(awk '/brew install bash/{print NR; exit}' <<<"$block")"
+  version_line="$(awk '/BASH_VERSINFO\[0\] >= 4/{print NR; exit}' <<<"$block")"
+  path_line="$(awk '/GITHUB_PATH/{print NR; exit}' <<<"$block")"
+  smoke_line="$(awk '/bash scripts\/os-smoke\.sh/{print NR; exit}' <<<"$block")"
+  [[ -n "$install_line" && -n "$version_line" && -n "$path_line" && -n "$smoke_line" && \
+     "$install_line" -lt "$version_line" && "$version_line" -lt "$path_line" && \
+     "$path_line" -lt "$smoke_line" ]]
+done
 
 gate_line="$(awk '/scripts\/docker-test\.sh scripts\/gates\/m13-complete\.sh/{print NR; exit}' <<<"$aggregate")"
 upload_line="$(awk '/uses: actions\/upload-artifact@v4/{print NR; exit}' <<<"$aggregate")"

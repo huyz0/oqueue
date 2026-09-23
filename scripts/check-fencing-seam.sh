@@ -38,6 +38,7 @@
 # no FAIL line, `check-topic-list-scope.sh`'s own note, repeated here rather
 # than relearned.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+require_python || finish
 
 cd "$REPO_ROOT"
 

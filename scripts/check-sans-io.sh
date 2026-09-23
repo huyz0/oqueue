@@ -110,6 +110,7 @@
 #   it is not shown, and what closes it is a reviewer noticing the trigger
 #   acquired a field.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+require_python || finish
 
 cd "$REPO_ROOT"
 

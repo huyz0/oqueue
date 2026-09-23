@@ -15,7 +15,34 @@ mkdir -p "$SMOKE_ROOT"
 trap 'rm -rf "$SMOKE_ROOT"' EXIT
 
 require_tool bash "install Bash 4+ or run through WSL2" || finish
+
+# Windows Git Bash can expose the Microsoft Store `python3` execution-alias
+# stub ahead of a working `python.exe`. Prove that gates recover through the
+# real `python` command and that the fallback reaches child Bash processes.
+python_path="$(command -v python || true)"
+if [[ -z "$python_path" ]] || ! "$python_path" -c 'pass' >/dev/null 2>&1; then
+  fail "OS smoke requires a working python command to test the python3 fallback"
+  finish
+fi
+fallback_bin="$SMOKE_ROOT/python-fallback-bin"
+mkdir -p "$fallback_bin"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 127' > "$fallback_bin/python3"
+chmod +x "$fallback_bin/python3"
+PATH="$fallback_bin:$PATH"
+export PATH
+unset PYTHONUTF8 || true
+require_tool python3 "install Python 3" || finish
+if ! python3 -c 'import sys; assert sys.flags.utf8_mode == 1' >/dev/null 2>&1; then
+  fail "Python gates are not running in UTF-8 mode"
+  finish
+fi
+if ! python3 -c 'pass' >/dev/null 2>&1; then
+  fail "require_tool accepted a non-functional python3 alias"
+  finish
+fi
 require_python || finish
+bash -c 'python3 -c '\''import sys; assert sys.version_info.major == 3'\''' \
+  || fail "python fallback was not available to a child Bash process"
 
 printf '%s\r\n' '---' 'name: smoke' 'description: line endings' '---' \
   > "$SMOKE_ROOT/crlf.md"

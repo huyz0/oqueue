@@ -19,6 +19,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - name: install supported Bash on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          bash_bin="$(brew --prefix)/bin/bash"
+          "$bash_bin" -c '(( BASH_VERSINFO[0] >= 4 ))'
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
       - name: run the portable shell smoke tier
         run: bash scripts/os-smoke.sh
       - name: verify portable release signature tests
@@ -39,6 +46,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.x"
+      - name: install supported Bash on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install bash
+          bash_bin="$(brew --prefix)/bin/bash"
+          "$bash_bin" -c '(( BASH_VERSINFO[0] >= 4 ))'
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
       - name: run the portable shell smoke tier
         run: bash scripts/os-smoke.sh
       - name: install the pinned repository toolchain

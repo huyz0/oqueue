@@ -165,6 +165,10 @@ has_rust() {
 # produces a checkout that is quietly less checked than the author believes.
 require_tool() {
   local tool="$1" remedy="${2:-}"
+  if [[ "$tool" == python3 ]]; then
+    require_python
+    return $?
+  fi
   if command -v "$tool" >/dev/null 2>&1; then
     return 0
   fi
@@ -550,11 +554,24 @@ require_sha256() {
 # mean anything — it would report success while enforcing nothing. `skip` stays
 # the default for genuinely optional tools; this is not one of them.
 require_python() {
+  # Repository metadata is UTF-8 on every platform. Python inherits the
+  # Windows locale encoding unless UTF-8 mode is requested, so pathlib's
+  # default read_text() otherwise fails on valid non-ASCII docs under CP1252.
+  export PYTHONUTF8=1
   if command -v python3 >/dev/null 2>&1 && python3 -c 'pass' >/dev/null 2>&1; then
     return 0
   fi
+  # Windows Git Bash can resolve `python3` to the non-functional Microsoft
+  # Store execution-alias stub even when setup-python or a local Python install
+  # provides a working `python`. Export the adapter because gates commonly
+  # launch child Bash scripts that invoke `python3` directly.
+  if command -v python >/dev/null 2>&1 && python -c 'pass' >/dev/null 2>&1; then
+    python3() { command python "$@"; }
+    export -f python3
+    return 0
+  fi
   fail "python3 not found"
-  note "install: apt-get install python3, or the equivalent for this system"
+  note "install: python3, or a working python command for this system"
   return 1
 }
 
