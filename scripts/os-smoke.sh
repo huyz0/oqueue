@@ -56,6 +56,42 @@ if "\r" in text or not re.search(r"^---\nname: smoke\n", text):
     raise SystemExit("CRLF normalization did not produce parser-safe text")
 PY
 
+# Python writes CRLF to a pipe on Windows. Exercise the milestone coverage
+# helper with that output on every OS so Bash array parsing cannot keep the
+# carriage return attached to each reviewed commit id.
+review_root="$SMOKE_ROOT/milestone-review"
+mkdir -p "$review_root/scripts" "$review_root/docs/internal/product" \
+  "$review_root/reviews" "$review_root/bin"
+cp "$ROOT/scripts/lib.sh" "$ROOT/scripts/milestone-review.sh" "$review_root/scripts/"
+printf '%s\n' '| M-1.1 | a fixture task | coverage is reported correctly | done |' \
+  > "$review_root/docs/internal/product/backlog.md"
+printf '%s\n' 'milestone review coverage fixture' > "$review_root/README.md"
+git -C "$review_root" init -q
+git -C "$review_root" config core.autocrlf false
+git -C "$review_root" config user.email smoke@example.test
+git -C "$review_root" config user.name 'OS smoke'
+git -C "$review_root" add -A
+git -C "$review_root" commit -qm 'M-1.1: create coverage fixture'
+reviewed_commit="$(git -C "$review_root" rev-parse HEAD)"
+printf '{"milestone":"M-1","commits":["%s"],"verdict":"pass","findings":[]}\n' \
+  "$reviewed_commit" > "$review_root/reviews/milestone-M-1-fixture.json"
+git -C "$review_root" add reviews/milestone-M-1-fixture.json
+git -C "$review_root" commit -qm 'record coverage fixture verdict'
+cat > "$review_root/bin/python3" <<'PYWRAPPER'
+#!/usr/bin/env bash
+set -euo pipefail
+command python "$@" | awk '{ sub(/\r$/, ""); printf "%s\r\n", $0 }'
+PYWRAPPER
+chmod +x "$review_root/bin/python3"
+unset -f python3 2>/dev/null || true
+review_output="$(cd "$review_root" && PATH="$review_root/bin:$PATH" \
+  bash scripts/milestone-review.sh coverage --milestone M-1)"
+if [[ "$review_output" != *'1 commit(s) naming a task; 0 not yet reviewed'* || \
+      "$review_output" == *'uncovered '* ]]; then
+  fail "milestone review coverage mishandled Python CRLF output"
+  note "$review_output"
+fi
+
 hash="$(printf 'oqueue-os-smoke\n' | sha256_stdin)"
 [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || fail "portable SHA-256 helper returned an invalid digest"
 

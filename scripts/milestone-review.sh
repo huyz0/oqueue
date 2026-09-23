@@ -141,7 +141,12 @@ fi
 
 mapfile -t COVERED < <(covered_commits "$MS")
 declare -A IS_COVERED=()
-for c in "${COVERED[@]}"; do IS_COVERED["$c"]=1; done
+for c in "${COVERED[@]}"; do
+  # Python emits CRLF on Windows when stdout is a pipe; mapfile removes only
+  # LF, so normalize the transport delimiter before comparing commit ids.
+  c="${c%$'\r'}"
+  IS_COVERED["$c"]=1
+done
 
 declare -a UNCOVERED=()
 for c in "${ALL[@]}"; do
