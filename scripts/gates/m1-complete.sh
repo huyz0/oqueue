@@ -61,8 +61,8 @@ CONTAINER="oqueue-m1-complete-minio"
 # builds while both record `s3  verified` — and the day a MinIO release
 # changes conditional-write behaviour, this gate goes red on an unchanged
 # tree and reads exactly like an `S3Store` regression.
-MINIO_IMAGE="minio/minio:RELEASE.2025-04-22T22-12-26Z"
-MC_IMAGE="minio/mc:RELEASE.2025-04-16T18-13-26Z"
+MINIO_IMAGE="quay.io/minio/minio:RELEASE.2025-04-22T22-12-26Z"
+MC_IMAGE="quay.io/minio/mc:RELEASE.2025-04-16T18-13-26Z"
 BUCKET="oqueue-conformance"
 
 cleanup() {

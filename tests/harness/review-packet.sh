@@ -379,6 +379,7 @@ printf 'FAIL staged executable mode became %s\n' "${mode:-missing}"
 exit 1
 EOF
 chmod +x "$gates/scripts"/check-*.sh
+chmod +x "$gates/scripts/gates/mode-probe.sh"
 git -C "$gates" add -- scripts/gates/mode-probe.sh
 git -C "$gates" update-index --chmod=+x -- scripts/gates/mode-probe.sh
 out="$(packet "$gates" "a change to review")"

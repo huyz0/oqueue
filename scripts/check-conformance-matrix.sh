@@ -247,6 +247,29 @@ if (( diverged_images == 0 && images_checked == 1 )); then
   ok "pinned conformance images carry one tag each"
 fi
 
+# Docker Hub removed the official MinIO repositories, while the same pinned
+# upstream releases remain available on Quay. Keep both the local gate and CI
+# on that registry; tag parity alone cannot catch a retired image namespace.
+registry_errors=0
+for source in .github/workflows/gates.yml scripts/gates/m1-complete.sh; do
+  for image in minio/minio minio/mc; do
+    if ! git grep -qF "quay.io/${image}:" -- "$source" 2>/dev/null; then
+      fail "$source must pin $image from quay.io"
+      registry_errors=$((registry_errors + 1))
+    fi
+    if git grep -qF "docker.io/${image}:" -- "$source" 2>/dev/null; then
+      fail "$source must not pin $image from Docker Hub"
+      registry_errors=$((registry_errors + 1))
+    elif git grep -qE "(^|[[:space:]\"'])${image}:" -- "$source" 2>/dev/null; then
+      fail "$source must not pin $image from Docker Hub"
+      registry_errors=$((registry_errors + 1))
+    fi
+  done
+done
+if (( registry_errors == 0 )); then
+  ok "pinned conformance images use Quay"
+fi
+
 # --- Agreement with what actually ran ---------------------------------------
 if (( AGAINST_ROSTER == 0 )); then
   finish

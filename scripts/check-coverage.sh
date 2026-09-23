@@ -124,7 +124,13 @@ fi
 
 cov_json="$REPO_ROOT/target/tmp/coverage.$$.json"
 mkdir -p "$REPO_ROOT/target/tmp"
-if ! cargo llvm-cov --workspace --locked --json --output-path "$cov_json" >/dev/null 2>&1; then
+# Coverage instrumentation links every workspace test binary. In the capped
+# Docker environment, parallel lld links exhausted the available thread
+# resources (`Resource temporarily unavailable`) at both 12 and four Cargo
+# jobs. One Cargo job completed the same coverage run; this serializes only the
+# instrumented build, not the other test gates or the container CPU cap.
+COVERAGE_BUILD_JOBS=1
+if ! CARGO_BUILD_JOBS="$COVERAGE_BUILD_JOBS" cargo llvm-cov --workspace --locked --json --output-path "$cov_json" >/dev/null 2>&1; then
   fail "cargo llvm-cov failed"
   note "run it directly to see why: cargo llvm-cov --workspace --locked"
   rm -f "$cov_json"

@@ -3075,6 +3075,26 @@ gcs-real  not-yet-run  deferred'
   printf '%s\n' "$dir"
 }
 
+# The image tags agree, but both references point at the retired Docker Hub
+# namespace. Keep registry availability under the same gate as version parity.
+setup_conformance_images_use_quay() {
+  local dir; dir="$(new_scratch conformance-images-use-quay)"
+  _conformance_scaffold "$dir" 'fake  verified  the in-memory fake
+sim  verified  the deterministic in-process S3
+s3  verified  MinIO at T2
+gcs  not-yet-run  no emulator round-trips the client
+s3-real  not-yet-run  deferred
+gcs-real  not-yet-run  deferred'
+  mkdir -p "$dir/.github/workflows" "$dir/scripts/gates"
+  printf 'image: quay.io/minio/minio:%s\nimage: quay.io/minio/mc:%s\nimage: docker.io/minio/minio:%s\nimage: docker.io/minio/mc:%s\n' \
+    'RELEASE.2025-04-22T22-12-26Z' 'RELEASE.2025-04-16T18-13-26Z' \
+    'RELEASE.2025-04-22T22-12-26Z' 'RELEASE.2025-04-16T18-13-26Z' > "$dir/.github/workflows/gates.yml"
+  printf 'MINIO_IMAGE="quay.io/minio/minio:%s"\nMC_IMAGE="quay.io/minio/mc:%s"\n' \
+    'RELEASE.2025-04-22T22-12-26Z' 'RELEASE.2025-04-16T18-13-26Z' > "$dir/scripts/gates/m1-complete.sh"
+  git -C "$dir" add -A
+  printf '%s\n' "$dir"
+}
+
 # The agreement half only runs when asked for it -- see the script's header
 # for why it is not in pre-commit.
 invoke_conformance_matrix_roster() {
@@ -3904,6 +3924,10 @@ run_case "check-conformance-matrix.sh (a claimed backend with no row)" setup_con
   "has no row for"
 run_case "check-conformance-matrix.sh (one image, two pins)" setup_conformance_image_pins invoke_conformance_matrix \
   "different tags"
+run_case "check-conformance-matrix.sh (retired Docker Hub images)" setup_conformance_images_use_quay invoke_conformance_matrix \
+  "must not pin minio/minio from Docker Hub"
+run_case "check-conformance-matrix.sh (explicit Docker Hub mc image)" setup_conformance_images_use_quay invoke_conformance_matrix \
+  "must not pin minio/mc from Docker Hub"
 run_case "check-conformance-matrix.sh (row with no reason)" setup_conformance_matrix_no_reason invoke_conformance_matrix \
   "is not <backend>  <status>  <why>"
 run_case "check-conformance-matrix.sh (duplicate backend row)" setup_conformance_matrix_duplicate_backend invoke_conformance_matrix \
