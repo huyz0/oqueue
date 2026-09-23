@@ -1,0 +1,39 @@
+{
+  "commits": [
+    "8c392fafd269190d0db8698da3ac77b5ceb2a060",
+    "cea85518499bfb5f621b4acfcf11b5aa44128a60",
+    "0164ac62b58db370e0275d9dbc5f437fcb133419",
+    "f220e0e2cc869f3acc621a88c4aec2bcd923cbda",
+    "092e0ecc5850ab6a26941d94c153c653d7d23e9a",
+    "1588b181d6505706f9b1ea7a374a164f9235434d",
+    "d306359af94a2d884e833cd207ca2875ab681b7a",
+    "9e34eadf2a872fbb11ddb6ba90429ea4e462005f",
+    "f83ef87b4f29b1043cd8cc1f223c9fb6163de75b",
+    "de85d5466f7d5e1a361f60f2e410d542fa89bc00",
+    "ccff24d4f9c867503b097b8e4f9939043b1ba9d2",
+    "be2fbc7663598fc1829228c6b50045f36ddf1f28",
+    "0533004a0b4ac000da99abd66ae65b2d81ab1ae7",
+    "f65a57a93e2a3918c5d7f4f5bd25acfc1ba17fec",
+    "0eac52f5e3ede95001b33014a1712680a133689f",
+    "cc6f56d86971e2f88b8d70ca208540a14579ea05",
+    "1bd9dfc0951cd57a3d18a455e98dca2fcc82190e",
+    "ece52abee00cb24ba6b7dcaa34015df4da8df846",
+    "b8b64f8dc6948481a84ebca28f59feaebf6ed480",
+    "665f26017211819118b6cee6c307c746db4d6715",
+    "d538a55fbbc6ec815781ed95bb49ec0ba59b9bfc"
+  ],
+  "findings": [
+    {
+      "evidence": "scripts/release-repro.sh writes build-a and build-b as canonical artifact files directly beneath target/repro/build-a and target/repro/build-b, and release.yml copies that directory unchanged to m13-job/repro. scripts/release-aggregate.sh instead requires repro/build-a/x86_64-unknown-linux-gnu.2.28/release/oqueue and its build-b counterpart. tests/release-aggregate.sh constructs those same obsolete paths, so its green fixture cannot catch the production layout mismatch.",
+      "id": "504c4a622a9f",
+      "kind": "gate-wrong",
+      "severity": "blocking",
+      "summary": "The native release aggregate looks for reproducibility outputs under the obsolete glibc-suffixed Cargo directory, so every valid M13 evidence bundle fails aggregation.",
+      "task_id": "M13.18"
+    }
+  ],
+  "milestone": "M13",
+  "recorded_at": "2026-09-23T04:08:19Z",
+  "reviewer": "GPT-6 independent milestone reviewer",
+  "verdict": "changes-requested"
+}

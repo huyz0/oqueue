@@ -75,8 +75,8 @@ source_repro_line="$(grep -E '^M13_REPRODUCIBILITY ' "$source_repro" 2>/dev/null
   printf '%s\n' 'release-aggregate: reproducibility evidence must contain exactly one record' >&2
   exit 1
 }
-repro_a="$input/repro/build-a/x86_64-unknown-linux-gnu.2.28/release/oqueue"
-repro_b="$input/repro/build-b/x86_64-unknown-linux-gnu.2.28/release/oqueue"
+repro_a="$input/repro/build-a/x86_64-unknown-linux-gnu/release/oqueue"
+repro_b="$input/repro/build-b/x86_64-unknown-linux-gnu/release/oqueue"
 [[ -f "$repro_a" && -f "$repro_b" ]] || {
   printf '%s\n' 'release-aggregate: native reproducibility build outputs are incomplete' >&2
   exit 1
@@ -102,6 +102,6 @@ printf '%s\n' \
   > "$build_tmp"
 mv "$build_tmp" "$output/build.tsv"
 printf '%s\n' \
-  "M13_REPRODUCIBILITY run_id=$run_id release_artifact_sha256=$release_sha mode=byte-identical release_build=a build_a=repro/build-a/x86_64-unknown-linux-gnu.2.28/release/oqueue sha256_a=$repro_sha_a build_b=repro/build-b/x86_64-unknown-linux-gnu.2.28/release/oqueue sha256_b=$repro_sha_b comparison=equal commands_sha256=$source_commands_sha outputs_sha256=$source_outputs_sha" \
+  "M13_REPRODUCIBILITY run_id=$run_id release_artifact_sha256=$release_sha mode=byte-identical release_build=a build_a=repro/build-a/x86_64-unknown-linux-gnu/release/oqueue sha256_a=$repro_sha_a build_b=repro/build-b/x86_64-unknown-linux-gnu/release/oqueue sha256_b=$repro_sha_b comparison=equal commands_sha256=$source_commands_sha outputs_sha256=$source_outputs_sha" \
   > "$output/repro.tsv"
 printf '%s\n' "$(<"$output/build.tsv")"

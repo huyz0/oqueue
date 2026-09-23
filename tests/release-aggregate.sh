@@ -30,14 +30,14 @@ for name in "${names[@]}"; do
   hashes+=("$(hash_file "$scratch/artifacts/$name")")
 done
 mkdir -p \
-  "$scratch/repro/build-a/x86_64-unknown-linux-gnu.2.28/release" \
-  "$scratch/repro/build-b/x86_64-unknown-linux-gnu.2.28/release"
+  "$scratch/repro/build-a/x86_64-unknown-linux-gnu/release" \
+  "$scratch/repro/build-b/x86_64-unknown-linux-gnu/release"
 cp "$scratch/artifacts/${names[0]}" \
-  "$scratch/repro/build-a/x86_64-unknown-linux-gnu.2.28/release/oqueue"
+  "$scratch/repro/build-a/x86_64-unknown-linux-gnu/release/oqueue"
 cp "$scratch/artifacts/${names[0]}" \
-  "$scratch/repro/build-b/x86_64-unknown-linux-gnu.2.28/release/oqueue"
+  "$scratch/repro/build-b/x86_64-unknown-linux-gnu/release/oqueue"
 printf '%s\n' \
-  "M13_REPRODUCIBILITY run_id=$run_id release_artifact_sha256=${hashes[0]} mode=byte-identical release_build=a build_a=$scratch/repro/build-a/x86_64-unknown-linux-gnu.2.28/release/oqueue sha256_a=${hashes[0]} build_b=$scratch/repro/build-b/x86_64-unknown-linux-gnu.2.28/release/oqueue sha256_b=${hashes[0]} comparison=equal commands_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa outputs_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" \
+  "M13_REPRODUCIBILITY run_id=$run_id release_artifact_sha256=${hashes[0]} mode=byte-identical release_build=a build_a=$scratch/repro/build-a/x86_64-unknown-linux-gnu/release/oqueue sha256_a=${hashes[0]} build_b=$scratch/repro/build-b/x86_64-unknown-linux-gnu/release/oqueue sha256_b=${hashes[0]} comparison=equal commands_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa outputs_sha256=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" \
   > "$scratch/repro/repro.tsv"
 printf '%s\n' \
   "M13_RELEASE_PROVENANCE status=pass run_id=$run_id native_x86=pass native_aarch64=pass clean_container=pass fips=pass fips_mode=pass fips_cross_read=pass nonfips_cross_read=pass isa=pass allocator=pass" \
@@ -46,7 +46,7 @@ printf '%s\n' \
 bash "$script" --input "$scratch" --output "$scratch" >/dev/null
 expected="M13_RELEASE_BUILD status=pass run_id=$run_id default_x86_sha256=${hashes[0]} fips_x86_sha256=${hashes[1]} default_aarch64_sha256=${hashes[2]} fips_aarch64_sha256=${hashes[3]} clean_container=pass fips=pass fips_mode=pass fips_cross_read=pass nonfips_cross_read=pass isa=pass allocator=pass"
 grep -Fqx "$expected" "$scratch/build.tsv"
-grep -Fq 'build_a=repro/build-a/x86_64-unknown-linux-gnu.2.28/release/oqueue' "$scratch/repro.tsv"
+grep -Fq 'build_a=repro/build-a/x86_64-unknown-linux-gnu/release/oqueue' "$scratch/repro.tsv"
 grep -Fq "sha256_b=${hashes[0]}" "$scratch/repro.tsv"
 
 sed 's/native_aarch64=pass/native_aarch64=fail/' "$scratch/provenance.tsv" > "$scratch/bad-provenance.tsv"
